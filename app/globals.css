@@ -1,0 +1,198 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Primary Shades */
+  --primary-100: 233 239 251;
+  --primary-90: 211 223 248;
+  --primary-80: 180 200 243;
+  --primary-70: 137, 168, 236;
+  --primary-60: 93 135 229;
+  --primary-50: 49 103 221;
+  --primary-40: 31 81 190;
+  --primary-30: 24 62 145;
+  --primary-20: 16 43 101;
+  --primary-10: 3 7 18;
+
+  /* Grey Shades */
+  --grey-100: 255 255 255;
+  --grey-90: 244 244 244;
+  --grey-80: 227 227 227;
+  --grey-70: 163 163 163;
+  --grey-60: 125 125 125;
+  --grey-50: 79 79 79;
+  --grey-40: 53 53 53;
+  --grey-30: 42 42 42;
+  --grey-20: 29 29 29;
+  --grey-10: 10 10 10;
+
+  /* Success Shades */
+  --success-100: 246 254 249;
+  --success-90: 218 251 232;
+  --success-80: 209 250 223;
+  --success-70: 166 244 197;
+  --success-60: 108 233 166;
+  --success-50: 50 213 131;
+  --success-40: 4 200 112;
+  --success-30: 3 152 85;
+  --success-20: 3 152 85;
+  --success-10: 3 48 30;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    scale: 0.9;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+    scale: 1;
+  }
+  to {
+    opacity: 0;
+    scale: 0.9;
+  }
+}
+
+.anim-state[data-state="open"],
+.anim-state[data-state="open"] {
+  animation: fadeIn 0.1s ease-out;
+}
+
+.anim-state[data-state="closed"],
+.anim-state[data-state="closed"] {
+  animation: fadeOut 0.1s;
+}
+
+@keyframes vertical-loop {
+  from {
+    transform: translateY(0);
+  }
+
+  to {
+    transform: translateY(-100%);
+  }
+}
+
+.vertical-loop {
+  animation: vertical-loop 5s infinite linear;
+}
+
+@keyframes scale-in {
+  100% {
+    transform: scale(1.3);
+  }
+}
+
+@keyframes scale-out {
+  100% {
+    transform: scale(1);
+  }
+}
+
+.canvas-scaleIn {
+  animation: scale-in 8s forwards;
+  animation-timing-function: cubic-bezier(0.45, 0.45, 0.31, 0.99);
+}
+
+.canvas-scaleOut {
+  transform: scale(1.2);
+  animation: scale-out 8s forwards;
+  animation-timing-function: cubic-bezier(0.45, 0.45, 0.31, 0.99);
+}
+/* hide scrollbar in WebKit browsers */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+/* hide scrollbar in Firefox */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE 10+ */
+}
+
+.custom-scrollbar,
+.custom-scrollbar-thin {
+  &::-webkit-scrollbar {
+    padding: 0 5px;
+    width: 5px;
+    height: 5px;
+  }
+  &::-webkit-scrollbar-track {
+    background-color: transparent;
+    padding: 5px;
+    border-radius: 20px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgb(247, 245, 245);
+    border-radius: 20px;
+    cursor: pointer;
+    border: 1px solid #d2d2d2;
+
+    @media (max-width: 719px) {
+      display: none;
+    }
+  }
+  &::-webkit-scrollbar-corner {
+    background-color: #202229;
+  }
+}
+
+.custom-scrollbar-ultra-thin {
+  &::-webkit-scrollbar {
+    padding: 0 5px;
+    width: 2px;
+    height: 5px;
+  }
+  &::-webkit-scrollbar-track {
+    background-color: transparent;
+    padding: 5px;
+    border-radius: 20px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: #e3e3e3;
+    border-radius: 40px;
+    cursor: pointer;
+    /* 
+    @media (max-width: 719px) {
+      display: none;
+    } */
+  }
+  &::-webkit-scrollbar-corner {
+    background-color: transparent;
+  }
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(360deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+.gradient-spinner {
+  animation: spin 1.3s linear infinite;
+  transform-origin: center;
+  background: conic-gradient(
+    from 180deg at 50% 50%,
+    rgba(49, 103, 221, 1) 0deg,
+    rgba(180, 200, 243, 1) 180deg,
+    rgba(233, 239, 251, 1) 360deg
+  );
+}
+
+.visx-tooltip-glyph > svg {
+  width: 8px;
+  height: 8px;
+}

@@ -1,0 +1,20 @@
+@keyframes loading-indicator-animation {
+  10% {
+    transform: translateY(0px);
+    background-color: black;
+  }
+  60% {
+    transform: translateY(3px);
+    background-color: rgb(11, 129, 213);
+    box-shadow: 0 0 8px rgb(11, 109, 213), inset 0 0 8px rgb(11, 119, 213);
+  }
+  100% {
+    transform: translateY(0px);
+    background-color: black;
+  }
+}
+
+.loadingIndicatorCircle {
+  animation: loading-indicator-animation cubic-bezier(0.81, 0.59, 0, 0.35)
+    infinite;
+}
