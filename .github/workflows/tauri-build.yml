@@ -68,9 +68,9 @@ jobs:
           releaseDraft: ${{ startsWith(github.ref, 'refs/tags/') }}
           prerelease: false
           
-      # Upload build artifacts for all builds
+      # Upload build artifacts for all builds - Fixed version
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4  # Updated from v3 to v4
         with:
           name: ${{ matrix.platform }}-build
           path: |
@@ -78,7 +78,7 @@ jobs:
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/deb/*.deb
-          if-no-files-found: ignore  # Not all platforms will have all file types
+          if-no-files-found: ignore
 
   # Optional: Create GitHub release when tag is pushed
   create-release:
@@ -96,7 +96,5 @@ jobs:
           tag_name: ${{ steps.get_tag.outputs.TAG }}
           name: Release ${{ steps.get_tag.outputs.TAG }}
           draft: false
-          prerelease: false
-          generate_release_notes: true
           prerelease: false
           generate_release_notes: true
