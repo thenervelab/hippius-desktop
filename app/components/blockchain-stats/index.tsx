@@ -1,6 +1,6 @@
 "use client";
 
-import { Database, ChevronDown } from "lucide-react";
+import { Database } from "lucide-react";
 
 const BlockchainStats: React.FC = () => {
   return (

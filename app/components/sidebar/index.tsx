@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { Home, FileText, Wallet, Bell, Settings, LogOut } from "lucide-react";
 import { usePathname } from "next/navigation";
