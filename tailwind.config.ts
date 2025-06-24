@@ -9,7 +9,7 @@ export default {
   theme: {
     extend: {
       screens: {
-        'desktop': '1310px',
+        desktop: "1310px",
       },
       maxWidth: {
         "screen-1.5xl": "1360px",
@@ -78,6 +78,9 @@ export default {
         5: "5",
       },
       keyframes: {
+        ["spin-reverse"]: {
+          to: { transform: "translate(-50%, -50%) rotate(-360deg)" },
+        },
         ["fade-in"]: {
           "0%": {
             opacity: "0",
@@ -287,6 +290,12 @@ export default {
           "translate-from-bottom 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards",
         ["translate-update"]:
           "translate-update 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards",
+         ['spin-fast']: 'spin 2s linear infinite',
+        ['spin-medium']: 'spin 4s linear infinite',
+        ['spin-slow']: 'spin 6s linear infinite',
+        ['spin-reverse-fast']: 'spin-reverse 3s linear infinite',
+        ['spin-reverse-medium']: 'spin-reverse 6s linear infinite',
+        ['spin-reverse-slow']: 'spin-reverse 9s linear infinite',
       },
     },
   },
