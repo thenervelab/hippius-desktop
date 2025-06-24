@@ -8,6 +8,7 @@ import Providers from "@/components/providers";
 import { Toaster } from "sonner";
 import "react-circular-progressbar/dist/styles.css";
 import NextTopLoader from "nextjs-toploader";
+import TrayInitialiser from "./components/tray-initialiser";
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
@@ -70,14 +71,13 @@ export default async function RootLayout({
       <body
         className={`${digitalFonts.className} ${geistSans.className} ${geistSans.variable} bg-grey-100 text-grey-10 antialiased font-sans`}
       >
+        <TrayInitialiser />
         <Providers>
           <NextTopLoader color="#3167DD" showSpinner={false} />
           <div className="flex min-h-screen">
             <Sidebar />
             <div className="flex flex-col flex-grow">
-              <main className="flex-grow ml-[200px] p-6">
-                {children}
-              </main>
+              <main className="flex-grow ml-[200px] p-6">{children}</main>
               <div className="ml-[200px]">
                 <RootFooter />
               </div>
