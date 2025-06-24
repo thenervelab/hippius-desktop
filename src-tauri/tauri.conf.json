@@ -10,10 +10,6 @@
     "frontendDist": "../out"
   },
   "app": {
-    "trayIcon": {
-      "iconPath": "icons/black-outline-icon.png",
-      "iconAsTemplate": true
-    },
     "windows": [
       {
         "title": "Hippius",
