@@ -203,3 +203,29 @@
   to { transform: rotate(-360deg);}
 }
 
+@keyframes fadePop {
+  0% {
+    opacity: 0;
+    transform: scale(0.9) translateY(18px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.animate-fadePop {
+  animation: fadePop 0.45s cubic-bezier(.44,1.8,.51,1.01);
+}
+
+@keyframes pulseBlue {
+  0%, 100% {
+    background-color: #3167DD; 
+  }
+  50% {
+    background-color: #5C8EEF;
+  }
+}
+.pulse-blue {
+  animation: pulseBlue 1s infinite;
+}
+

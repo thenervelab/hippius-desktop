@@ -1,16 +1,38 @@
-export const ProgressBar = ({ value = 0, segments = 5 }) => {
+import { cn } from "@/app/lib/utils";
+import React, { useEffect, useRef, useState } from "react";
+
+export const ProgressBar = ({
+  value = 0,
+  segments = 5,
+  stuckTimeout = 1000,
+}) => {
   const segPercent = 100 / segments;
+  const [isStuck, setIsStuck] = useState(false);
+  const lastValueRef = useRef(value);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (value !== lastValueRef.current) {
+      setIsStuck(false);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      timeoutRef.current = setTimeout(() => setIsStuck(true), stuckTimeout);
+      lastValueRef.current = value;
+    }
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, [value, stuckTimeout]);
 
   return (
-    <div className="flex gap-[2px] w-[580px] h-3 bg-transparent overflow-hidden">
+    <div className="relative flex gap-[2px] w-[580px] h-3 bg-transparent overflow-hidden">
       {Array.from({ length: segments }).map((_, idx) => {
         const start = idx * segPercent;
         const end = (idx + 1) * segPercent;
         let fill = 0;
         if (value >= end) {
-          fill = 1; 
+          fill = 1;
         } else if (value > start) {
-          fill = (value - start) / segPercent; 
+          fill = (value - start) / segPercent;
         }
         return (
           <div
@@ -19,9 +41,15 @@ export const ProgressBar = ({ value = 0, segments = 5 }) => {
           >
             {fill > 0 && (
               <div
-                className="absolute left-0 top-0 h-full bg-[#3167DD] transition-all duration-300"
-                style={{ width: `${fill * 100}%` }}
-              ></div>
+                className={cn(
+                  "absolute left-0 top-0 h-full transition-all duration-300",
+                  "bg-[#3167DD]",
+                  isStuck && "pulse-blue"
+                )}
+                style={{
+                  width: `${fill * 100}%`,
+                }}
+              />
             )}
           </div>
         );

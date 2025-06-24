@@ -1,17 +1,14 @@
 import React, { useRef, useLayoutEffect, useState } from "react";
 
+const SVG_SIZE = 1000;
+const MIDDLE_RING_RADIUS = 400;
+const MIDDLE_RING_DIAMETER = MIDDLE_RING_RADIUS * 2;
+const INNER_RING_RADIUS = 180;
+const INNER_RING_DIAMETER = INNER_RING_RADIUS * 2;
 export default function AnimatedRings() {
-  const containerRef = useRef(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [blurDiameter, setBlurDiameter] = useState(0);
   const [innerBlurDiameter, setInnerBlurDiameter] = useState(0);
-
-  // SVG setup
-  const SVG_SIZE = 1000;
-  const MIDDLE_RING_RADIUS = 400;
-  const MIDDLE_RING_DIAMETER = MIDDLE_RING_RADIUS * 2;
-  // Place this at the top, with your other constants:
-  const INNER_RING_RADIUS = 180;
-  const INNER_RING_DIAMETER = INNER_RING_RADIUS * 2;
 
   useLayoutEffect(() => {
     function updateSize() {
@@ -19,7 +16,7 @@ export default function AnimatedRings() {
         const { width, height } = containerRef.current.getBoundingClientRect();
         const scale = Math.min(width, height) / SVG_SIZE;
         setBlurDiameter(MIDDLE_RING_DIAMETER * scale + 250);
-        setInnerBlurDiameter(INNER_RING_DIAMETER * scale + 70); 
+        setInnerBlurDiameter(INNER_RING_DIAMETER * scale + 70);
       }
     }
     updateSize();

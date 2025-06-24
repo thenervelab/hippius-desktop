@@ -6,14 +6,19 @@ import AnimatedRings from "./animated-rings";
 import { ProgressBar } from "../progress-bar";
 import { PROGRESS_CONTENT } from "./splash-content";
 
-const splashScreen = ({ step }: { step: number }) => {
+const SplashScreen = ({
+  step,
+  progress,
+}: {
+  step: number;
+  progress: number;
+}) => {
   const showProgress = step >= 0 && step < PROGRESS_CONTENT.length;
   const progressData = PROGRESS_CONTENT[step];
+  const roundedProgress = Math.round(progress);
+
   return (
-    <div
-      className="flex grow flex-col items-center w-full h-full justify-center
-     bg-primary-10 relative overflow-hidden"
-    >
+    <div className="flex grow flex-col items-center w-full h-full justify-center bg-primary-10 relative overflow-hidden">
       <div className="absolute block w-full top-0 h-full">
         <AbstractCity animate />
         <div
@@ -63,19 +68,14 @@ const splashScreen = ({ step }: { step: number }) => {
         </InView>
       )}
       {showProgress && (
-        <InView triggerOnce>
-          {({ inView, ref }) => (
-            <div
-              ref={ref}
-              className="flex flex-col text-lg items-center absolute z-20
-            justify-center duration-300"
-            >
-              <RevealTextLine rotate reveal={inView}>
-                {progressData.icon}
-              </RevealTextLine>
-            </div>
-          )}
-        </InView>
+        <div className="flex items-center justify-center absolute z-20 overflow-hidden">
+          <div
+            key={progressData?.status}
+            className="h-[250px] w-[250px] flex items-center justify-center overflow-hidden animate-fadePop"
+          >
+            {progressData?.icon}
+          </div>
+        </div>
       )}
 
       {showProgress && (
@@ -88,8 +88,8 @@ const splashScreen = ({ step }: { step: number }) => {
               style={{ top: "72%" }}
             >
               <RevealTextLine rotate reveal={inView}>
-                <span className="font-digital font-normal text-[#3167DD] text-[34px] leading-[34px]">
-                  {progressData?.progress}%
+                <span className="font-digital font-normal text-[#3167DD] text-[34px] leading-[40px] overflow-hidden">
+                  {roundedProgress}%
                 </span>
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-300">
@@ -103,7 +103,7 @@ const splashScreen = ({ step }: { step: number }) => {
                 </span>
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-500">
-                <ProgressBar value={progressData.progress} />
+                <ProgressBar value={progress} segments={5} />
               </RevealTextLine>
             </div>
           )}
@@ -113,4 +113,4 @@ const splashScreen = ({ step }: { step: number }) => {
   );
 };
 
-export default splashScreen;
+export default SplashScreen;
