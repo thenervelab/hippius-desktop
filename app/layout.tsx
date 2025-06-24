@@ -8,6 +8,7 @@ import Providers from "@/components/providers";
 import { Toaster } from "sonner";
 import "react-circular-progressbar/dist/styles.css";
 import NextTopLoader from "nextjs-toploader";
+import SplashWrapper from "./components/splash-screen";
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
@@ -75,7 +76,9 @@ export default async function RootLayout({
           <div className="flex min-h-screen">
             <Sidebar />
             <div className="flex flex-col flex-grow">
-              <main className="flex-grow ml-[200px] p-6">{children}</main>
+              <main className="flex-grow ml-[200px] p-6">
+                <SplashWrapper>{children}</SplashWrapper>
+              </main>
               <div className="ml-[200px]">
                 <RootFooter />
               </div>
