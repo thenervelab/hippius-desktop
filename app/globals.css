@@ -204,18 +204,20 @@
 }
 
 @keyframes fadePop {
-  0% {
-    opacity: 0;
-    transform: scale(0.9) translateY(18px);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1) translateY(0);
-  }
+  0% { opacity: 0; transform: scale(0.9);}
+  100% { opacity: 1; transform: scale(1);}
 }
 .animate-fadePop {
-  animation: fadePop 0.45s cubic-bezier(.44,1.8,.51,1.01);
+  animation: fadePop 1s cubic-bezier(.44,1.8,.51,1.01);
 }
+
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+.animate-spin-slow {
+  animation: spin-slow 2s linear infinite;
+}
+
 
 @keyframes pulseBlue {
   0%, 100% {

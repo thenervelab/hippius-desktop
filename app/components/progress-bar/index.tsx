@@ -39,18 +39,16 @@ export const ProgressBar = ({
             key={idx}
             className="flex-1 border border-[#E3E3E3] bg-[#F4F4F4] h-full relative overflow-hidden"
           >
-            {fill > 0 && (
-              <div
-                className={cn(
-                  "absolute left-0 top-0 h-full transition-all duration-300",
-                  "bg-[#3167DD]",
-                  isStuck && "pulse-blue"
-                )}
-                style={{
-                  width: `${fill * 100}%`,
-                }}
-              />
-            )}
+            <div
+              className={cn(
+                "absolute left-0 top-0 h-full transition-all duration-300",
+                "bg-[#3167DD]",
+                isStuck && "pulse-blue"
+              )}
+              style={{
+                width: `${fill * 100}%`,
+              }}
+            />
           </div>
         );
       })}

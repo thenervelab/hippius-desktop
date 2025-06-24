@@ -5,6 +5,7 @@ import Link from "next/link";
 import AnimatedRings from "./animated-rings";
 import { ProgressBar } from "../progress-bar";
 import { PROGRESS_CONTENT } from "./splash-content";
+import AnimatedProgressIcon from "./animated-icons";
 
 const SplashScreen = ({
   step,
@@ -68,14 +69,11 @@ const SplashScreen = ({
         </InView>
       )}
       {showProgress && (
-        <div className="flex items-center justify-center absolute z-20 overflow-hidden">
-          <div
-            key={progressData?.status}
-            className="h-[250px] w-[250px] flex items-center justify-center overflow-hidden animate-fadePop"
-          >
-            {progressData?.icon}
-          </div>
-        </div>
+        <AnimatedProgressIcon
+          status={progressData?.status}
+          icon={progressData?.icon}
+          step={step}
+        />
       )}
 
       {showProgress && (
@@ -97,7 +95,7 @@ const SplashScreen = ({
                   {progressData?.status}
                 </span>
               </RevealTextLine>
-              <RevealTextLine reveal={inView} className="delay-400 mb-20">
+              <RevealTextLine reveal={inView} className="delay-400 lg:mb-20 mb-6">
                 <span className="text-sm font-medium text-white">
                   {progressData?.subStatus}
                 </span>
