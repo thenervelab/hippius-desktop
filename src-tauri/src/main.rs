@@ -3,7 +3,7 @@
 
 use tauri::{
     image::Image,
-    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
+    tray::{TrayIconBuilder, TrayIconEvent},
     Manager,
 };
 
@@ -20,26 +20,20 @@ fn main() {
                 .icon(Image::from_path(icon_path)?)
                 .icon_as_template(true)
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { button, .. } = event {
-                        match button {
-                            MouseButton::Right => {
-                                let app = tray.app_handle();
+                    if let TrayIconEvent::Click { .. } = event {
+                        let app = tray.app_handle();
 
-                                #[cfg(not(target_os = "macos"))]
-                                {
-                                    if let Some(webview_window) = app.get_webview_window("main") {
-                                        let _ = webview_window.show();
-                                        let _ = webview_window.set_focus();
-                                    }
-                                }
-
-                                #[cfg(target_os = "macos")]
-                                {
-                                    tauri::AppHandle::show(&app.app_handle()).unwrap();
-                                }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            if let Some(webview_window) = app.get_webview_window("main") {
+                                let _ = webview_window.show();
+                                let _ = webview_window.set_focus();
                             }
-                            // TODO - Show Menu when you click on left
-                            _ => {}
+                        }
+
+                        #[cfg(target_os = "macos")]
+                        {
+                            tauri::AppHandle::show(&app.app_handle()).unwrap();
                         }
                     }
                 })
