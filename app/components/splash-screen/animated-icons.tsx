@@ -1,5 +1,7 @@
-import { cn } from "@/app/lib/utils";
-import React, { useEffect, useState } from "react";
+import React from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { InView } from "react-intersection-observer";
+import { RevealTextLine } from "../ui";
 
 type AnimatedProgressIconProps = {
   icon: React.ReactNode;
@@ -12,31 +14,33 @@ export default function AnimatedProgressIcon({
   status,
   step,
 }: AnimatedProgressIconProps) {
-  const [spinning, setSpinning] = useState(false);
-
-  useEffect(() => {
-    setSpinning(false);
-    const timeout = setTimeout(() => setSpinning(true), 1000);
-    return () => clearTimeout(timeout);
-  }, [status, icon]);
-
-  const shouldSpin = spinning && (step === 1);
+  const presenceKey = `${step}-${status}`;
 
   return (
-    <div className="flex items-center justify-center absolute z-20 overflow-hidden">
-      <div
-        className={cn(
-          "h-[250px] w-[250px] flex items-center justify-center overflow-hidden",
-          shouldSpin && "animate-spin-slow"
-        )}
-      >
+    <InView triggerOnce>
+      {({ inView, ref }) => (
         <div
-          key={status}
-          className="h-full w-full flex items-center justify-center animate-fadePop"
+          ref={ref}
+          className="flex items-center justify-center absolute z-20 overflow-hidden"
         >
-          {icon}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={presenceKey}
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -30 }}
+              transition={{ duration: 0.3, ease: "easeInOut" }}
+              className="h-[250px] w-[250px] flex items-center justify-center overflow-hidden"
+            >
+              <RevealTextLine reveal={inView}>
+                <div className="h-full w-full flex items-center justify-center overflow-hidden">
+                  {icon}
+                </div>
+              </RevealTextLine>
+            </motion.div>
+          </AnimatePresence>
         </div>
-      </div>
-    </div>
+      )}
+    </InView>
   );
 }

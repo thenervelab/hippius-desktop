@@ -5,7 +5,8 @@ const MIDDLE_RING_RADIUS = 400;
 const MIDDLE_RING_DIAMETER = MIDDLE_RING_RADIUS * 2;
 const INNER_RING_RADIUS = 180;
 const INNER_RING_DIAMETER = INNER_RING_RADIUS * 2;
-export default function AnimatedRings() {
+
+export default function AnimatedRings({ step }: { step: number }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [blurDiameter, setBlurDiameter] = useState(0);
   const [innerBlurDiameter, setInnerBlurDiameter] = useState(0);
@@ -16,7 +17,7 @@ export default function AnimatedRings() {
         const { width, height } = containerRef.current.getBoundingClientRect();
         const scale = Math.min(width, height) / SVG_SIZE;
         setBlurDiameter(MIDDLE_RING_DIAMETER * scale + 250);
-        setInnerBlurDiameter(INNER_RING_DIAMETER * scale + 70);
+        setInnerBlurDiameter(INNER_RING_DIAMETER * scale - 30);
       }
     }
     updateSize();
@@ -44,23 +45,24 @@ export default function AnimatedRings() {
           zIndex: 10,
         }}
       />
-      <div
-        className="absolute rounded-full"
-        style={{
-          width: `${innerBlurDiameter}px`,
-          height: `${innerBlurDiameter}px`,
-          left: "50%",
-          top: "50%",
-          transform: "translate(-50%, -50%)",
-          background: "#274996",
-          opacity: 1,
-          filter: "blur(80px)",
-          pointerEvents: "none",
-          zIndex: 11,
-        }}
-      />
+      {(step === -1 || step === 0) && (
+        <div
+          className="absolute rounded-full"
+          style={{
+            width: `${innerBlurDiameter}px`, 
+            height: `${innerBlurDiameter}px`,
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
+            background: "#274996", 
+            filter: "blur(90px)",
+            pointerEvents: "none",
+            zIndex: 11,
+          }}
+        />
+      )}
 
-      {/* --- Single SVG with groups for independent animation --- */}
+      {/* --- Animated SVG Rings --- */}
       <svg
         className="w-full h-full"
         viewBox="0 0 1000 1000"
@@ -88,14 +90,8 @@ export default function AnimatedRings() {
           </linearGradient>
         </defs>
 
-        {/* OUTER ring (group animates independently) */}
-        <g
-          className="animate-spin-fast"
-          style={{
-            transformOrigin: "500px 500px",
-            transform: "rotate(0deg)",
-          }}
-        >
+        {/* OUTER ring */}
+        <g className="animate-spin-fast origin-center">
           <circle
             cx={500}
             cy={500}
@@ -106,40 +102,32 @@ export default function AnimatedRings() {
           />
         </g>
 
-        {/* MIDDLE ring (different speed, different start angle) */}
-        <g
-          className="animate-spin-reverse-fast"
-          style={{
-            transformOrigin: "500px 500px",
-            transform: "rotate(70deg)",
-          }}
-        >
-          <circle
-            cx={500}
-            cy={500}
-            r={MIDDLE_RING_RADIUS}
-            fill="none"
-            stroke="url(#fadeVertical)"
-            strokeWidth={6}
-          />
+        {/* MIDDLE ring, rotated initial angle */}
+        <g style={{ transform: "rotate(70deg)" }} className="origin-center">
+          <g className="animate-spin-reverse-fast origin-center">
+            <circle
+              cx={500}
+              cy={500}
+              r={MIDDLE_RING_RADIUS}
+              fill="none"
+              stroke="url(#fadeVertical)"
+              strokeWidth={6}
+            />
+          </g>
         </g>
 
-        {/* INNER ring (different speed, different start angle) */}
-        <g
-          className="animate-spin-medium"
-          style={{
-            transformOrigin: "500px 500px",
-            transform: "rotate(-33deg)",
-          }}
-        >
-          <circle
-            cx={500}
-            cy={500}
-            r={INNER_RING_RADIUS}
-            fill="none"
-            stroke="url(#fadeVerticalInner)"
-            strokeWidth={4}
-          />
+        {/* INNER ring, rotated initial angle */}
+        <g style={{ transform: "rotate(-33deg)" }} className="origin-center">
+          <g className="animate-spin-fast origin-center">
+            <circle
+              cx={500}
+              cy={500}
+              r={INNER_RING_RADIUS}
+              fill="none"
+              stroke="url(#fadeVerticalInner)"
+              strokeWidth={4}
+            />
+          </g>
         </g>
       </svg>
     </div>
