@@ -7,7 +7,7 @@ export const PROGRESS_CONTENT = [
     subStatus: "Verifying node status ....",
   },
   {
-    icon: <Icons.StartingDaemon className="h-[135px] w-[135px]" />,
+    icon: <Icons.StartingDaemon className="h-[135px] w-[135px] animate-spin-fast overflow-hidden" />,
     progress: 40,
     status: "Starting Daemon",
     subStatus: "Preparing background services ....",
@@ -25,7 +25,7 @@ export const PROGRESS_CONTENT = [
     subStatus: "Setting up database service ....",
   },
   {
-    icon: <Icons.SyncData className="h-[170px] w-[170px]" />,
+    icon: <Icons.SyncData className="h-[170px] w-[194px]" />,
     progress: 94,
     status: "Syncing Data",
     subStatus: "Setting up database service ....",
