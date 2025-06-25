@@ -6,6 +6,7 @@ import AnimatedRings from "./animated-rings";
 import { ProgressBar } from "../progress-bar";
 import { PROGRESS_CONTENT } from "./splash-content";
 import AnimatedProgressIcon from "./animated-icons";
+import { AnimatePresence, motion } from "framer-motion";
 
 const SplashScreen = ({
   step,
@@ -46,7 +47,7 @@ const SplashScreen = ({
       </div>
       <InView triggerOnce>
         {({ inView, ref }) => (
-          <div ref={ref}>{inView && <AnimatedRings />}</div>
+          <div ref={ref}>{inView && <AnimatedRings step={step} />}</div>
         )}
       </InView>
       {!showProgress && (
@@ -59,10 +60,10 @@ const SplashScreen = ({
               href="/"
             >
               <RevealTextLine rotate reveal={inView}>
-                <Icons.HippiusLogo className="size-14" />
+                <Icons.HippiusLogo className="h-[100px] w-[100px]" />
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-300">
-                <span className="text-[32px] font-medium">Hippius</span>
+                <span className="text-[32px] font-medium leading-[40px]">Hippius</span>
               </RevealTextLine>
             </Link>
           )}
@@ -91,14 +92,37 @@ const SplashScreen = ({
                 </span>
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-300">
-                <span className="text-white text-[22px] font-medium">
-                  {progressData?.status}
-                </span>
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={step}
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -30 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <span className="text-white text-[22px] font-medium">
+                      {progressData?.status}
+                    </span>
+                  </motion.div>
+                </AnimatePresence>
               </RevealTextLine>
-              <RevealTextLine reveal={inView} className="delay-400 lg:mb-20 mb-6">
-                <span className="text-sm font-medium text-white">
-                  {progressData?.subStatus}
-                </span>
+              <RevealTextLine
+                reveal={inView}
+                className="delay-400 lg:mb-20 mb-6"
+              >
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={step}
+                    initial={{ opacity: 0, y: 30 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -30 }}
+                    transition={{ duration: 0.3 }}
+                  >
+                    <span className="text-sm font-medium text-white">
+                      {progressData?.subStatus}
+                    </span>
+                  </motion.div>
+                </AnimatePresence>
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-500">
                 <ProgressBar value={progress} segments={5} />
