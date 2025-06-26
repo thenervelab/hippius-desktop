@@ -77,7 +77,7 @@ export default async function RootLayout({
             <Sidebar />
             <div className="flex flex-col flex-grow">
               <main className="flex-grow ml-[200px] p-6">
-                <SplashWrapper skipSplash={true}>{children}</SplashWrapper>
+                <SplashWrapper skipSplash={false}>{children}</SplashWrapper>
               </main>
               <div className="ml-[200px]">
                 <RootFooter />
