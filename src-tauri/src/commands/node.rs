@@ -7,21 +7,21 @@ use tokio::{
     process::Command,
 };
 
-use crate::constants::ipfs::{IpfsProgress, IPFS_NODE_SETUP_EVENT};
+use crate::constants::ipfs::{IpfsProgress, APP_SETUP_EVENT};
 use crate::utils::binary::ensure_ipfs_binary;
 
 static IPFS_HANDLE: OnceCell<Mutex<Option<tokio::process::Child>>> = OnceCell::new();
 
 #[tauri::command]
 pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
-    app.emit(IPFS_NODE_SETUP_EVENT, IpfsProgress::CheckingBinary)
+    app.emit(APP_SETUP_EVENT, IpfsProgress::CheckingBinary)
         .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
 
     let bin_path = ensure_ipfs_binary()
         .await
         .map_err(|e| format!("Binary fetch failed: {e}"))?;
 
-    app.emit(IPFS_NODE_SETUP_EVENT, IpfsProgress::StartingDaemon)
+    app.emit(APP_SETUP_EVENT, IpfsProgress::StartingDaemon)
         .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
 
     let mut child = Command::new(bin_path)
@@ -40,14 +40,12 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
             println!("[ipfs stdout] {}", line);
             if line.contains("Swarm listening on") {
                 app_clone
-                    .emit(IPFS_NODE_SETUP_EVENT, IpfsProgress::ConnectingToNetwork)
+                    .emit(APP_SETUP_EVENT, IpfsProgress::ConnectingToNetwork)
                     .ok();
             }
 
             if line.contains("Daemon is ready") || line.contains("API server listening") {
-                app_clone
-                    .emit(IPFS_NODE_SETUP_EVENT, IpfsProgress::Ready)
-                    .ok();
+                app_clone.emit(APP_SETUP_EVENT, IpfsProgress::Ready).ok();
             }
         }
     });

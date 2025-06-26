@@ -11,4 +11,4 @@ pub enum IpfsProgress {
 
 pub const KUBO_VERSION: &str = "0.35.0";
 
-pub const IPFS_NODE_SETUP_EVENT: &str = "ipfs_node_setup";
+pub const APP_SETUP_EVENT: &str = "app_setup_event";
