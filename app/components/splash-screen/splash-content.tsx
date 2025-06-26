@@ -21,7 +21,7 @@ export const PROGRESS_CONTENT = [
     subStatus: "Establishing peer connections ....",
   },
   {
-    icon: <Icons.CentralizedDataBase className="h-[224px] w-[220px]" />,
+    icon: <Icons.CentralizedDataBase className="h-[156px] w-[225px]" />,
     progress: 80,
     status: "Initializing Decentralized Database",
     subStatus: "Setting up database service ....",
