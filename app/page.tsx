@@ -1,4 +1,3 @@
-"use client";
 import { Metadata } from "next";
 import { createMetadata } from "@/lib/utils";
 import {
@@ -11,7 +10,12 @@ import {
 } from "lucide-react";
 import BlockchainStats from "@/components/blockchain-stats";
 import SearchBar from "@/components/search-bar";
-import { Icons } from "./components/ui";
+
+export const metadata: Metadata = createMetadata(
+  "Hippius Explorer - Decentralized Storage Blockchain",
+  "Web3 decentralized storage blockchain, part of the Bittensor ecosystem. Track blocks, nodes, miners, and IPFS/S3 metrics in real time.",
+  "Hippius Explorer, Decentralized Storage, Web3 Storage, IPFS Blockchain, Secure Cloud Storage, Blockchain Analytics, Subnet 75, Bittensor, real-time decentralized storage stats"
+);
 
 export default async function Home() {
   return (
@@ -25,7 +29,6 @@ export default async function Home() {
           Monitor your IPFS node status and performance
         </p>
       </section>
-      <Icons.CentralizedDataBase className="h-[156px] w-[225px]" />
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
