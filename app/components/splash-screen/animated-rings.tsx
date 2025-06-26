@@ -6,7 +6,7 @@ const MIDDLE_RING_DIAMETER = MIDDLE_RING_RADIUS * 2;
 const INNER_RING_RADIUS = 180;
 const INNER_RING_DIAMETER = INNER_RING_RADIUS * 2;
 
-export default function AnimatedRings({ step }: { step: number }) {
+export default function AnimatedRings() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [blurDiameter, setBlurDiameter] = useState(0);
   const [innerBlurDiameter, setInnerBlurDiameter] = useState(0);

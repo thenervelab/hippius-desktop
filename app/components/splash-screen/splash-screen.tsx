@@ -47,7 +47,7 @@ const SplashScreen = ({
       </div>
       <InView triggerOnce>
         {({ inView, ref }) => (
-          <div ref={ref}>{inView && <AnimatedRings step={step} />}</div>
+          <div ref={ref}>{inView && <AnimatedRings />}</div>
         )}
       </InView>
       {!showProgress && (
