@@ -8,9 +8,21 @@ const RevealTextLine: React.FC<{
   parentClassName?: string;
   rotate?: boolean;
   delay?: number;
-}> = ({ children, reveal, rotate, className, delay, parentClassName }) => {
+  onClick?: () => void;
+}> = ({
+  children,
+  reveal,
+  rotate,
+  className,
+  delay,
+  parentClassName,
+  onClick,
+}) => {
   return (
-    <span className={cn("overflow-y-hidden inline-flex", parentClassName)}>
+    <span
+      className={cn("overflow-y-hidden inline-flex", parentClassName)}
+      onClick={onClick}
+    >
       <span
         style={{ transitionDelay: delay ? `${delay}ms` : undefined }}
         className={cn(
