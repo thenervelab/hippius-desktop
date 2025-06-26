@@ -7,7 +7,9 @@ export const PROGRESS_CONTENT = [
     subStatus: "Verifying node status ....",
   },
   {
-    icon: <Icons.StartingDaemon className="h-[135px] w-[135px] animate-spin-fast overflow-hidden" />,
+    icon: (
+      <Icons.StartingDaemon className="h-[135px] w-[135px] animate-spin-fast overflow-hidden" />
+    ),
     progress: 40,
     status: "Starting Daemon",
     subStatus: "Preparing background services ....",
@@ -19,7 +21,7 @@ export const PROGRESS_CONTENT = [
     subStatus: "Establishing peer connections ....",
   },
   {
-    icon: <Icons.CentralizedDataBase className="h-[170px] w-[120px]" />,
+    icon: <Icons.CentralizedDataBase className="h-[224px] w-[220px]" />,
     progress: 80,
     status: "Initializing Decentralized Database",
     subStatus: "Setting up database service ....",

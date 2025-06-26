@@ -19,7 +19,7 @@ export default function SplashWrapper({
 
   // TEST: set loading false after 25s
   useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 25000);
+    const timer = setTimeout(() => setIsLoading(false), 20000);
     return () => clearTimeout(timer);
   }, []);
 

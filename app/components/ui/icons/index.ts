@@ -89,3 +89,4 @@ export { default as Home } from "./Home";
 export { default as DocumentText } from "./DocumentText";
 export { default as Notification } from "./Notification";
 export { default as Logout } from "./Logout";
+export { default as HippiusLogoLoader } from "./HippiusLogoLoader";
