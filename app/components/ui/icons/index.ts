@@ -85,3 +85,7 @@ export { default as ConnectingNetwork } from "./ConnectingNetwork";
 export { default as StartingDaemon } from "./StartingDaemon";
 export { default as CheckingIPFS } from "./CheckingIpfs";
 export { default as SideBarLeft } from "./SideBarLeft";
+export { default as Home } from "./Home";
+export { default as DocumentText } from "./DocumentText";
+export { default as Notification } from "./Notification";
+export { default as Logout } from "./Logout";
