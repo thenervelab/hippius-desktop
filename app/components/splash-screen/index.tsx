@@ -1,86 +1,54 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import SplashScreen from "./splash-screen";
-import { PROGRESS_CONTENT } from "./splash-content";
+import { AppSetupPhases } from "@/app/lib/types";
+import { listen } from "@tauri-apps/api/event";
+import { APP_SETUP_EVENT, APP_SETUP_PHASES } from "@/app/lib/constants";
+import { remap } from "@/app/lib/utils";
 
 export default function SplashWrapper({
   children,
-  skipSplash = false,
 }: {
   children: React.ReactNode;
   skipSplash?: boolean;
 }) {
-  const [progress, setProgress] = useState(0);
-  const [step, setStep] = useState(-1);
-  const [phase, setPhase] = useState<"logo" | "idle" | "animating" | "done">(
-    skipSplash ? "done" : "logo"
-  );
-  const [isLoading, setIsLoading] = useState(true);
+  const [phaseProgressionClock, setPhaseProgressionClock] = useState(0);
 
-  // TEST: set loading false after 20s
-  useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 20000);
-    return () => clearTimeout(timer);
-  }, []);
+  const [phase, setPhase] = useState<AppSetupPhases | null>(null);
 
-  const duration = 15000;
-  const totalSteps = PROGRESS_CONTENT.length;
-  const progressRef = useRef(0);
-
-  useEffect(() => {
-    if (phase !== "logo" || skipSplash) return;
-    const timer = setTimeout(() => {
-      setStep(0);
-      setProgress(0);
-      setPhase("idle");
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, [phase, skipSplash]);
-
-  useEffect(() => {
-    if (phase !== "idle") return;
-    const delay = 1500;
-    const timer = setTimeout(() => {
-      setPhase("animating");
-    }, delay);
-    return () => clearTimeout(timer);
+  const step = useMemo(() => {
+    if (phase) {
+      return APP_SETUP_PHASES.findIndex((v) => v === phase);
+    }
+    return 0;
   }, [phase]);
 
+  const progress = useMemo(() => {
+    const total = step + phaseProgressionClock;
+    return remap(total, 0, APP_SETUP_PHASES.length, 0, 100);
+  }, [phaseProgressionClock, step]);
+
   useEffect(() => {
-    if (phase !== "animating") return;
-    setProgress(0);
-    progressRef.current = 0;
-    let current = 0;
-    const intervalMs = duration / 100;
-    const interval = setInterval(() => {
-      if (current < 99) {
-        current += 1;
-        progressRef.current = current;
-        setProgress(current);
-      } else {
+    listen(APP_SETUP_EVENT, (event) => {
+      console.log("Received IPFS progress:", event.payload);
+      setPhase(event.payload as AppSetupPhases);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (phase && phase !== "ready") {
+      const interval = setInterval(() => {
+        setPhaseProgressionClock((v) => Math.min(v + 0.2, 1));
+      }, 300);
+
+      return () => {
         clearInterval(interval);
-      }
-    }, intervalMs);
-    return () => clearInterval(interval);
-  }, [phase, duration]);
-
-  useEffect(() => {
-    if (phase === "animating" && progress >= 99 && !isLoading) {
-      setProgress(100);
-      setTimeout(() => setPhase("done"), 300);
+        setPhaseProgressionClock(0);
+      };
     }
-  }, [isLoading, phase, progress]);
+  }, [phase]);
 
-  useEffect(() => {
-    if (phase !== "animating") return;
-    const currentStep = Math.min(
-      Math.floor((progress / 100) * totalSteps),
-      totalSteps - 1
-    );
-    if (currentStep !== step) setStep(currentStep);
-  }, [progress, totalSteps, step, phase]);
-
-  if (phase !== "done") {
+  if (phase !== "ready") {
     return (
       <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center w-full h-full">
         <SplashScreen step={step} progress={progress} />

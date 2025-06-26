@@ -4,7 +4,7 @@ import { InView } from "react-intersection-observer";
 import Link from "next/link";
 import AnimatedRings from "./animated-rings";
 import { ProgressBar } from "../progress-bar";
-import { PROGRESS_CONTENT } from "./splash-content";
+import { PHASE_CONTENT } from "./splash-content";
 import AnimatedProgressIcon from "./animated-icons";
 import { AnimatePresence, motion } from "framer-motion";
 
@@ -15,8 +15,9 @@ const SplashScreen = ({
   step: number;
   progress: number;
 }) => {
-  const showProgress = step >= 0 && step < PROGRESS_CONTENT.length;
-  const progressData = PROGRESS_CONTENT[step];
+  const contentArr = Object.values(PHASE_CONTENT);
+  const showProgress = step >= 0 && step < contentArr.length;
+  const progressData = contentArr[step];
   const roundedProgress = Math.round(progress);
 
   return (
