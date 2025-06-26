@@ -70,6 +70,9 @@ export default {
           20: "rgb(var(--grey-20) / <alpha-value>)",
           10: "rgb(var(--grey-10) / <alpha-value>)",
         },
+        error: {
+          80: "rgb(var(--error-80) / <alpha-value>)",
+        },
       },
       zIndex: {
         1: "1",

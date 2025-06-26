@@ -6,7 +6,7 @@ const MIDDLE_RING_DIAMETER = MIDDLE_RING_RADIUS * 2;
 const INNER_RING_RADIUS = 180;
 const INNER_RING_DIAMETER = INNER_RING_RADIUS * 2;
 
-export default function AnimatedRings({ step }: { step: number }) {
+export default function AnimatedRings() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [blurDiameter, setBlurDiameter] = useState(0);
   const [innerBlurDiameter, setInnerBlurDiameter] = useState(0);
@@ -45,22 +45,20 @@ export default function AnimatedRings({ step }: { step: number }) {
           zIndex: 10,
         }}
       />
-      {(step === -1 || step === 0) && (
-        <div
-          className="absolute rounded-full"
-          style={{
-            width: `${innerBlurDiameter}px`, 
-            height: `${innerBlurDiameter}px`,
-            left: "50%",
-            top: "50%",
-            transform: "translate(-50%, -50%)",
-            background: "#274996", 
-            filter: "blur(90px)",
-            pointerEvents: "none",
-            zIndex: 11,
-          }}
-        />
-      )}
+      <div
+        className="absolute rounded-full"
+        style={{
+          width: `${innerBlurDiameter}px`,
+          height: `${innerBlurDiameter}px`,
+          left: "50%",
+          top: "50%",
+          transform: "translate(-50%, -50%)",
+          background: "#274996",
+          filter: "blur(80px)",
+          pointerEvents: "none",
+          zIndex: 11,
+        }}
+      />
 
       {/* --- Animated SVG Rings --- */}
       <svg

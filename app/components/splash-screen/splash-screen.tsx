@@ -47,7 +47,7 @@ const SplashScreen = ({
       </div>
       <InView triggerOnce>
         {({ inView, ref }) => (
-          <div ref={ref}>{inView && <AnimatedRings step={step} />}</div>
+          <div ref={ref}>{inView && <AnimatedRings />}</div>
         )}
       </InView>
       {!showProgress && (
@@ -60,10 +60,12 @@ const SplashScreen = ({
               href="/"
             >
               <RevealTextLine rotate reveal={inView}>
-                <Icons.HippiusLogo className="h-[100px] w-[100px]" />
+                <Icons.HippiusLogoLoader className="h-[100px] w-[100px]" />
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-300">
-                <span className="text-[32px] font-medium leading-[40px]">Hippius</span>
+                <span className="text-[32px] font-medium leading-[40px]">
+                  Hippius
+                </span>
               </RevealTextLine>
             </Link>
           )}

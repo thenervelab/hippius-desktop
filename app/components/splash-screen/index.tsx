@@ -5,19 +5,21 @@ import { PROGRESS_CONTENT } from "./splash-content";
 
 export default function SplashWrapper({
   children,
+  skipSplash = false,
 }: {
   children: React.ReactNode;
+  skipSplash?: boolean;
 }) {
   const [progress, setProgress] = useState(0);
   const [step, setStep] = useState(-1);
   const [phase, setPhase] = useState<"logo" | "idle" | "animating" | "done">(
-    "logo"
+    skipSplash ? "done" : "logo"
   );
   const [isLoading, setIsLoading] = useState(true);
 
-  // TEST: set loading false after 25s
+  // TEST: set loading false after 20s
   useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 25000);
+    const timer = setTimeout(() => setIsLoading(false), 20000);
     return () => clearTimeout(timer);
   }, []);
 
@@ -26,24 +28,23 @@ export default function SplashWrapper({
   const progressRef = useRef(0);
 
   useEffect(() => {
-    if (phase !== "logo") return;
+    if (phase !== "logo" || skipSplash) return;
     const timer = setTimeout(() => {
       setStep(0);
       setProgress(0);
       setPhase("idle");
     }, 3000);
     return () => clearTimeout(timer);
-  }, [phase]);
+  }, [phase, skipSplash]);
 
   useEffect(() => {
-  if (phase !== "idle") return;
-  const delay = 1500; 
-  const timer = setTimeout(() => {
-    setPhase("animating");
-  }, delay);
-  return () => clearTimeout(timer);
-}, [phase]);
-
+    if (phase !== "idle") return;
+    const delay = 1500;
+    const timer = setTimeout(() => {
+      setPhase("animating");
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [phase]);
 
   useEffect(() => {
     if (phase !== "animating") return;
@@ -64,11 +65,11 @@ export default function SplashWrapper({
   }, [phase, duration]);
 
   useEffect(() => {
-    if (phase === "animating" && progressRef.current >= 99 && !isLoading) {
+    if (phase === "animating" && progress >= 99 && !isLoading) {
       setProgress(100);
       setTimeout(() => setPhase("done"), 300);
     }
-  }, [isLoading, phase]);
+  }, [isLoading, phase, progress]);
 
   useEffect(() => {
     if (phase !== "animating") return;
