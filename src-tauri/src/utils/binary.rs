@@ -23,8 +23,6 @@ pub fn get_binary_path() -> Result<PathBuf, String> {
 pub async fn ensure_ipfs_binary() -> Result<PathBuf, String> {
     let binary_path = get_binary_path()?;
 
-    eprintln!("GOT HERE");
-
     // If binary already exists, check if it's executable and valid
     if binary_path.exists() {
         // On non-Windows systems, check if the binary is executable

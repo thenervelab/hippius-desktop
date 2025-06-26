@@ -59,8 +59,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             })
             .build(app)?;
 
+        let handle = app.handle().clone();
+
         tauri::async_runtime::spawn(async {
-            if let Err(e) = start_ipfs_daemon().await {
+            if let Err(e) = start_ipfs_daemon(handle).await {
                 eprintln!("Failed to start IPFS daemon: {e:?}");
             }
         });
