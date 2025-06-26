@@ -7,22 +7,47 @@ use tokio::{
     process::Command,
 };
 
-use crate::constants::ipfs::{IpfsProgress, APP_SETUP_EVENT};
+use crate::constants::ipfs::{AppSetupPhase, APP_SETUP_EVENT};
 use crate::utils::binary::ensure_ipfs_binary;
 
 static IPFS_HANDLE: OnceCell<Mutex<Option<tokio::process::Child>>> = OnceCell::new();
 
+static CURRENT_SETUP_PHASE: OnceCell<Mutex<Option<AppSetupPhase>>> = OnceCell::new();
+
+async fn emit_and_update_phase(app: AppHandle, phase: AppSetupPhase) -> AppHandle {
+    let mutex = CURRENT_SETUP_PHASE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .await;
+
+    {
+        // Replace inside a block so the borrow ends before emit
+        let mut guard = mutex;
+        *guard = Some(phase.clone());
+    }
+
+    app.emit(APP_SETUP_EVENT, phase)
+        .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
+
+    app
+}
+
+#[tauri::command]
+pub async fn get_current_setup_phase() -> Option<String> {
+    let mutex = CURRENT_SETUP_PHASE.get()?;
+    let phase = mutex.lock().await;
+    serde_json::to_string(&*phase).ok()
+}
+
 #[tauri::command]
 pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
-    app.emit(APP_SETUP_EVENT, IpfsProgress::CheckingBinary)
-        .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
+    let app = emit_and_update_phase(app, AppSetupPhase::CheckingBinary).await;
 
     let bin_path = ensure_ipfs_binary()
         .await
         .map_err(|e| format!("Binary fetch failed: {e}"))?;
 
-    app.emit(APP_SETUP_EVENT, IpfsProgress::StartingDaemon)
-        .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
+    let app = emit_and_update_phase(app, AppSetupPhase::StartingDaemon).await;
 
     let mut child = Command::new(bin_path)
         .arg("daemon")
@@ -31,30 +56,25 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Spawn failed: {e}"))?;
 
-    // Optional: monitor stdout
     let stdout = child.stdout.take().unwrap();
-    let app_clone = app.clone();
+
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             println!("[ipfs stdout] {}", line);
             if line.contains("Swarm listening on") {
-                app_clone
-                    .emit(APP_SETUP_EVENT, IpfsProgress::ConnectingToNetwork)
-                    .ok();
+                emit_and_update_phase(app.clone(), AppSetupPhase::ConnectingToNetwork).await;
             }
 
             if line.contains("Daemon is ready") || line.contains("API server listening") {
-                app_clone.emit(APP_SETUP_EVENT, IpfsProgress::Ready).ok();
+                emit_and_update_phase(app.clone(), AppSetupPhase::Ready).await;
             }
         }
     });
 
-    IPFS_HANDLE
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .await
-        .replace(child);
+    let mutex = IPFS_HANDLE.get_or_init(|| Mutex::new(None));
+    let mut guard = mutex.lock().await;
+    guard.replace(child);
 
     Ok(())
 }

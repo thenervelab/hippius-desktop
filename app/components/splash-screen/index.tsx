@@ -5,6 +5,7 @@ import { AppSetupPhases } from "@/app/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { APP_SETUP_EVENT, APP_SETUP_PHASES } from "@/app/lib/constants";
 import { remap } from "@/app/lib/utils";
+import { invoke } from "@tauri-apps/api/core";
 
 export default function SplashWrapper({
   children,
@@ -29,11 +30,29 @@ export default function SplashWrapper({
   }, [phaseProgressionClock, step]);
 
   useEffect(() => {
-    listen(APP_SETUP_EVENT, (event) => {
-      console.log("Received IPFS progress:", event.payload);
-      setPhase(event.payload as AppSetupPhases);
-    });
-  }, []);
+    if (!phase) {
+      invoke("get_current_setup_phase").then((p) => {
+        if (p) {
+          // console.log("INIT PHASE ", p);
+          const parsedPhase = JSON.parse(p as string);
+          setPhase(parsedPhase as AppSetupPhases);
+        }
+      });
+    }
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase && phase !== "ready") {
+      const unlisten = listen(APP_SETUP_EVENT, (event) => {
+        console.log("Received IPFS progress:", event.payload);
+        setPhase(event.payload as AppSetupPhases);
+      });
+
+      return () => {
+        unlisten.then((fn) => fn());
+      };
+    }
+  }, [phase]);
 
   useEffect(() => {
     if (phase && phase !== "ready") {
