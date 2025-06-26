@@ -20,7 +20,7 @@ export default function ResponsiveContent({
           collapsed ? "ml-[60px]" : "ml-[161px]"
         )}
       >
-        <SplashWrapper skipSplash={true}>{children}</SplashWrapper>
+        <SplashWrapper skipSplash={false}>{children}</SplashWrapper>
       </main>
       <div
         className={cn(
