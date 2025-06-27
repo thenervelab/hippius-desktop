@@ -35,7 +35,6 @@ export default function SplashWrapper({
   useEffect(() => {
     if (phase !== "ready") {
       const unlisten = listen(APP_SETUP_EVENT, (event) => {
-        console.log("Received IPFS progress:", event.payload);
         setPhase(event.payload as AppSetupPhases);
       });
 
@@ -46,22 +45,9 @@ export default function SplashWrapper({
   }, [phase, setPhase]);
 
   useEffect(() => {
-    if (phase && phase !== "ready") {
-      const interval = setInterval(() => {
-        setPhaseProgressionClock((v) => Math.min(v + 0.2, 1));
-      }, 300);
-
-      return () => {
-        clearInterval(interval);
-        setPhaseProgressionClock(0);
-      };
-    }
-  }, [phase, setPhase, setPhaseProgressionClock]);
-
-  useEffect(() => {
     let frameId: number;
     let startTime: number | null = null;
-    const duration = 4000; // animation duration in ms
+    const duration = 4000;
 
     const animate = (timestamp: number) => {
       if (!startTime) startTime = timestamp;
