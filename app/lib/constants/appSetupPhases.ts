@@ -4,6 +4,8 @@ export const APP_SETUP_PHASES = [
   "checking_binary",
   "starting_daemon",
   "connecting_to_network",
+  "initialising_database",
+  "syncing_data",
   "ready",
 ] as const;
 

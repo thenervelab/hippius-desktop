@@ -1,11 +1,9 @@
-use std::time::Duration;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     Builder, Manager, Wry,
 };
-use tokio::time::sleep;
 
 use crate::commands::node::start_ipfs_daemon;
 
@@ -64,9 +62,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         let handle = app.handle().clone();
 
         tauri::async_runtime::spawn(async {
-            // TODO - Remove this sleep
-            sleep(Duration::from_secs(10)).await;
-
             if let Err(e) = start_ipfs_daemon(handle).await {
                 eprintln!("Failed to start IPFS daemon: {e:?}");
             }

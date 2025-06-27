@@ -45,28 +45,25 @@ export default function SplashWrapper({
   }, [phase, setPhase]);
 
   useEffect(() => {
-    let frameId: number;
-    let startTime: number | null = null;
-    const duration = 4000;
-
-    const animate = (timestamp: number) => {
-      if (!startTime) startTime = timestamp;
-      const elapsed = timestamp - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      setPhaseProgressionClock(progress);
-      if (progress < 1) {
-        frameId = requestAnimationFrame(animate);
-      }
-    };
-
     if (phase && phase !== "ready") {
-      frameId = requestAnimationFrame(animate);
-    }
+      const duration = 4000;
+      const start = performance.now();
 
-    return () => {
-      cancelAnimationFrame(frameId);
-      setPhaseProgressionClock(0);
-    };
+      const interval = setInterval(() => {
+        const elapsed = performance.now() - start;
+        const progress = Math.min(elapsed / duration, 1);
+        setPhaseProgressionClock(progress);
+
+        if (progress >= 1) {
+          clearInterval(interval);
+        }
+      }, 16);
+
+      return () => {
+        clearInterval(interval);
+        setPhaseProgressionClock(0);
+      };
+    }
   }, [phase, setPhaseProgressionClock]);
 
   useEffect(() => {

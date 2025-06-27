@@ -41,18 +41,25 @@ pub async fn get_current_setup_phase() -> Option<String> {
     serde_json::to_string(&*phase).ok()
 }
 
+const SMALL_SLEEP: u64 = 4;
+const LARGE_SLEEP: u64 = 15;
+
 #[tauri::command]
 pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
+    // TODO - Remove this sleep
+    sleep(Duration::from_secs(LARGE_SLEEP)).await;
+
     let app = emit_and_update_phase(app, AppSetupPhase::CheckingBinary).await;
+    // TODO - Remove this sleep
+    sleep(Duration::from_secs(SMALL_SLEEP)).await;
 
     let bin_path = ensure_ipfs_binary()
         .await
         .map_err(|e| format!("Binary fetch failed: {e}"))?;
 
-    // TODO - Remove this sleep
-    sleep(Duration::from_secs(4)).await;
-
     let app = emit_and_update_phase(app, AppSetupPhase::StartingDaemon).await;
+    // TODO - Remove this sleep
+    sleep(Duration::from_secs(SMALL_SLEEP)).await;
 
     let mut child = Command::new(bin_path)
         .arg("daemon")
@@ -68,14 +75,22 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         while let Ok(Some(line)) = lines.next_line().await {
             println!("[ipfs stdout] {}", line);
             if line.contains("Swarm listening on") {
-                // TODO - Remove this sleep
-                sleep(Duration::from_secs(4)).await;
                 emit_and_update_phase(app.clone(), AppSetupPhase::ConnectingToNetwork).await;
             }
 
             if line.contains("Daemon is ready") || line.contains("API server listening") {
                 // TODO - Remove this sleep
-                sleep(Duration::from_secs(4)).await;
+                sleep(Duration::from_secs(SMALL_SLEEP)).await;
+
+                emit_and_update_phase(app.clone(), AppSetupPhase::InitialisingDatabase).await;
+                // TODO - Remove this sleep
+                sleep(Duration::from_secs(SMALL_SLEEP)).await;
+
+                emit_and_update_phase(app.clone(), AppSetupPhase::SyncingData).await;
+
+                // TODO - Remove this sleep
+                sleep(Duration::from_secs(SMALL_SLEEP)).await;
+
                 emit_and_update_phase(app.clone(), AppSetupPhase::Ready).await;
             }
         }

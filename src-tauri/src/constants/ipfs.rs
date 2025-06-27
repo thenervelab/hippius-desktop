@@ -6,6 +6,8 @@ pub enum AppSetupPhase {
     CheckingBinary,
     StartingDaemon,
     ConnectingToNetwork,
+    InitialisingDatabase,
+    SyncingData,
     Ready,
 }
 
