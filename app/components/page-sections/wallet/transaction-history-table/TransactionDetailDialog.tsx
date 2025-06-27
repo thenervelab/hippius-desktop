@@ -3,7 +3,7 @@ import { CloseCircle } from "@/components/ui/icons";
 
 import TransactionTypeBadge from "./TransactionTypeBadge";
 import { TransactionObject } from "@/app/lib/hooks/api/useBillingTransactions";
-import { formatDate } from "./TransactionHistoryTable";
+import { formatDate } from ".";
 
 export interface TransactionDetailDialogProps {
   open: boolean;

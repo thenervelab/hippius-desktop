@@ -12,7 +12,8 @@ export interface Account {
   reserved_balance: string;
   misc_frozen_balance: string;
   fee_frozen_balance: string;
-  total_balance: string;
+  total_balance: string | any;
+  credit?: string;
   processed_timestamp: string;
 }
 

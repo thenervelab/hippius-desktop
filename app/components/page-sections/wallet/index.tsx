@@ -5,7 +5,7 @@ import React from "react";
 import { AbstractIconWrapper, ProfileCard } from "../../ui";
 import HeaderText from "./HeaderText";
 import { Clock } from "../../ui/icons";
-import TransactionHistoryTable from "./TransactionHistoryTable";
+import TransactionHistoryTable from "./transaction-history-table";
 import SubscriptionPlansWidget from "./SubscriptionPlansWidget";
 import WalletBalanceWidgetWithGraph from "./WalletBalanceWidgetWithGraph";
 
