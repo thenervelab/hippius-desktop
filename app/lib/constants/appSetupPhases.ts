@@ -1,7 +1,7 @@
 import { ReactNode } from "react";
 
 export const APP_SETUP_PHASES = [
-  "check_binary",
+  "checking_binary",
   "starting_daemon",
   "connecting_to_network",
   "ready",

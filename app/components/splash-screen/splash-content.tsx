@@ -3,7 +3,7 @@ import { Icons } from "../ui";
 import { AppSetupPhases } from "@/app/lib/types";
 
 export const PHASE_CONTENT: Record<AppSetupPhases, AppSetupPhaseContent> = {
-  check_binary: {
+  checking_binary: {
     icon: <Icons.CheckingIPFS className="h-[140px] w-[230px]" />,
     status: "Checking IPFS Status",
     subStatus: "Verifying node status ....",
@@ -25,9 +25,14 @@ export const PHASE_CONTENT: Record<AppSetupPhases, AppSetupPhaseContent> = {
   //   status: "Initializing Decentralized Database",
   //   subStatus: "Setting up database service ....",
   // },
+  // ready: {
+  //   icon: <Icons.SyncData className="h-[170px] w-[194px]" />,
+  //   status: "Syncing Data",
+  //   subStatus: "Setting up database service ....",
+  // },
   ready: {
     icon: <Icons.SyncData className="h-[170px] w-[194px]" />,
-    status: "Syncing Data",
-    subStatus: "Setting up database service ....",
+    status: "Preparing your Dashboard",
+    subStatus: "Setting up your dashboard ....",
   },
 };

@@ -1,11 +1,13 @@
 "use client";
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
 import SplashScreen from "./splash-screen";
 import { AppSetupPhases } from "@/app/lib/types";
 import { listen } from "@tauri-apps/api/event";
-import { APP_SETUP_EVENT, APP_SETUP_PHASES } from "@/app/lib/constants";
-import { remap } from "@/app/lib/utils";
+import { APP_SETUP_EVENT } from "@/app/lib/constants";
 import { invoke } from "@tauri-apps/api/core";
+import { useAtom, useSetAtom } from "jotai";
+import { phaseAtom, phaseProgressionClockAtom } from "./atoms";
+import { cn } from "@/app/lib/utils";
 
 export default function SplashWrapper({
   children,
@@ -13,36 +15,25 @@ export default function SplashWrapper({
   children: React.ReactNode;
   skipSplash?: boolean;
 }) {
-  const [phaseProgressionClock, setPhaseProgressionClock] = useState(0);
-
-  const [phase, setPhase] = useState<AppSetupPhases | null>(null);
-
-  const step = useMemo(() => {
-    if (phase) {
-      return APP_SETUP_PHASES.findIndex((v) => v === phase);
-    }
-    return 0;
-  }, [phase]);
-
-  const progress = useMemo(() => {
-    const total = step + phaseProgressionClock;
-    return remap(total, 0, APP_SETUP_PHASES.length, 0, 100);
-  }, [phaseProgressionClock, step]);
+  const [phase, setPhase] = useAtom(phaseAtom);
+  const setPhaseProgressionClock = useSetAtom(phaseProgressionClockAtom);
+  const [keepSplashscreenInDom, setKeepSplacescreenInDom] = useState(true);
 
   useEffect(() => {
     if (!phase) {
       invoke("get_current_setup_phase").then((p) => {
-        if (p) {
-          // console.log("INIT PHASE ", p);
+        try {
           const parsedPhase = JSON.parse(p as string);
-          setPhase(parsedPhase as AppSetupPhases);
-        }
+          if (parsedPhase) {
+            setPhase(parsedPhase as AppSetupPhases);
+          }
+        } catch {}
       });
     }
-  }, [phase]);
+  }, [phase, setPhase]);
 
   useEffect(() => {
-    if (phase && phase !== "ready") {
+    if (phase !== "ready") {
       const unlisten = listen(APP_SETUP_EVENT, (event) => {
         console.log("Received IPFS progress:", event.payload);
         setPhase(event.payload as AppSetupPhases);
@@ -52,7 +43,7 @@ export default function SplashWrapper({
         unlisten.then((fn) => fn());
       };
     }
-  }, [phase]);
+  }, [phase, setPhase]);
 
   useEffect(() => {
     if (phase && phase !== "ready") {
@@ -65,15 +56,35 @@ export default function SplashWrapper({
         setPhaseProgressionClock(0);
       };
     }
+  }, [phase, setPhase, setPhaseProgressionClock]);
+
+  useEffect(() => {
+    if (phase === "ready") {
+      const timeout = setTimeout(() => {
+        setKeepSplacescreenInDom(false);
+      }, 1000);
+
+      return () => {
+        clearTimeout(timeout);
+      };
+    }
   }, [phase]);
 
-  if (phase !== "ready") {
-    return (
-      <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center w-full h-full">
-        <SplashScreen step={step} progress={progress} />
-      </div>
-    );
-  }
+  const isReady = phase === "ready";
 
-  return <>{children}</>;
+  return (
+    <>
+      {keepSplashscreenInDom && (
+        <div
+          className={cn(
+            "fixed inset-0 z-[9999] flex flex-col items-center justify-center w-full h-full duration-300",
+            isReady && "pointer-events-none opacity-0 scale-90"
+          )}
+        >
+          <SplashScreen />
+        </div>
+      )}
+      {isReady && children}
+    </>
+  );
 }

@@ -9,6 +9,8 @@ use tokio::{
 
 use crate::constants::ipfs::{AppSetupPhase, APP_SETUP_EVENT};
 use crate::utils::binary::ensure_ipfs_binary;
+use std::time::Duration;
+use tokio::time::sleep;
 
 static IPFS_HANDLE: OnceCell<Mutex<Option<tokio::process::Child>>> = OnceCell::new();
 
@@ -34,7 +36,7 @@ async fn emit_and_update_phase(app: AppHandle, phase: AppSetupPhase) -> AppHandl
 
 #[tauri::command]
 pub async fn get_current_setup_phase() -> Option<String> {
-    let mutex = CURRENT_SETUP_PHASE.get()?;
+    let mutex = CURRENT_SETUP_PHASE.get_or_init(|| Mutex::new(None));
     let phase = mutex.lock().await;
     serde_json::to_string(&*phase).ok()
 }
@@ -46,6 +48,8 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
     let bin_path = ensure_ipfs_binary()
         .await
         .map_err(|e| format!("Binary fetch failed: {e}"))?;
+
+    sleep(Duration::from_secs(8)).await;
 
     let app = emit_and_update_phase(app, AppSetupPhase::StartingDaemon).await;
 
@@ -63,10 +67,12 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         while let Ok(Some(line)) = lines.next_line().await {
             println!("[ipfs stdout] {}", line);
             if line.contains("Swarm listening on") {
+                sleep(Duration::from_secs(8)).await;
                 emit_and_update_phase(app.clone(), AppSetupPhase::ConnectingToNetwork).await;
             }
 
             if line.contains("Daemon is ready") || line.contains("API server listening") {
+                sleep(Duration::from_secs(8)).await;
                 emit_and_update_phase(app.clone(), AppSetupPhase::Ready).await;
             }
         }
