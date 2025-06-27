@@ -45,25 +45,27 @@ export default function SplashWrapper({
   }, [phase, setPhase]);
 
   useEffect(() => {
-    if (phase && phase !== "ready") {
-      const duration = 4000;
-      const start = performance.now();
+    if (!phase || phase === "ready") return;
 
-      const interval = setInterval(() => {
-        const elapsed = performance.now() - start;
-        const progress = Math.min(elapsed / duration, 1);
-        setPhaseProgressionClock(progress);
+    const duration = 4000;
+    const start = performance.now();
 
-        if (progress >= 1) {
-          clearInterval(interval);
-        }
-      }, 16);
+    const update = () => {
+      const now = performance.now();
+      const elapsed = now - start;
+      const progress = Math.min(elapsed / duration, 1);
+      setPhaseProgressionClock(progress);
+    };
 
-      return () => {
-        clearInterval(interval);
-        setPhaseProgressionClock(0);
-      };
-    }
+    // Immediately reset progress
+    setPhaseProgressionClock(0);
+
+    const interval = setInterval(update, 16);
+
+    return () => {
+      clearInterval(interval);
+      setPhaseProgressionClock(0); // Reset again on cleanup
+    };
   }, [phase, setPhaseProgressionClock]);
 
   useEffect(() => {
