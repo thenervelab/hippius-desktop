@@ -30,7 +30,8 @@ const NavItem: React.FC<NavItemProps> = ({
           "bg-blue-50 text-primary-40": active,
           "hover:bg-gray-100 hover:text-primary-40 text-grey-70":
             !active && label !== "Logout",
-          "hover:bg-gray-100 text-error-80": label === "Logout",
+          "hover:bg-gray-100 hover:text-red-600 text-error-80":
+            label === "Logout",
         },
         className
       )}
@@ -61,8 +62,8 @@ const NavItem: React.FC<NavItemProps> = ({
         <div
           className={cn(
             "absolute left-[3px] bg-primary-50 w-0.5 h-[22px] rounded-3xl",
-            !active &&
-              "opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+            !active && "opacity-0  transition-opacity duration-300",
+            !active && label !== "Logout" && "group-hover:opacity-100"
           )}
         />
 
