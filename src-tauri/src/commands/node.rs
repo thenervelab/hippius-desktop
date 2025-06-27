@@ -49,7 +49,8 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| format!("Binary fetch failed: {e}"))?;
 
-    sleep(Duration::from_secs(8)).await;
+    // TODO - Remove this sleep
+    sleep(Duration::from_secs(4)).await;
 
     let app = emit_and_update_phase(app, AppSetupPhase::StartingDaemon).await;
 
@@ -67,12 +68,14 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         while let Ok(Some(line)) = lines.next_line().await {
             println!("[ipfs stdout] {}", line);
             if line.contains("Swarm listening on") {
-                sleep(Duration::from_secs(8)).await;
+                // TODO - Remove this sleep
+                sleep(Duration::from_secs(4)).await;
                 emit_and_update_phase(app.clone(), AppSetupPhase::ConnectingToNetwork).await;
             }
 
             if line.contains("Daemon is ready") || line.contains("API server listening") {
-                sleep(Duration::from_secs(8)).await;
+                // TODO - Remove this sleep
+                sleep(Duration::from_secs(4)).await;
                 emit_and_update_phase(app.clone(), AppSetupPhase::Ready).await;
             }
         }
