@@ -3,21 +3,19 @@ import { AbstractCity, Graphsheet, RevealTextLine, Icons } from "../ui";
 import { InView } from "react-intersection-observer";
 import Link from "next/link";
 import AnimatedRings from "./animated-rings";
-import { ProgressBar } from "../progress-bar";
-import { PROGRESS_CONTENT } from "./splash-content";
+import { PHASE_CONTENT } from "./splash-content";
 import AnimatedProgressIcon from "./animated-icons";
 import { AnimatePresence, motion } from "framer-motion";
+import ProgressDisplay from "./progress-display";
+import ProgressBarDisplay from "./progress-bar-display";
+import { useAtomValue } from "jotai";
+import { stepAtom } from "./atoms";
 
-const SplashScreen = ({
-  step,
-  progress,
-}: {
-  step: number;
-  progress: number;
-}) => {
-  const showProgress = step >= 0 && step < PROGRESS_CONTENT.length;
-  const progressData = PROGRESS_CONTENT[step];
-  const roundedProgress = Math.round(progress);
+const SplashScreen = () => {
+  const step = useAtomValue(stepAtom);
+  const contentArr = Object.values(PHASE_CONTENT);
+  const showProgress = step >= 0 && step < contentArr.length;
+  const progressData = contentArr[step];
 
   return (
     <div className="flex grow flex-col items-center w-full h-full justify-center bg-primary-10 relative overflow-hidden">
@@ -89,9 +87,7 @@ const SplashScreen = ({
               style={{ top: "72%" }}
             >
               <RevealTextLine rotate reveal={inView}>
-                <span className="font-digital font-normal text-[#3167DD] text-[34px] leading-[40px] overflow-hidden">
-                  {roundedProgress}%
-                </span>
+                <ProgressDisplay />
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-300">
                 <AnimatePresence mode="wait">
@@ -127,7 +123,7 @@ const SplashScreen = ({
                 </AnimatePresence>
               </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-500">
-                <ProgressBar value={progress} segments={5} />
+                <ProgressBarDisplay />
               </RevealTextLine>
             </div>
           )}

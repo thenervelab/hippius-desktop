@@ -41,12 +41,11 @@ export const ProgressBar = ({
           >
             <div
               className={cn(
-                "absolute left-0 top-0 h-full transition-all duration-300",
-                "bg-[#3167DD]",
+                "absolute left-0 top-0 h-full w-full origin-right bg-[#3167DD]",
                 isStuck && "pulse-blue"
               )}
               style={{
-                width: `${fill * 100}%`,
+                transform: `translateX(${fill * 100 - 100}%)`,
               }}
             />
           </div>

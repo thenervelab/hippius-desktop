@@ -1,14 +1,23 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod blocks;
+mod builder_blocks;
+mod commands;
+mod constants;
+mod utils;
 
-use crate::blocks::system_tray::add_system_tray;
+use builder_blocks::{on_window_event::on_window_event, setup::setup};
+use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
 
 fn main() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().invoke_handler(tauri::generate_handler![
+        start_ipfs_daemon,
+        stop_ipfs_daemon,
+        get_current_setup_phase
+    ]);
 
-    let builder = add_system_tray(builder);
+    let builder = setup(builder);
+    let builder = on_window_event(builder);
 
     builder
         .run(tauri::generate_context!())

@@ -1,92 +1,100 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import SplashScreen from "./splash-screen";
-import { PROGRESS_CONTENT } from "./splash-content";
+import { AppSetupPhases } from "@/app/lib/types";
+import { listen } from "@tauri-apps/api/event";
+import { APP_SETUP_EVENT } from "@/app/lib/constants";
+import { invoke } from "@tauri-apps/api/core";
+import { useAtom, useSetAtom } from "jotai";
+import { phaseAtom, phaseProgressionClockAtom } from "./atoms";
+import { cn } from "@/app/lib/utils";
 
 export default function SplashWrapper({
   children,
-  skipSplash = false,
 }: {
   children: React.ReactNode;
   skipSplash?: boolean;
 }) {
-  const [progress, setProgress] = useState(0);
-  const [step, setStep] = useState(-1);
-  const [phase, setPhase] = useState<"logo" | "idle" | "animating" | "done">(
-    skipSplash ? "done" : "logo"
-  );
-  const [isLoading, setIsLoading] = useState(true);
-
-  // TEST: set loading false after 20s
-  useEffect(() => {
-    const timer = setTimeout(() => setIsLoading(false), 20000);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const duration = 15000;
-  const totalSteps = PROGRESS_CONTENT.length;
-  const progressRef = useRef(0);
+  const [phase, setPhase] = useAtom(phaseAtom);
+  const setPhaseProgressionClock = useSetAtom(phaseProgressionClockAtom);
+  const [keepSplashscreenInDom, setKeepSplacescreenInDom] = useState(true);
 
   useEffect(() => {
-    if (phase !== "logo" || skipSplash) return;
-    const timer = setTimeout(() => {
-      setStep(0);
-      setProgress(0);
-      setPhase("idle");
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, [phase, skipSplash]);
+    if (!phase) {
+      invoke("get_current_setup_phase").then((p) => {
+        try {
+          const parsedPhase = JSON.parse(p as string);
+          if (parsedPhase) {
+            setPhase(parsedPhase as AppSetupPhases);
+          }
+        } catch {}
+      });
+    }
+  }, [phase, setPhase]);
 
   useEffect(() => {
-    if (phase !== "idle") return;
-    const delay = 1500;
-    const timer = setTimeout(() => {
-      setPhase("animating");
-    }, delay);
-    return () => clearTimeout(timer);
+    if (phase !== "ready") {
+      const unlisten = listen(APP_SETUP_EVENT, (event) => {
+        setPhase(event.payload as AppSetupPhases);
+      });
+
+      return () => {
+        unlisten.then((fn) => fn());
+      };
+    }
+  }, [phase, setPhase]);
+
+  useEffect(() => {
+    if (!phase || phase === "ready") return;
+
+    const duration = 4000;
+    const start = performance.now();
+
+    const update = () => {
+      const now = performance.now();
+      const elapsed = now - start;
+      const progress = Math.min(elapsed / duration, 1);
+      setPhaseProgressionClock(progress);
+    };
+
+    // Immediately reset progress
+    setPhaseProgressionClock(0);
+
+    const interval = setInterval(update, 16);
+
+    return () => {
+      clearInterval(interval);
+      setPhaseProgressionClock(0); // Reset again on cleanup
+    };
+  }, [phase, setPhaseProgressionClock]);
+
+  useEffect(() => {
+    if (phase === "ready") {
+      const timeout = setTimeout(() => {
+        setKeepSplacescreenInDom(false);
+      }, 1000);
+
+      return () => {
+        clearTimeout(timeout);
+      };
+    }
   }, [phase]);
 
-  useEffect(() => {
-    if (phase !== "animating") return;
-    setProgress(0);
-    progressRef.current = 0;
-    let current = 0;
-    const intervalMs = duration / 100;
-    const interval = setInterval(() => {
-      if (current < 99) {
-        current += 1;
-        progressRef.current = current;
-        setProgress(current);
-      } else {
-        clearInterval(interval);
-      }
-    }, intervalMs);
-    return () => clearInterval(interval);
-  }, [phase, duration]);
+  const isReady = phase === "ready";
 
-  useEffect(() => {
-    if (phase === "animating" && progress >= 99 && !isLoading) {
-      setProgress(100);
-      setTimeout(() => setPhase("done"), 300);
-    }
-  }, [isLoading, phase, progress]);
-
-  useEffect(() => {
-    if (phase !== "animating") return;
-    const currentStep = Math.min(
-      Math.floor((progress / 100) * totalSteps),
-      totalSteps - 1
-    );
-    if (currentStep !== step) setStep(currentStep);
-  }, [progress, totalSteps, step, phase]);
-
-  if (phase !== "done") {
-    return (
-      <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center w-full h-full">
-        <SplashScreen step={step} progress={progress} />
-      </div>
-    );
-  }
-
-  return <>{children}</>;
+  return (
+    <>
+      {keepSplashscreenInDom && (
+        <div
+          className={cn(
+            "fixed inset-0 z-[9999] flex flex-col items-center justify-center w-full h-full duration-300",
+            isReady && "pointer-events-none opacity-0 scale-90"
+          )}
+        >
+          <SplashScreen />
+        </div>
+      )}
+      {isReady && children}
+    </>
+  );
 }

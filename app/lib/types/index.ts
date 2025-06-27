@@ -12,3 +12,4 @@ export * from "./extrinsics";
 export * from "./events";
 export * from "./cid";
 export * from "./lonLat";
+export * from "./appSetupPhases";
