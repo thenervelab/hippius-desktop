@@ -1,10 +1,9 @@
 "use client";
 
-import { getPaginationPageList } from "@/lib/utils";
 import React from "react";
-import { Icons } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import { cn, getPaginationPageList } from "@/lib/utils";
 import AbstractIconWrapper from "../abstract-icon-wrapper";
+import { Icons } from "..";
 
 interface TablePaginationProps {
   currentPage: number;

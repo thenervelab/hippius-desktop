@@ -7,3 +7,4 @@ export * from "./tr";
 export * from "./table";
 export * from "./copyable-cell";
 export * from "./pagination";
+export * from "./truncated-cell";
