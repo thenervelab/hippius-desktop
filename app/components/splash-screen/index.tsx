@@ -59,6 +59,31 @@ export default function SplashWrapper({
   }, [phase, setPhase, setPhaseProgressionClock]);
 
   useEffect(() => {
+    let frameId: number;
+    let startTime: number | null = null;
+    const duration = 4000; // animation duration in ms
+
+    const animate = (timestamp: number) => {
+      if (!startTime) startTime = timestamp;
+      const elapsed = timestamp - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      setPhaseProgressionClock(progress);
+      if (progress < 1) {
+        frameId = requestAnimationFrame(animate);
+      }
+    };
+
+    if (phase && phase !== "ready") {
+      frameId = requestAnimationFrame(animate);
+    }
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      setPhaseProgressionClock(0);
+    };
+  }, [phase, setPhaseProgressionClock]);
+
+  useEffect(() => {
     if (phase === "ready") {
       const timeout = setTimeout(() => {
         setKeepSplacescreenInDom(false);

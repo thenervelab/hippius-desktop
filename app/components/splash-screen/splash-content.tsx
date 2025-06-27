@@ -29,7 +29,10 @@ export const PHASE_CONTENT: Record<AppSetupPhases, AppSetupPhaseContent> = {
   //   icon: <Icons.SyncData className="h-[170px] w-[194px]" />,
   //   status: "Syncing Data",
   //   subStatus: "Setting up database service ....",
-  // },
+  // }
+
+  //////////////// - Ready does not really show since its revealing the dashboard at that point
+
   ready: {
     icon: <Icons.SyncData className="h-[170px] w-[194px]" />,
     status: "Preparing your Dashboard",
