@@ -149,7 +149,7 @@ function LineChart<T extends object>({
                 strokeDasharray: "4 4",
               }}
               unstyled
-              className="p-4 absolute bg-white border border-grey-80 rounded-lg text-grey-70 font-medium shadow-tooltip text-xs"
+              className="p-2 absolute bg-white border border-grey-80 rounded-lg text-grey-70 font-medium shadow-tooltip text-xs"
               renderTooltip={({ tooltipData }) => {
                 return renderTooltip(tooltipData);
               }}

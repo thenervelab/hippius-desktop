@@ -24,33 +24,33 @@ const chartData: Account[] = [
     processed_timestamp: "2025-06-22T09:00:00Z", // Sunday
   },
   {
-    total_balance: "27500000000000000000", // 2750 tokens
-    credit: "2500000000000000000", // 2550 tokens
+    total_balance: "27000000000000000000", // 2750 tokens
+    credit: "15000000000000000000", // 2550 tokens
     processed_timestamp: "2025-06-23T14:30:00Z", // Monday
   },
   {
     total_balance: "26000000000000000000", // 2600 tokens
-    credit: "2000000000000000000", // 2400 tokens
+    credit: "10000000000000000000", // 2400 tokens
     processed_timestamp: "2025-06-24T11:15:00Z", // Tuesday
   },
   {
     total_balance: "31000000000000000000", // 3100 tokens
-    credit: "2000000000000000000", // 2800 tokens
+    credit: "22000000000000000000", // 2800 tokens
     processed_timestamp: "2025-06-25T16:45:00Z", // Wednesday
   },
   {
     total_balance: "29000000000000000000", // 2900 tokens
-    credit: "2000000000000000000", // 2600 tokens
+    credit: "10000000000000000000", // 2600 tokens
     processed_timestamp: "2025-06-26T08:20:00Z", // Thursday
   },
   {
     total_balance: "32000000000000000000", // 3200 tokens
-    credit: "3000000000000000000", // 3000 tokens
+    credit: "22000000000000000000", // 3000 tokens
     processed_timestamp: "2025-06-27T13:10:00Z", // Friday
   },
   {
-    total_balance: "30500000000000000000", // 3050 tokens
-    credit: "2800000000000000000", // 2850 tokens
+    total_balance: "30000000000000000000", // 3050 tokens
+    credit: "18000000000000000000", // 2850 tokens
     processed_timestamp: "2025-06-28T10:30:00Z", // Saturday
   },
 ];
