@@ -1,4 +1,3 @@
-import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import localFont from "next/font/local";
 import "@/app/globals.css";
@@ -8,6 +7,7 @@ import { Toaster } from "sonner";
 import "react-circular-progressbar/dist/styles.css";
 import NextTopLoader from "nextjs-toploader";
 import ResponsiveContent from "./ResponsiveContent";
+import { metadata } from "./metadata";
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
@@ -19,46 +19,7 @@ const geistSans = Geist({
   subsets: ["latin"],
 });
 
-// Default metadata that will be used across the site
-export const metadata: Metadata = {
-  metadataBase: new URL("https://hipstats.com"),
-  title: {
-    default: "Hippius Explorer - Decentralized Storage Blockchain",
-    template: "%s", // This allows pages to set just their part of the title
-  },
-  description:
-    "Web3 decentralized storage blockchain, part of the Bittensor ecosystem. Track blocks, nodes, miners, and IPFS/S3 metrics in real time.",
-  openGraph: {
-    type: "website",
-    siteName: "Hippius Explorer",
-    title: {
-      default: "Hippius Explorer - Decentralized Storage Blockchain",
-      template: "%s",
-    },
-    description:
-      "Web3 decentralized storage blockchain, part of the Bittensor ecosystem. Track blocks, nodes, miners, and IPFS/S3 metrics in real time.",
-    url: "https://hipstats.com/",
-    images: [
-      {
-        url: "https://hipstats.com/opengraph-image.png",
-        width: 1200,
-        height: 630,
-        alt: "Hippius Explorer",
-      },
-    ],
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: {
-      default: "Hippius Explorer - Decentralized Storage Blockchain",
-      template: "%s",
-    },
-    description:
-      "Web3 decentralized storage blockchain, part of the Bittensor ecosystem. Track blocks, nodes, miners, and IPFS/S3 metrics in real time.",
-    images: ["https://hipstats.com/opengraph-image.png"],
-    creator: "@hippiusstorage",
-  },
-};
+export { metadata };
 
 export default async function RootLayout({
   children,

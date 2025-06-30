@@ -1,5 +1,4 @@
-import { Metadata } from "next";
-import { createMetadata } from "@/lib/utils";
+"use client";
 import {
   BarChart3,
   CheckCircle,
@@ -10,14 +9,37 @@ import {
 } from "lucide-react";
 import BlockchainStats from "@/components/blockchain-stats";
 import SearchBar from "@/components/search-bar";
+import { useEffect, useState } from "react";
 
-export const metadata: Metadata = createMetadata(
-  "Hippius Explorer - Decentralized Storage Blockchain",
-  "Web3 decentralized storage blockchain, part of the Bittensor ecosystem. Track blocks, nodes, miners, and IPFS/S3 metrics in real time.",
-  "Hippius Explorer, Decentralized Storage, Web3 Storage, IPFS Blockchain, Secure Cloud Storage, Blockchain Analytics, Subnet 75, Bittensor, real-time decentralized storage stats"
-);
+type IpfsInfo = {
+  ID?: string;
+  Addresses?: string[];
+  AgentVersion?: string;
+  ProtocolVersion?: string;
+  // [key: string]: any;
+};
 
-export default async function Home() {
+function shortId(id?: string) {
+  if (!id || id.length <= 8) return id || "";
+  return `${id.slice(0, 8)}........${id.slice(-8)}`;
+}
+
+function useIpfsInfo() {
+  const [ipfsInfo, setIpfsInfo] = useState<IpfsInfo | null>(null);
+
+  useEffect(() => {
+    fetch("http://127.0.0.1:5001/api/v0/id", { method: "POST" })
+      .then(res => res.json())
+      .then(setIpfsInfo)
+      .catch(() => setIpfsInfo(null));
+  }, []);
+
+  return ipfsInfo;
+}
+
+export default function Home() {
+  const ipfsInfo = useIpfsInfo();
+
   return (
     <div className="flex flex-col space-y-6">
       <BlockchainStats />
@@ -44,7 +66,9 @@ export default async function Home() {
               Network Connections
             </p>
             <div className="flex items-baseline mt-1">
-              <span className="text-2xl font-bold">413</span>
+              <span className="text-2xl font-bold">
+                {ipfsInfo?.Addresses?.length ?? "—"}
+              </span>
               <span className="ml-2 text-xs text-gray-500">
                 Active Network Connections
               </span>
@@ -67,7 +91,7 @@ export default async function Home() {
                 <span className="text-2xl font-bold">Online</span>
               </div>
               <span className="ml-4 text-xs text-gray-500">
-                Peer ID: 441.013
+                Peer ID: {ipfsInfo?.ID ? shortId(ipfsInfo.ID) : "Loading..."}
               </span>
             </div>
           </div>

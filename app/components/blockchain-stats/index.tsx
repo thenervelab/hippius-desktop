@@ -13,7 +13,7 @@ const BlockchainStats: React.FC = () => {
       // Fetch peer count from the node
       api.rpc.system
         .peers()
-        .then((peers: any) => setPeerCount(peers.length))
+        .then((peers) => setPeerCount(peers.length))
         .catch(() => setPeerCount(null));
     } else {
       setPeerCount(null);

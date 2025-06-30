@@ -46,22 +46,23 @@ const LARGE_SLEEP: u64 = 15;
 
 #[tauri::command]
 pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
-    // TODO - Remove this sleep
     sleep(Duration::from_secs(LARGE_SLEEP)).await;
-
     let app = emit_and_update_phase(app, AppSetupPhase::CheckingBinary).await;
-    // TODO - Remove this sleep
     sleep(Duration::from_secs(SMALL_SLEEP)).await;
 
     let bin_path = ensure_ipfs_binary()
         .await
         .map_err(|e| format!("Binary fetch failed: {e}"))?;
 
-    let app = emit_and_update_phase(app, AppSetupPhase::StartingDaemon).await;
-    // TODO - Remove this sleep
+    // Configure CORS before starting daemon
+    let app = emit_and_update_phase(app, AppSetupPhase::ConfiguringCors).await;
+    configure_ipfs_cors(&bin_path).await?;
     sleep(Duration::from_secs(SMALL_SLEEP)).await;
 
-    let mut child = Command::new(bin_path)
+    let app = emit_and_update_phase(app, AppSetupPhase::StartingDaemon).await;
+    
+    // Start the daemon process
+    let mut child = Command::new(&bin_path)
         .arg("daemon")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -74,23 +75,17 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             println!("[ipfs stdout] {}", line);
+            
             if line.contains("Swarm listening on") {
                 emit_and_update_phase(app.clone(), AppSetupPhase::ConnectingToNetwork).await;
             }
 
             if line.contains("Daemon is ready") || line.contains("API server listening") {
-                // TODO - Remove this sleep
                 sleep(Duration::from_secs(SMALL_SLEEP)).await;
-
                 emit_and_update_phase(app.clone(), AppSetupPhase::InitialisingDatabase).await;
-                // TODO - Remove this sleep
                 sleep(Duration::from_secs(SMALL_SLEEP)).await;
-
                 emit_and_update_phase(app.clone(), AppSetupPhase::SyncingData).await;
-
-                // TODO - Remove this sleep
                 sleep(Duration::from_secs(SMALL_SLEEP)).await;
-
                 emit_and_update_phase(app.clone(), AppSetupPhase::Ready).await;
             }
         }
@@ -99,6 +94,37 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
     let mutex = IPFS_HANDLE.get_or_init(|| Mutex::new(None));
     let mut guard = mutex.lock().await;
     guard.replace(child);
+
+    Ok(())
+}
+
+async fn configure_ipfs_cors(bin_path: &std::path::PathBuf) -> Result<(), String> {
+    // First ensure no daemon is running
+    let _ = Command::new(&bin_path)
+        .arg("shutdown")
+        .output()
+        .await;
+
+    let cors_config = vec![
+        ("Access-Control-Allow-Origin", "[\"http://localhost:3000\"]"),
+        ("Access-Control-Allow-Methods", "[\"PUT\", \"GET\", \"POST\", \"OPTIONS\"]"),
+        ("Access-Control-Allow-Headers", "[\"Authorization\"]"),
+        ];
+
+    for (header, value) in cors_config {
+        let output = Command::new(&bin_path)
+            .arg("config")
+            .arg("--json")
+            .arg(format!("API.HTTPHeaders.{}", header))
+            .arg(value)
+            .output()
+            .await
+            .map_err(|e| format!("Failed to set CORS header {}: {}", header, e))?;
+
+        if !output.status.success() {
+            eprintln!("Failed to set CORS header {}: {}", header, String::from_utf8_lossy(&output.stderr));
+        }
+    }
 
     Ok(())
 }
