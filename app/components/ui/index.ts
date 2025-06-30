@@ -27,3 +27,6 @@ export { default as ResourceDetailsError } from "./resource-details-error";
 export { default as FileTypeTag } from "./file-type-tag";
 export { default as ErrorDetail } from "./error-detail";
 export { default as SearchInput } from "./search-input";
+export { default as ProfileCard } from "./profile-card";
+export { default as CardButton } from "./button/CardButton";
+export { default as AreaLineChart } from "./area-line-chart";

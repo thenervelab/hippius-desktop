@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { Header, flexRender } from "@tanstack/react-table";
-import { Icons } from "@/components/ui";
+import { ChevronDown } from "../icons";
 
 export interface ThProps<TData, TValue>
   extends React.ThHTMLAttributes<HTMLTableCellElement> {
@@ -43,10 +43,10 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
         )}
       >
         {canSort ? (
-          <button className="relative flex h-fit w-fit whitespace-nowrap">
+          <button className="relative flex h-fit w-fit whitespace-nowrap uppercase">
             {flexRender(header.column.columnDef.header, header.getContext())}
             {sortOrder && (
-              <Icons.ChevronDown
+              <ChevronDown
                 className={cn(
                   "absolute mt-0.5 -right-5 w-4 duration-300",
                   sortOrder === "asc" && "rotate-180"
@@ -55,7 +55,9 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
             )}
           </button>
         ) : (
-          flexRender(header.column.columnDef.header, header.getContext())
+          <span className="uppercase">
+            {flexRender(header.column.columnDef.header, header.getContext())}
+          </span>
         )}
       </div>
     </th>

@@ -9,14 +9,16 @@ export interface ChartPoint {
   formattedBalance: string;
   timestamp: string;
   dayLabel?: string;
-  bandLabel?: string
+  bandLabel?: string;
 }
 
 // Helpers to format dates
 const formatDayName = (d: Date) =>
   d.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
 const formatDateForMonth = (d: Date) =>
-  d.toLocaleDateString("en-US", { day: "2-digit", month: "short" }).toUpperCase();
+  d
+    .toLocaleDateString("en-US", { day: "2-digit", month: "short" })
+    .toUpperCase();
 const formatDateForYear = (d: Date) =>
   d.toLocaleDateString("en-US", { month: "short" }).toUpperCase();
 
@@ -64,7 +66,8 @@ export function formatAccountsForChartByRange(
       // Keep the newest data for each day
       if (
         !daysData[day] ||
-        new Date(account.processed_timestamp) > new Date(daysData[day].processed_timestamp)
+        new Date(account.processed_timestamp) >
+          new Date(daysData[day].processed_timestamp)
       ) {
         daysData[day] = account;
       }
@@ -144,7 +147,8 @@ export function formatAccountsForChartByRange(
       // Keep the newest data for each date format
       if (
         !groupedData[key] ||
-        new Date(account.processed_timestamp) > new Date(groupedData[key].processed_timestamp)
+        new Date(account.processed_timestamp) >
+          new Date(groupedData[key].processed_timestamp)
       ) {
         groupedData[key] = account;
       }
@@ -166,7 +170,8 @@ export function formatAccountsForChartByRange(
 
     // Sort points by timestamp
     return result.sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      (a, b) =>
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
   }
 }

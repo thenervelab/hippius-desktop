@@ -90,3 +90,7 @@ export { default as DocumentText } from "./DocumentText";
 export { default as Notification } from "./Notification";
 export { default as Logout } from "./Logout";
 export { default as HippiusLogoLoader } from "./HippiusLogoLoader";
+export { default as ArrowCircleDown } from "./ArrowCircleDown";
+export { default as Dollar } from "./Dollar";
+export { default as TaoLogo } from "./TaoLogo";
+export { default as Tag2 } from "./Tag2";
