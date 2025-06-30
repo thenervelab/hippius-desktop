@@ -2,7 +2,6 @@
 import { useAtom } from "jotai";
 import { sidebarCollapsedAtom } from "./components/sidebar/sideBarAtoms";
 import SplashWrapper from "./components/splash-screen";
-import RootFooter from "@/components/root-footer";
 import cn from "@/app/lib/utils/cn";
 
 export default function ResponsiveContent({
@@ -20,16 +19,8 @@ export default function ResponsiveContent({
           collapsed ? "ml-[60px]" : "ml-[161px]"
         )}
       >
-        <SplashWrapper skipSplash={false}>{children}</SplashWrapper>
+        <SplashWrapper skipSplash={true}>{children}</SplashWrapper>
       </main>
-      <div
-        className={cn(
-          "p-4 transition-all duration-300 ease-in-out",
-          collapsed ? "ml-[60px]" : "ml-[161px]"
-        )}
-      >
-        <RootFooter />
-      </div>
     </div>
   );
 }

@@ -40,7 +40,28 @@
   --success-10: 3 48 30;
 
   /* Error Shades */
+  --error-100: 255 245 245;
+  --error-90: 252 224 222;
   --error-80: 252 163 156;
+  --error-70: 252 125 115;
+  --error-60: 251 67 55;
+  --error-50: 245 26 10;
+  --error-40: 190 26 14;
+  --error-30: 135 26 18;
+  --error-20: 92 20 15;
+  --error-10: 42 13 9;
+
+  /* Warning Shades */
+  --warning-100: 255 247 229;
+  --warning-90: 255 242 204;
+  --warning-80: 253 227 155;
+  --warning-70: 254 214 103;
+  --warning-60: 254 193 52;
+  --warning-50: 254 178 1;
+  --warning-40: 232 151 2;
+  --warning-30: 148 86 5;
+  --warning-20: 121 57 2;
+  --warning-10: 46 18 5;
 }
 
 @keyframes fadeIn {
