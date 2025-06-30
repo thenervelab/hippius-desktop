@@ -1,7 +1,7 @@
 "use client";
 import { useAtom } from "jotai";
 import { sidebarCollapsedAtom } from "./components/sidebar/sideBarAtoms";
-import SplashWrapper from "./components/splash-screen";
+// import SplashWrapper from "./components/splash-screen";
 import cn from "@/app/lib/utils/cn";
 
 export default function ResponsiveContent({
@@ -19,7 +19,9 @@ export default function ResponsiveContent({
           collapsed ? "ml-[60px]" : "ml-[161px]"
         )}
       >
-        <SplashWrapper skipSplash={true}>{children}</SplashWrapper>
+          {children}
+        {/* <SplashWrapper skipSplash={false}>
+          </SplashWrapper> */}
       </main>
     </div>
   );
