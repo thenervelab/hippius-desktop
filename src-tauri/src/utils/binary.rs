@@ -4,10 +4,22 @@ use std::path::PathBuf;
 use std::time::Duration as StdDuration;
 use tokio::sync::Mutex;
 use tokio::task;
+use sodiumoxide::crypto::secretbox;
+use std::collections::HashMap;
+use base64;
+use std::path::Path;
+use sha2::{Digest, Sha256};
+use reqwest::blocking::Client;
+use reqwest::blocking::multipart;
+use std::io::Read;
+use serde_json;
 
 use crate::constants::ipfs::KUBO_VERSION;
 
 static DOWNLOAD_STATE: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
+
+// In-memory key storage for example; replace with persistent storage as needed.
+static mut KEY_STORAGE: Option<HashMap<String, String>> = None;
 
 pub fn get_binary_path() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
@@ -286,4 +298,142 @@ fn get_download_url() -> Result<String, String> {
         "https://github.com/ipfs/kubo/releases/download/v{}/kubo_v{}_{}-{}.{}",
         KUBO_VERSION, KUBO_VERSION, os_name, arch_name, ext
     ))
+}
+
+fn init_key_storage() {
+    unsafe {
+        if KEY_STORAGE.is_none() {
+            KEY_STORAGE = Some(HashMap::new());
+        }
+    }
+}
+
+fn get_key_for_account(account_id: &str) -> Option<String> {
+    unsafe {
+        KEY_STORAGE.as_ref()?.get(account_id).cloned()
+    }
+}
+
+fn set_key_for_account(account_id: &str, key_b64: &str) {
+    unsafe {
+        if let Some(storage) = KEY_STORAGE.as_mut() {
+            storage.insert(account_id.to_string(), key_b64.to_string());
+        }
+    }
+}
+
+fn generate_and_store_key_for_account(account_id: &str) -> String {
+    let key = secretbox::gen_key();
+    let key_b64 = base64::encode(&key.0);
+    set_key_for_account(account_id, &key_b64);
+    key_b64
+}
+
+fn deterministic_key_for_account(account_id: &str) -> secretbox::Key {
+    let mut hasher = Sha256::new();
+    hasher.update(account_id.as_bytes());
+    let hash = hasher.finalize();
+    let mut key_bytes = [0u8; secretbox::KEYBYTES];
+    key_bytes.copy_from_slice(&hash[..secretbox::KEYBYTES]);
+    secretbox::Key(key_bytes)
+}
+
+fn get_or_generate_key_for_account(account_id: &str) -> secretbox::Key {
+    // Option 1: Deterministic (always same for same account_id)
+    deterministic_key_for_account(account_id)
+}
+
+fn encrypt_and_upload_file(account_id: &str, file_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    init_key_storage();
+
+    // Get or generate key
+    let key_b64 = get_key_for_account(account_id)
+        .unwrap_or_else(|| generate_and_store_key_for_account(account_id));
+    let key_bytes = base64::decode(&key_b64)?;
+    let key = secretbox::Key::from_slice(&key_bytes).expect("Key must be 32 bytes");
+
+    // Read file
+    let file_data = fs::read(file_path)?;
+
+    // Encrypt
+    let nonce = secretbox::gen_nonce();
+    let encrypted_data = secretbox::seal(&file_data, &nonce, &key);
+
+    // Save nonce + encrypted data (for upload)
+    let mut to_upload = nonce.0.to_vec();
+    to_upload.extend_from_slice(&encrypted_data);
+
+    // TODO: Upload `to_upload` to IPFS here, get CID, etc.
+
+    Ok(())
+}
+
+fn download_and_decrypt_file(account_id: &str, encrypted_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    init_key_storage();
+
+    // Get key from storage, or generate deterministically if not found
+    let key = match get_key_for_account(account_id) {
+        Some(key_b64) => {
+            let key_bytes = base64::decode(&key_b64)?;
+            secretbox::Key::from_slice(&key_bytes).expect("Key must be 32 bytes")
+        }
+        None => {
+            // Generate deterministic key and store it
+            let key = deterministic_key_for_account(account_id);
+            let key_b64 = base64::encode(&key.0);
+            set_key_for_account(account_id, &key_b64);
+            key
+        }
+    };
+
+    // Extract nonce and ciphertext
+    let (nonce_bytes, ciphertext) = encrypted_data.split_at(secretbox::NONCEBYTES);
+    let nonce = secretbox::Nonce::from_slice(nonce_bytes).unwrap();
+
+    // Decrypt
+    let decrypted_data = secretbox::open(ciphertext, &nonce, &key)
+        .map_err(|_| "Decryption failed")?;
+
+    Ok(decrypted_data)
+}
+
+fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let client = Client::new();
+
+    // Read file data
+    let mut file = fs::File::open(file_path)?;
+    let mut file_data = Vec::new();
+    file.read_to_end(&mut file_data)?;
+
+    // Prepare multipart form
+    let part = multipart::Part::bytes(file_data)
+        .file_name("file")
+        .mime_str("application/octet-stream")?;
+    let form = multipart::Form::new().part("file", part);
+
+    // POST to /api/v0/add
+    let res = client
+        .post(&format!("{}/api/v0/add", api_url))
+        .multipart(form)
+        .send()?
+        .error_for_status()?;
+
+    // Parse response
+    let json: serde_json::Value = res.json()?;
+    let cid = json["Hash"].as_str().ok_or("No Hash in IPFS response")?.to_string();
+
+    Ok(cid)
+}
+
+fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let client = Client::new();
+
+    // POST to /api/v0/cat?arg=<cid>
+    let res = client
+        .post(&format!("{}/api/v0/cat?arg={}", api_url, cid))
+        .send()?
+        .error_for_status()?;
+
+    let bytes = res.bytes()?.to_vec();
+    Ok(bytes)
 }
