@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 use tokio::task;
 use sodiumoxide::crypto::secretbox;
 use std::collections::HashMap;
-use base64;
+use base64::{engine::general_purpose, Engine as _};
 use std::path::Path;
 use sha2::{Digest, Sha256};
 use reqwest::blocking::Client;
@@ -324,7 +324,7 @@ fn set_key_for_account(account_id: &str, key_b64: &str) {
 
 fn generate_and_store_key_for_account(account_id: &str) -> String {
     let key = secretbox::gen_key();
-    let key_b64 = base64::encode(&key.0);
+    let key_b64 = general_purpose::STANDARD.encode(&key.0);
     set_key_for_account(account_id, &key_b64);
     key_b64
 }
@@ -349,7 +349,7 @@ fn encrypt_and_upload_file(account_id: &str, file_path: &Path) -> Result<(), Box
     // Get or generate key
     let key_b64 = get_key_for_account(account_id)
         .unwrap_or_else(|| generate_and_store_key_for_account(account_id));
-    let key_bytes = base64::decode(&key_b64)?;
+    let key_bytes = general_purpose::STANDARD.decode(&key_b64)?;
     let key = secretbox::Key::from_slice(&key_bytes).expect("Key must be 32 bytes");
 
     // Read file
@@ -374,13 +374,13 @@ fn download_and_decrypt_file(account_id: &str, encrypted_data: &[u8]) -> Result<
     // Get key from storage, or generate deterministically if not found
     let key = match get_key_for_account(account_id) {
         Some(key_b64) => {
-            let key_bytes = base64::decode(&key_b64)?;
+            let key_bytes = general_purpose::STANDARD.decode(&key_b64)?;
             secretbox::Key::from_slice(&key_bytes).expect("Key must be 32 bytes")
         }
         None => {
             // Generate deterministic key and store it
             let key = deterministic_key_for_account(account_id);
-            let key_b64 = base64::encode(&key.0);
+            let key_b64 = general_purpose::STANDARD.encode(&key.0);
             set_key_for_account(account_id, &key_b64);
             key
         }
