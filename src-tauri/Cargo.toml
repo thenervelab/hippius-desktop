@@ -37,3 +37,5 @@ zip = "4.2.0"
 sodiumoxide = "0.2"
 base64 = "0.21"
 sha2 = "0.10"
+subxt = { version = "0.38", features = ["substrate-compat"] }
+sp-core = "34.0.0"

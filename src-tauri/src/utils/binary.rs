@@ -13,13 +13,25 @@ use reqwest::blocking::Client;
 use reqwest::blocking::multipart;
 use std::io::Read;
 use serde_json;
+use serde::{Deserialize, Serialize};
+use subxt::tx::PairSigner;
+use sp_core::{Pair, sr25519};
+use subxt::{OnlineClient, PolkadotConfig};
 
+#[subxt::subxt(runtime_metadata_path = "metadata.scale")]
+pub mod custom_runtime {}
+
+use custom_runtime::runtime_types::ipfs_pallet::types::FileInput;
+use custom_runtime::marketplace::calls::types::storage_unpin_request::FileHash;
 use crate::constants::ipfs::KUBO_VERSION;
 
 static DOWNLOAD_STATE: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
 
 // In-memory key storage for example; replace with persistent storage as needed.
 static mut KEY_STORAGE: Option<HashMap<String, String>> = None;
+
+const SEED_PHRASE: &str = "your seed phrase here";
+const WSS_ENDPOINT: &str = "wss://your-node-endpoint";
 
 pub fn get_binary_path() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
@@ -343,17 +355,18 @@ fn get_or_generate_key_for_account(account_id: &str) -> secretbox::Key {
     deterministic_key_for_account(account_id)
 }
 
-fn encrypt_and_upload_file(account_id: &str, file_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+#[tauri::command]
+pub fn encrypt_and_upload_file(account_id: String, file_path: String, api_url: String) -> Result<String, String> {
     init_key_storage();
 
     // Get or generate key
-    let key_b64 = get_key_for_account(account_id)
-        .unwrap_or_else(|| generate_and_store_key_for_account(account_id));
-    let key_bytes = general_purpose::STANDARD.decode(&key_b64)?;
-    let key = secretbox::Key::from_slice(&key_bytes).expect("Key must be 32 bytes");
+    let key_b64 = get_key_for_account(&account_id)
+        .unwrap_or_else(|| generate_and_store_key_for_account(&account_id));
+    let key_bytes = general_purpose::STANDARD.decode(&key_b64).map_err(|e| e.to_string())?;
+    let key = secretbox::Key::from_slice(&key_bytes).ok_or("Key must be 32 bytes")?;
 
     // Read file
-    let file_data = fs::read(file_path)?;
+    let file_data = fs::read(&file_path).map_err(|e| e.to_string())?;
 
     // Encrypt
     let nonce = secretbox::gen_nonce();
@@ -363,36 +376,54 @@ fn encrypt_and_upload_file(account_id: &str, file_path: &Path) -> Result<(), Box
     let mut to_upload = nonce.0.to_vec();
     to_upload.extend_from_slice(&encrypted_data);
 
-    // TODO: Upload `to_upload` to IPFS here, get CID, etc.
+    // Write encrypted data to a temp file
+    let temp_path = std::env::temp_dir().join("encrypted_upload.bin");
+    fs::write(&temp_path, &to_upload).map_err(|e| e.to_string())?;
 
-    Ok(())
+    // Upload to IPFS
+    let cid = upload_to_ipfs(&api_url, temp_path.to_str().unwrap())
+        .map_err(|e| e.to_string())?;
+    println!("Encrypted file uploaded to IPFS with CID: {}", cid);
+
+    // Optionally, remove the temp file
+    let _ = fs::remove_file(&temp_path);
+
+    Ok(cid)
 }
 
-fn download_and_decrypt_file(account_id: &str, encrypted_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+#[tauri::command]
+pub fn download_and_decrypt_file(account_id: String, cid: String, api_url: String) -> Result<Vec<u8>, String> {
     init_key_storage();
 
+    // Download encrypted data from IPFS
+    let encrypted_data = download_from_ipfs(&api_url, &cid)
+        .map_err(|e| e.to_string())?;
+
     // Get key from storage, or generate deterministically if not found
-    let key = match get_key_for_account(account_id) {
+    let key = match get_key_for_account(&account_id) {
         Some(key_b64) => {
-            let key_bytes = general_purpose::STANDARD.decode(&key_b64)?;
-            secretbox::Key::from_slice(&key_bytes).expect("Key must be 32 bytes")
+            let key_bytes = general_purpose::STANDARD.decode(&key_b64).map_err(|e| e.to_string())?;
+            secretbox::Key::from_slice(&key_bytes).ok_or("Key must be 32 bytes")?
         }
         None => {
             // Generate deterministic key and store it
-            let key = deterministic_key_for_account(account_id);
+            let key = deterministic_key_for_account(&account_id);
             let key_b64 = general_purpose::STANDARD.encode(&key.0);
-            set_key_for_account(account_id, &key_b64);
+            set_key_for_account(&account_id, &key_b64);
             key
         }
     };
 
     // Extract nonce and ciphertext
+    if encrypted_data.len() < secretbox::NONCEBYTES {
+        return Err("Encrypted data too short".to_string());
+    }
     let (nonce_bytes, ciphertext) = encrypted_data.split_at(secretbox::NONCEBYTES);
-    let nonce = secretbox::Nonce::from_slice(nonce_bytes).unwrap();
+    let nonce = secretbox::Nonce::from_slice(nonce_bytes).ok_or("Invalid nonce")?;
 
     // Decrypt
     let decrypted_data = secretbox::open(ciphertext, &nonce, &key)
-        .map_err(|_| "Decryption failed")?;
+        .map_err(|_| "Decryption failed".to_string())?;
 
     Ok(decrypted_data)
 }
@@ -405,13 +436,11 @@ fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn std:
     let mut file_data = Vec::new();
     file.read_to_end(&mut file_data)?;
 
-    // Prepare multipart form
     let part = multipart::Part::bytes(file_data)
         .file_name("file")
         .mime_str("application/octet-stream")?;
     let form = multipart::Form::new().part("file", part);
 
-    // POST to /api/v0/add
     let res = client
         .post(&format!("{}/api/v0/add", api_url))
         .multipart(form)
@@ -428,7 +457,6 @@ fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn std:
 fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let client = Client::new();
 
-    // POST to /api/v0/cat?arg=<cid>
     let res = client
         .post(&format!("{}/api/v0/cat?arg={}", api_url, cid))
         .send()?
@@ -436,4 +464,47 @@ fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::
 
     let bytes = res.bytes()?.to_vec();
     Ok(bytes)
+}
+
+#[tauri::command]
+pub async fn storage_request_tauri(
+    files_input: Vec<FileInput>,
+    miner_ids: Option<Vec<Vec<u8>>>,
+) -> Result<String, String> {
+
+    let pair = sr25519::Pair::from_string(SEED_PHRASE, None)
+    .map_err(|e| format!("Failed to create pair: {:?}", e))?;
+
+    let signer = PairSigner::new(pair);
+    let api = OnlineClient::<PolkadotConfig>::from_url(WSS_ENDPOINT)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let tx = custom_runtime::tx().marketplace().storage_request(files_input, miner_ids);
+    let result = api.tx().sign_and_submit_then_watch_default(&tx, &signer)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("storage_request submitted: {:?}", result))
+}
+
+#[tauri::command]
+pub async fn storage_unpin_request_tauri(
+    file_hash: FileHash,
+) -> Result<String, String> {
+    let pair = sr25519::Pair::from_string(SEED_PHRASE, None).map_err(|e| e.to_string())?;
+    let signer = PairSigner::new(pair);
+    let api = OnlineClient::<PolkadotConfig>::from_url(WSS_ENDPOINT)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let tx = custom_runtime::tx().marketplace().storage_unpin_request(file_hash);
+    let result = api.tx().sign_and_submit_then_watch_default(&tx, &signer)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("storage_unpin_request submitted: {:?}", result))
+}
+
+#[tauri::command]
+pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    std::fs::write(path, data).map_err(|e| e.to_string())
 }
