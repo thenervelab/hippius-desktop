@@ -4,11 +4,13 @@ import { invoke } from "@tauri-apps/api/core";
 
 export default function IpfsTest() {
   const [file, setFile] = useState<File | null>(null);
-  const [cid, setCid] = useState<string>("");
+  const [metadataCid, setMetadataCid] = useState<string>("");
   const [downloadedUrl, setDownloadedUrl] = useState<string>("");
   const [status, setStatus] = useState<string>("");
+  const [k, setK] = useState<number>(3);
+  const [m, setM] = useState<number>(5);
+  const [chunkSize, setChunkSize] = useState<number>(1024 * 1024);
 
-  // Replace with your actual account id and IPFS API URL
   const accountId = "test-account";
   const apiUrl = "http://127.0.0.1:5001";
 
@@ -19,36 +21,40 @@ export default function IpfsTest() {
   const handleUpload = async () => {
     if (!file) return;
     setStatus("Uploading...");
-    // Save file to a temp path (Tauri can only access files on disk)
-    const arrayBuffer = await file.arrayBuffer();
-    const tempPath = `/tmp/${file.name}`;
-    // Write file to disk using Tauri's fs API
-    await invoke("write_file", { path: tempPath, data: Array.from(new Uint8Array(arrayBuffer)) });
-    // Call the Rust command
     try {
+      const arrayBuffer = await file.arrayBuffer();
+      const tempPath = `/tmp/${file.name}`;
+      // Write file to disk using Rust command
+      await invoke("write_file", { path: tempPath, data: Array.from(new Uint8Array(arrayBuffer)) });
+      // Call the Rust erasure coding upload command
       const result = await invoke<string>("encrypt_and_upload_file", {
         accountId,
         filePath: tempPath,
         apiUrl,
+        k,
+        m,
+        chunkSize,
       });
-      setCid(result);
-      setStatus("Upload successful! CID: " + result);
+      setMetadataCid(result);
+      setStatus("Upload successful! Metadata CID: " + result);
     } catch (e: any) {
       setStatus("Upload failed: " + e.toString());
     }
   };
-  
 
   const handleDownload = async () => {
-    if (!cid) return;
+    if (!metadataCid || !file) return;
     setStatus("Downloading...");
     try {
-      const data: number[] = await invoke("download_and_decrypt_file", {
+      const outputPath = `/tmp/dec_${file.name}`;
+      await invoke("download_and_decrypt_file", {
         accountId,
-        cid,
+        metadataCid,
         apiUrl,
+        outputFile: outputPath,
       });
-      // Convert to Blob and create a download link
+      // Read the file from disk using Rust command
+      const data: number[] = await invoke("read_file", { path: outputPath });
       const blob = new Blob([new Uint8Array(data)]);
       const url = URL.createObjectURL(blob);
       setDownloadedUrl(url);
@@ -60,23 +66,32 @@ export default function IpfsTest() {
 
   return (
     <div>
-      <h2>IPFS Encrypted Upload/Download Test</h2>
+      <h2>IPFS Encrypted Upload/Download (Erasure Coding Test)</h2>
       <input type="file" onChange={handleFileChange} />
+      <div>
+        <label>
+          k (data shards):
+          <input type="number" value={k} min={1} max={m} onChange={e => setK(Number(e.target.value))} />
+        </label>
+        <label>
+          m (total shards):
+          <input type="number" value={m} min={k} max={20} onChange={e => setM(Number(e.target.value))} />
+        </label>
+        <label>
+          Chunk size:
+          <input type="number" value={chunkSize} min={1024} step={1024} onChange={e => setChunkSize(Number(e.target.value))} />
+        </label>
+      </div>
       <button onClick={handleUpload} disabled={!file}>Upload & Encrypt</button>
-      <br />
-      {cid && (
+      {metadataCid && (
         <>
-          <div>
-            <strong>CID:</strong> {cid}
-          </div>
+          <div><strong>Metadata CID:</strong> {metadataCid}</div>
           <button onClick={handleDownload}>Download & Decrypt</button>
         </>
       )}
       {downloadedUrl && (
         <div>
-          <a href={downloadedUrl} download="downloaded_file">
-            Download Decrypted File
-          </a>
+          <a href={downloadedUrl} download={file ? `dec_${file.name}` : "file"}>Download Decrypted File</a>
         </div>
       )}
       <div>{status}</div>

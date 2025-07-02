@@ -39,3 +39,6 @@ base64 = "0.21"
 sha2 = "0.10"
 subxt = { version = "0.38", features = ["substrate-compat"] }
 sp-core = "34.0.0"
+reed-solomon-erasure = "6.0.0"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"

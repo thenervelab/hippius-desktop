@@ -10,7 +10,7 @@ import {
 import BlockchainStats from "@/components/blockchain-stats";
 import SearchBar from "@/components/search-bar";
 import { useEffect, useState } from "react";
-// import IpfsTest from "@/components/upload-download";
+import IpfsTest from "@/components/upload-download";
 
 type IpfsInfo = {
   ID?: string;
@@ -136,10 +136,10 @@ export default function Home() {
       </div>
 
       {/* IPFS Upload/Download Test */}
-      {/* <section>
+      <section>
         <h2 className="text-xl font-semibold mb-2">IPFS Encrypted Upload/Download Test</h2>
         <IpfsTest />
-      </section> */}
+      </section> 
 
       {/* Charts Section */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
