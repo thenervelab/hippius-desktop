@@ -13,25 +13,13 @@ use reqwest::blocking::Client;
 use reqwest::blocking::multipart;
 use std::io::Read;
 use serde_json;
-use serde::{Deserialize, Serialize};
-use subxt::tx::PairSigner;
-use sp_core::{Pair, sr25519};
-use subxt::{OnlineClient, PolkadotConfig};
 
-#[subxt::subxt(runtime_metadata_path = "metadata.scale")]
-pub mod custom_runtime {}
-
-use custom_runtime::runtime_types::ipfs_pallet::types::FileInput;
-use custom_runtime::marketplace::calls::types::storage_unpin_request::FileHash;
 use crate::constants::ipfs::KUBO_VERSION;
 
 static DOWNLOAD_STATE: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
 
 // In-memory key storage for example; replace with persistent storage as needed.
 static mut KEY_STORAGE: Option<HashMap<String, String>> = None;
-
-const SEED_PHRASE: &str = "your seed phrase here";
-const WSS_ENDPOINT: &str = "wss://your-node-endpoint";
 
 pub fn get_binary_path() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
@@ -312,7 +300,7 @@ fn get_download_url() -> Result<String, String> {
     ))
 }
 
-fn init_key_storage() {
+pub fn init_key_storage() {
     unsafe {
         if KEY_STORAGE.is_none() {
             KEY_STORAGE = Some(HashMap::new());
@@ -320,7 +308,7 @@ fn init_key_storage() {
     }
 }
 
-fn get_key_for_account(account_id: &str) -> Option<String> {
+pub fn get_key_for_account(account_id: &str) -> Option<String> {
     unsafe {
         KEY_STORAGE.as_ref()?.get(account_id).cloned()
     }
@@ -334,7 +322,7 @@ fn set_key_for_account(account_id: &str, key_b64: &str) {
     }
 }
 
-fn generate_and_store_key_for_account(account_id: &str) -> String {
+pub fn generate_and_store_key_for_account(account_id: &str) -> String {
     let key = secretbox::gen_key();
     let key_b64 = general_purpose::STANDARD.encode(&key.0);
     set_key_for_account(account_id, &key_b64);
@@ -355,56 +343,7 @@ fn get_or_generate_key_for_account(account_id: &str) -> secretbox::Key {
     deterministic_key_for_account(account_id)
 }
 
-#[tauri::command]
-pub async fn encrypt_and_upload_file(account_id: String, file_path: String, api_url: String) -> Result<String, String> {
-    tokio::task::spawn_blocking(move || {
-        init_key_storage();
-
-        // Get or generate key
-        let key_b64 = get_key_for_account(&account_id)
-            .unwrap_or_else(|| generate_and_store_key_for_account(&account_id));
-        let key_bytes = general_purpose::STANDARD.decode(&key_b64).map_err(|e| e.to_string())?;
-        let key = secretbox::Key::from_slice(&key_bytes).ok_or("Key must be 32 bytes")?;
-
-        // Read file
-        let file_data = fs::read(&file_path).map_err(|e| e.to_string())?;
-
-        // Encrypt
-        let nonce = secretbox::gen_nonce();
-        let encrypted_data = secretbox::seal(&file_data, &nonce, &key);
-
-        // Save nonce + encrypted data (for upload)
-        let mut to_upload = nonce.0.to_vec();
-        to_upload.extend_from_slice(&encrypted_data);
-
-        // Write encrypted data to a temp file
-        let temp_path = std::env::temp_dir().join("encrypted_upload.bin");
-        fs::write(&temp_path, &to_upload).map_err(|e| e.to_string())?;
-
-        // Upload to IPFS
-        let cid = upload_to_ipfs(&api_url, temp_path.to_str().unwrap())
-            .map_err(|e| e.to_string())?;
-        println!("Encrypted file uploaded to IPFS with CID: {}", cid);
-
-        // Optionally, remove the temp file
-        let _ = fs::remove_file(&temp_path);
-
-        Ok(cid)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn download_and_decrypt_file(account_id: String, cid: String, api_url: String) -> Result<Vec<u8>, String> {
-    tokio::task::spawn_blocking(move || {
-        download_and_decrypt_file_blocking(account_id, cid, api_url)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-fn download_and_decrypt_file_blocking(account_id: String, cid: String, api_url: String) -> Result<Vec<u8>, String> {
+pub fn download_and_decrypt_file_blocking(account_id: String, cid: String, api_url: String) -> Result<Vec<u8>, String> {
     init_key_storage();
 
     // Download encrypted data from IPFS
@@ -440,7 +379,7 @@ fn download_and_decrypt_file_blocking(account_id: String, cid: String, api_url: 
     Ok(decrypted_data)
 }
 
-fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
     let client = Client::new();
 
     // Read file data
@@ -466,7 +405,7 @@ fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn std:
     Ok(cid)
 }
 
-fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let client = Client::new();
 
     let res = client
@@ -476,47 +415,4 @@ fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::
 
     let bytes = res.bytes()?.to_vec();
     Ok(bytes)
-}
-
-#[tauri::command]
-pub async fn storage_request_tauri(
-    files_input: Vec<FileInput>,
-    miner_ids: Option<Vec<Vec<u8>>>,
-) -> Result<String, String> {
-
-    let pair = sr25519::Pair::from_string(SEED_PHRASE, None)
-    .map_err(|e| format!("Failed to create pair: {:?}", e))?;
-
-    let signer = PairSigner::new(pair);
-    let api = OnlineClient::<PolkadotConfig>::from_url(WSS_ENDPOINT)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let tx = custom_runtime::tx().marketplace().storage_request(files_input, miner_ids);
-    let result = api.tx().sign_and_submit_then_watch_default(&tx, &signer)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(format!("storage_request submitted: {:?}", result))
-}
-
-#[tauri::command]
-pub async fn storage_unpin_request_tauri(
-    file_hash: FileHash,
-) -> Result<String, String> {
-    let pair = sr25519::Pair::from_string(SEED_PHRASE, None).map_err(|e| e.to_string())?;
-    let signer = PairSigner::new(pair);
-    let api = OnlineClient::<PolkadotConfig>::from_url(WSS_ENDPOINT)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let tx = custom_runtime::tx().marketplace().storage_unpin_request(file_hash);
-    let result = api.tx().sign_and_submit_then_watch_default(&tx, &signer)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(format!("storage_unpin_request submitted: {:?}", result))
-}
-
-#[tauri::command]
-pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
-    std::fs::write(path, data).map_err(|e| e.to_string())
 }

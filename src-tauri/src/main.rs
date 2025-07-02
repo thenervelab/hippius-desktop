@@ -8,7 +8,7 @@ mod utils;
 
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
-use utils::binary::{download_and_decrypt_file, encrypt_and_upload_file, write_file};
+use commands::ipfs_commands::{download_and_decrypt_file, encrypt_and_upload_file, write_file};
 
 fn main() {
     sodiumoxide::init().unwrap();
