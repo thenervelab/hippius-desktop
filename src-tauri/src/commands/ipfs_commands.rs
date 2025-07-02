@@ -1,5 +1,5 @@
 use crate::utils::binary::{
-    download_from_ipfs, upload_to_ipfs, get_key_for_account, generate_and_store_key_for_account, init_key_storage
+    download_from_ipfs, upload_to_ipfs, get_key_for_account, generate_and_store_key_for_account, init_key_storage, deterministic_key_for_account, encrypt_file_for_account, decrypt_file_for_account
 };
 use std::fs;
 use std::io::{Write, Read};
@@ -44,6 +44,7 @@ pub struct ErasureCodingInfo {
     pub chunk_size: usize,
     pub encrypted: bool,
     pub file_id: String,
+    pub encrypted_size: usize,
 }
 
 const DEFAULT_K: usize = 3;
@@ -66,22 +67,31 @@ pub async fn encrypt_and_upload_file(
     let api_url = api_url.clone();
     tokio::task::spawn_blocking(move || {
         init_key_storage();
-        // Get or generate key
-        let key_b64 = get_key_for_account(&account_id)
-            .unwrap_or_else(|| generate_and_store_key_for_account(&account_id));
-        let key_bytes = general_purpose::STANDARD.decode(&key_b64).map_err(|e| e.to_string())?;
-        let key = secretbox::Key::from_slice(&key_bytes).ok_or("Key must be 32 bytes")?;
+        println!("[UPLOAD] account_id: {}", account_id);
         // Read file
         let file_data = fs::read(&file_path).map_err(|e| e.to_string())?;
+        println!("[UPLOAD] file_path: {} ({} bytes)", file_path, file_data.len());
+        println!("[UPLOAD] first 32 bytes of plaintext: {:02x?}", &file_data[..32.min(file_data.len())]);
         // Calculate original file hash
         let mut hasher = Sha256::new();
         hasher.update(&file_data);
         let original_file_hash = format!("{:x}", hasher.finalize());
-        // Encrypt
-        let nonce = secretbox::gen_nonce();
-        let encrypted_data = secretbox::seal(&file_data, &nonce, &key);
-        let mut to_process = nonce.0.to_vec();
-        to_process.extend_from_slice(&encrypted_data);
+        println!("[UPLOAD] file hash: {}", original_file_hash);
+        // Log encryption key
+        let key = crate::utils::binary::deterministic_key_for_account(&account_id);
+        println!("[UPLOAD] encryption key (hex): {:02x?}", &key.0);
+        println!("[UPLOAD] encryption key (base64): {}", base64::engine::general_purpose::STANDARD.encode(&key.0));
+        // Encrypt using centralized function
+        let to_process = crate::utils::binary::encrypt_file_for_account(&account_id, &file_data)?;
+        // Log nonce and encrypted data
+        let nonce_bytes = &to_process[..sodiumoxide::crypto::secretbox::NONCEBYTES];
+        println!("[UPLOAD] nonce (hex): {:02x?}", nonce_bytes);
+        let encrypted_data = &to_process[sodiumoxide::crypto::secretbox::NONCEBYTES..];
+        println!("[UPLOAD] first 32 bytes of encrypted_data: {:02x?}", &encrypted_data[..32.min(encrypted_data.len())]);
+        println!("[UPLOAD] total encrypted length (with nonce): {}", to_process.len());
+        let mut hasher = Sha256::new();
+        hasher.update(&to_process);
+        println!("[UPLOAD] encrypted data hash: {:x}", hasher.finalize());
         // Split into chunks
         let mut chunks = vec![];
         for i in (0..to_process.len()).step_by(chunk_size) {
@@ -89,6 +99,7 @@ pub async fn encrypt_and_upload_file(
             if chunk.len() < chunk_size {
                 chunk.resize(chunk_size, 0);
             }
+            println!("[UPLOAD] chunk {}: {} bytes", chunks.len(), chunk.len());
             chunks.push(chunk);
         }
         // Erasure code each chunk
@@ -122,6 +133,7 @@ pub async fn encrypt_and_upload_file(
                 let chunk_path = temp_dir.path().join(&chunk_name);
                 let mut f = fs::File::create(&chunk_path).map_err(|e| e.to_string())?;
                 f.write_all(shard).map_err(|e| e.to_string())?;
+                println!("[UPLOAD] uploading shard: chunk {} share {} ({} bytes)", orig_idx, share_idx, shard.len());
                 let cid = upload_to_ipfs(&api_url, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
                 all_chunk_info.push(ChunkInfo {
                     name: chunk_name,
@@ -135,6 +147,7 @@ pub async fn encrypt_and_upload_file(
         // Build metadata
         let file_name = std::path::Path::new(&file_path).file_name().unwrap().to_string_lossy().to_string();
         let file_extension = std::path::Path::new(&file_path).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let encrypted_size = to_process.len();
         let metadata = Metadata {
             original_file: OriginalFileInfo {
                 name: file_name,
@@ -148,6 +161,7 @@ pub async fn encrypt_and_upload_file(
                 chunk_size,
                 encrypted: true,
                 file_id: file_id.clone(),
+                encrypted_size,
             },
             chunks: all_chunk_info,
             metadata_cid: None,
@@ -158,9 +172,7 @@ pub async fn encrypt_and_upload_file(
         fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
         // Upload metadata
         let metadata_cid = upload_to_ipfs(&api_url, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
-        println!("to_process.len() = {}", to_process.len());
-        println!("nonce (hex): {:02x?}", &nonce.0);
-        println!("first 32 bytes of encrypted_data (hex): {:02x?}", &encrypted_data[..32.min(encrypted_data.len())]);
+        println!("[UPLOAD] metadata CID: {}", metadata_cid);
         Ok(metadata_cid)
     })
     .await
@@ -175,6 +187,8 @@ pub async fn download_and_decrypt_file(
     output_file: String,
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
+        println!("[DOWNLOAD] account_id: {}", account_id);
+        println!("[DOWNLOAD] metadata CID: {}", metadata_cid);
         // Download metadata
         let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
         let metadata: Metadata = serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
@@ -184,7 +198,8 @@ pub async fn download_and_decrypt_file(
         let chunk_size = metadata.erasure_coding.chunk_size;
         let file_size = metadata.original_file.size;
         let file_hash = &metadata.original_file.hash;
-
+        println!("[DOWNLOAD] file hash (from metadata): {}", file_hash);
+        println!("[DOWNLOAD] k: {}, m: {}, chunk_size: {}", k, m, chunk_size);
         // Group chunks by original chunk index
         let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
         for chunk in &metadata.chunks {
@@ -195,11 +210,12 @@ pub async fn download_and_decrypt_file(
 
         for orig_idx in 0..chunk_map.len() {
             let available_chunks = chunk_map.get(&orig_idx).ok_or("Missing chunk info")?;
-
+            println!("[DOWNLOAD] reconstructing chunk {} ({} shares)", orig_idx, available_chunks.len());
             // Download shards into Vec<Option<Vec<u8>>>
             let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
             for chunk in available_chunks {
                 let data = download_from_ipfs(&api_url, &chunk.cid).map_err(|e| e.to_string())?;
+                println!("[DOWNLOAD] downloaded share {} for chunk {} ({} bytes)", chunk.share_idx, orig_idx, data.len());
                 shards[chunk.share_idx] = Some(data);
             }
 
@@ -218,24 +234,28 @@ pub async fn download_and_decrypt_file(
 
             // Calculate how many bytes to take for this chunk
             let is_last_chunk = orig_idx == chunk_map.len() - 1;
+            let encrypted_size = metadata.erasure_coding.encrypted_size;
             let mut chunk_bytes_needed = if !is_last_chunk {
                 chunk_size
             } else {
                 // For the last chunk, only take the remaining bytes needed
                 let total_bytes_so_far: usize = chunk_size * orig_idx;
-                let total_encrypted_size = file_size + secretbox::NONCEBYTES;
-                total_encrypted_size.saturating_sub(total_bytes_so_far)
+                encrypted_size.saturating_sub(total_bytes_so_far)
             };
 
-            let mut chunk_data = Vec::with_capacity(chunk_size);
-            let sub_block_size = shards.iter().filter_map(|s| s.as_ref()).next().map(|v| v.len()).unwrap_or(0);
-            
+            let mut chunk_data = Vec::with_capacity(chunk_bytes_needed);
+            let mut bytes_collected = 0;
             for i in 0..k {
                 if let Some(ref shard) = shards[i] {
-                    chunk_data.extend_from_slice(&shard[..]);
+                    let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
+                    chunk_data.extend_from_slice(&shard[..bytes_to_take]);
+                    bytes_collected += bytes_to_take;
+                    if bytes_collected == chunk_bytes_needed {
+                        break;
+                    }
                 }
             }
-            chunk_data.truncate(chunk_size); // Important: truncate padding            
+            println!("[DOWNLOAD] reconstructed chunk {} ({} bytes)", orig_idx, chunk_data.len());
             reconstructed_chunks.push(chunk_data);
         }
 
@@ -244,45 +264,43 @@ pub async fn download_and_decrypt_file(
         for chunk in reconstructed_chunks {
             encrypted_data.extend_from_slice(&chunk);
         }
-
+        println!("[DOWNLOAD] total reconstructed encrypted data (with nonce): {} bytes", encrypted_data.len());
         // Truncate to expected total
-        let total_size = file_size + secretbox::NONCEBYTES;
-        if encrypted_data.len() > total_size {
-            encrypted_data.truncate(total_size);
+        let encrypted_size = metadata.erasure_coding.encrypted_size;
+        if encrypted_data.len() > encrypted_size {
+            println!("[DOWNLOAD] truncating encrypted data from {} to {} bytes", encrypted_data.len(), encrypted_size);
+            encrypted_data.truncate(encrypted_size);
         }
-
-        // Extract nonce and ciphertext
-        let (nonce_bytes, ciphertext) = encrypted_data.split_at(secretbox::NONCEBYTES);
-
-        println!("encrypted_data.len() = {}", encrypted_data.len());
-        println!("total_size = {}", total_size);
-        println!("nonce (hex): {:02x?}", &nonce_bytes);
-        println!("first 32 bytes of ciphertext (hex): {:02x?}", &ciphertext[..32.min(ciphertext.len())]);
-
-        // Get key
-        let key_b64 = get_key_for_account(&account_id).ok_or("No key found")?;
-        let key_bytes = general_purpose::STANDARD.decode(&key_b64).map_err(|e| e.to_string())?;
-        let key = secretbox::Key::from_slice(&key_bytes).ok_or("Invalid key length")?;
-        let nonce = secretbox::Nonce::from_slice(nonce_bytes).ok_or("Invalid nonce")?;
-
-        // Decrypt
-        let decrypted_data = secretbox::open(ciphertext, &nonce, &key)
-            .map_err(|_| "Decryption failed".to_string())?;
-
+        // Log nonce and encrypted data
+        let nonce_bytes = &encrypted_data[..sodiumoxide::crypto::secretbox::NONCEBYTES];
+        println!("[DOWNLOAD] nonce (hex): {:02x?}", nonce_bytes);
+        let encrypted_part = &encrypted_data[sodiumoxide::crypto::secretbox::NONCEBYTES..];
+        println!("[DOWNLOAD] first 32 bytes of encrypted_data: {:02x?}", &encrypted_part[..32.min(encrypted_part.len())]);
+        // Log decryption key
+        let key = crate::utils::binary::deterministic_key_for_account(&account_id);
+        println!("[DOWNLOAD] decryption key (hex): {:02x?}", &key.0);
+        println!("[DOWNLOAD] decryption key (base64): {}", base64::engine::general_purpose::STANDARD.encode(&key.0));
+        // Decrypt using centralized function
+        let decrypted_data = crate::utils::binary::decrypt_file_for_account(&account_id, &encrypted_data)?;
+        println!("[DOWNLOAD] first 32 bytes of decrypted data: {:02x?}", &decrypted_data[..32.min(decrypted_data.len())]);
         // Hash check
         let mut hasher = Sha256::new();
         hasher.update(&decrypted_data);
         let actual_hash = format!("{:x}", hasher.finalize());
+        println!("[DOWNLOAD] actual file hash: {}", actual_hash);
         if actual_hash != *file_hash {
+            println!("[DOWNLOAD] HASH MISMATCH! expected: {} got: {}", file_hash, actual_hash);
             return Err(format!(
                 "Hash mismatch: expected {}, got {}",
                 file_hash, actual_hash
             ));
         }
-
         // Save
-        std::fs::write(output_file, decrypted_data).map_err(|e| e.to_string())?;
-
+        std::fs::write(output_file.clone(), decrypted_data).map_err(|e| e.to_string())?;
+        println!("[DOWNLOAD] file written to {}", output_file);
+        let mut hasher = Sha256::new();
+        hasher.update(&encrypted_data);
+        println!("[DOWNLOAD] reconstructed encrypted data hash: {:x}", hasher.finalize());
         Ok(())
     })
     .await
@@ -292,4 +310,9 @@ pub async fn download_and_decrypt_file(
 #[tauri::command]
 pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(path, data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn read_file(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| e.to_string())
 }
