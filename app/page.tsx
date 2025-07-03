@@ -139,7 +139,7 @@ export default function Home() {
       {/* <section>
         <h2 className="text-xl font-semibold mb-2">IPFS Encrypted Upload/Download Test</h2>
         <IpfsTest />
-      </section>  */}
+      </section> */}
 
       {/* Charts Section */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

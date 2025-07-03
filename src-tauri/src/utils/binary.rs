@@ -18,9 +18,6 @@ use crate::constants::ipfs::KUBO_VERSION;
 
 static DOWNLOAD_STATE: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
 
-// In-memory key storage for example; replace with persistent storage as needed.
-static mut KEY_STORAGE: Option<HashMap<String, String>> = None;
-
 pub fn get_binary_path() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
 
@@ -300,35 +297,6 @@ fn get_download_url() -> Result<String, String> {
     ))
 }
 
-pub fn init_key_storage() {
-    unsafe {
-        if KEY_STORAGE.is_none() {
-            KEY_STORAGE = Some(HashMap::new());
-        }
-    }
-}
-
-pub fn get_key_for_account(account_id: &str) -> Option<String> {
-    unsafe {
-        KEY_STORAGE.as_ref()?.get(account_id).cloned()
-    }
-}
-
-fn set_key_for_account(account_id: &str, key_b64: &str) {
-    unsafe {
-        if let Some(storage) = KEY_STORAGE.as_mut() {
-            storage.insert(account_id.to_string(), key_b64.to_string());
-        }
-    }
-}
-
-pub fn generate_and_store_key_for_account(account_id: &str) -> String {
-    let key = secretbox::gen_key();
-    let key_b64 = general_purpose::STANDARD.encode(&key.0);
-    set_key_for_account(account_id, &key_b64);
-    key_b64
-}
-
 pub fn deterministic_key_for_account(account_id: &str) -> secretbox::Key {
     let mut hasher = Sha256::new();
     hasher.update(account_id.as_bytes());
@@ -336,47 +304,6 @@ pub fn deterministic_key_for_account(account_id: &str) -> secretbox::Key {
     let mut key_bytes = [0u8; secretbox::KEYBYTES];
     key_bytes.copy_from_slice(&hash[..secretbox::KEYBYTES]);
     secretbox::Key(key_bytes)
-}
-
-fn get_or_generate_key_for_account(account_id: &str) -> secretbox::Key {
-    // Option 1: Deterministic (always same for same account_id)
-    deterministic_key_for_account(account_id)
-}
-
-pub fn download_and_decrypt_file_blocking(account_id: String, cid: String, api_url: String) -> Result<Vec<u8>, String> {
-    init_key_storage();
-
-    // Download encrypted data from IPFS
-    let encrypted_data = download_from_ipfs(&api_url, &cid)
-        .map_err(|e| e.to_string())?;
-
-    // Get key from storage, or generate deterministically if not found
-    let key = match get_key_for_account(&account_id) {
-        Some(key_b64) => {
-            let key_bytes = general_purpose::STANDARD.decode(&key_b64).map_err(|e| e.to_string())?;
-            secretbox::Key::from_slice(&key_bytes).ok_or("Key must be 32 bytes")?
-        }
-        None => {
-            // Generate deterministic key and store it
-            let key = deterministic_key_for_account(&account_id);
-            let key_b64 = general_purpose::STANDARD.encode(&key.0);
-            set_key_for_account(&account_id, &key_b64);
-            key
-        }
-    };
-
-    // Extract nonce and ciphertext
-    if encrypted_data.len() < secretbox::NONCEBYTES {
-        return Err("Encrypted data too short".to_string());
-    }
-    let (nonce_bytes, ciphertext) = encrypted_data.split_at(secretbox::NONCEBYTES);
-    let nonce = secretbox::Nonce::from_slice(nonce_bytes).ok_or("Invalid nonce")?;
-
-    // Decrypt
-    let decrypted_data = secretbox::open(ciphertext, &nonce, &key)
-        .map_err(|_| "Decryption failed".to_string())?;
-
-    Ok(decrypted_data)
 }
 
 pub fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -401,6 +328,22 @@ pub fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn 
     // Parse response
     let json: serde_json::Value = res.json()?;
     let cid = json["Hash"].as_str().ok_or("No Hash in IPFS response")?.to_string();
+
+    // Pin the file to the local node
+    let pin_url = format!("{}/api/v0/pin/add?arg={}", api_url, cid);
+    let pin_res = client.post(&pin_url).send();
+    match pin_res {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                println!("[IPFS] Successfully pinned CID: {}", cid);
+            } else {
+                println!("[IPFS] Failed to pin CID: {} (status: {})", cid, resp.status());
+            }
+        }
+        Err(e) => {
+            println!("[IPFS] Error pinning CID {}: {}", cid, e);
+        }
+    }
 
     Ok(cid)
 }
