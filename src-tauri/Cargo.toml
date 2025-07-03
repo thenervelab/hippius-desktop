@@ -42,3 +42,4 @@ sp-core = "34.0.0"
 reed-solomon-erasure = "6.0.0"
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
+tauri-plugin-fs = "2"

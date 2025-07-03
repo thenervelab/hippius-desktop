@@ -54,7 +54,7 @@ export const Pagination: React.FC<TablePaginationProps> = ({
           return (
             <div
               className={cn(
-                "size-7 sm:size-9 bg-grey-90 relative rounded-[8px] border border-transparent flex items-center justify-center font-medium text-xs sm:text-sm text-grey-70 overflow-hidden",
+                "size-7 sm:size-9 bg-grey-90 relative rounded-lg border border-transparent flex items-center justify-center font-medium text-xs sm:text-sm text-grey-70 overflow-hidden",
                 isActive && "text-primary-40 border-primary-60 bg-transparent"
               )}
               key={`${i}-${currentPage}`}

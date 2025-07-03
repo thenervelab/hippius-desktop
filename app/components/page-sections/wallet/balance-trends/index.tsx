@@ -31,7 +31,7 @@ const BalanceTrends: React.FC<{
   isLoading?: boolean;
   className?: string;
   onRetry?: () => void;
-}> = ({ chartData, isLoading, className }) => {
+}> = ({ chartData, isLoading }) => {
   const [timeRange, setTimeRange] = useState<string>("week");
 
   // Format raw account‐data into ChartPoint[] according to the selected range
@@ -120,12 +120,9 @@ const BalanceTrends: React.FC<{
     xLabels = MONTHS.slice(0, monthsToShow);
   }
 
-  // Compute a “half‐band” paddingOuter so the first tick sits half a band away
-  const paddingOuter = xLabels.length > 0 ? 1 / (2 * xLabels.length) : 0;
-
   return (
     <InView triggerOnce threshold={0.2}>
-      {({ ref, inView }) => (
+      {({ ref }) => (
         <div ref={ref} className="p-4 w-full">
           <div
             className={
