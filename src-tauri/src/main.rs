@@ -12,6 +12,7 @@ mod folder_sync;
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
 use commands::ipfs_commands::{download_and_decrypt_file, encrypt_and_upload_file, write_file, read_file};
+use commands::substrate_tx::storage_request_tauri;
 use sqlx::sqlite::SqlitePool;
 use once_cell::sync::OnceCell;
 use constants::substrate::DEFAULT_ACCOUNT_ID;
@@ -73,6 +74,7 @@ async fn main() {
             download_and_decrypt_file,
             write_file,
             read_file,
+            storage_request_tauri,
         ]);
     let builder = setup(builder);
     let builder = on_window_event(builder);

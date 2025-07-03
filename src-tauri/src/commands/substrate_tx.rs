@@ -1,31 +1,51 @@
-// use subxt::tx::PairSigner;
-// use sp_core::{Pair, sr25519};
-// use crate::substrate_client::get_substrate_client;
-// use crate::constants::substrate::SEED_PHRASE;
+use subxt::tx::PairSigner;
+use sp_core::{Pair, sr25519};
+use crate::substrate_client::get_substrate_client;
+use crate::constants::substrate::SEED_PHRASE;
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
 
-// use custom_runtime::runtime_types::ipfs_pallet::types::FileInput;
-// use custom_runtime::marketplace::calls::types::storage_unpin_request::FileHash;
+use serde::Deserialize;
+use custom_runtime::runtime_types::ipfs_pallet::types::FileInput;
+use custom_runtime::marketplace::calls::types::storage_unpin_request::FileHash;
 
-// #[tauri::command]
-// pub async fn storage_request_tauri(
-//     files_input: Vec<FileInput>,
-//     miner_ids: Option<Vec<Vec<u8>>>,
-// ) -> Result<String, String> {
+#[derive(Deserialize)]
+pub struct FileInputWrapper {
+    pub file_hash: Vec<u8>,
+    pub file_name: Vec<u8>,
+}
 
-//     let pair = sr25519::Pair::from_string(SEED_PHRASE, None)
-//     .map_err(|e| format!("Failed to create pair: {:?}", e))?;
+impl From<FileInputWrapper> for FileInput {
+    fn from(wrapper: FileInputWrapper) -> Self {
+        FileInput {
+            file_hash: wrapper.file_hash,
+            file_name: wrapper.file_name,
+        }
+    }
+}
 
-//     let signer = PairSigner::new(pair);
-//     let api = get_substrate_client().await?;
+#[tauri::command]
+pub async fn storage_request_tauri(
+    files_input: Vec<FileInputWrapper>,
+    miner_ids: Option<Vec<Vec<u8>>>,
+) -> Result<String, String> {
+    let pair = sr25519::Pair::from_string(SEED_PHRASE, None)
+        .map_err(|e| format!("Failed to create pair: {:?}", e))?;
 
-//     let tx = custom_runtime::tx().marketplace().storage_request(files_input, miner_ids);
-//     let result = api.tx().sign_and_submit_then_watch_default(&tx, &signer)
-//         .await
-//         .map_err(|e| e.to_string())?;
-//     Ok(format!("storage_request submitted: {:?}", result))
-// }
+    let signer = PairSigner::new(pair);
+    let api = get_substrate_client().await?;
+
+    // Convert Vec<FileInputWrapper> to Vec<FileInput>
+    let files_input: Vec<FileInput> = files_input.into_iter().map(FileInput::from).collect();
+
+    let tx = custom_runtime::tx().marketplace().storage_request(files_input, miner_ids);
+    let result = api
+        .tx()
+        .sign_and_submit_then_watch_default(&tx, &signer)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(format!("storage_request submitted: {:?}", result))
+}
 
 // #[tauri::command]
 // pub async fn storage_unpin_request_tauri(

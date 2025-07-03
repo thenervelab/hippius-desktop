@@ -1,5 +1,5 @@
 use crate::utils::binary::{
-    download_from_ipfs, upload_to_ipfs, encrypt_file_for_account, decrypt_file_for_account
+    download_from_ipfs, upload_to_ipfs, encrypt_file_for_account, decrypt_file_for_account, pin_json_to_ipfs_local
 };
 use std::fs;
 use std::io::{Write};
@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use uuid::Uuid;
 use tempfile::tempdir;
+use crate::commands::substrate_tx::FileInputWrapper;
 
 #[derive(Serialize, Deserialize)]
 pub struct ChunkInfo {
@@ -60,20 +61,19 @@ pub async fn encrypt_and_upload_file(
     let k = k.unwrap_or(DEFAULT_K);
     let m = m.unwrap_or(DEFAULT_M);
     let chunk_size = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
-    let file_path = file_path.clone();
-    let api_url = api_url.clone();
-    tokio::task::spawn_blocking(move || {
+    let file_path_cloned = file_path.clone();
+    let api_url_cloned = api_url.clone();
+    // Run blocking work and return file_name and metadata_cid
+    let (file_name, metadata_cid) = tokio::task::spawn_blocking(move || {
         // Read file
-        let file_data = fs::read(&file_path).map_err(|e| e.to_string())?;
+        let file_data = fs::read(&file_path_cloned).map_err(|e| e.to_string())?;
         // Calculate original file hash
         let mut hasher = Sha256::new();
         hasher.update(&file_data);
-        let original_file_hash = format!("{:x}", hasher.finalize());
+        let _original_file_hash = format!("{:x}", hasher.finalize());
 
         // Encrypt using centralized function
         let to_process = encrypt_file_for_account(&account_id, &file_data)?;
-        let mut hasher = Sha256::new();
-        hasher.update(&to_process);
         // Split into chunks
         let mut chunks = vec![];
         for i in (0..to_process.len()).step_by(chunk_size) {
@@ -114,7 +114,7 @@ pub async fn encrypt_and_upload_file(
                 let chunk_path = temp_dir.path().join(&chunk_name);
                 let mut f = fs::File::create(&chunk_path).map_err(|e| e.to_string())?;
                 f.write_all(shard).map_err(|e| e.to_string())?;
-                let cid = upload_to_ipfs(&api_url, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+                let cid = upload_to_ipfs(&api_url_cloned, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
                 all_chunk_info.push(ChunkInfo {
                     name: chunk_name,
                     cid,
@@ -125,14 +125,14 @@ pub async fn encrypt_and_upload_file(
             }
         }
         // Build metadata
-        let file_name = std::path::Path::new(&file_path).file_name().unwrap().to_string_lossy().to_string();
-        let file_extension = std::path::Path::new(&file_path).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let file_name = std::path::Path::new(&file_path_cloned).file_name().unwrap().to_string_lossy().to_string();
+        let file_extension = std::path::Path::new(&file_path_cloned).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         let encrypted_size = to_process.len();
         let metadata = Metadata {
             original_file: OriginalFileInfo {
-                name: file_name,
+                name: file_name.clone(),
                 size: file_data.len(),
-                hash: original_file_hash,
+                hash: String::new(), // Not used here
                 extension: file_extension,
             },
             erasure_coding: ErasureCodingInfo {
@@ -151,11 +151,22 @@ pub async fn encrypt_and_upload_file(
         let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
         fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
         // Upload metadata
-        let metadata_cid = upload_to_ipfs(&api_url, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
-        Ok(metadata_cid)
+        let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+        Ok::<(String, String), String>((file_name, metadata_cid))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    // Log the metadata CID
+    println!("[encrypt_and_upload_file] Metadata CID: {}", metadata_cid);
+
+    // Call request_file_storage and log its returned CID
+    let storage_result = request_file_storage(&file_name, &metadata_cid, &api_url).await;
+    match &storage_result {
+        Ok(cid) => println!("[encrypt_and_upload_file] Storage request CID: {}", cid),
+        Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
+    }
+    storage_result
 }
 
 #[tauri::command]
@@ -270,4 +281,34 @@ pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
 #[tauri::command]
 pub fn read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| e.to_string())
+}
+
+pub async fn request_file_storage(
+    file_name: &str,
+    file_cid: &str,
+    api_url: &str,
+) -> Result<String, String> {
+    // 1. Create the JSON
+    let json = serde_json::json!([{
+        "filename": file_name,
+        "cid": file_cid
+    }]);
+    let json_string = serde_json::to_string(&json).unwrap();
+
+    // 2. Pin JSON to local IPFS node
+    let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
+
+    // 3. Construct FileInput
+    let file_input = FileInputWrapper {
+        file_hash: json_cid.as_bytes().to_vec(),
+        file_name: file_name.as_bytes().to_vec(),
+    };
+
+    // 4. Call storage_request_tauri
+    let result = crate::commands::substrate_tx::storage_request_tauri(
+        vec![file_input],
+        None,
+    ).await?;
+
+    Ok(result)
 }
