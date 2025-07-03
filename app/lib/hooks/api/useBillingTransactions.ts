@@ -96,6 +96,7 @@ export default function useBillingTransactions() {
   const [previousPage, setPreviousPage] = useState<string | null>(null);
 
   const fetchTransactions = async (url?: string) => {
+    console.log("url", url);
     try {
       setIsLoading(true);
       // Commented out for now, will use later

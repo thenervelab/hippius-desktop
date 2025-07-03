@@ -9,6 +9,11 @@
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../out"
   },
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
+    }
+  },
   "app": {
     "windows": [
       {
@@ -18,7 +23,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": ["default"]
     }
   },
   "bundle": {

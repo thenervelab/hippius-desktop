@@ -11,12 +11,13 @@ import Warning from "../../ui/icons/Warning";
 import TimeAgo from "react-timeago";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import BalanceTrends from "./balance-trends";
+import { Account } from "@/app/lib/types";
 
 interface WalletBalanceWidgetWithGraphProps {
   className?: string;
 }
 // Dummy chartData for a week - only required fields for the chart
-const chartData: any[] = [
+const chartData: Account[] = [
   {
     total_balance: "25000000000000000000", // 2500 tokens
     credit: "2000000000000000000", // 2300 tokens

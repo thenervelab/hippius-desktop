@@ -55,22 +55,17 @@ export function useUserCredits() {
       // }
 
       if (data.result && Array.isArray(data.result)) {
-        // The result is a list of tuples [AccountId, u128]
-        // Find the tuple for our address
-        const userCreditsTuple = data.result.find((tuple: any) => {
-          // The first element is the account ID
-          const accountId = tuple[0];
-          return (
-            accountId === polkadotAddress ||
-            accountId.toString() === polkadotAddress
-          );
-        });
+        const userCreditsTuple = data.result.find(
+          (tuple) =>
+            tuple[0] === polkadotAddress ||
+            tuple[0].toString() === polkadotAddress
+        );
 
         if (userCreditsTuple) {
-          // The second element is the credits amount
           const creditAmount = userCreditsTuple[1];
-
-          return BigInt(creditAmount);
+          return typeof creditAmount === "bigint"
+            ? creditAmount
+            : BigInt(creditAmount);
         } else {
           return BigInt(0);
         }

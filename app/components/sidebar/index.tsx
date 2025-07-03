@@ -9,6 +9,7 @@ import { navItems, footerNavItems } from "./nav-data";
 import { useAtom } from "jotai";
 import { sidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { InView } from "react-intersection-observer";
+import FooterNavItem from "./footer-nav-items";
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
@@ -78,13 +79,11 @@ const Sidebar: React.FC = () => {
 
           <div className="py-2 border-y border-gray-80 mt-2 w-full">
             {footerNavItems.map((item) => (
-              <NavItem
-                key={item.path}
+              <FooterNavItem
+                key={item.label}
                 icon={item.icon}
                 label={item.label}
-                href={item.path}
                 inView={inView}
-                active={pathname === item.path}
                 collapsed={collapsed}
               />
             ))}
