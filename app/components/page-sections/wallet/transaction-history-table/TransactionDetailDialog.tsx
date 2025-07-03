@@ -67,7 +67,7 @@ const TransactionDetailDialog: React.FC<TransactionDetailDialogProps> = ({
                   Transaction Type
                 </p>
                 <div className="mt-2">
-                  <TransactionTypeBadge type={transaction?.type!} />
+                  <TransactionTypeBadge type={transaction?.type} />
                 </div>
               </div>
               {/* Date */}

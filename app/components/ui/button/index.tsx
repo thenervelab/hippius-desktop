@@ -11,7 +11,11 @@ const buttonVariants = cva({
   variants: {
     variant: {
       primary: cn(
-        "relative overflow-hidden bg-primary-50 hover:bg-primary-40 text-white border border-primary-40 rounded",
+        "relative overflow-hidden bg-primary-50 hover:bg-primary-50 text-white border border-primary-40 rounded",
+        classes.primary
+      ),
+      error: cn(
+        "relative overflow-hidden bg-error-50 hover:bg-error-40 text-white border border-error-40 rounded",
         classes.primary
       ),
       secondary:
@@ -39,6 +43,7 @@ interface ButtonProps
     CommonProps {
   loading?: boolean;
   asLink?: false;
+  childClass?: string;
 }
 
 interface LinkProps
@@ -53,12 +58,16 @@ const ButtonOrLinkInner: React.FC<{
   variant: VariantProps<typeof buttonVariants>["variant"];
   loading?: boolean;
   icon?: CommonProps["icon"];
-}> = ({ children, variant, icon }) => {
+  childClass?: string;
+}> = ({ children, variant, icon, childClass }) => {
   if (variant !== "ghost") {
     return (
       <>
         {variant === "primary" && (
-          <div className="absolute border rounded border-primary-40 left-0.5 right-0.5 top-0.5 bottom-0.5" />
+          <div className="absolute border rounded border-primary-40 left-1.5 right-1.5 top-1.5 bottom-1.5" />
+        )}
+        {variant === "error" && (
+          <div className="absolute border rounded border-error-40 left-1 right-1 top-1 bottom-1" />
         )}
         {variant === "secondary" && (
           <Graphsheet
@@ -75,7 +84,7 @@ const ButtonOrLinkInner: React.FC<{
             }}
           />
         )}
-        <span className="relative">{children}</span>
+        <span className={cn("relative", childClass)}>{children}</span>
 
         {icon && <span className="size-4 relative">{icon}</span>}
       </>
@@ -118,6 +127,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps | LinkProps>(
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         asLink: _,
         icon,
+        childClass,
         ...rest
       } = props;
       return (
@@ -126,7 +136,12 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps | LinkProps>(
           className={cn(buttonVariants({ variant, size, className }))}
           {...rest}
         >
-          <ButtonOrLinkInner icon={icon} variant={variant} loading={loading}>
+          <ButtonOrLinkInner
+            icon={icon}
+            variant={variant}
+            loading={loading}
+            childClass={childClass}
+          >
             {children}
           </ButtonOrLinkInner>
         </button>

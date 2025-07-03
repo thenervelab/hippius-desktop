@@ -6,6 +6,10 @@ export interface NavItemData {
   icon: React.ReactNode;
   isActive?: boolean;
 }
+export interface FooterNavItemData {
+  label: string;
+  icon: React.ReactNode;
+}
 
 export const navItems: NavItemData[] = [
   {
@@ -36,10 +40,9 @@ export const navItems: NavItemData[] = [
   },
 ];
 
-export const footerNavItems: NavItemData[] = [
+export const footerNavItems: FooterNavItemData[] = [
   {
     label: "Logout",
-    path: "/logout",
     icon: <Icons.Logout />,
   },
 ];

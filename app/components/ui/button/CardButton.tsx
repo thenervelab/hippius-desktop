@@ -6,7 +6,7 @@ import classes from "./button.module.css";
 import { Loader2 } from "lucide-react";
 
 // Define types for our variants
-type ButtonCardVariant = "primary" | "secondary" | "ghost" | "dialog";
+type ButtonCardVariant = "primary" | "secondary" | "ghost" | "dialog" | "error";
 type ButtonCardSize = "sm" | "md" | "lg";
 type ButtonCardState = "disabled" | undefined;
 
@@ -35,6 +35,12 @@ const buttonCardVariants = ({
       variantClasses = cn(
         "relative overflow-hidden bg-primary-50 hover:bg-primary-40 text-white border border-primary-40 rounded shadow-outer-buttonCard",
         classes.primary
+      );
+      break;
+    case "error":
+      variantClasses = cn(
+        "relative overflow-hidden bg-error-50 hover:bg-error-40 text-white border border-error-40 rounded shadow-outer-buttonCard",
+        classes.error
       );
       break;
     case "secondary":
@@ -111,6 +117,9 @@ const ButtonCardOrLinkInner: React.FC<{
         )}
         {variant === "dialog" && (
           <div className="absolute border rounded border-primary-40 left-1.5 right-1.5 top-1.5 bottom-1.5 shadow-inner-buttonCard" />
+        )}
+        {variant === "error" && (
+          <div className="absolute border rounded border-error-70/80 left-1.5 right-1.5 top-1.5 bottom-1.5 shadow-inner-buttonCard shadow-md" />
         )}
 
         {appendToStart && icon && (

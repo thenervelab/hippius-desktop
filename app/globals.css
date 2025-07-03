@@ -243,3 +243,12 @@
 .pulse-blue {
   animation: pulseBlue 1s infinite;
 }
+
+.swiper-pagination-bullet {
+  background: rgb(var(--grey-80)) !important; /* Inactive dot */
+  opacity: 1 !important;
+}
+
+.swiper-pagination-bullet-active {
+  background: rgb(var(--grey-100)) !important; /* Active dot */
+}
