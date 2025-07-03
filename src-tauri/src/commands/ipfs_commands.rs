@@ -248,11 +248,6 @@ pub async fn download_and_decrypt_file(
         if encrypted_data.len() > encrypted_size {
             encrypted_data.truncate(encrypted_size);
         }
-        // Log nonce and encrypted data
-        let nonce_bytes = &encrypted_data[..sodiumoxide::crypto::secretbox::NONCEBYTES];
-        let encrypted_part = &encrypted_data[sodiumoxide::crypto::secretbox::NONCEBYTES..];
-        // Log decryption key
-        let key = crate::utils::binary::deterministic_key_for_account(&account_id);
         // Decrypt using centralized function
         let decrypted_data = crate::utils::binary::decrypt_file_for_account(&account_id, &encrypted_data)?;
         // Hash check
