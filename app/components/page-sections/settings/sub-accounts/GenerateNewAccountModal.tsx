@@ -8,10 +8,10 @@ import {
   ShieldSecurity,
   OctagonAlert,
 } from "@/components/ui/icons";
-import { Copy, Check, MoveRight } from "lucide-react";
+import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Graphsheet } from "@/app/components/ui";
+import { Graphsheet, ImportantWarnings } from "@/app/components/ui";
 
 type Props = {
   open: boolean;
@@ -30,24 +30,6 @@ export default function GenerateNewAccountModal({
   copied,
   onAddAsSubAccount,
 }: Props) {
-  const warnings = [
-    {
-      id: 1,
-      text: "Store this key in a secure password manager",
-    },
-    {
-      id: 2,
-      text: "Never share it with anyone",
-    },
-    {
-      id: 3,
-      text: (
-        <div>
-          We <b>cannot</b> help you recover your account if you lose this key
-        </div>
-      ),
-    },
-  ];
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
@@ -138,17 +120,7 @@ export default function GenerateNewAccountModal({
               </span>
             </div>
             <div className="flex flex-col gap-[8px]">
-              {warnings?.map((item) => {
-                return (
-                  <div
-                    key={item?.id}
-                    className="text-grey-50 font-medium text-sm flex gap-[8px] items-center"
-                  >
-                    <MoveRight className="text-grey-80 h-[20px] w-[20px]" />
-                    <span>{item?.text}</span>
-                  </div>
-                );
-              })}
+              <ImportantWarnings />
             </div>
           </div>
 

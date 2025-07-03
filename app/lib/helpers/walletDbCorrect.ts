@@ -126,8 +126,3 @@ export async function clearWalletDb() {
   db.run(TABLE_SCHEMA);
   await saveBytes(db.export());
 }
-
-/** Export the raw database bytes */
-export async function exportWalletDb(): Promise<Uint8Array | null> {
-  return await getBytes();
-}

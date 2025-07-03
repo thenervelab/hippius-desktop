@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Icons, Input, RevealTextLine } from "../ui";
+import { Button, Icons, ImportantWarnings, Input, RevealTextLine } from "../ui";
 import { Eye, EyeOff, Key } from "../ui/icons";
 import { InView } from "react-intersection-observer";
 import { encryptMnemonic, hashPasscode } from "@/app/lib/helpers/crypto";
@@ -201,6 +201,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                   <span>{error}</span>
                 </div>
               )}
+              <ImportantWarnings inView={inView} usePasscode />
 
               <div className="flex flex-col w-full">
                 <RevealTextLine

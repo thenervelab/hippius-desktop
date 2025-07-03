@@ -31,3 +31,4 @@ export { default as ProfileCard } from "./profile-card";
 export { default as CardButton } from "./button/CardButton";
 export { default as AreaLineChart } from "./area-line-chart";
 export { default as ConfirmModal } from "./confirm-modal";
+export { default as ImportantWarnings } from "./important-warnings";
