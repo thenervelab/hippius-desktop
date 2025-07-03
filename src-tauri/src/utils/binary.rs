@@ -1,18 +1,18 @@
+use base64::{engine::general_purpose, Engine as _};
 use once_cell::sync::OnceCell;
+use reqwest::blocking::multipart;
+use reqwest::blocking::Client;
+use serde_json;
+use sha2::{Digest, Sha256};
+use sodiumoxide::crypto::secretbox;
+use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration as StdDuration;
 use tokio::sync::Mutex;
 use tokio::task;
-use sodiumoxide::crypto::secretbox;
-use std::collections::HashMap;
-use base64::{engine::general_purpose, Engine as _};
-use std::path::Path;
-use sha2::{Digest, Sha256};
-use reqwest::blocking::Client;
-use reqwest::blocking::multipart;
-use std::io::Read;
-use serde_json;
 
 use crate::constants::ipfs::KUBO_VERSION;
 
@@ -306,7 +306,10 @@ pub fn deterministic_key_for_account(account_id: &str) -> secretbox::Key {
     secretbox::Key(key_bytes)
 }
 
-pub fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub fn upload_to_ipfs(
+    api_url: &str,
+    file_path: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     let client = Client::new();
 
     // Read file data
@@ -327,7 +330,10 @@ pub fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn 
 
     // Parse response
     let json: serde_json::Value = res.json()?;
-    let cid = json["Hash"].as_str().ok_or("No Hash in IPFS response")?.to_string();
+    let cid = json["Hash"]
+        .as_str()
+        .ok_or("No Hash in IPFS response")?
+        .to_string();
 
     // Pin the file to the local node
     let pin_url = format!("{}/api/v0/pin/add?arg={}", api_url, cid);
@@ -337,7 +343,11 @@ pub fn upload_to_ipfs(api_url: &str, file_path: &str) -> Result<String, Box<dyn 
             if resp.status().is_success() {
                 println!("[IPFS] Successfully pinned CID: {}", cid);
             } else {
-                println!("[IPFS] Failed to pin CID: {} (status: {})", cid, resp.status());
+                println!(
+                    "[IPFS] Failed to pin CID: {} (status: {})",
+                    cid,
+                    resp.status()
+                );
             }
         }
         Err(e) => {
@@ -371,7 +381,10 @@ pub fn encrypt_file_for_account(account_id: &str, file_data: &[u8]) -> Result<Ve
 }
 
 /// Decrypts file data for an account, extracting the nonce and using the deterministic key.
-pub fn decrypt_file_for_account(account_id: &str, encrypted_data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn decrypt_file_for_account(
+    account_id: &str,
+    encrypted_data: &[u8],
+) -> Result<Vec<u8>, String> {
     if encrypted_data.len() < secretbox::NONCEBYTES {
         return Err("Encrypted data too short".to_string());
     }

@@ -1,16 +1,17 @@
 use crate::utils::binary::{
-    download_from_ipfs, upload_to_ipfs,  deterministic_key_for_account, encrypt_file_for_account, decrypt_file_for_account
+    decrypt_file_for_account, deterministic_key_for_account, download_from_ipfs,
+    encrypt_file_for_account, upload_to_ipfs,
 };
-use std::fs;
-use std::io::{Write, Read};
-use std::path::PathBuf;
 use base64::{engine::general_purpose, Engine as _};
-use sodiumoxide::crypto::secretbox;
-use serde::{Serialize, Deserialize};
-use sha2::{Digest, Sha256};
 use reed_solomon_erasure::galois_8::ReedSolomon;
-use uuid::Uuid;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use sodiumoxide::crypto::secretbox;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use tempfile::tempdir;
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize)]
 pub struct ChunkInfo {
@@ -98,30 +99,37 @@ pub async fn encrypt_and_upload_file(
         for (orig_idx, chunk) in chunks.iter().enumerate() {
             // Split chunk into k sub-blocks
             let sub_block_size = (chunk.len() + k - 1) / k;
-            let mut sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
-                let start = j * sub_block_size;
-                let end = std::cmp::min(start + sub_block_size, chunk.len());
-                let mut sub_block = chunk[start..end].to_vec();
-                if sub_block.len() < sub_block_size {
-                    sub_block.resize(sub_block_size, 0);
-                }
-                sub_block
-            }).collect();
+            let mut sub_blocks: Vec<Vec<u8>> = (0..k)
+                .map(|j| {
+                    let start = j * sub_block_size;
+                    let end = std::cmp::min(start + sub_block_size, chunk.len());
+                    let mut sub_block = chunk[start..end].to_vec();
+                    if sub_block.len() < sub_block_size {
+                        sub_block.resize(sub_block_size, 0);
+                    }
+                    sub_block
+                })
+                .collect();
             // Prepare m shards
             let mut shards: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
             for _ in k..m {
                 shards.push(Some(vec![0u8; sub_block_size]));
             }
             // Encode
-            let mut shard_refs: Vec<_> = shards.iter_mut().map(|x| x.as_mut().unwrap().as_mut_slice()).collect();
-            r.encode(&mut shard_refs).map_err(|e| format!("ReedSolomon encode error: {e}"))?;
+            let mut shard_refs: Vec<_> = shards
+                .iter_mut()
+                .map(|x| x.as_mut().unwrap().as_mut_slice())
+                .collect();
+            r.encode(&mut shard_refs)
+                .map_err(|e| format!("ReedSolomon encode error: {e}"))?;
             // Write and upload each shard
             for (share_idx, shard) in shard_refs.iter().enumerate() {
                 let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
                 let chunk_path = temp_dir.path().join(&chunk_name);
                 let mut f = fs::File::create(&chunk_path).map_err(|e| e.to_string())?;
                 f.write_all(shard).map_err(|e| e.to_string())?;
-                let cid = upload_to_ipfs(&api_url, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+                let cid = upload_to_ipfs(&api_url, chunk_path.to_str().unwrap())
+                    .map_err(|e| e.to_string())?;
                 all_chunk_info.push(ChunkInfo {
                     name: chunk_name,
                     cid,
@@ -132,8 +140,15 @@ pub async fn encrypt_and_upload_file(
             }
         }
         // Build metadata
-        let file_name = std::path::Path::new(&file_path).file_name().unwrap().to_string_lossy().to_string();
-        let file_extension = std::path::Path::new(&file_path).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let file_name = std::path::Path::new(&file_path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let file_extension = std::path::Path::new(&file_path)
+            .extension()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         let encrypted_size = to_process.len();
         let metadata = Metadata {
             original_file: OriginalFileInfo {
@@ -158,7 +173,8 @@ pub async fn encrypt_and_upload_file(
         let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
         fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
         // Upload metadata
-        let metadata_cid = upload_to_ipfs(&api_url, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+        let metadata_cid =
+            upload_to_ipfs(&api_url, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
         Ok(metadata_cid)
     })
     .await
@@ -174,8 +190,10 @@ pub async fn download_and_decrypt_file(
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         // Download metadata
-        let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
-        let metadata: Metadata = serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
+        let metadata_bytes =
+            download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
+        let metadata: Metadata =
+            serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
 
         let k = metadata.erasure_coding.k;
         let m = metadata.erasure_coding.m;
@@ -183,9 +201,13 @@ pub async fn download_and_decrypt_file(
         let file_size = metadata.original_file.size;
         let file_hash = &metadata.original_file.hash;
         // Group chunks by original chunk index
-        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
+        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> =
+            std::collections::HashMap::new();
         for chunk in &metadata.chunks {
-            chunk_map.entry(chunk.original_chunk).or_default().push(chunk);
+            chunk_map
+                .entry(chunk.original_chunk)
+                .or_default()
+                .push(chunk);
         }
 
         let mut reconstructed_chunks = Vec::with_capacity(chunk_map.len());
@@ -210,7 +232,8 @@ pub async fn download_and_decrypt_file(
 
             // Reconstruct
             let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
-            r.reconstruct_data(&mut shards).map_err(|e| format!("Reconstruction failed: {e}"))?;
+            r.reconstruct_data(&mut shards)
+                .map_err(|e| format!("Reconstruction failed: {e}"))?;
 
             // Calculate how many bytes to take for this chunk
             let is_last_chunk = orig_idx == chunk_map.len() - 1;
@@ -227,7 +250,8 @@ pub async fn download_and_decrypt_file(
             let mut bytes_collected = 0;
             for i in 0..k {
                 if let Some(ref shard) = shards[i] {
-                    let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
+                    let bytes_to_take =
+                        std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
                     chunk_data.extend_from_slice(&shard[..bytes_to_take]);
                     bytes_collected += bytes_to_take;
                     if bytes_collected == chunk_bytes_needed {
@@ -254,7 +278,8 @@ pub async fn download_and_decrypt_file(
         // Log decryption key
         let key = crate::utils::binary::deterministic_key_for_account(&account_id);
         // Decrypt using centralized function
-        let decrypted_data = crate::utils::binary::decrypt_file_for_account(&account_id, &encrypted_data)?;
+        let decrypted_data =
+            crate::utils::binary::decrypt_file_for_account(&account_id, &encrypted_data)?;
         // Hash check
         let mut hasher = Sha256::new();
         hasher.update(&decrypted_data);

@@ -8,7 +8,7 @@ import {
   mkdir,
 } from "@tauri-apps/plugin-fs";
 
-const DB_FILENAME = "wallet.db";
+export const DB_FILENAME = "wallet.db";
 const TABLE_SCHEMA = `
   CREATE TABLE IF NOT EXISTS wallet (
     id INTEGER PRIMARY KEY,
@@ -38,7 +38,7 @@ async function getBytes(): Promise<Uint8Array | null> {
 }
 
 /** Persist raw bytes to disk */
-async function saveBytes(bytes: Uint8Array) {
+export async function saveBytes(bytes: Uint8Array) {
   await writeFile(DB_FILENAME, bytes, { baseDir: BaseDirectory.AppLocalData });
 }
 
@@ -86,13 +86,12 @@ export async function updateWallet(
     throw new Error("No wallet record found to update");
   }
   const id = res[0].values[0][0];
-  
+
   // Update the record
-  db.run("UPDATE wallet SET encryptedMnemonic = ?, passcodeHash = ? WHERE id = ?", [
-    encryptedMnemonic,
-    passcodeHash,
-    id
-  ]);
+  db.run(
+    "UPDATE wallet SET encryptedMnemonic = ?, passcodeHash = ? WHERE id = ?",
+    [encryptedMnemonic, passcodeHash, id]
+  );
   await saveBytes(db.export());
 }
 
@@ -126,4 +125,9 @@ export async function clearWalletDb() {
   const db = new SQL.Database();
   db.run(TABLE_SCHEMA);
   await saveBytes(db.export());
+}
+
+/** Export the raw database bytes */
+export async function exportWalletDb(): Promise<Uint8Array | null> {
+  return await getBytes();
 }

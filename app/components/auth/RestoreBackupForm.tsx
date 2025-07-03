@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -15,20 +16,45 @@ import { Eye, EyeOff, Key } from "../ui/icons";
 import { InView } from "react-intersection-observer";
 import BoxSimple from "../ui/icons/BoxSimple";
 import Link from "next/link";
+import { restoreWalletFromZip } from "@/app/lib/helpers/restoreWallet";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+
+type FieldErrorState = {
+  file?: string | null;
+  passcode?: string | null;
+};
 
 const RestoreBackupForm: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [passCode, setPasscode] = useState("");
   const [restoring, setRestoring] = useState(false);
   const [error, setError] = useState("");
+  const [fieldError, setFieldError] = useState<FieldErrorState>({});
   const [showPasscode, setShowPasscode] = useState(false);
 
   const fileInput = useRef<HTMLInputElement>(null);
+  const router = useRouter();
+  const { setSession } = useWalletAuth();
+
+  const validateFile = (file: File | null) => {
+    if (!file) return "Please select a backup file.";
+    if (!file.name.endsWith(".zip")) return "Please select a valid zip file.";
+    return null;
+  };
+
+  const validatePasscode = (passcode: string) => {
+    if (!passcode) return "Please enter your passcode.";
+    if (passcode.length < 8) return "Passcode must be at least 8 characters.";
+    return null;
+  };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setFile(e.dataTransfer.files[0]);
+      const droppedFile = e.dataTransfer.files[0];
+      setFile(droppedFile);
+      const fileErr = validateFile(droppedFile);
+      setFieldError((prev) => ({ ...prev, file: fileErr }));
     }
   };
 
@@ -36,14 +62,50 @@ const RestoreBackupForm: React.FC = () => {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setFile(e.target.files[0]);
+      const selectedFile = e.target.files[0];
+      setFile(selectedFile);
+      const fileErr = validateFile(selectedFile);
+      setFieldError((prev) => ({ ...prev, file: fileErr }));
     }
   };
 
-  const handleRestore = () => {
+  const handlePasscodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setPasscode(value);
+    const passcodeErr = validatePasscode(value);
+    setFieldError((prev) => ({ ...prev, passcode: passcodeErr }));
+  };
+
+  const handleRestore = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const fileErr = validateFile(file);
+    const passcodeErr = validatePasscode(passCode);
+
+    setFieldError({ file: fileErr, passcode: passcodeErr });
+
+    if (fileErr || passcodeErr) {
+      return;
+    }
+
     setRestoring(true);
-    console.log("handle restore");
     setError("");
+
+    try {
+      const result = await restoreWalletFromZip(file!, passCode);
+
+      if (result.success && result.mnemonic) {
+        setSession(result.mnemonic);
+        await router.push("/");
+      } else {
+        setError(result.error || "Failed to restore wallet");
+      }
+    } catch (error) {
+      console.error("Restore failed:", error);
+      setError("An unexpected error occurred. Please try again.");
+    } finally {
+      setRestoring(false);
+    }
   };
 
   return (
@@ -63,8 +125,8 @@ const RestoreBackupForm: React.FC = () => {
                 </div>
                 <div className="text-grey-50 xl:text-base text-xs font-medium">
                   <RevealTextLine rotate reveal={inView} className="delay-300">
-                    Here is your seed phrase to gain access to your Hippius
-                    account, please store it somewhere and continue
+                    Upload your backup file and enter your passcode to restore
+                    your Hippius account
                   </RevealTextLine>
                 </div>
               </div>
@@ -109,6 +171,14 @@ const RestoreBackupForm: React.FC = () => {
                             onClick={(e) => {
                               e.stopPropagation();
                               setFile(null);
+                              setFieldError((prev) => ({
+                                ...prev,
+                                file: null,
+                              }));
+                              // Clear the file input value to allow re-selection
+                              if (fileInput.current) {
+                                fileInput.current.value = "";
+                              }
                             }}
                           >
                             <Icons.CloseCircle className="size-4 text-grey-50" />
@@ -125,12 +195,19 @@ const RestoreBackupForm: React.FC = () => {
                       <input
                         ref={fileInput}
                         type="file"
+                        accept=".zip"
                         className="hidden"
                         onChange={handleChange}
                       />
                     </div>
                   </div>
                 </RevealTextLine>
+                {fieldError.file && (
+                  <div className="flex text-error-70 text-sm font-medium mt-2 items-center gap-2">
+                    <AlertCircle className="size-4 !relative" />
+                    <span>{fieldError.file}</span>
+                  </div>
+                )}
               </div>
               <div className="xl:space-y-2 space-y-1 text-grey-10 w-full flex flex-col">
                 <RevealTextLine rotate reveal={inView} className="delay-300">
@@ -153,7 +230,7 @@ const RestoreBackupForm: React.FC = () => {
                       placeholder="Passcode"
                       type={showPasscode ? "text" : "password"}
                       value={passCode}
-                      onChange={(e) => setPasscode(e.target.value)}
+                      onChange={handlePasscodeChange}
                       className="pl-11 border-grey-80 h-14 text-grey-30 w-full
                                   bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none 
                                   hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
@@ -171,6 +248,12 @@ const RestoreBackupForm: React.FC = () => {
                     )}
                   </div>
                 </RevealTextLine>
+                {fieldError.passcode && (
+                  <div className="flex text-error-70 text-sm font-medium mt-2 items-center gap-2">
+                    <AlertCircle className="size-4 !relative" />
+                    <span>{fieldError.passcode}</span>
+                  </div>
+                )}
               </div>
 
               {error && (
