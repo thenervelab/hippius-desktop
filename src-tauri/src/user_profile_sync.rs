@@ -18,6 +18,7 @@ pub fn start_user_profile_sync(account_id: &str) {
         let client = Client::new();
 
         loop {
+            // sync profile after every 40 secs
             time::sleep(Duration::from_secs(40)).await;
 
             let api = match get_substrate_client().await {

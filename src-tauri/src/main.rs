@@ -7,6 +7,7 @@ mod constants;
 mod utils;
 mod substrate_client;
 mod user_profile_sync;
+mod folder_sync;
 
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
@@ -79,6 +80,8 @@ async fn main() {
     // Start the user profile sync (background task)
     println!("[UserProfileSync] Sync loop started for account: {}", DEFAULT_ACCOUNT_ID);
     user_profile_sync::start_user_profile_sync(DEFAULT_ACCOUNT_ID);
+
+    folder_sync::start_folder_sync();
 
     builder.run(tauri::generate_context!())
         .expect("error while running tauri application");
