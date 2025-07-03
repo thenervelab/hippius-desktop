@@ -8,6 +8,7 @@ import ChangePasscode from "./ChangePasscode";
 import AccountActionButtons from "./AccountActionButtons";
 import ExportEncryptedSeed from "./ExportEncryptedSeed";
 import { InView } from "react-intersection-observer";
+import SubAccounts from "./sub-accounts";
 
 const Settings = () => {
   return (
@@ -29,6 +30,9 @@ const Settings = () => {
           </RevealTextLine>
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <ChangePasscode />
+          </RevealTextLine>
+          <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
+            <SubAccounts />
           </RevealTextLine>
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <AccountActionButtons />

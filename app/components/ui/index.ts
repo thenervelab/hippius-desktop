@@ -30,3 +30,4 @@ export { default as SearchInput } from "./search-input";
 export { default as ProfileCard } from "./profile-card";
 export { default as CardButton } from "./button/CardButton";
 export { default as AreaLineChart } from "./area-line-chart";
+export { default as ConfirmModal } from "./confirm-modal";

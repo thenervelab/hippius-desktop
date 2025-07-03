@@ -2,10 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Allow read, write & exists on AppLocalData/wallet.db",
-  "windows": [
-    "main"
-  ],
+  "windows": ["main"],
   "permissions": [
+    "core:default",
+    "opener:default",
     "fs:default",
     {
       "identifier": "fs:allow-exists",

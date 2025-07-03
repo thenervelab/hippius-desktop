@@ -17,6 +17,7 @@
   "app": {
     "windows": [
       {
+        "dragDropEnabled": false,
         "title": "Hippius",
         "width": 900,
         "height": 700
