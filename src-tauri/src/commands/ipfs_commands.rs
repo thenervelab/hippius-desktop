@@ -1,11 +1,8 @@
 use crate::utils::binary::{
-    download_from_ipfs, upload_to_ipfs,  deterministic_key_for_account, encrypt_file_for_account, decrypt_file_for_account
+    download_from_ipfs, upload_to_ipfs, encrypt_file_for_account, decrypt_file_for_account
 };
 use std::fs;
-use std::io::{Write, Read};
-use std::path::PathBuf;
-use base64::{engine::general_purpose, Engine as _};
-use sodiumoxide::crypto::secretbox;
+use std::io::{Write};
 use serde::{Serialize, Deserialize};
 use sha2::{Digest, Sha256};
 use reed_solomon_erasure::galois_8::ReedSolomon;
@@ -72,13 +69,9 @@ pub async fn encrypt_and_upload_file(
         let mut hasher = Sha256::new();
         hasher.update(&file_data);
         let original_file_hash = format!("{:x}", hasher.finalize());
-        // Log encryption key
-        let key = crate::utils::binary::deterministic_key_for_account(&account_id);
+
         // Encrypt using centralized function
-        let to_process = crate::utils::binary::encrypt_file_for_account(&account_id, &file_data)?;
-        // Log nonce and encrypted data
-        let nonce_bytes = &to_process[..sodiumoxide::crypto::secretbox::NONCEBYTES];
-        let encrypted_data = &to_process[sodiumoxide::crypto::secretbox::NONCEBYTES..];
+        let to_process = encrypt_file_for_account(&account_id, &file_data)?;
         let mut hasher = Sha256::new();
         hasher.update(&to_process);
         // Split into chunks
@@ -98,7 +91,7 @@ pub async fn encrypt_and_upload_file(
         for (orig_idx, chunk) in chunks.iter().enumerate() {
             // Split chunk into k sub-blocks
             let sub_block_size = (chunk.len() + k - 1) / k;
-            let mut sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
+            let sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
                 let start = j * sub_block_size;
                 let end = std::cmp::min(start + sub_block_size, chunk.len());
                 let mut sub_block = chunk[start..end].to_vec();
@@ -180,7 +173,6 @@ pub async fn download_and_decrypt_file(
         let k = metadata.erasure_coding.k;
         let m = metadata.erasure_coding.m;
         let chunk_size = metadata.erasure_coding.chunk_size;
-        let file_size = metadata.original_file.size;
         let file_hash = &metadata.original_file.hash;
         // Group chunks by original chunk index
         let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
@@ -215,7 +207,7 @@ pub async fn download_and_decrypt_file(
             // Calculate how many bytes to take for this chunk
             let is_last_chunk = orig_idx == chunk_map.len() - 1;
             let encrypted_size = metadata.erasure_coding.encrypted_size;
-            let mut chunk_bytes_needed = if !is_last_chunk {
+            let chunk_bytes_needed = if !is_last_chunk {
                 chunk_size
             } else {
                 // For the last chunk, only take the remaining bytes needed
@@ -249,7 +241,7 @@ pub async fn download_and_decrypt_file(
             encrypted_data.truncate(encrypted_size);
         }
         // Decrypt using centralized function
-        let decrypted_data = crate::utils::binary::decrypt_file_for_account(&account_id, &encrypted_data)?;
+        let decrypted_data = decrypt_file_for_account(&account_id, &encrypted_data)?;
         // Hash check
         let mut hasher = Sha256::new();
         hasher.update(&decrypted_data);

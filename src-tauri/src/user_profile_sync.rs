@@ -4,10 +4,7 @@ use crate::substrate_client::get_substrate_client;
 use subxt::utils::AccountId32;
 use reqwest::Client;
 use crate::DB_POOL;
-use sp_core::Encode;
-use parity_scale_codec::Decode;
 use crate::commands::substrate_tx::custom_runtime;
-use crate::commands::substrate_tx::custom_runtime::runtime_types::bounded_collections::bounded_vec::BoundedVec;
 use hex;
 
 /// Decode BoundedVec<u8> into a readable string

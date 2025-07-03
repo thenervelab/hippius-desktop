@@ -13,9 +13,6 @@ use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemo
 use commands::ipfs_commands::{download_and_decrypt_file, encrypt_and_upload_file, write_file, read_file};
 use sqlx::sqlite::SqlitePool;
 use once_cell::sync::OnceCell;
-use subxt::dynamic::{storage, Value};
-use serde_json::Value as JsonValue;
-use reqwest::Client;
 use constants::substrate::DEFAULT_ACCOUNT_ID;
 use dirs;
 
