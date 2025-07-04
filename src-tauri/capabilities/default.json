@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Allow read, write & exists on AppLocalData/wallet.db",
+  "description": "Allow read, write & exists on AppLocalData/wallet.db and enable event communication",
   "windows": ["main"],
   "permissions": [
     "fs:default",
@@ -28,6 +28,10 @@
     {
       "identifier": "fs:allow-mkdir",
       "allow": [{ "path": "$APPLOCALDATA" }]
-    }
+    },
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to"
   ]
 }
