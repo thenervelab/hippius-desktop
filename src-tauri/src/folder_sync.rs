@@ -27,8 +27,6 @@ pub fn start_folder_sync() {
             .watch(&sync_path, RecursiveMode::Recursive)
             .expect("[FolderSync] Failed to watch sync directory");
 
-        println!("[FolderSync] Watching directory: {}", sync_path.display());
-
         for res in rx {
             match res {
                 Ok(event) => handle_event(event),
@@ -44,11 +42,9 @@ fn handle_event(event: Event) {
             for path in event.paths {
                 match kind {
                     CreateKind::File => {
-                        println!("[FolderSync] New file detected: {}", path.display());
                         upload_file(&path);
                     }
                     CreateKind::Folder => {
-                        println!("[FolderSync] New folder detected: {}", path.display());
                         upload_folder(&path);
                     }
                     _ => {}
@@ -57,7 +53,6 @@ fn handle_event(event: Event) {
         }
         EventKind::Modify(ModifyKind::Data(_)) => {
             for path in event.paths {
-                println!("[FolderSync] File modified: {}", path.display());
                 // clear db and unpin, then upload
                 replace_file_and_db_records(&path);
             }
@@ -71,7 +66,6 @@ fn upload_file(path: &Path) {
         return;
     }
     let file_path = path.to_string_lossy().to_string();
-    println!("[FolderSync] Uploading file: {}", file_path);
 
     // Call the async upload command in a blocking way
     let result = block_on(encrypt_and_upload_file(

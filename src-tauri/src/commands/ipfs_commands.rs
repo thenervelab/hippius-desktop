@@ -44,7 +44,6 @@ pub async fn encrypt_and_upload_file(
         .await
         .map_err(|e| format!("DB error: {e}"))?;
         if row.is_some() {
-            println!("[encrypt_and_upload_file] File '{}' already exists for owner '{}', skipping upload.", file_name, account_id);
             return Err(format!("File '{}' already exists for this user.", file_name));
         }
     }

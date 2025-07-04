@@ -82,8 +82,6 @@ pub async fn delete_and_unpin_user_file_records_by_name(file_name: &str) -> Resu
         .await
         .map_err(|e| format!("DB error (delete): {e}"))?;
 
-        println!("[delete_user_file_records_by_name] Deleted {} records for file '{}'", result.rows_affected(), file_name);
-
         Ok(result.rows_affected())
     } else {
         Err("DB_POOL not initialized".to_string())
