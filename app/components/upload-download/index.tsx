@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -25,7 +26,10 @@ export default function IpfsTest() {
       const arrayBuffer = await file.arrayBuffer();
       const tempPath = `/tmp/${file.name}`;
       // Write file to disk using Rust command
-      await invoke("write_file", { path: tempPath, data: Array.from(new Uint8Array(arrayBuffer)) });
+      await invoke("write_file", {
+        path: tempPath,
+        data: Array.from(new Uint8Array(arrayBuffer)),
+      });
       // Call the Rust erasure coding upload command
       const result = await invoke<string>("encrypt_and_upload_file", {
         accountId,
@@ -71,27 +75,51 @@ export default function IpfsTest() {
       <div>
         <label>
           k (data shards):
-          <input type="number" value={k} min={1} max={m} onChange={e => setK(Number(e.target.value))} />
+          <input
+            type="number"
+            value={k}
+            min={1}
+            max={m}
+            onChange={(e) => setK(Number(e.target.value))}
+          />
         </label>
         <label>
           m (total shards):
-          <input type="number" value={m} min={k} max={20} onChange={e => setM(Number(e.target.value))} />
+          <input
+            type="number"
+            value={m}
+            min={k}
+            max={20}
+            onChange={(e) => setM(Number(e.target.value))}
+          />
         </label>
         <label>
           Chunk size:
-          <input type="number" value={chunkSize} min={1024} step={1024} onChange={e => setChunkSize(Number(e.target.value))} />
+          <input
+            type="number"
+            value={chunkSize}
+            min={1024}
+            step={1024}
+            onChange={(e) => setChunkSize(Number(e.target.value))}
+          />
         </label>
       </div>
-      <button onClick={handleUpload} disabled={!file}>Upload & Encrypt</button>
+      <button onClick={handleUpload} disabled={!file}>
+        Upload & Encrypt
+      </button>
       {metadataCid && (
         <>
-          <div><strong>Metadata CID:</strong> {metadataCid}</div>
+          <div>
+            <strong>Metadata CID:</strong> {metadataCid}
+          </div>
           <button onClick={handleDownload}>Download & Decrypt</button>
         </>
       )}
       {downloadedUrl && (
         <div>
-          <a href={downloadedUrl} download={file ? `dec_${file.name}` : "file"}>Download Decrypted File</a>
+          <a href={downloadedUrl} download={file ? `dec_${file.name}` : "file"}>
+            Download Decrypted File
+          </a>
         </div>
       )}
       <div>{status}</div>

@@ -8,9 +8,9 @@ import { Pagination, Autoplay } from "swiper/modules";
 import "swiper/css";
 import "swiper/css/pagination";
 
-const RightPanel = () => {
+const LeftCarouselPanel = () => {
   return (
-    <div className="relative w-full h-full min-h-full max-h-full rounded-lg bg-primary-60">
+    <div className="relative w-full h-full min-h-full max-h-full rounded-lg bg-primary-50">
       <div className="absolute w-full top-0 h-full opacity-5">
         <Graphsheet
           majorCell={{
@@ -40,7 +40,7 @@ const RightPanel = () => {
             >
               {SWIPE_CONTENT.map((item) => (
                 <SwiperSlide key={item.heading}>
-                  <div className="xl:p-10 p-6 w-full h-full  flex items-center justify-center flex-col">
+                  <div className="py-[84px] px-5 w-full h-full items-center  flex  justify-between flex-col">
                     <RevealTextLine
                       rotate
                       reveal={inView}
@@ -48,7 +48,7 @@ const RightPanel = () => {
                     >
                       <div
                         className="text-center xl:text-[40px] text-[28px] 
-                      font-medium text-grey-100 xl:mb-[72px] mb-[40px] xl:mt-[50px] mt-[40px]"
+                      font-medium text-grey-100 mb-12  "
                       >
                         {item.heading}
                       </div>
@@ -56,7 +56,7 @@ const RightPanel = () => {
                     <div className="w-full flex items-center justify-center">
                       {item.icon}
                     </div>
-                    <div className="flex flex-col gap-1 items-center justify-center font-normal mt-8 w-full p-10 relative z-30">
+                    <div className="flex flex-col gap-1 items-center justify-center font-normal mt-10 w-full px-10 relative z-30">
                       <RevealTextLine
                         rotate
                         reveal={inView}
@@ -90,4 +90,4 @@ const RightPanel = () => {
   );
 };
 
-export default RightPanel;
+export default LeftCarouselPanel;

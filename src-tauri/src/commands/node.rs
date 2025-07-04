@@ -60,7 +60,7 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
     sleep(Duration::from_secs(SMALL_SLEEP)).await;
 
     let app = emit_and_update_phase(app, AppSetupPhase::StartingDaemon).await;
-    
+
     // Start the daemon process
     let mut child = Command::new(&bin_path)
         .arg("daemon")
@@ -75,7 +75,7 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             println!("[ipfs stdout] {}", line);
-            
+
             if line.contains("Swarm listening on") {
                 emit_and_update_phase(app.clone(), AppSetupPhase::ConnectingToNetwork).await;
             }
@@ -100,16 +100,16 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
 
 async fn configure_ipfs_cors(bin_path: &std::path::PathBuf) -> Result<(), String> {
     // First ensure no daemon is running
-    let _ = Command::new(&bin_path)
-        .arg("shutdown")
-        .output()
-        .await;
+    let _ = Command::new(&bin_path).arg("shutdown").output().await;
 
     let cors_config = vec![
         ("Access-Control-Allow-Origin", "[\"http://localhost:3000\"]"),
-        ("Access-Control-Allow-Methods", "[\"PUT\", \"GET\", \"POST\", \"OPTIONS\"]"),
+        (
+            "Access-Control-Allow-Methods",
+            "[\"PUT\", \"GET\", \"POST\", \"OPTIONS\"]",
+        ),
         ("Access-Control-Allow-Headers", "[\"Authorization\"]"),
-        ];
+    ];
 
     for (header, value) in cors_config {
         let output = Command::new(&bin_path)
@@ -122,7 +122,11 @@ async fn configure_ipfs_cors(bin_path: &std::path::PathBuf) -> Result<(), String
             .map_err(|e| format!("Failed to set CORS header {}: {}", header, e))?;
 
         if !output.status.success() {
-            eprintln!("Failed to set CORS header {}: {}", header, String::from_utf8_lossy(&output.stderr));
+            eprintln!(
+                "Failed to set CORS header {}: {}",
+                header,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 

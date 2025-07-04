@@ -10,8 +10,10 @@ mod user_profile_sync;
 mod folder_sync;
 
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
+use commands::ipfs_commands::{
+    download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
+};
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
-use commands::ipfs_commands::{download_and_decrypt_file, encrypt_and_upload_file, write_file, read_file};
 use commands::substrate_tx::{storage_request_tauri, storage_unpin_request_tauri};
 use sqlx::sqlite::SqlitePool;
 use once_cell::sync::OnceCell;

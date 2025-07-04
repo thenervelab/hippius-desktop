@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-// import { authService } from "@/lib/services/auth-service";
+import { authService } from "@/lib/services/auth-service";
 
 export interface BillingTransaction {
   id: string;
@@ -30,63 +30,6 @@ export interface TransactionObject {
   description: string;
 }
 
-// Dummy data for development
-const dummyApiResponse: BillingTransactionsResponse = {
-  count: 4,
-  next: null,
-  previous: null,
-  results: [
-    {
-      id: "71ef5e56-b646-4355-9666-ad33c08790b7",
-      payment_type: "stripe",
-      amount: "20.00000000",
-      currency: "USD",
-      credits: 20,
-      status: "payment_confirmed",
-      ready_for_mint: true,
-      minted: false,
-      created_at: "2025-06-25T07:20:49.861262Z",
-      completed_at: "2025-06-25T07:21:23.175707Z",
-    },
-    {
-      id: "4766e172-3595-42c7-b7ec-df1a05e64ef7",
-      payment_type: "stripe",
-      amount: "10.00000000",
-      currency: "USD",
-      credits: 10,
-      status: "payment_confirmed",
-      ready_for_mint: true,
-      minted: false,
-      created_at: "2025-06-25T17:52:27.291579Z",
-      completed_at: "2025-06-25T17:56:29.741605Z",
-    },
-    {
-      id: "1f42460f-5448-4415-a0d4-9b0fe91d6294",
-      payment_type: "stripe",
-      amount: "20.00000000",
-      currency: "USD",
-      credits: 20,
-      status: "failed",
-      ready_for_mint: false,
-      minted: false,
-      created_at: "2025-06-25T18:20:07.142733Z",
-      completed_at: "2025-06-26T18:20:08.335394Z",
-    },
-    {
-      id: "22c7cbb3-2319-4e92-a589-7e0d1b37ecd2",
-      payment_type: "stripe",
-      amount: "20.00000000",
-      currency: "USD",
-      credits: 20,
-      status: "payment_confirmed",
-      ready_for_mint: true,
-      minted: false,
-      created_at: "2025-06-25T18:20:52.449000Z",
-      completed_at: "2025-06-25T18:21:37.443140Z",
-    },
-  ],
-};
-
 export default function useBillingTransactions() {
   const [transactions, setTransactions] = useState<TransactionObject[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -99,29 +42,26 @@ export default function useBillingTransactions() {
     console.log("url", url);
     try {
       setIsLoading(true);
-      // Commented out for now, will use later
-      // const authToken = authService.getAuthToken();
-      // if (!authToken) {
-      //   throw new Error("Not authenticated");
-      // }
+      const authToken = authService.getAuthToken();
+      if (!authToken) {
+        throw new Error("Not authenticated");
+      }
+      const fetchUrl =
+        url || "https://api.hippius.com/api/billing/transactions/";
+      const response = await fetch(fetchUrl, {
+        headers: {
+          Authorization: `Token ${authToken}`,
+          Accept: "application/json",
+        },
+      });
 
-      // Instead of making an API call, use the dummy data
-      // const fetchUrl = url || "https://api.hippius.com/api/billing/transactions/";
-      // const response = await fetch(fetchUrl, {
-      //   headers: {
-      //     Authorization: `Token ${authToken}`,
-      //     Accept: "application/json",
-      //   },
-      // });
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch billing transactions: ${response.status}`
+        );
+      }
 
-      // if (!response.ok) {
-      //   throw new Error(`Failed to fetch billing transactions: ${response.status}`);
-      // }
-
-      // const data: BillingTransactionsResponse = await response.json();
-
-      // Using dummy data instead
-      const data = dummyApiResponse;
+      const data: BillingTransactionsResponse = await response.json();
 
       // Update pagination data
       setTotalCount(data.count);

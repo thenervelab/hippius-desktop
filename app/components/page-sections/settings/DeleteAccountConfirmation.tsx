@@ -1,10 +1,10 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Button } from "@/components/ui/button";
-import React from "react";
+import React, { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 
 import DialogContainer from "../../ui/dialog-container";
 import { CardButton, Graphsheet, Icons } from "../../ui";
+import { exportWalletAsZip } from "../../../lib/helpers/exportWallet";
 
 export interface DeleteAccountConfirmationProps {
   open: boolean;
@@ -21,8 +21,31 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
   onDelete,
   onBack,
   onBackupData,
-  loading = false
+  loading = false,
 }) => {
+  const [isBackingUp, setIsBackingUp] = useState(false);
+
+  const handleBackupData = async () => {
+    setIsBackingUp(true);
+    try {
+      const success = await exportWalletAsZip();
+      if (success) {
+        console.log("Wallet backup exported successfully");
+      } else {
+        console.log("Backup export cancelled or failed");
+      }
+    } catch (error) {
+      console.error("Backup export failed:", error);
+    } finally {
+      setIsBackingUp(false);
+    }
+
+    // Call original onBackupData if provided
+    if (onBackupData) {
+      onBackupData();
+    }
+  };
+
   return (
     <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <DialogContainer
@@ -82,12 +105,12 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
           <CardButton
             className="w-full mb-4 h-10"
             variant="secondary"
-            onClick={onBackupData}
-            disabled={loading}
+            onClick={handleBackupData}
+            disabled={loading || isBackingUp}
           >
             <div className="flex items-center gap-2">
               <Icons.Backup className="size-5" />
-              Back up your Data
+              {isBackingUp ? "Backing up..." : "Back up your Data"}
             </div>
           </CardButton>
 

@@ -7,11 +7,14 @@ use crate::utils::{
     },
     file_operations::request_file_storage
 };
-use std::fs;
-use std::io::{Write};
-use sha2::{Digest, Sha256};
-use reed_solomon_erasure::galois_8::ReedSolomon;
 use uuid::Uuid;
+use std::fs;
+use reed_solomon_erasure::galois_8::ReedSolomon;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use sodiumoxide::crypto::secretbox;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use tempfile::tempdir;
 use crate::DB_POOL;
 use crate::commands::types::*;
@@ -96,8 +99,12 @@ pub async fn encrypt_and_upload_file(
                 shards.push(Some(vec![0u8; sub_block_size]));
             }
             // Encode
-            let mut shard_refs: Vec<_> = shards.iter_mut().map(|x| x.as_mut().unwrap().as_mut_slice()).collect();
-            r.encode(&mut shard_refs).map_err(|e| format!("ReedSolomon encode error: {e}"))?;
+            let mut shard_refs: Vec<_> = shards
+                .iter_mut()
+                .map(|x| x.as_mut().unwrap().as_mut_slice())
+                .collect();
+            r.encode(&mut shard_refs)
+                .map_err(|e| format!("ReedSolomon encode error: {e}"))?;
             // Write and upload each shard
             for (share_idx, shard) in shard_refs.iter().enumerate() {
                 let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
@@ -168,17 +175,23 @@ pub async fn download_and_decrypt_file(
 ) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         // Download metadata
-        let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
-        let metadata: Metadata = serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
+        let metadata_bytes =
+            download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
+        let metadata: Metadata =
+            serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
 
         let k = metadata.erasure_coding.k;
         let m = metadata.erasure_coding.m;
         let chunk_size = metadata.erasure_coding.chunk_size;
         let file_hash = &metadata.original_file.hash;
         // Group chunks by original chunk index
-        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
+        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> =
+            std::collections::HashMap::new();
         for chunk in &metadata.chunks {
-            chunk_map.entry(chunk.original_chunk).or_default().push(chunk);
+            chunk_map
+                .entry(chunk.original_chunk)
+                .or_default()
+                .push(chunk);
         }
 
         let mut reconstructed_chunks = Vec::with_capacity(chunk_map.len());
@@ -203,7 +216,8 @@ pub async fn download_and_decrypt_file(
 
             // Reconstruct
             let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
-            r.reconstruct_data(&mut shards).map_err(|e| format!("Reconstruction failed: {e}"))?;
+            r.reconstruct_data(&mut shards)
+                .map_err(|e| format!("Reconstruction failed: {e}"))?;
 
             // Calculate how many bytes to take for this chunk
             let is_last_chunk = orig_idx == chunk_map.len() - 1;
@@ -220,7 +234,8 @@ pub async fn download_and_decrypt_file(
             let mut bytes_collected = 0;
             for i in 0..k {
                 if let Some(ref shard) = shards[i] {
-                    let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
+                    let bytes_to_take =
+                        std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
                     chunk_data.extend_from_slice(&shard[..bytes_to_take]);
                     bytes_collected += bytes_to_take;
                     if bytes_collected == chunk_bytes_needed {
@@ -272,4 +287,3 @@ pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
 pub fn read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| e.to_string())
 }
-

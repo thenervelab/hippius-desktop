@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-// import { authService } from "@/lib/services/auth-service";
+import { authService } from "@/lib/services/auth-service";
 
 export interface SubscriptionPlan {
   id: string;
@@ -44,60 +44,6 @@ export interface SubscriptionPlansResponse {
   recommendation: string;
 }
 
-const dummyPlansApiResponse = {
-  plans: [
-    {
-      id: "prod_SYtFxmpsG2PGpy",
-      name: "Plan1",
-      description: null,
-      price_id: "price_1RdlSyLwzPfzXVTcHNPphtAP",
-      currency: "usd",
-      amount: 10,
-      interval: "month",
-      interval_count: 1,
-      credits_per_billing: 10,
-      savings_vs_onetime: {
-        annual_subscription_cost: 120,
-        annual_onetime_cost: 120,
-        convenience_benefit: "Automatic reloading, never run out of credits",
-      },
-    },
-    {
-      id: "prod_SYtFy84bzQH1Cs",
-      name: "plan 2",
-      description: null,
-      price_id: "price_1RdlTHLwzPfzXVTcBB54QwXO",
-      currency: "usd",
-      amount: 20,
-      interval: "month",
-      interval_count: 1,
-      credits_per_billing: 20,
-      savings_vs_onetime: {
-        annual_subscription_cost: 240,
-        annual_onetime_cost: 240,
-        convenience_benefit: "Automatic reloading, never run out of credits",
-      },
-    },
-  ],
-  recommendation:
-    "Subscriptions offer automatic credit reloading and better value than one-time purchases.",
-};
-const dummyActiveApiResponse = {
-  subscription: {
-    id: "sub_1RdxwvLwzPfzXVTc4K1ysG4I",
-    status: "active",
-    plan_name: "plan 2",
-    amount: 20,
-    currency: "usd",
-    interval: "month",
-    current_period_start: "2025-06-25T18:21:33+00:00",
-    current_period_end: "2025-07-25T18:21:33+00:00",
-    cancel_at_period_end: true,
-    credits_per_billing: 20,
-  },
-  has_subscription: true,
-};
-
 export default function useSubscriptionData() {
   const [activeSubscription, setActiveSubscription] =
     useState<ActiveSubscription | null>(null);
@@ -118,25 +64,30 @@ export default function useSubscriptionData() {
   const fetchActiveSubscription = async () => {
     try {
       setIsLoadingActive(true);
-      // const authToken = authService.getAuthToken();
+      const authToken = authService.getAuthToken();
 
-      // if (!authToken) {
-      //     throw new Error("Not authenticated");
-      // }
+      if (!authToken) {
+        throw new Error("Not authenticated");
+      }
 
-      // const response = await fetch("https://api.hippius.com/api/billing/stripe/active-subscription/", {
-      //     headers: {
-      //         Authorization: `Token ${authToken}`,
-      //         Accept: "application/json",
-      //     },
-      // });
+      const response = await fetch(
+        "https://api.hippius.com/api/billing/stripe/active-subscription/",
+        {
+          headers: {
+            Authorization: `Token ${authToken}`,
+            Accept: "application/json",
+          },
+        }
+      );
 
-      // if (!response.ok) {
-      //     throw new Error(`Failed to fetch active subscription: ${response.status}`);
-      // }
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch active subscription: ${response.status}`
+        );
+      }
 
-      // const data: ActiveSubscription = await response.json();
-      const data = dummyActiveApiResponse;
+      const data: ActiveSubscription = await response.json();
+
       setActiveSubscription(data);
       setActiveError(null);
     } catch (error) {
@@ -150,26 +101,30 @@ export default function useSubscriptionData() {
   const fetchSubscriptionPlans = async () => {
     try {
       setIsLoadingPlans(true);
-      // const authToken = authService.getAuthToken();
+      const authToken = authService.getAuthToken();
 
-      // if (!authToken) {
-      //     throw new Error("Not authenticated");
-      // }
+      if (!authToken) {
+        throw new Error("Not authenticated");
+      }
 
-      // const response = await fetch("https://api.hippius.com/api/billing/stripe/subscription-plans/", {
-      //     headers: {
-      //         Authorization: `Token ${authToken}`,
-      //         Accept: "application/json",
-      //     },
-      // });
+      const response = await fetch(
+        "https://api.hippius.com/api/billing/stripe/subscription-plans/",
+        {
+          headers: {
+            Authorization: `Token ${authToken}`,
+            Accept: "application/json",
+          },
+        }
+      );
 
-      // if (!response.ok) {
-      //     throw new Error(`Failed to fetch subscription plans: ${response.status}`);
-      // }
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch subscription plans: ${response.status}`
+        );
+      }
 
-      // const data: SubscriptionPlansResponse = await response.json();
+      const data: SubscriptionPlansResponse = await response.json();
 
-      const data = dummyPlansApiResponse;
       setSubscriptionPlans(data.plans || []);
       setRecommendation(data.recommendation || "");
       setPlansError(null);
