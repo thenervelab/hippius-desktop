@@ -254,14 +254,13 @@ const RestoreBackupForm: React.FC = () => {
                     <span>{fieldError.passcode}</span>
                   </div>
                 )}
+                {error && (
+                  <div className="flex text-error-70 text-sm font-medium items-center gap-2">
+                    <AlertCircle className="size-4 !relative" />
+                    <span>{error}</span>
+                  </div>
+                )}
               </div>
-
-              {error && (
-                <div className="flex text-error-70 text-sm font-medium items-center gap-2">
-                  <AlertCircle className="size-4 !relative" />
-                  <span>{error}</span>
-                </div>
-              )}
 
               <div className="flex flex-col w-full">
                 <RevealTextLine
