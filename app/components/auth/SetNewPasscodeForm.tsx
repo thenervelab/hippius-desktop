@@ -211,8 +211,8 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                   <OctagonAlert className="text-warning-50 size-6" />
                   <div className="text-grey-50 font-medium text-sm flex gap-2 items-center">
                     <span>
-                      We can't restore this passcode, so please save it in your
-                      password manager
+                      We can{"'"}t restore this passcode, so please save it in
+                      your password manager
                     </span>
                   </div>
                 </div>

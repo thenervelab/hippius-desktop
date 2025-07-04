@@ -1,8 +1,7 @@
 import JSZip from "jszip";
-import { writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { hashPasscode, decryptMnemonic } from "./crypto";
 import { isMnemonicValid } from "./validateMnemonic";
-import { DB_FILENAME, saveBytes } from "./walletDb";
+import { saveBytes } from "./walletDb";
 import initSqlJs from "sql.js/dist/sql-wasm.js";
 
 export async function restoreWalletFromZip(

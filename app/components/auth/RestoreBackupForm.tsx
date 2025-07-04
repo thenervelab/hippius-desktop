@@ -257,7 +257,7 @@ const RestoreBackupForm: React.FC = () => {
               </div>
 
               {error && (
-                <div className="flex text-error-70 text-sm font-medium mt-2 items-center gap-2">
+                <div className="flex text-error-70 text-sm font-medium items-center gap-2">
                   <AlertCircle className="size-4 !relative" />
                   <span>{error}</span>
                 </div>

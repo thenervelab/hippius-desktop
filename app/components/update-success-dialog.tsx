@@ -1,7 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Button } from "@/components/ui/button";
 import React from "react";
-import { ArrowLeft } from "lucide-react";
 
 import DialogContainer from "./ui/dialog-container";
 import { CardButton, Graphsheet, Icons } from "./ui";

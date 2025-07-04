@@ -7,7 +7,7 @@ import BoxSimple from "../ui/icons/BoxSimple";
 import { Icons } from "../ui";
 
 const BlockchainStats: React.FC = () => {
-  const { api, isConnected, blockNumber } = usePolkadotApi();
+  const { api, isConnected } = usePolkadotApi();
   const [peerCount, setPeerCount] = useState<number | null>(null);
 
   useEffect(() => {

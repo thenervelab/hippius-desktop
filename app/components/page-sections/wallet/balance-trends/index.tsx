@@ -99,7 +99,7 @@ const BalanceTrends: React.FC<{
 
   return (
     <InView triggerOnce threshold={0.2}>
-      {({ ref, inView }) => (
+      {({ ref }) => (
         <div ref={ref} className={`p-4 w-full ${className || ""}`}>
           <div className="border border-grey-80 rounded-lg h-full relative">
             <div className="absolute left-2  z-50">

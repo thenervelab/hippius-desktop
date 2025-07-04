@@ -6,7 +6,6 @@ import {
   CloseCircle,
   HippiusLogo,
   ShieldSecurity,
-  OctagonAlert,
 } from "@/components/ui/icons";
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -113,12 +112,7 @@ export default function GenerateNewAccountModal({
                 </Button>
               </div>
             </div>
-            <div className="flex gap-[8px] border-t-2 py-[16px] border-grey-90 mt-[16px] items-center">
-              <OctagonAlert className="text-warning-50 w-[24px] h-[24px]" />
-              <span className="text-lg font-semibold text-grey-10">
-                Important
-              </span>
-            </div>
+
             <div className="flex flex-col gap-[8px]">
               <ImportantWarnings />
             </div>

@@ -1,16 +1,16 @@
-import { Keyring } from '@polkadot/keyring';
-import { createWalletClient, http, Hex } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { 
-  mnemonicToMiniSecret, 
-  mnemonicGenerate, 
-  cryptoWaitReady, 
-  encodeAddress, 
-  decodeAddress, 
-  mnemonicValidate
-} from '@polkadot/util-crypto';
-import { u8aToHex } from '@polkadot/util';
-import { hippiusChain } from './chains';
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { Keyring } from "@polkadot/keyring";
+import { createWalletClient, http, Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import {
+  mnemonicToMiniSecret,
+  mnemonicGenerate,
+  cryptoWaitReady,
+  encodeAddress,
+  mnemonicValidate,
+} from "@polkadot/util-crypto";
+import { u8aToHex } from "@polkadot/util";
+import { hippiusChain } from "./chains";
 
 interface WalletAddresses {
   polkadotAddress: string;
@@ -26,16 +26,16 @@ export class WalletManager {
 
   get evmWallet() {
     if (!this.evmAccount || !this.walletClient) {
-      throw new Error('EVM wallet not initialized');
+      throw new Error("EVM wallet not initialized");
     }
     return {
       address: this.evmAccount.address,
       signMessage: async (message: string) => {
         return this.walletClient!.signMessage({
           account: this.evmAccount!,
-          message
+          message,
         });
-      }
+      },
     };
   }
 
@@ -67,22 +67,25 @@ export class WalletManager {
 
       // Create EVM account and wallet client
       this.evmAccount = privateKeyToAccount(privateKey);
-      
+
       // Create wallet client with fallback transport
       try {
         this.walletClient = createWalletClient({
           account: this.evmAccount,
           chain: hippiusChain,
-          transport: http()
+          transport: http(),
         });
       } catch (error) {
-        console.warn('Failed to create wallet client with HTTP transport, proceeding with account only:', error);
+        console.warn(
+          "Failed to create wallet client with HTTP transport, proceeding with account only:",
+          error
+        );
       }
 
       return this.evmAccount.address;
     } catch (error) {
-      console.error('Failed to initialize EVM wallet:', error);
-      throw new Error('Failed to initialize EVM wallet');
+      console.error("Failed to initialize EVM wallet:", error);
+      throw new Error("Failed to initialize EVM wallet");
     }
   }
 
@@ -94,21 +97,21 @@ export class WalletManager {
       // Validate mnemonic
       const isValidMnemonic = await mnemonicValidate(mnemonic);
       if (!isValidMnemonic) {
-        throw new Error('Invalid mnemonic phrase');
+        throw new Error("Invalid mnemonic phrase");
       }
 
       // Store mnemonic
       this._mnemonic = mnemonic;
 
       // Initialize Polkadot keyring with SS58 format 42
-      const keyring = new Keyring({ 
-        type: 'sr25519',  // Use sr25519 to match Polkadot.js default
-        ss58Format: 42 
+      const keyring = new Keyring({
+        type: "sr25519", // Use sr25519 to match Polkadot.js default
+        ss58Format: 42,
       });
 
       // Add from mnemonic with default derivation path
       this._polkadotPair = keyring.addFromUri(mnemonic);
-      
+
       // Get the address in SS58 format 42
       const polkadotAddress = encodeAddress(this._polkadotPair.addressRaw, 42);
 
@@ -128,14 +131,16 @@ export class WalletManager {
   async initFromMnemonic(mnemonic: string) {
     // Validate mnemonic first
     if (!mnemonicValidate(mnemonic)) {
-      throw new Error('Invalid mnemonic phrase. Please check your access key and try again.');
+      throw new Error(
+        "Invalid mnemonic phrase. Please check your access key and try again."
+      );
     }
 
     await WalletManager.initWasm();
     this._mnemonic = mnemonic;
 
     // Initialize Polkadot wallet
-    const keyring = new Keyring({ type: 'sr25519' });
+    const keyring = new Keyring({ type: "sr25519" });
     this._polkadotPair = keyring.addFromMnemonic(mnemonic);
 
     // Initialize EVM wallet
@@ -145,12 +150,12 @@ export class WalletManager {
     this.walletClient = createWalletClient({
       account: this.evmAccount,
       chain: hippiusChain,
-      transport: http()
+      transport: http(),
     });
 
     return {
       polkadotAddress: this._polkadotPair.address,
-      evmAddress: this.evmAccount.address
+      evmAddress: this.evmAccount.address,
     };
   }
 

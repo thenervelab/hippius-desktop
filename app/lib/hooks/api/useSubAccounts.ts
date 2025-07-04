@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
@@ -19,7 +21,8 @@ export function useSubAccounts() {
     const main = walletManager.polkadotPair.address;
     const entries = await api.query.subAccount.subAccount.entries();
     const mine = entries.filter(
-      ([, mainOpt]) => mainOpt.isSome && mainOpt.unwrap().toString() === main
+      ([, mainOpt]) =>
+        (mainOpt as any).isSome && (mainOpt as any).unwrap().toString() === main
     );
 
     const resolved = await Promise.all(
@@ -28,7 +31,9 @@ export function useSubAccounts() {
         const roleOpt = await api.query.subAccount.subAccountRole(sub);
         return {
           address: sub,
-          role: roleOpt.isSome ? roleOpt.unwrap().toString() : "",
+          role: (roleOpt as any).isSome
+            ? (roleOpt as any).unwrap().toString()
+            : "",
         };
       })
     );

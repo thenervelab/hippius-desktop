@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import React, { useState, useCallback } from "react";
@@ -84,7 +85,7 @@ const SubAccounts: React.FC = () => {
       setTxLoading(false);
       setConfirmOpen(false);
     }
-  }, [pending, api, isConnected, walletManager, toast, reload]);
+  }, [pending, api, isConnected, walletManager, reload]);
 
   const onCreate = useCallback(() => {
     if (!draftAddress.trim()) {

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import React, {
@@ -28,6 +29,7 @@ interface WalletContextType {
   unlockWithPasscode: (passcode: string) => Promise<boolean>;
   logout: () => void;
   resetWallet: () => void;
+  address: string | null;
 }
 const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 
@@ -191,6 +193,7 @@ export function WalletAuthProvider({
         unlockWithPasscode,
         logout,
         resetWallet,
+        address,
       }}
     >
       {children}

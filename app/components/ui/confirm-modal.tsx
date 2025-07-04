@@ -33,7 +33,6 @@ export default function ConfirmModal({
 }: ConfirmModalProps) {
   const isDelete = variant === "delete";
   const accentBg = isDelete ? "bg-red-500" : "bg-primary-50";
-  const accentHover = isDelete ? "hover:bg-red-600" : "hover:bg-primary-60";
   const Icon = isDelete ? Trash : HippiusLogo;
 
   return (

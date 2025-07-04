@@ -49,7 +49,7 @@ const AuthLayout = ({ children }: AuthLayoutProps) => {
             <div className="flex flex-col items-start justify-center h-full ">
               <div
                 className={cn(
-                  "text-lg  font-medium text-grey-10  mb-[38px] flex gap-2 items-center",
+                  "text-xl  font-medium text-grey-10  mb-[38px] flex gap-2 items-center",
                   inView
                     ? "opacity-100 translate-y-0"
                     : "opacity-0 translate-y-8"

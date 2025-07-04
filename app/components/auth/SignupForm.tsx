@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button, Icons, RevealTextLine, ImportantWarnings } from "../ui";
 import { InView } from "react-intersection-observer";
 import { isMnemonicValid } from "@/app/lib/helpers/validateMnemonic";
-import { ShieldSecurity, OctagonAlert } from "@/components/ui/icons";
+import { ShieldSecurity } from "@/components/ui/icons";
 import { toast } from "sonner";
 import { generateMnemonic } from "@/app/lib/helpers/mnemonic";
 

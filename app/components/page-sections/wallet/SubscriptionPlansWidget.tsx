@@ -127,8 +127,6 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
         <div className=" relative mx-11 pb-4 mt-16 bg-grey-100 w-auto ">
           <CardButton
             className="w-full"
-            asLink
-            href="/dashboard/billing/plans"
             disabled={isLoadingActive}
             onClick={handleOpenSubscriptionPlans}
           >

@@ -23,7 +23,8 @@ const AccountActionButtons = () => {
         duration: 4000,
       });
     } catch (error) {
-      toast.error("Failed to delete account. Please try again.");
+      console.log("Failed to delete account:", error);
+      toast.error(`Failed to delete account`);
       setIsDeleting(false);
     } finally {
       handleCloseDeleteDialog();
