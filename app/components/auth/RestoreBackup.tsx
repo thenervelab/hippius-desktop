@@ -5,8 +5,25 @@ import { RevealTextLine } from "../ui";
 import Link from "next/link";
 import RestoreBackupForm from "./RestoreBackupForm";
 import AuthLayout from "./AuthLayout";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 const RestoreBackup = () => {
+  const handleTermsClick = async () => {
+    try {
+      await openUrl("https://hippius.com/terms-and-conditions");
+    } catch (error) {
+      console.error("Failed to open Terms of Service:", error);
+    }
+  };
+
+  const handlePrivacyClick = async () => {
+    try {
+      await openUrl("https://hippius.com/privacy-policy");
+    } catch (error) {
+      console.error("Failed to open Privacy Policy:", error);
+    }
+  };
+
   return (
     <AuthLayout>
       <>
@@ -31,19 +48,19 @@ const RestoreBackup = () => {
         <RevealTextLine rotate reveal={true} className="delay-300">
           <p className="text-xs xl:mt-2 mt-1 text-grey-60 font-medium w-full">
             By continuing, you agree to our{" "}
-            <Link
-              href="https://hippius.com/terms-and-conditions"
-              className="text-primary-50 hover:text-[#0052ff]/90"
+            <button
+              onClick={handleTermsClick}
+              className="text-primary-50 hover:text-[#0052ff]/90 hover:underline"
             >
               Terms of Service
-            </Link>{" "}
+            </button>{" "}
             and{" "}
-            <Link
-              href="https://hippius.com/privacy-policy"
-              className="text-primary-50 hover:text-[#0052ff]/90"
+            <button
+              onClick={handlePrivacyClick}
+              className="text-primary-50 hover:text-[#0052ff]/90 hover:underline"
             >
               Privacy Policy
-            </Link>
+            </button>
           </p>
         </RevealTextLine>
         <RevealTextLine rotate reveal={true} className="delay-500">

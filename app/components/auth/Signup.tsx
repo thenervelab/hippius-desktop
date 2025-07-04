@@ -6,10 +6,27 @@ import Link from "next/link";
 import CreateAccountForm from "./SignupForm";
 import PassCodeForm from "./SetNewPasscodeForm";
 import AuthLayout from "./AuthLayout";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 const SignUp = () => {
   const [showPasscodeFields, setShowPasscodeFields] = useState(false);
   const [mnemonic, setMnemonic] = useState("");
+
+  const handleTermsClick = async () => {
+    try {
+      await openUrl("https://hippius.com/terms-and-conditions");
+    } catch (error) {
+      console.error("Failed to open Terms of Service:", error);
+    }
+  };
+
+  const handlePrivacyClick = async () => {
+    try {
+      await openUrl("https://hippius.com/privacy-policy");
+    } catch (error) {
+      console.error("Failed to open Privacy Policy:", error);
+    }
+  };
 
   return (
     <AuthLayout>
@@ -42,19 +59,19 @@ const SignUp = () => {
         <RevealTextLine rotate reveal={true} className="delay-300">
           <p className="text-xs mt-2 text-grey-60 font-medium w-full">
             By continuing, you agree to our{" "}
-            <Link
-              href="https://hippius.com/terms-and-conditions"
-              className="text-primary-50 hover:text-[#0052ff]/90"
+            <button
+              onClick={handleTermsClick}
+              className="text-primary-50 hover:text-[#0052ff]/90 hover:underline"
             >
               Terms of Service
-            </Link>{" "}
+            </button>{" "}
             and{" "}
-            <Link
-              href="https://hippius.com/privacy-policy"
-              className="text-primary-50 hover:text-[#0052ff]/90"
+            <button
+              onClick={handlePrivacyClick}
+              className="text-primary-50 hover:text-[#0052ff]/90 hover:underline"
             >
               Privacy Policy
-            </Link>
+            </button>
           </p>
         </RevealTextLine>
         <RevealTextLine rotate reveal={true} className="delay-500">
