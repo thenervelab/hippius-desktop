@@ -14,7 +14,7 @@ export default function Wallet() {
   return (
     <>
       <DashboardTitleWrapper mainText="Wallet">
-        <div className="flex gap-4 mt-6">
+        <div className="flex flex-col xl:flex-row gap-4 mt-6">
           <WalletBalanceWidgetWithGraph />
           <SubscriptionPlansWidget />
         </div>

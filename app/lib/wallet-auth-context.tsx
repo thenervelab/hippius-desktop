@@ -12,6 +12,9 @@ import { Keyring } from "@polkadot/keyring";
 import { getWalletRecord, clearWalletDb } from "./helpers/walletDb";
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
+import { mnemonicToAccount } from "viem/accounts";
+import { authService } from "./services/auth-service";
+import { useSearchParams } from "next/navigation";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -21,7 +24,7 @@ interface WalletContextType {
   walletManager: {
     polkadotPair: any;
   } | null;
-  setSession: (mnemonic: string) => boolean;
+  setSession: (mnemonic: string) => Promise<boolean>;
   unlockWithPasscode: (passcode: string) => Promise<boolean>;
   logout: () => void;
   resetWallet: () => void;
@@ -42,6 +45,8 @@ export function WalletAuthProvider({
   const [walletManager, setWalletManager] = useState<{
     polkadotPair: any;
   } | null>(null);
+  const searchParams = useSearchParams();
+  const [address, setAddress] = useState<string | null>(null);
 
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
 
@@ -50,6 +55,7 @@ export function WalletAuthProvider({
     setPolkadotAddress(null);
     setWalletManager(null);
     setIsAuthenticated(false);
+    setAddress(null);
   }, []);
 
   // Memoize resetLogoutTimer and depend on logout
@@ -87,13 +93,48 @@ export function WalletAuthProvider({
   }, [isAuthenticated, resetLogoutTimer]);
 
   // Set session
-  const setSession = (inputMnemonic: string) => {
+  const setSession = async (inputMnemonic: string) => {
     try {
       if (!isMnemonicValid(inputMnemonic)) return false;
       const keyring = new Keyring({ type: "sr25519" });
       const pair = keyring.addFromMnemonic(inputMnemonic);
+      const polkadotAddr = pair.address;
+
+      // Create Ethereum account
+      const ethAccount = mnemonicToAccount(inputMnemonic);
+      const ethAddress = ethAccount.address;
+
+      console.log("[WalletAuth] Derived addresses:", {
+        eth: ethAddress,
+        polkadot: polkadotAddr,
+      });
+
+      // Request challenge
+      const challengeData = await authService.requestChallenge(
+        ethAddress,
+        polkadotAddr
+      );
+      console.log("[WalletAuth] Got challenge:", challengeData.message);
+
+      // Sign challenge
+      const signature = await ethAccount.signMessage({
+        message: challengeData.message,
+      });
+      console.log("[WalletAuth] Generated signature");
+
+      // Verify signature
+      const referralCode = searchParams.get("referral_code");
+
+      await authService.verifySignature({
+        signature,
+        address: ethAddress,
+        substrateAddress: polkadotAddr,
+        referralCode,
+      });
+      console.log("[WalletAuth] Signature verified");
       setMnemonic(inputMnemonic);
       setPolkadotAddress(pair.address);
+      setAddress(ethAddress);
       setWalletManager({ polkadotPair: pair });
       setIsAuthenticated(true);
       return true;
@@ -101,6 +142,7 @@ export function WalletAuthProvider({
       setMnemonic(null);
       setPolkadotAddress(null);
       setWalletManager(null);
+      setAddress(null);
       setIsAuthenticated(false);
       return false;
     }
@@ -116,7 +158,8 @@ export function WalletAuthProvider({
         throw new Error("Incorrect passcode");
       const mnemonic = decryptMnemonic(record.encryptedMnemonic, passcode);
       if (!isMnemonicValid(mnemonic)) throw new Error("Decryption failed");
-      setSession(mnemonic);
+
+      await setSession(mnemonic);
       setIsLoading(false);
       return true;
     } catch {
@@ -125,6 +168,7 @@ export function WalletAuthProvider({
       setWalletManager(null);
       setIsAuthenticated(false);
       setIsLoading(false);
+      setAddress(null);
       return false;
     }
   };

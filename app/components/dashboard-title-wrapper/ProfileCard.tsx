@@ -1,9 +1,11 @@
+"use client";
 import React from "react";
-import Avatar from "boring-avatars";
 import { toast } from "sonner";
 import BoxSimple from "../ui/icons/BoxSimple";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
+import dynamic from "next/dynamic";
+const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 const ProfileCard: React.FC = () => {
   const { polkadotAddress } = useWalletAuth();
   const { blockNumber, isConnected } = usePolkadotApi();
@@ -16,12 +18,13 @@ const ProfileCard: React.FC = () => {
             toast.success("Copied to clipboard successfully!");
           });
         }}
-        className="animate-fade-in-0.3 flex items-center gap-x-2 bg-white hover:bg-primary-100/60 duration-300 px-3 pr-4 rounded-full"
+        className="animate-fade-in-0.3 flex items-center gap-x-2 bg-white hover:bg-primary-100/60 duration-300  rounded-full"
       >
         <div className="size-10 font-medium flex items-center justify-center">
           <Avatar
             colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]}
             name={polkadotAddress}
+            size={40}
             variant="pixel"
           />
         </div>

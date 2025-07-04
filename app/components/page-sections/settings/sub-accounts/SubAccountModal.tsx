@@ -12,7 +12,7 @@ import {
   SelectGroup,
   SelectScrollUpButton,
   SelectScrollDownButton,
-} from "@/components/ui/select";
+} from "@/components/ui/select/Select2";
 
 import { Check } from "lucide-react";
 import { Graphsheet } from "@/app/components/ui";

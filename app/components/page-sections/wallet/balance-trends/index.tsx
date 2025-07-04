@@ -5,12 +5,12 @@ import { Option } from "@/components/ui/select";
 import { Account } from "@/app/lib/types/accounts";
 import {
   formatAccountsForChartByRange,
-  ChartPoint
+  ChartPoint,
 } from "@/app/lib/utils/getFormatDataForAccountsChart";
 import { InView } from "react-intersection-observer";
 import {
   getQuarterDateLabels,
-  MONTHS
+  MONTHS,
 } from "@/app/lib/utils/getXlablesForAccounts";
 import BalanceTrendsTooltip from "./BalanceTrendsTooltip";
 import { COLORS } from "./constants";
@@ -19,7 +19,7 @@ const timeRangeOptions: Option[] = [
   { value: "week", label: "This Week" },
   { value: "month", label: "This Month" },
   { value: "quarter", label: "3 Months" },
-  { value: "year", label: "This Year" }
+  { value: "year", label: "This Year" },
 ];
 
 const BalanceTrends: React.FC<{
@@ -80,7 +80,7 @@ const BalanceTrends: React.FC<{
             ...Array.from({ length: Math.ceil(today / 2) }, (_, i) =>
               String(1 + i * 2).padStart(2, "0")
             ),
-            String(today).padStart(2, "0")
+            String(today).padStart(2, "0"),
           ];
   } else if (timeRange === "quarter") {
     if (formattedChartData.length) {
@@ -127,12 +127,12 @@ const BalanceTrends: React.FC<{
               majorCell={{
                 lineColor: [232, 237, 248, 1],
                 lineWidth: 2,
-                cellDim: 100
+                cellDim: 100,
               }}
               minorCell={{
                 lineColor: [251, 252, 254, 1],
                 lineWidth: 1,
-                cellDim: 15
+                cellDim: 15,
               }}
             />
             <div className="relative w-full h-full flex">
@@ -165,8 +165,8 @@ const BalanceTrends: React.FC<{
                         fontSize: 10,
                         fill: "#6B7280",
                         textAnchor: "middle",
-                        dy: "0.5em"
-                      })
+                        dy: "0.5em",
+                      }),
                     }}
                     yAxisProps={{
                       numTicks: yTicks.length,
@@ -183,23 +183,23 @@ const BalanceTrends: React.FC<{
                         textAnchor: "end",
                         verticalAnchor: "middle",
                         angle: -35,
-                        dx: -2
-                      })
+                        dx: -2,
+                      }),
                     }}
                     plots={[
                       {
                         dataKey: "balance",
                         xAccessor: (d: ChartPoint) => d.bandLabel ?? d.x,
                         yAccessor: (d: ChartPoint) => d.balance,
-                        lineColor: COLORS.balance
+                        lineColor: COLORS.balance,
                       },
                       {
                         dataKey: "credit",
                         xAccessor: (d: ChartPoint) => d.bandLabel ?? d.x,
                         yAccessor: (d: ChartPoint) => d.credit,
                         lineColor: COLORS.credit,
-                        lineType: "dashed"
-                      }
+                        lineType: "dashed",
+                      },
                     ]}
                     renderTooltip={(td) => (
                       <BalanceTrendsTooltip tooltipData={td} />

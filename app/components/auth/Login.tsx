@@ -1,8 +1,6 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { LucideLoader2 } from "lucide-react";
-import { Suspense } from "react";
 import { RevealTextLine } from "../ui";
 import Link from "next/link";
 import AccessKeyForm from "./AccessKeyForm";
@@ -23,25 +21,17 @@ const Login = () => {
   return (
     <AuthLayout>
       <>
-        <Suspense
-          fallback={
-            <div className="flex h-full w-full items-center justify-center opacity-0 grow animate-fade-in-0.5">
-              <LucideLoader2 className="animate-spin text-primary-50" />
-            </div>
-          }
-        >
-          {hasWallet ? (
-            <LoginWithPassCodeForm />
-          ) : showPasscodeFields ? (
-            <SetNewPassCodeForm mnemonic={mnemonic} />
-          ) : (
-            <AccessKeyForm
-              setShowPasscodeFields={setShowPasscodeFields}
-              setMnemonic={setMnemonic}
-              mnemonic={mnemonic}
-            />
-          )}
-        </Suspense>
+        {hasWallet ? (
+          <LoginWithPassCodeForm />
+        ) : showPasscodeFields ? (
+          <SetNewPassCodeForm mnemonic={mnemonic} />
+        ) : (
+          <AccessKeyForm
+            setShowPasscodeFields={setShowPasscodeFields}
+            setMnemonic={setMnemonic}
+            mnemonic={mnemonic}
+          />
+        )}
         <RevealTextLine rotate reveal={true} className="delay-500">
           <div className="w-full items-start justify-start flex mt-6 text-grey-50 gap-1">
             Are you new here?{" "}

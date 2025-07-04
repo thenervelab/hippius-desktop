@@ -95,7 +95,7 @@ const RestoreBackupForm: React.FC = () => {
       const result = await restoreWalletFromZip(file!, passCode);
 
       if (result.success && result.mnemonic) {
-        setSession(result.mnemonic);
+        await setSession(result.mnemonic);
         await router.push("/");
       } else {
         setError(result.error || "Failed to restore wallet");

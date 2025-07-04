@@ -1,8 +1,6 @@
 "use client";
 
 import React from "react";
-import { LucideLoader2 } from "lucide-react";
-import { Suspense } from "react";
 import { RevealTextLine } from "../ui";
 import Link from "next/link";
 import RestoreBackupForm from "./RestoreBackupForm";
@@ -12,15 +10,8 @@ const RestoreBackup = () => {
   return (
     <AuthLayout>
       <>
-        <Suspense
-          fallback={
-            <div className="flex h-full w-full items-center justify-center opacity-0 grow animate-fade-in-0.5">
-              <LucideLoader2 className="animate-spin text-primary-50" />
-            </div>
-          }
-        >
-          <RestoreBackupForm />
-        </Suspense>
+        <RestoreBackupForm />
+
         <RevealTextLine rotate reveal={true} className="delay-500">
           <div className="w-full items-start justify-start flex xl:mt-6 mt-3 text-grey-50 gap-1">
             Are you new here?{" "}

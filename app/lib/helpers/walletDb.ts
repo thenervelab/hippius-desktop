@@ -1,6 +1,14 @@
-import type initSqlJsType from "sql.js/dist/sql-wasm";
+import initSqlJs from "sql.js/dist/sql-wasm.js";
+import type initSqlJsType from "sql.js/dist/sql-wasm.js";
+import {
+  readFile,
+  writeFile,
+  exists,
+  BaseDirectory,
+  mkdir,
+} from "@tauri-apps/plugin-fs";
 
-export const DB_KEY = "walletDB";
+export const DB_FILENAME = "wallet.db";
 const TABLE_SCHEMA = `
   CREATE TABLE IF NOT EXISTS wallet (
     id INTEGER PRIMARY KEY,
@@ -9,23 +17,51 @@ const TABLE_SCHEMA = `
   );
 `;
 
+async function ensureAppDirectory() {
+  try {
+    // create the AppLocalData folder structure if missing
+    await mkdir("", {
+      baseDir: BaseDirectory.AppLocalData,
+      recursive: true, // ← allows nested dirs :contentReference[oaicite:1]{index=1}
+    });
+  } catch (err) {
+    console.error("Failed to create app directory:", err);
+  }
+}
+
+/** Load raw bytes if the file exists */
+async function getBytes(): Promise<Uint8Array | null> {
+  if (!(await exists(DB_FILENAME, { baseDir: BaseDirectory.AppLocalData }))) {
+    return null;
+  }
+  return await readFile(DB_FILENAME, { baseDir: BaseDirectory.AppLocalData });
+}
+
+/** Persist raw bytes to disk */
+export async function saveBytes(bytes: Uint8Array) {
+  await writeFile(DB_FILENAME, bytes, { baseDir: BaseDirectory.AppLocalData });
+}
+
+/** Initialize or load the DB */
 export async function initWalletDb(): Promise<initSqlJsType.Database> {
-  // 👇 ONLY use the WASM build here
-  const initSqlJs = (await import("sql.js/dist/sql-wasm.js")).default;
+  await ensureAppDirectory();
   const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
-  const dbData = localStorage.getItem(DB_KEY);
+  const raw = await getBytes();
+
   let db: initSqlJsType.Database;
-  if (dbData) {
-    db = new SQL.Database(
-      Uint8Array.from(atob(dbData), (c) => c.charCodeAt(0))
-    );
+  if (raw) {
+    // load existing file
+    db = new SQL.Database(raw);
   } else {
+    // create new DB and schema
     db = new SQL.Database();
     db.run(TABLE_SCHEMA);
+    await saveBytes(db.export());
   }
   return db;
 }
 
+/** Insert a new wallet record */
 export async function saveWallet(
   encryptedMnemonic: string,
   passcodeHash: string
@@ -35,11 +71,31 @@ export async function saveWallet(
     encryptedMnemonic,
     passcodeHash,
   ]);
-  const data = db.export();
-  const b64 = btoa(String.fromCharCode(...data));
-  localStorage.setItem(DB_KEY, b64);
+  await saveBytes(db.export());
 }
 
+/** Update the existing wallet record */
+export async function updateWallet(
+  encryptedMnemonic: string,
+  passcodeHash: string
+) {
+  const db = await initWalletDb();
+  // Get the latest wallet record id
+  const res = db.exec("SELECT id FROM wallet ORDER BY id DESC LIMIT 1");
+  if (!res[0]?.values.length) {
+    throw new Error("No wallet record found to update");
+  }
+  const id = res[0].values[0][0];
+
+  // Update the record
+  db.run(
+    "UPDATE wallet SET encryptedMnemonic = ?, passcodeHash = ? WHERE id = ?",
+    [encryptedMnemonic, passcodeHash, id]
+  );
+  await saveBytes(db.export());
+}
+
+/** Fetch the latest wallet record */
 export async function getWalletRecord(): Promise<{
   encryptedMnemonic: string;
   passcodeHash: string;
@@ -48,27 +104,25 @@ export async function getWalletRecord(): Promise<{
   const res = db.exec(
     "SELECT encryptedMnemonic, passcodeHash FROM wallet ORDER BY id DESC LIMIT 1"
   );
-  if (!res.length || !res[0].values.length) return null;
-  const row = res[0].values[0];
-  return {
-    encryptedMnemonic: row[0] as string,
-    passcodeHash: row[1] as string,
-  };
+  if (!res[0]?.values.length) return null;
+  const [encryptedMnemonic, passcodeHash] = res[0].values[0] as string[];
+  return { encryptedMnemonic, passcodeHash };
 }
 
+/** Check if any record exists */
 export async function hasWalletRecord(): Promise<boolean> {
-  const initSqlJs = (await import("sql.js")).default;
+  const raw = await getBytes();
+  if (!raw) return false;
   const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
-  const dbData = localStorage.getItem("walletDB");
-  if (!dbData) return false;
-
-  const db = new SQL.Database(
-    Uint8Array.from(atob(dbData), (c) => c.charCodeAt(0))
-  );
-  const res = db.exec("SELECT 1 FROM wallet LIMIT 1");
-  return res.length > 0 && res[0].values.length > 0;
+  const db = new SQL.Database(raw);
+  const rows = db.exec("SELECT 1 FROM wallet LIMIT 1");
+  return rows.length > 0 && rows[0].values.length > 0;
 }
 
-export function clearWalletDb() {
-  localStorage.removeItem(DB_KEY);
+/** Wipe the DB (recreate empty schema) */
+export async function clearWalletDb() {
+  const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
+  const db = new SQL.Database();
+  db.run(TABLE_SCHEMA);
+  await saveBytes(db.export());
 }

@@ -15,6 +15,7 @@ use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemo
 fn main() {
     sodiumoxide::init().unwrap();
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![

@@ -3,7 +3,7 @@
 import { FC } from "react";
 import { cn } from "@/lib/utils";
 import { AddCircle, Refresh, WalletAdd } from "@/components/ui/icons";
-
+import { openUrl } from "@tauri-apps/plugin-opener";
 import * as Typography from "@/components/ui/typography";
 import { AbstractIconWrapper, CardButton } from "../../ui";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
@@ -66,6 +66,14 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
     dataUpdatedAt,
   } = useUserCredits();
   console.log("credits", credits);
+
+  const handleAddCredits = async () => {
+    try {
+      await openUrl("https://console.hippius.com/dashboard/billing");
+    } catch (error) {
+      console.error("Failed to open URL:", error);
+    }
+  };
 
   return (
     <div className="w-full  relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
@@ -135,7 +143,11 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
               </div>
             </div>
           </div>
-          <CardButton className="w-[160px] mt-4 " variant="secondary">
+          <CardButton
+            className="w-[160px] mt-4 "
+            variant="secondary"
+            onClick={handleAddCredits}
+          >
             <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
               <AddCircle className="size-4" />
               Add Credits
