@@ -4,7 +4,8 @@ use std::sync::mpsc::channel;
 use std::thread;
 use crate::constants::substrate::{SYNC_PATH, DEFAULT_ACCOUNT_ID};
 use crate::constants::ipfs::{API_URL};
-use crate::commands::ipfs_commands::{encrypt_and_upload_file, delete_and_unpin_user_file_records_by_name};
+use crate::commands::ipfs_commands::{encrypt_and_upload_file};
+use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
 use tauri::async_runtime::block_on; // To run async in sync context
 use std::fs;
 
