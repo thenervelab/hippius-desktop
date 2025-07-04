@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, Icons, Input, RevealTextLine } from "../ui";
-import { Eye, EyeOff, Key } from "../ui/icons";
+import { Eye, EyeOff, Key, OctagonAlert } from "../ui/icons";
 import { InView } from "react-intersection-observer";
 import { encryptMnemonic, hashPasscode } from "@/app/lib/helpers/crypto";
 import { saveWallet } from "@/app/lib/helpers/walletDb";
@@ -98,7 +98,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
 
       // Store in walletDb (SQLite/sql.js)
       await saveWallet(encryptedMnemonic, passcodeHash);
-      setSession(mnemonic);
+      await setSession(mnemonic);
       await router.push("/");
     } catch (error) {
       console.error("Failed to create wallet:", error);
@@ -201,6 +201,22 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                   <span>{error}</span>
                 </div>
               )}
+
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 w-full"
+              >
+                <div className="flex gap-2 items-center">
+                  <OctagonAlert className="text-warning-50 size-6" />
+                  <div className="text-grey-50 font-medium text-sm flex gap-2 items-center">
+                    <span>
+                      We can{"'"}t restore this passcode, so please save it in
+                      your password manager
+                    </span>
+                  </div>
+                </div>
+              </RevealTextLine>
 
               <div className="flex flex-col w-full">
                 <RevealTextLine

@@ -141,6 +141,7 @@ const ChangePasscode = () => {
           fieldsData.currentPasscode
         );
       } catch (error) {
+        console.error("Decryption failed:", error);
         setFieldError((prev) => ({
           ...prev,
           currentPasscode: "Current passcode is incorrect",

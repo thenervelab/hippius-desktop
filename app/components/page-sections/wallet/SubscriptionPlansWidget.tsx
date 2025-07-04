@@ -8,6 +8,7 @@ import * as Typography from "@/components/ui/typography";
 import { Loader2 } from "lucide-react";
 import { AbstractIconWrapper, CardButton } from "../../ui";
 import useSubscriptionData from "@/app/lib/hooks/api/useSubscriptionData";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface SubscriptionPlansWidgetProps {
   className?: string;
@@ -44,8 +45,16 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
 
   const hasActiveSubscription = activeSubscription?.has_subscription;
 
+  const handleOpenSubscriptionPlans = async () => {
+    try {
+      await openUrl("https://console.hippius.com/dashboard/billing/plans");
+    } catch (error) {
+      console.error("Failed to open URL:", error);
+    }
+  };
+
   return (
-    <div className="w-full sm:max-w-[345px]  relative bg-[url('/assets/subscription-bg-layer.png')] bg-repeat bg-cover">
+    <div className="w-full  lg:max-w-[345px]  relative bg-[url('/assets/subscription-bg-layer.png')] bg-repeat bg-cover">
       <div
         className={cn(
           "border relative border-grey-80 overflow-hidden rounded-xl w-full h-full",
@@ -100,13 +109,13 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center pt-7">
-                  <AbstractIconWrapper className="size-8 sm:size-10">
-                    <TagRight className="absolute size-4 sm:size-6 text-primary-50" />
+                <div className="flex flex-col items-center justify-center pt-4 pb-2">
+                  <AbstractIconWrapper className="size-12 mb-3 bg-grey-90 border border-grey-80">
+                    <TagRight className="absolute size-6 text-primary-50" />
                   </AbstractIconWrapper>
                   <Typography.P
-                    size={"xxs"}
-                    className="text-center text-grey-10 pb-2 mt-1"
+                    size={"sm"}
+                    className="text-center text-grey-40 font-medium"
                   >
                     No Active Plan
                   </Typography.P>
@@ -118,9 +127,8 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
         <div className=" relative mx-11 pb-4 mt-16 bg-grey-100 w-auto ">
           <CardButton
             className="w-full"
-            asLink
-            href="/dashboard/billing/plans"
             disabled={isLoadingActive}
+            onClick={handleOpenSubscriptionPlans}
           >
             <div className="flex items-center gap-2">
               <Tag2 className="size-4" />

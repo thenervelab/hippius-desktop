@@ -3,7 +3,7 @@
 import { FC } from "react";
 import { cn } from "@/lib/utils";
 import { AddCircle, Refresh, WalletAdd } from "@/components/ui/icons";
-
+import { openUrl } from "@tauri-apps/plugin-opener";
 import * as Typography from "@/components/ui/typography";
 import { AbstractIconWrapper, CardButton } from "../../ui";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
@@ -21,36 +21,36 @@ const chartData: Account[] = [
   {
     total_balance: "25000000000000000000", // 2500 tokens
     credit: "2000000000000000000", // 2300 tokens
-    processed_timestamp: "2025-06-22T09:00:00Z", // Sunday
+    processed_timestamp: "2025-07-04T09:00:00Z", // Sunday
   },
   {
-    total_balance: "27500000000000000000", // 2750 tokens
-    credit: "2500000000000000000", // 2550 tokens
-    processed_timestamp: "2025-06-23T14:30:00Z", // Monday
+    total_balance: "27000000000000000000", // 2750 tokens
+    credit: "15000000000000000000", // 2550 tokens
+    processed_timestamp: "2025-07-03T14:30:00Z", // Monday
   },
   {
     total_balance: "26000000000000000000", // 2600 tokens
-    credit: "2000000000000000000", // 2400 tokens
-    processed_timestamp: "2025-06-24T11:15:00Z", // Tuesday
+    credit: "10000000000000000000", // 2400 tokens
+    processed_timestamp: "2025-07-02T11:15:00Z", // Tuesday
   },
   {
     total_balance: "31000000000000000000", // 3100 tokens
-    credit: "2000000000000000000", // 2800 tokens
-    processed_timestamp: "2025-06-25T16:45:00Z", // Wednesday
+    credit: "22000000000000000000", // 2800 tokens
+    processed_timestamp: "2025-07-01T16:45:00Z", // Wednesday
   },
   {
     total_balance: "29000000000000000000", // 2900 tokens
-    credit: "2000000000000000000", // 2600 tokens
-    processed_timestamp: "2025-06-26T08:20:00Z", // Thursday
+    credit: "10000000000000000000", // 2600 tokens
+    processed_timestamp: "2025-06-30T08:20:00Z", // Thursday
   },
   {
     total_balance: "32000000000000000000", // 3200 tokens
-    credit: "3000000000000000000", // 3000 tokens
-    processed_timestamp: "2025-06-27T13:10:00Z", // Friday
+    credit: "22000000000000000000", // 3000 tokens
+    processed_timestamp: "2025-06-29T13:10:00Z", // Friday
   },
   {
-    total_balance: "30500000000000000000", // 3050 tokens
-    credit: "2800000000000000000", // 2850 tokens
+    total_balance: "30000000000000000000", // 3050 tokens
+    credit: "18000000000000000000", // 2850 tokens
     processed_timestamp: "2025-06-28T10:30:00Z", // Saturday
   },
 ];
@@ -66,6 +66,14 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
     dataUpdatedAt,
   } = useUserCredits();
   console.log("credits", credits);
+
+  const handleAddCredits = async () => {
+    try {
+      await openUrl("https://console.hippius.com/dashboard/billing");
+    } catch (error) {
+      console.error("Failed to open URL:", error);
+    }
+  };
 
   return (
     <div className="w-full  relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
@@ -135,7 +143,11 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
               </div>
             </div>
           </div>
-          <CardButton className="w-[160px] mt-4 " variant="secondary">
+          <CardButton
+            className="w-[160px] mt-4 "
+            variant="secondary"
+            onClick={handleAddCredits}
+          >
             <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
               <AddCircle className="size-4" />
               Add Credits

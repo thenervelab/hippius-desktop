@@ -4,31 +4,12 @@ import { useState, useEffect } from "react";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Icons, RevealTextLine } from "../ui";
+import { Button, Icons, RevealTextLine, ImportantWarnings } from "../ui";
 import { InView } from "react-intersection-observer";
 import { isMnemonicValid } from "@/app/lib/helpers/validateMnemonic";
-import { ShieldSecurity, OctagonAlert } from "@/components/ui/icons";
+import { ShieldSecurity } from "@/components/ui/icons";
 import { toast } from "sonner";
 import { generateMnemonic } from "@/app/lib/helpers/mnemonic";
-
-const warnings = [
-  {
-    id: 1,
-    text: "Store this key in a secure password manager",
-  },
-  {
-    id: 2,
-    text: "Never share it with anyone",
-  },
-  {
-    id: 3,
-    text: (
-      <div>
-        We <b>cannot</b> help you recover your account if you lose this key
-      </div>
-    ),
-  },
-];
 
 interface CreateAccountFormProps {
   setShowPasscodeFields: React.Dispatch<React.SetStateAction<boolean>>;
@@ -130,36 +111,7 @@ const CreateAccountForm: React.FC<CreateAccountFormProps> = ({
                 </div>
               </div>
 
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                className="delay-300 w-full"
-              >
-                <div className="flex gap-2 xl:pt-5 pt-3 xl:pb-4 pb-3 items-center">
-                  <OctagonAlert className="text-warning-50 size-6" />
-                  <span className="text-lg font-semibold text-grey-10">
-                    Important
-                  </span>
-                </div>
-              </RevealTextLine>
-
-              <div className="flex flex-col gap-2">
-                {warnings?.map((item) => {
-                  return (
-                    <RevealTextLine
-                      rotate
-                      reveal={inView}
-                      className="delay-500 w-full"
-                      key={item?.id}
-                    >
-                      <div className="text-grey-50 font-medium text-sm flex gap-2 items-center">
-                        <Icons.ArrowRight className="text-grey-80 size-5" />
-                        <span>{item?.text}</span>
-                      </div>
-                    </RevealTextLine>
-                  );
-                })}
-              </div>
+              <ImportantWarnings inView={inView} />
 
               <div className="xl:pt-5 pt-3 flex flex-col w-full">
                 <RevealTextLine

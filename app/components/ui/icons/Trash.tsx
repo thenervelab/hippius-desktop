@@ -1,44 +1,44 @@
 import { IconComponent } from "@/app/lib/types";
 
-export const Trash: IconComponent = (props) => (
+const Trash: IconComponent = (props) => (
   <svg
-    {...props}
-    viewBox="0 0 16 16"
+    viewBox="0 0 20 20"
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
+    {...props}
   >
     <path
-      d="M14 3.98665C11.78 3.76665 9.54667 3.65332 7.32 3.65332C6 3.65332 4.68 3.71999 3.36 3.85332L2 3.98665"
-      stroke="white"
-      strokeWidth="1.5"
+      d="M17.5 4.98307C14.725 4.70807 11.9333 4.56641 9.15 4.56641C7.5 4.56641 5.85 4.64974 4.2 4.81641L2.5 4.98307"
+      stroke="currentColor"
+      strokeWidth="1.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
     <path
-      d="M5.66699 3.31301L5.81366 2.43967C5.92033 1.80634 6.00033 1.33301 7.12699 1.33301H8.87366C10.0003 1.33301 10.087 1.83301 10.187 2.44634L10.3337 3.31301"
-      stroke="white"
-      strokeWidth="2"
+      d="M7.08337 4.14297L7.26671 3.0513C7.40004 2.25964 7.50004 1.66797 8.90837 1.66797H11.0917C12.5 1.66797 12.6084 2.29297 12.7334 3.05964L12.9167 4.14297"
+      stroke="currentColor"
+      strokeWidth="1.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
     <path
-      d="M12.5669 6.09375L12.1336 12.8071C12.0603 13.8537 12.0003 14.6671 10.1403 14.6671H5.86026C4.00026 14.6671 3.94026 13.8537 3.86693 12.8071L3.43359 6.09375"
-      stroke="white"
-      strokeWidth="2"
+      d="M15.7083 7.61719L15.1666 16.0089C15.075 17.3172 15 18.3339 12.675 18.3339H7.32496C4.99996 18.3339 4.92496 17.3172 4.83329 16.0089L4.29163 7.61719"
+      stroke="currentColor"
+      strokeWidth="1.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
     <path
-      d="M6.88672 11H9.10672"
-      stroke="white"
-      strokeWidth="2"
+      d="M8.60828 13.75H11.3833"
+      stroke="currentColor"
+      strokeWidth="1.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
     <path
-      d="M6.33301 8.33301H9.66634"
-      stroke="white"
-      strokeWidth="2"
+      d="M7.91663 10.418H12.0833"
+      stroke="currentColor"
+      strokeWidth="1.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />

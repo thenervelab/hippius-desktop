@@ -17,6 +17,16 @@ export interface AuthResponse {
   is_new: boolean;
 }
 
+// interface VerifySignatureRequest {
+//   signature: string;
+//   address: string;
+//   substrate_address: string;
+//   challenge: string;
+//   session_data?: {
+//     challenge: string;
+//     address: string;
+//   };
+// }
 
 class AuthService {
   private baseUrl: string;

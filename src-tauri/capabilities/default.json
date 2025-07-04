@@ -4,30 +4,57 @@
   "description": "Allow read, write & exists on AppLocalData/wallet.db",
   "windows": ["main"],
   "permissions": [
+    "core:default",
+    "opener:default",
     "fs:default",
     {
       "identifier": "fs:allow-exists",
-      "allow": [{ "path": "$APPLOCALDATA/wallet.db" }]
+      "allow": [
+        {
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
     },
     {
       "identifier": "fs:allow-write-file",
-      "allow": [{ "path": "$APPLOCALDATA/wallet.db" }]
+      "allow": [
+        {
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
     },
     {
       "identifier": "fs:allow-read-file",
-      "allow": [{ "path": "$APPLOCALDATA/wallet.db" }]
+      "allow": [
+        {
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
     },
     {
       "identifier": "fs:allow-applocaldata-read-recursive",
-      "allow": [{ "path": "$APPLOCALDATA/wallet.db" }]
+      "allow": [
+        {
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
     },
     {
       "identifier": "fs:allow-applocaldata-write-recursive",
-      "allow": [{ "path": "$APPLOCALDATA/wallet.db" }]
+      "allow": [
+        {
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
     },
     {
       "identifier": "fs:allow-mkdir",
-      "allow": [{ "path": "$APPLOCALDATA" }]
-    }
+      "allow": [
+        {
+          "path": "$APPLOCALDATA"
+        }
+      ]
+    },
+    "dialog:default"
   ]
 }

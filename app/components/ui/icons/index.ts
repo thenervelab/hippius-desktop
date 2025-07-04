@@ -105,3 +105,4 @@ export { default as Zip } from "./Zip";
 export { default as Trash } from "./Trash";
 export { default as Tick } from "./Tick";
 export { default as Backup } from "./Backup";
+export { default as KeySquare } from "./KeySquare";
