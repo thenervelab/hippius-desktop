@@ -9,7 +9,7 @@ import { WalletAuthProvider } from "./lib/wallet-auth-context";
 import { metadata as appMetadata } from "./metadata";
 import { Suspense } from "react";
 import PageLoader from "@/components/page-loader";
-// import SplashWrapper from "./components/splash-screen";
+import SplashWrapper from "./components/splash-screen";
 
 export const metadata = appMetadata;
 
@@ -37,9 +37,9 @@ export default async function RootLayout({
           <Providers>
             <WalletAuthProvider>
               <NextTopLoader color="#3167DD" showSpinner={false} />
-              <div className="flex min-h-screen h-screen">{children}</div>
-              {/* <SplashWrapper skipSplash={false}>
-          </SplashWrapper> */}
+                <SplashWrapper skipSplash={false}>
+                  <div className="flex min-h-screen h-screen">{children}</div>
+              </SplashWrapper>
               <Toaster />
             </WalletAuthProvider>
           </Providers>
