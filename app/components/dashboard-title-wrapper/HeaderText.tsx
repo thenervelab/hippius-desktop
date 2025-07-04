@@ -1,14 +1,11 @@
-// import { useAtomValue } from "jotai";
-// import { dashboardPageHeaderAtom } from "@/global-state/ui";
+import { useAtomValue } from "jotai";
+
 import { P } from "@/components/ui/typography";
+import { dashboardPageHeaderAtom } from "./dashboardAtoms";
 
 const HeaderText = () => {
-  //   const dashHeader = useAtomValue(dashboardPageHeaderAtom);
+  const dashHeader = useAtomValue(dashboardPageHeaderAtom);
 
-  const dashHeader = {
-    mainText: "Wallet",
-    subText: "",
-  };
   const headerTextKey = dashHeader.mainText + dashHeader.subText;
 
   return (

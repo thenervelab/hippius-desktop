@@ -1,8 +1,9 @@
 "use client";
 import { useAtom } from "jotai";
-import { sidebarCollapsedAtom } from "./components/sidebar/sideBarAtoms";
-// import SplashWrapper from "./components/splash-screen";
+import { sidebarCollapsedAtom } from "@/components/sidebar/sideBarAtoms";
 import cn from "@/app/lib/utils/cn";
+import HeaderText from "@/app/components/dashboard-title-wrapper/HeaderText";
+import ProfileCard from "@/app/components/dashboard-title-wrapper/ProfileCard";
 
 export default function ResponsiveContent({
   children,
@@ -19,9 +20,11 @@ export default function ResponsiveContent({
           collapsed ? "ml-[60px]" : "ml-[161px]"
         )}
       >
-          {children}
-        {/* <SplashWrapper skipSplash={false}>
-          </SplashWrapper> */}
+        <div className=" bg-white z-10 justify-between flex ">
+          <HeaderText />
+          <ProfileCard />
+        </div>
+        {children}
       </main>
     </div>
   );

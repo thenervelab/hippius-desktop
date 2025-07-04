@@ -3,7 +3,7 @@
 import "@/app/globals.css";
 import Sidebar from "@/components/sidebar";
 import "react-circular-progressbar/dist/styles.css";
-import ResponsiveContent from "../ResponsiveContent";
+import ResponsiveContent from "./ResponsiveContent";
 import { useRouter } from "next/navigation";
 import { useWalletAuth } from "../lib/wallet-auth-context";
 import { useEffect } from "react";

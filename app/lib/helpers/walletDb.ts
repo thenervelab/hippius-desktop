@@ -1,6 +1,6 @@
 import type initSqlJsType from "sql.js/dist/sql-wasm";
 
-const DB_KEY = "walletDB";
+export const DB_KEY = "walletDB";
 const TABLE_SCHEMA = `
   CREATE TABLE IF NOT EXISTS wallet (
     id INTEGER PRIMARY KEY,
@@ -33,7 +33,7 @@ export async function saveWallet(
   const db = await initWalletDb();
   db.run("INSERT INTO wallet (encryptedMnemonic, passcodeHash) VALUES (?, ?)", [
     encryptedMnemonic,
-    passcodeHash
+    passcodeHash,
   ]);
   const data = db.export();
   const b64 = btoa(String.fromCharCode(...data));
@@ -52,7 +52,7 @@ export async function getWalletRecord(): Promise<{
   const row = res[0].values[0];
   return {
     encryptedMnemonic: row[0] as string,
-    passcodeHash: row[1] as string
+    passcodeHash: row[1] as string,
   };
 }
 

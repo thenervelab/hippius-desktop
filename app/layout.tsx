@@ -6,6 +6,10 @@ import { Toaster } from "sonner";
 import "react-circular-progressbar/dist/styles.css";
 import NextTopLoader from "nextjs-toploader";
 import { WalletAuthProvider } from "./lib/wallet-auth-context";
+import { metadata as appMetadata } from "./metadata";
+// import SplashWrapper from "./components/splash-screen";
+
+export const metadata = appMetadata;
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
@@ -31,6 +35,8 @@ export default async function RootLayout({
           <WalletAuthProvider>
             <NextTopLoader color="#3167DD" showSpinner={false} />
             <div className="flex min-h-screen h-screen">{children}</div>
+            {/* <SplashWrapper skipSplash={false}>
+          </SplashWrapper> */}
             <Toaster />
           </WalletAuthProvider>
         </Providers>
