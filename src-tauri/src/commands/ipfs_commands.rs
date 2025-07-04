@@ -58,6 +58,31 @@ pub async fn encrypt_and_upload_file(
     m: Option<usize>,
     chunk_size: Option<usize>,
 ) -> Result<String, String> {
+    use std::path::Path;
+    use crate::DB_POOL;
+
+    // Extract file name from file_path
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
+
+    // Check if file already exists in DB for this account
+    if let Some(pool) = DB_POOL.get() {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+        )
+        .bind(&account_id)
+        .bind(&file_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error: {e}"))?;
+        if row.is_some() {
+            println!("[encrypt_and_upload_file] File '{}' already exists for owner '{}', skipping upload.", file_name, account_id);
+            return Err(format!("File '{}' already exists for this user.", file_name));
+        }
+    }
+
     let k = k.unwrap_or(DEFAULT_K);
     let m = m.unwrap_or(DEFAULT_M);
     let chunk_size = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);

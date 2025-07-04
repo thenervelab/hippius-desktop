@@ -60,7 +60,6 @@ pub fn start_user_profile_sync(account_id: &str) {
                     decode_bounded_vec_to_string(&bounded_vec.0)
                 }
                 None => {
-                    println!("No user profile found for account: {}", account_id);
                     if let Some(pool) = DB_POOL.get() {
                         let _ = sqlx::query("DELETE FROM user_profiles WHERE owner = ?")
                             .bind(&account_id)
@@ -71,7 +70,6 @@ pub fn start_user_profile_sync(account_id: &str) {
                 }
             };
 
-            println!("CID for account {}: {}", account_id, cid);
             let ipfs_url = format!("https://get.hippius.network/ipfs/{}", cid);
 
             match client.get(&ipfs_url).send().await {
@@ -79,15 +77,10 @@ pub fn start_user_profile_sync(account_id: &str) {
                     if let Ok(data) = resp.text().await {
                         if let Ok(profile_data) = serde_json::from_str::<serde_json::Value>(&data) {
                             if let Some(pool) = DB_POOL.get() {
-                                println!("[UserProfileSync] Clearing old entries for owner: {}", account_id);
-                                let clear_result = sqlx::query("DELETE FROM user_profiles WHERE owner = ?")
+                                let _clear_result = sqlx::query("DELETE FROM user_profiles WHERE owner = ?")
                                     .bind(&account_id)
                                     .execute(pool)
                                     .await;
-                                match clear_result {
-                                    Ok(res) => println!("[UserProfileSync] Cleared {} old entries for owner: {}", res.rows_affected(), account_id),
-                                    Err(e) => eprintln!("[UserProfileSync] Failed to clear old entries: {e}"),
-                                }
 
                                 if let Some(files) = profile_data.as_array() {
                                     for file in files {
@@ -99,11 +92,6 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         let main_req_hash = file.get("main_req_hash").and_then(|v| v.as_str()).unwrap_or_default();
                                         let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default();
                                         let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
-
-                                        println!(
-                                            "[UserProfileSync] Inserting file: hash={}, name={}, size={}, assigned={}, last_charged_at={}, main_req_hash={}, selected_validator={}, total_replicas={}",
-                                            file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas
-                                        );
 
                                         let insert_result = sqlx::query(
                                             "INSERT INTO user_profiles (
