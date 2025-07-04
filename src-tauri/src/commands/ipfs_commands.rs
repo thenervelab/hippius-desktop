@@ -9,6 +9,9 @@ use reed_solomon_erasure::galois_8::ReedSolomon;
 use uuid::Uuid;
 use tempfile::tempdir;
 use crate::commands::substrate_tx::FileInputWrapper;
+use crate::DB_POOL;
+use crate::commands::substrate_tx::storage_unpin_request_tauri;
+use crate::commands::substrate_tx::FileHashWrapper;
 
 #[derive(Serialize, Deserialize)]
 pub struct ChunkInfo {
@@ -59,7 +62,6 @@ pub async fn encrypt_and_upload_file(
     chunk_size: Option<usize>,
 ) -> Result<String, String> {
     use std::path::Path;
-    use crate::DB_POOL;
 
     // Extract file name from file_path
     let file_name = Path::new(&file_path)
@@ -336,4 +338,57 @@ pub async fn request_file_storage(
     ).await?;
 
     Ok(result)
+}
+
+/// Unpins all user_profiles records with the given file name by calling storage_unpin_request_tauri
+pub async fn unpin_user_file_by_name(file_name: &str) -> Result<(), String> {
+    if let Some(pool) = DB_POOL.get() {
+        // Fetch the main_req_hash for the file name
+        let hashes: Vec<(String,)> = sqlx::query_as(
+            "SELECT main_req_hash FROM user_profiles WHERE file_name = ?"
+        )
+        .bind(file_name)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("DB error (fetch): {e}"))?;
+
+        if let Some((main_req_hash,)) = hashes.first() {
+            // Wrap in FileHashWrapper
+            let file_hash_wrapper = FileHashWrapper { file_hash: main_req_hash.as_bytes().to_vec() };
+            // Call the unpin request
+            let result = storage_unpin_request_tauri(file_hash_wrapper).await;
+            match result {
+                Ok(msg) => println!("[unpin_user_file_by_name] Unpin request result: {}", msg),
+                Err(e) => println!("[unpin_user_file_by_name] Unpin request error: {}", e),
+            }
+        } else {
+            println!("[unpin_user_file_by_name] No main_req_hash found for file '{}', nothing to unpin.", file_name);
+        }
+        Ok(())
+    } else {
+        Err("DB_POOL not initialized".to_string())
+    }
+}
+
+/// Deletes all user_profiles records with the given file name and unpins the file.
+/// Returns the number of deleted records or an error.
+pub async fn delete_and_unpin_user_file_records_by_name(file_name: &str) -> Result<u64, String> {
+    // Unpin first
+    let _ = unpin_user_file_by_name(file_name).await;
+    if let Some(pool) = DB_POOL.get() {
+        // Now, delete the records
+        let result = sqlx::query(
+            "DELETE FROM user_profiles WHERE file_name = ?"
+        )
+        .bind(file_name)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("DB error (delete): {e}"))?;
+
+        println!("[delete_user_file_records_by_name] Deleted {} records for file '{}'", result.rows_affected(), file_name);
+
+        Ok(result.rows_affected())
+    } else {
+        Err("DB_POOL not initialized".to_string())
+    }
 }

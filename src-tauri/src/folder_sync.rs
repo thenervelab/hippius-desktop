@@ -1,10 +1,10 @@
-use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event, EventKind, event::CreateKind};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event, EventKind, event::CreateKind, event::ModifyKind};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::thread;
 use crate::constants::substrate::{SYNC_PATH, DEFAULT_ACCOUNT_ID};
 use crate::constants::ipfs::{API_URL};
-use crate::commands::ipfs_commands::encrypt_and_upload_file;
+use crate::commands::ipfs_commands::{encrypt_and_upload_file, delete_and_unpin_user_file_records_by_name};
 use tauri::async_runtime::block_on; // To run async in sync context
 use std::fs;
 
@@ -38,20 +38,30 @@ pub fn start_folder_sync() {
 }
 
 fn handle_event(event: Event) {
-    if let EventKind::Create(kind) = event.kind {
-        for path in event.paths {
-            match kind {
-                CreateKind::File => {
-                    println!("[FolderSync] New file detected: {}", path.display());
-                    upload_file(&path);
+    match event.kind {
+        EventKind::Create(kind) => {
+            for path in event.paths {
+                match kind {
+                    CreateKind::File => {
+                        println!("[FolderSync] New file detected: {}", path.display());
+                        upload_file(&path);
+                    }
+                    CreateKind::Folder => {
+                        println!("[FolderSync] New folder detected: {}", path.display());
+                        upload_folder(&path);
+                    }
+                    _ => {}
                 }
-                CreateKind::Folder => {
-                    println!("[FolderSync] New folder detected: {}", path.display());
-                    upload_folder(&path);
-                }
-                _ => {}
             }
         }
+        EventKind::Modify(ModifyKind::Data(_)) => {
+            for path in event.paths {
+                println!("[FolderSync] File modified: {}", path.display());
+                // clear db and unpin, then upload
+                replace_file_and_db_records(&path);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -93,5 +103,28 @@ fn upload_folder(folder_path: &Path) {
                 upload_folder(&path); // Recursively handle subfolders
             }
         }
+    }
+}
+
+// New function: replace file and db records
+fn replace_file_and_db_records(path: &Path) {
+    if !path.is_file() {
+        return;
+    }
+    // Extract file name
+    let file_name = match path.file_name().map(|s| s.to_string_lossy().to_string()) {
+        Some(name) => name,
+        None => {
+            eprintln!("[FolderSync] Could not extract file name from path: {}", path.display());
+            return;
+        }
+    };
+    // Delete and unpin old records
+    let delete_result = block_on(delete_and_unpin_user_file_records_by_name(&file_name));
+    if delete_result.is_ok() {
+        // Upload the file only if delete succeeded
+        upload_file(path);
+    } else {
+        eprintln!("[FolderSync] Failed to delete/unpin old records for '{}', skipping upload.", file_name);
     }
 }
