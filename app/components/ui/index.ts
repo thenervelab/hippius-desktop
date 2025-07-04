@@ -2,6 +2,7 @@ export { default as Graphsheet } from "./graphsheet";
 export { default as AbstractCity } from "./abstract-city";
 export { default as Button } from "./button";
 export { default as Select } from "./select";
+export { default as Select2 } from "./select/Select2";
 export { default as Input } from "./input";
 export { default as RevealTextLine } from "./reveal-text-line";
 export { default as RevealBulletLine } from "./reveal-bullet-line";
