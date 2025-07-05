@@ -3,54 +3,63 @@ type BreakpointFlags = {
   isLaptop?: boolean;
   isDesktop?: boolean;
   isLargeDesktop?: boolean;
-  isTable?: boolean;
 };
+
+type TruncationStyle = "end" | "middle";
 
 export const shortenCopyAbleText = (
   address: string,
-  breakpoints?: BreakpointFlags
+  breakpointsOrOptions?:
+    | BreakpointFlags
+    | { style?: TruncationStyle; startLen?: number; endLen?: number }
 ): string => {
-  const {
-    isMobile = false,
-    isLaptop = false,
-    isDesktop = false,
-    isLargeDesktop = false,
-    isTable = false,
-  } = breakpoints || {};
+  // Check if we're using the old breakpoints API or the new options API
+  if (!breakpointsOrOptions) {
+    return short(address, 5, 5);
+  }
 
-  // 1) If it's a "table" layout...
-  if (isTable) {
-    //   – on mobile, keep 5…5
-    if (isMobile) {
+  // Handle the options-based API
+  if ("style" in breakpointsOrOptions) {
+    const { style = "end", startLen = 5, endLen = 5 } = breakpointsOrOptions;
+
+    if (style === "middle") {
+      return shortMiddle(address, startLen, endLen);
+    }
+    return short(address, startLen, endLen);
+  }
+
+  // Handle the legacy breakpoints API
+  if (
+    typeof breakpointsOrOptions === "object" &&
+    ("isMobile" in breakpointsOrOptions ||
+      "isLaptop" in breakpointsOrOptions ||
+      "isDesktop" in breakpointsOrOptions ||
+      "isLargeDesktop" in breakpointsOrOptions)
+  ) {
+    const { isMobile, isLaptop, isDesktop, isLargeDesktop } =
+      breakpointsOrOptions as BreakpointFlags;
+
+    if (Object.values(breakpointsOrOptions).every((flag) => !flag)) {
       return short(address, 5, 5);
     }
-    //   – otherwise (tablet or larger), use 12…12
-    return short(address, 12, 12);
-  }
 
-  // 2) No flags = default to 5…5
-  if (
-    !breakpoints ||
-    [isMobile, isLaptop, isDesktop, isLargeDesktop].every((f) => !f)
-  ) {
+    if (isDesktop || isLargeDesktop || isLaptop) return address;
+    if (isMobile) return short(address, 5, 5);
+
     return short(address, 5, 5);
   }
 
-  // 3) For laptop/desktop, show the full address
-  if (isLaptop || isDesktop || isLargeDesktop) {
-    return address;
-  }
-
-  // 4) For any other mobile case, 5…5
-  if (isMobile) {
-    return short(address, 5, 5);
-  }
-
-  // 5) Fallback
+  // Default fallback to ensure a string is always returned
   return short(address, 5, 5);
 };
 
 function short(address: string, startLen: number, endLen: number) {
   if (!address || address.length <= startLen + endLen + 3) return address;
-  return `${address.slice(0, startLen)}…${address.slice(-endLen)}`;
+  return `${address.slice(0, startLen)}.....${address.slice(-endLen)}`;
+}
+
+// New function to truncate from the middle
+function shortMiddle(address: string, startLen: number, endLen: number) {
+  if (!address || address.length <= startLen + endLen + 3) return address;
+  return `${address.slice(0, startLen)}...${address.slice(-endLen)}`;
 }

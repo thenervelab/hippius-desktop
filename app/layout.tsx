@@ -1,13 +1,17 @@
 import { Geist } from "next/font/google";
 import localFont from "next/font/local";
 import "@/app/globals.css";
-import Sidebar from "@/components/sidebar";
 import Providers from "@/components/providers";
 import { Toaster } from "sonner";
 import "react-circular-progressbar/dist/styles.css";
 import NextTopLoader from "nextjs-toploader";
-import ResponsiveContent from "./ResponsiveContent";
-import { metadata } from "./metadata";
+import { WalletAuthProvider } from "./lib/wallet-auth-context";
+import { metadata as appMetadata } from "./metadata";
+import { Suspense } from "react";
+import PageLoader from "@/components/page-loader";
+import SplashWrapper from "./components/splash-screen";
+
+export const metadata = appMetadata;
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
@@ -19,8 +23,6 @@ const geistSans = Geist({
   subsets: ["latin"],
 });
 
-export { metadata };
-
 export default async function RootLayout({
   children,
 }: Readonly<{
@@ -31,14 +33,17 @@ export default async function RootLayout({
       <body
         className={`${digitalFonts.className} ${geistSans.className} ${geistSans.variable} bg-grey-100 text-grey-10 antialiased font-sans`}
       >
-        <Providers>
-          <NextTopLoader color="#3167DD" showSpinner={false} />
-          <div className="flex min-h-screen">
-            <Sidebar />
-            <ResponsiveContent>{children}</ResponsiveContent>
-          </div>
-          <Toaster />
-        </Providers>
+        <Suspense fallback={<PageLoader />}>
+          <Providers>
+            <WalletAuthProvider>
+              <NextTopLoader color="#3167DD" showSpinner={false} />
+                <SplashWrapper skipSplash={false}>
+                  <div className="flex min-h-screen h-screen">{children}</div>
+              </SplashWrapper>
+              <Toaster />
+            </WalletAuthProvider>
+          </Providers>
+        </Suspense>
       </body>
     </html>
   );

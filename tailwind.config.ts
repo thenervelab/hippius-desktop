@@ -21,6 +21,11 @@ export default {
         tooltip: "0px 12px 36px 0px rgba(0, 0, 0, 0.14)",
         "banner-scroll": "-4px 0px 0px 0px rgba(31, 81, 190, 0.8) inset",
         menu: "0px 12px 36px 0px #00000024",
+        "input-shadow": "0px 0px 0px 4px rgba(10, 10, 10, 0.05)",
+        "inner-button":
+          "0px 4px 4px 0px #0441951A,0px 2px 9px 0px #3D8CFA99 inset",
+        "outer-button":
+          "0px 4px 4px 0px #0441951A,0px 2px 9px 0px #3D8CFA99 inset",
       },
       backgroundImage: {
         "white-cloud-gradient":
@@ -70,8 +75,29 @@ export default {
           20: "rgb(var(--grey-20) / <alpha-value>)",
           10: "rgb(var(--grey-10) / <alpha-value>)",
         },
+        warning: {
+          100: "rgb(var(--warning-100) / <alpha-value>)",
+          90: "rgb(var(--warning-90) / <alpha-value>)",
+          80: "rgb(var(--warning-80) / <alpha-value>)",
+          70: "rgb(var(--warning-70) / <alpha-value>)",
+          60: "rgb(var(--warning-60) / <alpha-value>)",
+          50: "rgb(var(--warning-50) / <alpha-value>)",
+          40: "rgb(var(--warning-40) / <alpha-value>)",
+          30: "rgb(var(--warning-30) / <alpha-value>)",
+          20: "rgb(var(--warning-20) / <alpha-value>)",
+          10: "rgb(var(--warning-10) / <alpha-value>)",
+        },
         error: {
+          100: "rgb(var(--error-100) / <alpha-value>)",
+          90: "rgb(var(--error-90) / <alpha-value>)",
           80: "rgb(var(--error-80) / <alpha-value>)",
+          70: "rgb(var(--error-70) / <alpha-value>)",
+          60: "rgb(var(--error-60) / <alpha-value>)",
+          50: "rgb(var(--error-50) / <alpha-value>)",
+          40: "rgb(var(--error-40) / <alpha-value>)",
+          30: "rgb(var(--error-30) / <alpha-value>)",
+          20: "rgb(var(--error-20) / <alpha-value>)",
+          10: "rgb(var(--error-10) / <alpha-value>)",
         },
       },
       zIndex: {

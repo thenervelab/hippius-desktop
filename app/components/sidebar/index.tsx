@@ -6,17 +6,32 @@ import { Icons, RevealTextLine } from "../ui";
 import cn from "@/app/lib/utils/cn";
 import NavItem from "./nav-item";
 import { navItems, footerNavItems } from "./nav-data";
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import { sidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { InView } from "react-intersection-observer";
+import FooterNavItem from "./footer-nav-items";
+import { FaHdd, FaFolder } from "react-icons/fa";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { phaseAtom } from "../splash-screen/atoms";
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useAtom(sidebarCollapsedAtom);
+  const [syncPath, setSyncPath] = useState<string>("");
+  const phase = useAtomValue(phaseAtom);
 
   const toggleSidebar = () => {
     setCollapsed(!collapsed);
   };
+
+  useEffect(() => {
+    if (phase === "ready") {
+      invoke<string>("get_sync_path")
+        .then(setSyncPath)
+        .catch(() => setSyncPath(""));
+    }
+  }, [phase]);
 
   return (
     <InView triggerOnce>
@@ -62,6 +77,20 @@ const Sidebar: React.FC = () => {
             </RevealTextLine>
           </div>
 
+          <div className="px-4 pt-4">
+            {!collapsed && <div className="text-xs text-grey-60 font-semibold mb-2">Locations</div>}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 text-grey-10">
+                <FaHdd className="text-grey-50" />
+                {!collapsed && <span>Hippius</span>}
+              </div>
+              <div className="flex items-center gap-2 text-grey-10">
+                <FaFolder className="text-blue-500" />
+                {!collapsed && <span>{syncPath ? syncPath.split("/").pop() : ""}</span>}
+              </div>
+            </div>
+          </div>
+
           <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-gray-80 w-full">
             {navItems.map((item) => (
               <NavItem
@@ -78,13 +107,11 @@ const Sidebar: React.FC = () => {
 
           <div className="py-2 border-y border-gray-80 mt-2 w-full">
             {footerNavItems.map((item) => (
-              <NavItem
-                key={item.path}
+              <FooterNavItem
+                key={item.label}
                 icon={item.icon}
                 label={item.label}
-                href={item.path}
                 inView={inView}
-                active={pathname === item.path}
                 collapsed={collapsed}
               />
             ))}

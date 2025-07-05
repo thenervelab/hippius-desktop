@@ -9,16 +9,23 @@
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../out"
   },
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
+    }
+  },
   "app": {
     "windows": [
       {
+        "dragDropEnabled": false,
         "title": "Hippius",
-        "width": 900,
-        "height": 700
+        "width": 1000,
+        "height": 800
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": ["default"]
     }
   },
   "bundle": {

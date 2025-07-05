@@ -3,9 +3,13 @@ import { Metadata } from "next";
 export function createMetadata(
   title: string,
   description: string,
-  keywords?: string
+  keywords?: string,
+  metadataBase?: string
 ): Metadata {
   return {
+    metadataBase: metadataBase
+      ? new URL(metadataBase)
+      : new URL("https://hippius.com"),
     title,
     description,
     keywords,
