@@ -15,7 +15,6 @@ use commands::ipfs_commands::{download_and_decrypt_file, encrypt_and_upload_file
 use commands::substrate_tx::{storage_request_tauri, storage_unpin_request_tauri,get_sync_path};
 use sqlx::sqlite::SqlitePool;
 use once_cell::sync::OnceCell;
-use constants::substrate::DEFAULT_ACCOUNT_ID;
 use dirs;
 use tauri::{Manager, Builder};
 

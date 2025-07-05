@@ -14,6 +14,7 @@ use std::time::Duration as StdDuration;
 use tokio::sync::Mutex;
 use tokio::task;
 use crate::constants::ipfs::KUBO_VERSION;
+use tauri::Emitter;
 
 static DOWNLOAD_STATE: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
 
@@ -28,7 +29,7 @@ pub fn get_binary_path() -> Result<PathBuf, String> {
     Ok(home.join(".hippius").join("bin").join(binary_name))
 }
 
-pub async fn ensure_ipfs_binary() -> Result<PathBuf, String> {
+pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String> {
     let binary_path = get_binary_path()?;
 
     // If binary already exists, check if it's executable and valid
@@ -56,6 +57,9 @@ pub async fn ensure_ipfs_binary() -> Result<PathBuf, String> {
         {
             Ok(_) => {
                 println!("Valid IPFS binary found at {:?}", binary_path);
+                // Emit DownloadingBinary event even when binary exists (for frontend consistency)
+                app.emit(crate::constants::ipfs::APP_SETUP_EVENT, crate::constants::ipfs::AppSetupPhase::DownloadingBinary)
+                    .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
                 return Ok(binary_path);
             }
             Err(e) => {
@@ -81,6 +85,10 @@ pub async fn ensure_ipfs_binary() -> Result<PathBuf, String> {
     };
 
     if should_download {
+        // Emit DownloadingBinary event
+        app.emit(crate::constants::ipfs::APP_SETUP_EVENT, crate::constants::ipfs::AppSetupPhase::DownloadingBinary)
+            .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
+
         println!("Starting IPFS binary download");
         // We're the downloading thread
         let result = task::spawn_blocking(move || download_and_extract_binary(&binary_path))
@@ -92,6 +100,10 @@ pub async fn ensure_ipfs_binary() -> Result<PathBuf, String> {
         *download_state = None;
 
         return Ok(result);
+    }else {
+        // Emit DownloadingBinary event
+        app.emit(crate::constants::ipfs::APP_SETUP_EVENT, crate::constants::ipfs::AppSetupPhase::DownloadingBinary)
+        .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
     }
 
     // We're not the downloading thread, wait for the download to complete

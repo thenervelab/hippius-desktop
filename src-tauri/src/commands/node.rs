@@ -50,7 +50,7 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
     let app = emit_and_update_phase(app, AppSetupPhase::CheckingBinary).await;
     sleep(Duration::from_secs(SMALL_SLEEP)).await;
 
-    let bin_path = ensure_ipfs_binary()
+    let bin_path = ensure_ipfs_binary(app.clone())
         .await
         .map_err(|e| format!("Binary fetch failed: {e}"))?;
 
