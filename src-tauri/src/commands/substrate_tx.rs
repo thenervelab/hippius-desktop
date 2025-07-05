@@ -1,4 +1,3 @@
-
 use subxt::tx::PairSigner;
 use sp_core::{Pair, sr25519};
 use crate::substrate_client::get_substrate_client;
@@ -88,4 +87,9 @@ pub async fn storage_unpin_request_tauri(
         .await
         .map_err(|e| e.to_string())?;
     Ok(format!("storage_unpin_request submitted: {:?}", result))
+}
+
+#[tauri::command]
+pub fn get_sync_path() -> String {
+    crate::constants::substrate::SYNC_PATH.to_string()
 }
