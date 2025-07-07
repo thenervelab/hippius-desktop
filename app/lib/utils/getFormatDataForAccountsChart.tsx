@@ -1,6 +1,6 @@
 // getFormatDataForAccountsChart.tsx
 import { Account } from "../types";
-import { formatBalance } from "../utils";
+import { formatBalance } from "./formatters/formatBalance";
 
 export interface ChartPoint {
   x: Date;

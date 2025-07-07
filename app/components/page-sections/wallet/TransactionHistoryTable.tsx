@@ -22,7 +22,7 @@ import { Dollar } from "@/components/ui/icons";
 import useBillingTransactions, {
   TransactionObject,
 } from "@/app/lib/hooks/api/useBillingTransactions";
-import { formatBalance } from "@/app/lib/utils";
+import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
 
 export const formatDate = (
   date: Date,

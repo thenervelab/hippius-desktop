@@ -5,9 +5,10 @@ import React from "react";
 import { AbstractIconWrapper } from "../../ui";
 
 import { Clock } from "../../ui/icons";
-import TransactionHistoryTable from "./transaction-history-table";
+
 import WalletBalanceWidgetWithGraph from "./WalletBalanceWidgetWithGraph";
 import DashboardTitleWrapper from "../../dashboard-title-wrapper";
+import TransactionHistoryTable from "./TransactionHistoryTable";
 
 export default function Wallet() {
   return (
