@@ -1,7 +1,7 @@
 use subxt::tx::PairSigner;
 use sp_core::{Pair, sr25519};
 use crate::substrate_client::get_substrate_client;
-use crate::constants::substrate::SEED_PHRASE;
+// use crate::constants::substrate::SEED_PHRASE;
 use serde::Deserialize;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
@@ -51,8 +51,9 @@ impl From<FileInputWrapper> for FileInput {
 pub async fn storage_request_tauri(
     files_input: Vec<FileInputWrapper>,
     miner_ids: Option<Vec<Vec<u8>>>,
+    seed_phrase: String
 ) -> Result<String, String> {
-    let pair = sr25519::Pair::from_string(SEED_PHRASE, None)
+    let pair = sr25519::Pair::from_string(&seed_phrase, None)
         .map_err(|e| format!("Failed to create pair: {:?}", e))?;
 
     let signer = PairSigner::new(pair);
@@ -73,8 +74,9 @@ pub async fn storage_request_tauri(
 #[tauri::command]
 pub async fn storage_unpin_request_tauri(
     file_hash_wrapper: FileHashWrapper,
+    seed_phrase: String
 ) -> Result<String, String> {
-    let pair = sr25519::Pair::from_string(SEED_PHRASE, None).map_err(|e| e.to_string())?;
+    let pair = sr25519::Pair::from_string(&seed_phrase, None).map_err(|e| e.to_string())?;
     let signer = PairSigner::new(pair);
     let api = get_substrate_client().await?;
 

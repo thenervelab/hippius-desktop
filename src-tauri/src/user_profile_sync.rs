@@ -135,3 +135,9 @@ pub fn start_user_profile_sync(account_id: &str) {
         }
     });
 }
+
+#[tauri::command]
+pub async fn start_user_profile_sync_tauri(account_id: String) {
+    println!("starting profile sync {:?}", account_id);
+    start_user_profile_sync(&account_id);
+}

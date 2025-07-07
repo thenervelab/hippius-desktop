@@ -12,7 +12,6 @@ export * from "./toOrdinal";
 export * from "./mbValueToBytes";
 export * from "./avgLatency";
 export * from "./createMetadata";
-export * from "./formatBalance";
 export * from "./shortenCopyAbleText";
 export * from "./formatTimeDiff";
 export * from "./atomWithDebounce";

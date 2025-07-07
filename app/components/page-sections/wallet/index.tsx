@@ -5,10 +5,10 @@ import React from "react";
 import { AbstractIconWrapper } from "../../ui";
 
 import { Clock } from "../../ui/icons";
-import TransactionHistoryTable from "./transaction-history-table";
-import SubscriptionPlansWidget from "./SubscriptionPlansWidget";
+
 import WalletBalanceWidgetWithGraph from "./WalletBalanceWidgetWithGraph";
 import DashboardTitleWrapper from "../../dashboard-title-wrapper";
+import TransactionHistoryTable from "./TransactionHistoryTable";
 
 export default function Wallet() {
   return (
@@ -16,7 +16,6 @@ export default function Wallet() {
       <DashboardTitleWrapper mainText="Wallet">
         <div className="flex flex-col xl:flex-row gap-4 mt-6">
           <WalletBalanceWidgetWithGraph />
-          <SubscriptionPlansWidget />
         </div>
 
         <div className="mt-6">

@@ -1,7 +1,6 @@
 import { AppSetupPhaseContent } from "@/app/lib/constants";
 import { Icons } from "../ui";
 import { AppSetupPhases } from "@/app/lib/types";
-import { FiDownloadCloud, FiSettings } from "react-icons/fi";
 
 export const PHASE_CONTENT: Record<AppSetupPhases, AppSetupPhaseContent> = {
   checking_binary: {
@@ -10,17 +9,19 @@ export const PHASE_CONTENT: Record<AppSetupPhases, AppSetupPhaseContent> = {
     subStatus: "Verifying node status ....",
   },
   downloading_binary: {
-    icon: <FiDownloadCloud className="h-[135px] w-[135px] animate-bounce text-blue-500" />,
+    icon: <Icons.DownloadingIPFS className="h-[200] w-[130px] " />,
     status: "Downloading IPFS",
     subStatus: "Fetching and installing IPFS binary ....",
   },
   initializing_repo: {
-    icon: <FiSettings className="h-[135px] w-[135px] animate-spin text-green-500" />,
-    status: "Initializing IPFS Repo",
+    icon: <Icons.InitializeRepo className="h-[222px] w-[110px] " />,
+    status: "Initializing IPFS Repository",
     subStatus: "Setting up IPFS repository ....",
   },
   configuring_cors: {
-    icon: <FiSettings className="h-[135px] w-[135px] animate-spin text-yellow-500" />,
+    icon: (
+      <Icons.ConfiguringCORS className="h-[130px] w-[145px] animate-spin-fast " />
+    ),
     status: "Configuring CORS",
     subStatus: "Setting up CORS headers for IPFS API ....",
   },

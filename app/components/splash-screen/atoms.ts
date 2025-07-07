@@ -1,7 +1,7 @@
-import { APP_SETUP_PHASES } from "@/app/lib/constants";
 import { AppSetupPhases } from "@/app/lib/types";
 import { remap } from "@/app/lib/utils";
 import { atom } from "jotai";
+import { APP_SETUP_PHASES } from "@/app/lib/constants/appSetupPhases";
 
 export const phaseAtom = atom<AppSetupPhases | null>(null);
 

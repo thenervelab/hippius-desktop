@@ -5,6 +5,7 @@ export interface NavItemData {
   path: string;
   icon: React.ReactNode;
   isActive?: boolean;
+  comingSoon?: boolean;
 }
 export interface FooterNavItemData {
   label: string;
@@ -22,6 +23,7 @@ export const navItems: NavItemData[] = [
     label: "Files",
     path: "/files",
     icon: <Icons.DocumentText />,
+    comingSoon: true,
   },
   {
     label: "Wallet",
@@ -32,6 +34,7 @@ export const navItems: NavItemData[] = [
     label: "Notification",
     path: "/notification",
     icon: <Icons.Notification />,
+    comingSoon: true,
   },
   {
     label: "Settings",

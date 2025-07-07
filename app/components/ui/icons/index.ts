@@ -106,3 +106,6 @@ export { default as Trash } from "./Trash";
 export { default as Tick } from "./Tick";
 export { default as Backup } from "./Backup";
 export { default as KeySquare } from "./KeySquare";
+export { default as DownloadingIPFS } from "./DownloadingIPFS";
+export { default as ConfiguringCORS } from "./ConfiguringCORS";
+export { default as InitializeRepo } from "./InitializeRepo";
