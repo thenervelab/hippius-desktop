@@ -27,6 +27,7 @@ pub async fn encrypt_and_upload_file(
     k: Option<usize>,
     m: Option<usize>,
     chunk_size: Option<usize>,
+    seed_phrase: String
 ) -> Result<String, String> {
     use std::path::Path;
 
@@ -158,7 +159,7 @@ pub async fn encrypt_and_upload_file(
     println!("[encrypt_and_upload_file] Metadata CID: {}", metadata_cid);
 
     // Call request_file_storage and log its returned CID
-    let storage_result = request_file_storage(&file_name, &metadata_cid, &api_url).await;
+    let storage_result = request_file_storage(&file_name, &metadata_cid, &api_url, &seed_phrase).await;
     match &storage_result {
         Ok(cid) => println!("[encrypt_and_upload_file] Storage request CID: {}", cid),
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
