@@ -9,7 +9,6 @@ import {
 } from "@/config/constants";
 import { useAtomValue, useSetAtom } from "jotai";
 import { polkadotApiAtom } from "../global-atoms/polkadotApiAtom";
-import { phaseAtom } from "@/components/splash-screen/atoms";
 
 export const usePolkadotApi = () => {
   return useAtomValue(polkadotApiAtom);
@@ -17,8 +16,6 @@ export const usePolkadotApi = () => {
 
 export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   const setState = useSetAtom(polkadotApiAtom);
-  const appPhase = useAtomValue(phaseAtom);
-  const isAppReady = appPhase === "ready";
 
   const apiRef = useRef<ApiPromise | null>(null);
   const wsProviderRef = useRef<WsProvider | null>(null);
@@ -27,7 +24,6 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   const connectingRef = useRef(false);
   const retryCountRef = useRef(0);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const connectionInitiatedRef = useRef(false);
 
   const cleanup = useCallback(async () => {
     console.log("Cleaning up Polkadot API connections...");
@@ -42,20 +38,12 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
     }
 
     if (apiRef.current) {
-      try {
-        await apiRef.current.disconnect();
-      } catch (e) {
-        console.log("Error disconnecting API:", e);
-      }
+      await apiRef.current.disconnect();
       apiRef.current = null;
     }
 
     if (wsProviderRef.current) {
-      try {
-        await wsProviderRef.current.disconnect();
-      } catch (e) {
-        console.log("Error disconnecting WebSocket:", e);
-      }
+      await wsProviderRef.current.disconnect();
       wsProviderRef.current = null;
     }
 
@@ -72,12 +60,6 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   }, [setState]);
 
   const connect = useCallback(async () => {
-    // Don't try to connect if the app isn't ready yet
-    if (!isAppReady) {
-      console.log("Skipping connection: app not ready yet");
-      return;
-    }
-
     if (connectingRef.current) {
       console.log("Skipping connection: already connecting");
       return;
@@ -169,29 +151,17 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-  }, [cleanup, setState, isAppReady]);
+  }, [cleanup, setState]);
 
   useEffect(() => {
     mountedRef.current = true;
-
-    // Only try to connect if the app is ready
-    if (isAppReady && !connectionInitiatedRef.current) {
-      connectionInitiatedRef.current = true;
-      // Add a small delay to ensure the splash screen transition is complete
-      const timeout = setTimeout(() => {
-        connect();
-      }, 1500);
-
-      return () => {
-        clearTimeout(timeout);
-      };
-    }
+    connect();
 
     return () => {
       mountedRef.current = false;
       cleanup();
     };
-  }, [connect, cleanup, isAppReady]);
+  }, [connect, cleanup]);
 
   return children;
 }
