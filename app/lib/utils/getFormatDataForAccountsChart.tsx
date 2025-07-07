@@ -154,8 +154,6 @@ export const formatAccountsForChartByRange = (
   }
 
   if (range === "year") {
-    // const start = new Date(now.getFullYear(), 0, 1);
-
     // Create a monthly data map instead of using daily data
     const monthlyData: Map<number, ChartPoint> = new Map();
 
