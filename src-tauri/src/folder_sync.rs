@@ -13,7 +13,7 @@ const DEFAULT_K: usize = 3;
 const DEFAULT_M: usize = 5;
 const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
 
-pub fn start_folder_sync(account_id: String) {
+pub fn start_folder_sync(account_id: String, seed_phrase: String) {
     let sync_path = PathBuf::from(SYNC_PATH);
     let account_id = account_id.clone(); // Only clone here for thread move
 
@@ -30,23 +30,23 @@ pub fn start_folder_sync(account_id: String) {
 
         for res in rx {
             match res {
-                Ok(event) => handle_event(event, &account_id),
+                Ok(event) => handle_event(event, &account_id, &seed_phrase),
                 Err(e) => eprintln!("[FolderSync] Watch error: {:?}", e),
             }
         }
     });
 }
 
-fn handle_event(event: Event, account_id: &str) {
+fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
     match event.kind {
         EventKind::Create(kind) => {
             for path in event.paths {
                 match kind {
                     CreateKind::File => {
-                        upload_file(&path, account_id);
+                        upload_file(&path, account_id, seed_phrase);
                     }
                     CreateKind::Folder => {
-                        upload_folder(&path, account_id);
+                        upload_folder(&path, account_id, seed_phrase);
                     }
                     _ => {}
                 }
@@ -55,14 +55,14 @@ fn handle_event(event: Event, account_id: &str) {
         EventKind::Modify(ModifyKind::Data(_)) => {
             for path in event.paths {
                 // clear db and unpin, then upload
-                replace_file_and_db_records(&path, account_id);
+                replace_file_and_db_records(&path, account_id, seed_phrase);
             }
         }
         _ => {}
     }
 }
 
-fn upload_file(path: &Path, account_id: &str) {
+fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) {
     if !path.is_file() {
         return;
     }
@@ -76,6 +76,7 @@ fn upload_file(path: &Path, account_id: &str) {
         Some(DEFAULT_K),
         Some(DEFAULT_M),
         Some(DEFAULT_CHUNK_SIZE),
+        seed_phrase.to_string()
     ));
 
     match result {
@@ -84,7 +85,7 @@ fn upload_file(path: &Path, account_id: &str) {
     }
 }
 
-fn upload_folder(folder_path: &Path, account_id: &str) {
+fn upload_folder(folder_path: &Path, account_id: &str, seed_phrase: &str) {
     if !folder_path.is_dir() {
         return;
     }
@@ -94,16 +95,16 @@ fn upload_folder(folder_path: &Path, account_id: &str) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                upload_file(&path, account_id);
+                upload_file(&path, account_id, seed_phrase);
             } else if path.is_dir() {
-                upload_folder(&path, account_id); // Recursively handle subfolders
+                upload_folder(&path, account_id, seed_phrase); // Recursively handle subfolders
             }
         }
     }
 }
 
 // New function: replace file and db records
-fn replace_file_and_db_records(path: &Path, account_id: &str) {
+fn replace_file_and_db_records(path: &Path, account_id: &str, seed_phrase: &str) {
     if !path.is_file() {
         return;
     }
@@ -116,16 +117,16 @@ fn replace_file_and_db_records(path: &Path, account_id: &str) {
         }
     };
     // Delete and unpin old records
-    let delete_result = block_on(delete_and_unpin_user_file_records_by_name(&file_name));
+    let delete_result = block_on(delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase));
     if delete_result.is_ok() {
         // Upload the file only if delete succeeded
-        upload_file(path, account_id);
+        upload_file(path, account_id, seed_phrase);
     } else {
         eprintln!("[FolderSync] Failed to delete/unpin old records for '{}', skipping upload.", file_name);
     }
 }
 
 #[tauri::command]
-pub fn start_folder_sync_tauri(account_id: String) {
-    start_folder_sync(account_id);
+pub fn start_folder_sync_tauri(account_id: String, seed_phrase: String) {
+    start_folder_sync(account_id, seed_phrase);
 }
