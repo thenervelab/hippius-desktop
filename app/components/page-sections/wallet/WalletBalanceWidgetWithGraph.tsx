@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { AddCircle, Refresh, WalletAdd } from "@/components/ui/icons";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import * as Typography from "@/components/ui/typography";
-import { AbstractIconWrapper, CardButton } from "../../ui";
+import { AbstractIconWrapper, CardButton, Icons } from "../../ui";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import Warning from "../../ui/icons/Warning";
 import TimeAgo from "react-timeago";
@@ -67,7 +67,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
   } = useUserCredits();
   console.log("credits", credits);
 
-  const handleAddCredits = async () => {
+  const handleOpenConsoleBillingPage = async () => {
     try {
       await openUrl("https://console.hippius.com/dashboard/billing");
     } catch (error) {
@@ -83,7 +83,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
           className
         )}
       >
-        <div className="w-full pl-4 py-4 relative max-w-[280px]">
+        <div className="w-full pl-4 py-4 relative min-w-[280px] max-w-[300px]">
           <div className="flex items-start">
             <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
               <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
@@ -143,16 +143,29 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
               </div>
             </div>
           </div>
-          <CardButton
-            className="w-[160px] mt-4 "
-            variant="secondary"
-            onClick={handleAddCredits}
-          >
-            <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
-              <AddCircle className="size-4" />
-              Add Credits
-            </div>
-          </CardButton>
+          <div className="flex flex-col">
+            <CardButton
+              className="w-full mt-4 "
+              variant="secondary"
+              onClick={handleOpenConsoleBillingPage}
+            >
+              <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
+                <AddCircle className="size-4" />
+                Add Credits
+              </div>
+            </CardButton>
+            <CardButton
+              className="w-full mt-3"
+              onClick={handleOpenConsoleBillingPage}
+            >
+              <div className="flex items-center gap-2 ">
+                <Icons.Tag2 className="size-4" />
+                <span className="flex items-center text-lg font-medium">
+                  Manage Subscription
+                </span>
+              </div>
+            </CardButton>
+          </div>
         </div>
         <BalanceTrends chartData={chartData} isLoading={false} />
       </div>

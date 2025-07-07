@@ -1,9 +1,8 @@
 import React from "react";
-import { cn } from "@/lib/utils";
-import Link from "next/link";
-import CopyText from "../copy-text";
-import { shortenCopyAbleText } from "@/lib/utils/shortenCopyAbleText";
+import { CopyText } from "@/components/ui";
+import { cn, shortenCopyAbleText } from "@/app/lib/utils";
 import { useBreakpoint } from "@/app/lib/hooks";
+import Link from "next/link";
 
 export const CopyableCell: React.FC<{
   copyAbleText: string;
@@ -15,9 +14,9 @@ export const CopyableCell: React.FC<{
   checkIconClassName?: string;
   buttonClass?: string;
   textColor?: string;
-  showCopyAbleText?: boolean;
-  truncationStyle?: "end" | "middle";
   className?: string;
+  isTable?: boolean;
+  linkClass?: string;
 }> = ({
   copyAbleText,
   link,
@@ -28,33 +27,20 @@ export const CopyableCell: React.FC<{
   buttonClass,
   textColor,
   checkIconClassName,
-  showCopyAbleText = true,
-  truncationStyle = "end",
   className,
+  isTable,
+  linkClass,
 }) => {
-  const { isMobile, isTablet, isLaptop, isDesktop, isLargeDesktop } =
-    useBreakpoint();
-
-  let display;
-
-  // For CIDs or similar long strings, use the truncation style provided
-  if (truncationStyle === "middle") {
-    display = shortenCopyAbleText(copyAbleText, {
-      style: "middle",
-      startLen: isMobile ? 8 : isTablet ? 10 : isLaptop ? 12 : 20,
-      endLen: isMobile ? 5 : isTablet ? 7 : isLaptop ? 10 : 15,
-    });
-  } else if (forSmallScreen) {
-    display = shortenCopyAbleText(copyAbleText);
-  } else {
-    display = shortenCopyAbleText(copyAbleText, {
-      isMobile,
-      isLaptop,
-      isDesktop,
-      isLargeDesktop,
-    });
-  }
-
+  const { isMobile, isLaptop, isDesktop, isLargeDesktop } = useBreakpoint();
+  const display = forSmallScreen
+    ? shortenCopyAbleText(copyAbleText)
+    : shortenCopyAbleText(copyAbleText, {
+        isMobile,
+        isLaptop,
+        isDesktop,
+        isLargeDesktop,
+        isTable,
+      });
   return (
     <CopyText
       text={copyAbleText}
@@ -68,18 +54,17 @@ export const CopyableCell: React.FC<{
       {link ? (
         <Link
           href={link}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-grey-20 hover:text-primary-50"
+          className={cn("text-grey-20 hover:text-primary-50", linkClass)}
         >
           {display}
         </Link>
       ) : (
-        showCopyAbleText && (
-          <span className={cn(textColor ? textColor : "text-grey-20")}>
-            {display}
-          </span>
-        )
+        <span
+          onClick={(e) => e.stopPropagation()}
+          className={cn(textColor ? textColor : "text-grey-20")}
+        >
+          {display}
+        </span>
       )}
     </CopyText>
   );

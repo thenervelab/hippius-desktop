@@ -1,127 +1,95 @@
-import { useState, useEffect } from "react";
-import { authService } from "@/lib/services/auth-service";
+import {
+  useQuery,
+  UseQueryOptions,
+  UseQueryResult,
+  keepPreviousData,
+} from "@tanstack/react-query";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { API_BASE_URL } from "../../constants";
 
-export interface BillingTransaction {
-  id: string;
-  payment_type: string;
-  amount: number | string;
-  currency: string;
-  description?: string;
-  credits?: number;
-  status: string;
-  ready_for_mint?: boolean;
-  minted?: boolean;
-  created_at: string;
-  completed_at?: string;
+// Define types based on the indexer API response
+export interface TransferEvent {
+  block_number: number;
+  event_index: number;
+  from_account: string;
+  to_account: string;
+  amount: string;
+  extrinsic_hash: string | null;
+  raw_event_data: {
+    amount: string;
+    from: string;
+    to: string;
+  };
+  processed_timestamp: string;
 }
 
-interface BillingTransactionsResponse {
-  results: BillingTransaction[];
-  count: number;
-  next: string | null;
-  previous: string | null;
+export interface TransfersResponse {
+  data: TransferEvent[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    total_pages: number;
+  };
 }
 
+// Modified structure to match new column requirements
 export interface TransactionObject {
   id: string;
-  type: "card" | "tao";
+  block: number;
   amount: number;
+  from: string;
   date: string;
-  description: string;
 }
 
-export default function useBillingTransactions() {
-  const [transactions, setTransactions] = useState<TransactionObject[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [totalCount, setTotalCount] = useState<number>(0);
-  const [nextPage, setNextPage] = useState<string | null>(null);
-  const [previousPage, setPreviousPage] = useState<string | null>(null);
+export interface UseTransfersParams {
+  page?: number;
+  limit?: number;
+}
 
-  const fetchTransactions = async (url?: string) => {
-    console.log("url", url);
-    try {
-      setIsLoading(true);
-      const authToken = authService.getAuthToken();
-      if (!authToken) {
-        throw new Error("Not authenticated");
+export default function useBillingTransactions(
+  params?: UseTransfersParams,
+  options?: Omit<
+    UseQueryOptions<TransfersResponse, Error, TransactionObject[]>,
+    "queryKey" | "queryFn"
+  >
+): UseQueryResult<TransactionObject[], Error> {
+  const { polkadotAddress } = useWalletAuth();
+  const page = params?.page || 1;
+  const limit = params?.limit || 10;
+
+  return useQuery<TransfersResponse, Error, TransactionObject[]>({
+    queryKey: ["transfers", polkadotAddress, page, limit],
+    queryFn: async () => {
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
-      const fetchUrl =
-        url || "https://api.hippius.com/api/billing/transactions/";
-      const response = await fetch(fetchUrl, {
+
+      const url = `${API_BASE_URL}/balance-transfers?account=${polkadotAddress}`;
+
+      const response = await fetch(url, {
         headers: {
-          Authorization: `Token ${authToken}`,
-          Accept: "application/json",
+          accept: "application/json",
         },
       });
 
       if (!response.ok) {
-        throw new Error(
-          `Failed to fetch billing transactions: ${response.status}`
-        );
+        throw new Error(`Failed to fetch transfers: ${response.status}`);
       }
 
-      const data: BillingTransactionsResponse = await response.json();
-
-      // Update pagination data
-      setTotalCount(data.count);
-      setNextPage(data.next);
-      setPreviousPage(data.previous);
-
-      // Transform API data to match expected TransactionObject structure
-      const transformedData = data.results.map((transaction) => ({
-        id: transaction.id,
-        type: transaction.payment_type.toLowerCase().includes("stripe")
-          ? "card"
-          : "tao",
-        amount:
-          typeof transaction.amount === "string"
-            ? parseFloat(transaction.amount)
-            : transaction.amount,
-        date: transaction.created_at,
-        description:
-          transaction.description || `Payment - ${transaction.payment_type}`,
-      })) as TransactionObject[];
-
-      setTransactions(transformedData);
-      setError(null);
-    } catch (error) {
-      console.error("Error fetching billing transactions:", error);
-      setError(error instanceof Error ? error.message : "Unknown error");
-      setTransactions([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Fetch transactions on component mount
-  useEffect(() => {
-    fetchTransactions();
-  }, []);
-
-  // Function to load next page of results
-  const fetchNextPage = () => {
-    if (nextPage) {
-      fetchTransactions(nextPage);
-    }
-  };
-
-  // Function to load previous page of results
-  const fetchPreviousPage = () => {
-    if (previousPage) {
-      fetchTransactions(previousPage);
-    }
-  };
-
-  return {
-    data: transactions,
-    isPending: isLoading,
-    error,
-    totalCount,
-    hasNextPage: !!nextPage,
-    hasPreviousPage: !!previousPage,
-    fetchNextPage,
-    fetchPreviousPage,
-    refetch: fetchTransactions,
-  };
+      return (await response.json()) as TransfersResponse;
+    },
+    select: (data) => {
+      return data.data.map((transfer) => ({
+        id: `${transfer.block_number}-${transfer.event_index}`,
+        block: transfer.block_number,
+        amount: parseFloat(transfer.amount),
+        from: transfer.from_account,
+        date: transfer.processed_timestamp,
+      }));
+    },
+    placeholderData: keepPreviousData,
+    enabled: !!polkadotAddress,
+    ...options,
+  });
 }
