@@ -46,7 +46,8 @@ export default function Home() {
   useEffect(() => {
     if (polkadotAddress) {
       invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
-      invoke("start_folder_sync_tauri", { accountId: polkadotAddress , seedPhrase : mnemonic});
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      invoke("start_folder_sync_tauri", { accountId: polkadotAddress, seedPhrase: mnemonic });
     }
   }, [polkadotAddress]);
 
