@@ -67,7 +67,7 @@ export default function useBalance(
         throw new Error("No wallet address available");
       }
 
-      const url = `${API_BASE_URL}/account?account_id=5DZqHcEfLUV2EbNAYVDLZddKGsLxHevcvU5fz26bdtjcTS6t`;
+      const url = `${API_BASE_URL}/account?account_id=${polkadotAddress}`;
 
       const response = await fetch(url, {
         headers: {
