@@ -46,9 +46,12 @@ export default function Home() {
   useEffect(() => {
     if (polkadotAddress) {
       invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
-      invoke("start_folder_sync_tauri", { accountId: polkadotAddress , seedPhrase : mnemonic});
+      invoke("start_folder_sync_tauri", {
+        accountId: polkadotAddress,
+        seedPhrase: mnemonic,
+      });
     }
-  }, [polkadotAddress]);
+  }, [polkadotAddress, mnemonic]);
 
   return (
     <DashboardTitleWrapper mainText="">
@@ -149,7 +152,6 @@ export default function Home() {
         <h2 className="text-xl font-semibold mb-2">IPFS Encrypted Upload/Download Test</h2>
         <IpfsTest />
       </section> */}
-
       </div>
     </DashboardTitleWrapper>
   );
