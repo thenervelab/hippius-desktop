@@ -7,12 +7,13 @@ use tauri::{
 use sqlx::sqlite::SqlitePool;
 use once_cell::sync::OnceCell;
 use dirs;
+use std::path::PathBuf;
 
 use crate::{
     commands::node::start_ipfs_daemon,
     constants::substrate::DEFAULT_ACCOUNT_ID,
-    user_profile_sync,
     folder_sync,
+    // Removed unused import: user_profile_sync
 };
 
 static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
@@ -24,15 +25,15 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         let quit_i = MenuItem::with_id(app, "quit", "Quit Hippius", true, None::<&str>)?;
         let menu = Menu::with_items(app, &[&quit_i])?;
 
-        #[cfg(not(target_os = "macos"))]
-        let icon_path = "./icons/icon.png";
+        // Resolve icon path
+        let icon_path = resolve_icon_path("icons/icon.png", &app.handle());
 
-        #[cfg(target_os = "macos")]
-        let icon_path = "./icons/black-outline-icon.png";
+        // Debug: Log the resolved path
+        println!("[Setup] Resolved icon path: {}", icon_path.display());
 
         let _tray = TrayIconBuilder::new()
             .tooltip("Hippius Cloud")
-            .icon(Image::from_path(icon_path)?)
+            .icon(Image::from_path(&icon_path)?)
             .icon_as_template(true)
             .menu(&menu)
             .show_menu_on_left_click(false)
@@ -118,9 +119,8 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             println!("[Setup] Database initialized successfully");
 
             // Start background sync tasks
-            println!("[Setup] Starting user profile sync for account: {}", DEFAULT_ACCOUNT_ID);
-            user_profile_sync::start_user_profile_sync(DEFAULT_ACCOUNT_ID);
-            folder_sync::start_folder_sync();
+            println!("[Setup] Starting folder sync for account: {}", DEFAULT_ACCOUNT_ID);
+            folder_sync::start_folder_sync(DEFAULT_ACCOUNT_ID.to_string());
 
             // Start IPFS daemon
             if let Err(e) = start_ipfs_daemon(handle).await {
@@ -130,4 +130,44 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         
         Ok(())
     })
+}
+
+fn resolve_icon_path(filename: &str, app_handle: &tauri::AppHandle) -> PathBuf {
+    // Try dev path for development
+    let dev_dir = PathBuf::from("src-tauri");
+    let dev_path = dev_dir.join(filename);
+    println!("[Setup] Checking dev path: {}", dev_path.display());
+    if dev_path.exists() {
+        println!("[Setup] Using dev path: {}", dev_path.display());
+        return dev_path;
+    }
+
+    // In production, use the resource directory
+    let resource_dir = app_handle
+        .path()
+        .resource_dir()
+        .expect("Failed to resolve resource directory in production");
+    let prod_path = resource_dir.join(filename);
+    
+    println!("[Setup] Resolved production path: {}", prod_path.display());
+
+    if !prod_path.exists() {
+        // Log resource directory contents for debugging
+        if let Ok(entries) = std::fs::read_dir(&resource_dir) {
+            println!("[Setup] Resource directory contents:");
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    println!("[Setup] - {}", entry.path().display());
+                }
+            }
+        }
+        panic!(
+            "[Setup] Icon not found at production path: {}. Ensure src-tauri/icons/icon.png is bundled in tauri.conf.json.",
+            prod_path.display()
+        );
+    }
+    
+    println!("[Setup] Using production path: {}", prod_path.display());
+    
+    prod_path
 }

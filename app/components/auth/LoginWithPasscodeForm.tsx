@@ -9,6 +9,9 @@ import { Eye, EyeOff, Key } from "../ui/icons";
 import { InView } from "react-intersection-observer";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useRouter } from "next/navigation";
+import { invoke } from "@tauri-apps/api/core";
+import { useAtomValue } from "jotai";
+import { phaseAtom } from "../splash-screen/atoms";
 
 const LoginWithPassCodeForm = () => {
   const [error, setError] = useState<string | null>(null);
@@ -16,8 +19,9 @@ const LoginWithPassCodeForm = () => {
   const [showPasscode, setShowPasscode] = useState(false);
   const [passcode, setPasscode] = useState("");
 
-  const { unlockWithPasscode } = useWalletAuth();
+  const { unlockWithPasscode, polkadotAddress } = useWalletAuth();
   const router = useRouter();
+  const phase = useAtomValue(phaseAtom);
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -33,6 +37,8 @@ const LoginWithPassCodeForm = () => {
     try {
       const success = await unlockWithPasscode(passcode);
       if (success) {
+        await invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
+        await invoke("start_folder_sync_tauri", { accountId: polkadotAddress });
         router.push("/");
         setLoggingIn(false);
       } else {
@@ -116,10 +122,10 @@ const LoginWithPassCodeForm = () => {
                     className={cn(
                       "w-full h-[60px] text-white font-medium text-lg"
                     )}
-                    disabled={logginIn}
+                    disabled={logginIn || phase !== "ready"}
                     icon={<Icons.ArrowRight />}
                   >
-                    {logginIn ? "Logging in..." : "Login"}
+                    {logginIn ? "Logging in..." : phase !== "ready" ? "Initializing..." : "Login"}
                   </Button>
                 </RevealTextLine>
               </div>
