@@ -1,5 +1,4 @@
 export const API_CONFIG = {
-  baseUrl: process.env.NEXT_PUBLIC_API_URL || "https://api.hippius.com",
   IPFS_GATEWAY:
     process.env.NEXT_PUBLIC_IPFS_GATEWAY || "https://relay-fr.hippius.network",
   auth: {
@@ -20,4 +19,3 @@ export const AUTH_CONFIG = {
   tokenStorageKey: "hippius_session_token",
   tokenExpiryKey: "hippius_token_expiry",
 } as const;
-
