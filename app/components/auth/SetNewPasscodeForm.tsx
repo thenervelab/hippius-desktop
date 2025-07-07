@@ -11,7 +11,6 @@ import { InView } from "react-intersection-observer";
 import { encryptMnemonic, hashPasscode } from "@/app/lib/helpers/crypto";
 import { saveWallet } from "@/app/lib/helpers/walletDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { invoke } from "@tauri-apps/api/core";
 import { useAtomValue } from "jotai";
 import { phaseAtom } from "../splash-screen/atoms";
 
@@ -44,7 +43,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
   const [fieldError, setFieldError] = useState<FieldErrorState>({});
 
   const router = useRouter();
-  const { setSession, polkadotAddress } = useWalletAuth();
+  const { setSession } = useWalletAuth();
   const phase = useAtomValue(phaseAtom);
 
   const validateNewPass = (val: string) => {
@@ -166,7 +165,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                           type={showPasscode ? "text" : "password"}
                           value={
                             passCode[
-                              item?.name as "newPassCode" | "confirmPassCode"
+                            item?.name as "newPassCode" | "confirmPassCode"
                             ]
                           }
                           onChange={(e) =>
