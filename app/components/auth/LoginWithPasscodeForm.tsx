@@ -9,7 +9,6 @@ import { Eye, EyeOff, Key } from "../ui/icons";
 import { InView } from "react-intersection-observer";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useRouter } from "next/navigation";
-import { invoke } from "@tauri-apps/api/core";
 import { useAtomValue } from "jotai";
 import { phaseAtom } from "../splash-screen/atoms";
 
@@ -19,7 +18,7 @@ const LoginWithPassCodeForm = () => {
   const [showPasscode, setShowPasscode] = useState(false);
   const [passcode, setPasscode] = useState("");
 
-  const { unlockWithPasscode, polkadotAddress } = useWalletAuth();
+  const { unlockWithPasscode } = useWalletAuth();
   const router = useRouter();
   const phase = useAtomValue(phaseAtom);
 

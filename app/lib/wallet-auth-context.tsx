@@ -14,8 +14,6 @@ import { getWalletRecord, clearWalletDb } from "./helpers/walletDb";
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { mnemonicToAccount } from "viem/accounts";
-import { authService } from "./services/auth-service";
-import { useSearchParams } from "next/navigation";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -47,7 +45,6 @@ export function WalletAuthProvider({
   const [walletManager, setWalletManager] = useState<{
     polkadotPair: any;
   } | null>(null);
-  const searchParams = useSearchParams();
   const [address, setAddress] = useState<string | null>(null);
 
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
@@ -100,39 +97,11 @@ export function WalletAuthProvider({
       if (!isMnemonicValid(inputMnemonic)) return false;
       const keyring = new Keyring({ type: "sr25519" });
       const pair = keyring.addFromMnemonic(inputMnemonic);
-      const polkadotAddr = pair.address;
 
       // Create Ethereum account
       const ethAccount = mnemonicToAccount(inputMnemonic);
       const ethAddress = ethAccount.address;
 
-      console.log("[WalletAuth] Derived addresses:", {
-        eth: ethAddress,
-        polkadot: polkadotAddr,
-      });
-
-      // Request challenge
-      const challengeData = await authService.requestChallenge(
-        ethAddress,
-        polkadotAddr
-      );
-      console.log("[WalletAuth] Got challenge:", challengeData.message);
-
-      // Sign challenge
-      const signature = await ethAccount.signMessage({
-        message: challengeData.message,
-      });
-      console.log("[WalletAuth] Generated signature");
-
-      // Verify signature
-      const referralCode = searchParams.get("referral_code");
-
-      await authService.verifySignature({
-        signature,
-        address: ethAddress,
-        substrateAddress: polkadotAddr,
-        referralCode,
-      });
       console.log("[WalletAuth] Signature verified");
       setMnemonic(inputMnemonic);
       setPolkadotAddress(pair.address);
