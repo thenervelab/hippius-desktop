@@ -78,7 +78,11 @@ const Sidebar: React.FC = () => {
           </div>
 
           <div className="px-4 pt-4">
-            {!collapsed && <div className="text-xs text-grey-60 font-semibold mb-2">Locations</div>}
+            {!collapsed && (
+              <div className="text-xs text-grey-60 font-semibold mb-2">
+                Locations
+              </div>
+            )}
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 text-grey-10">
                 <FaHdd className="text-grey-50" />
@@ -86,7 +90,9 @@ const Sidebar: React.FC = () => {
               </div>
               <div className="flex items-center gap-2 text-grey-10">
                 <FaFolder className="text-blue-500" />
-                {!collapsed && <span>{syncPath ? syncPath.split("/").pop() : ""}</span>}
+                {!collapsed && (
+                  <span>{syncPath ? syncPath.split("/").pop() : ""}</span>
+                )}
               </div>
             </div>
           </div>
@@ -100,6 +106,7 @@ const Sidebar: React.FC = () => {
                 href={item.path}
                 inView={inView}
                 active={pathname === item.path}
+                comingSoon={item?.comingSoon}
                 collapsed={collapsed}
               />
             ))}

@@ -10,17 +10,23 @@ export const PHASE_CONTENT: Record<AppSetupPhases, AppSetupPhaseContent> = {
     subStatus: "Verifying node status ....",
   },
   downloading_binary: {
-    icon: <FiDownloadCloud className="h-[135px] w-[135px] animate-bounce text-blue-500" />,
+    icon: (
+      <FiDownloadCloud className="h-[135px] w-[135px] animate-bounce text-blue-500" />
+    ),
     status: "Downloading IPFS",
     subStatus: "Fetching and installing IPFS binary ....",
   },
   initializing_repo: {
-    icon: <FiSettings className="h-[135px] w-[135px] animate-spin text-green-500" />,
+    icon: (
+      <FiSettings className="h-[135px] w-[135px] animate-spin text-blue-500" />
+    ),
     status: "Initializing IPFS Repo",
     subStatus: "Setting up IPFS repository ....",
   },
   configuring_cors: {
-    icon: <FiSettings className="h-[135px] w-[135px] animate-spin text-yellow-500" />,
+    icon: (
+      <FiSettings className="h-[135px] w-[135px] animate-spin text-blue-500" />
+    ),
     status: "Configuring CORS",
     subStatus: "Setting up CORS headers for IPFS API ....",
   },
