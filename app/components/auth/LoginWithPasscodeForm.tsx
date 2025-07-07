@@ -37,8 +37,6 @@ const LoginWithPassCodeForm = () => {
     try {
       const success = await unlockWithPasscode(passcode);
       if (success) {
-        await invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
-        await invoke("start_folder_sync_tauri", { accountId: polkadotAddress });
         router.push("/");
         setLoggingIn(false);
       } else {

@@ -11,9 +11,6 @@ use std::path::PathBuf;
 
 use crate::{
     commands::node::start_ipfs_daemon,
-    constants::substrate::DEFAULT_ACCOUNT_ID,
-    folder_sync,
-    // Removed unused import: user_profile_sync
 };
 
 static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
@@ -117,10 +114,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             .unwrap();
 
             println!("[Setup] Database initialized successfully");
-
-            // Start background sync tasks
-            println!("[Setup] Starting folder sync for account: {}", DEFAULT_ACCOUNT_ID);
-            folder_sync::start_folder_sync(DEFAULT_ACCOUNT_ID.to_string());
 
             // Start IPFS daemon
             if let Err(e) = start_ipfs_daemon(handle).await {

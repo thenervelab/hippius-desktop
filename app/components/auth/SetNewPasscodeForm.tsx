@@ -103,8 +103,6 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
       // Store in walletDb (SQLite/sql.js)
       await saveWallet(encryptedMnemonic, passcodeHash);
       await setSession(mnemonic);
-      await invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
-      await invoke("start_folder_sync_tauri", { accountId: polkadotAddress });
       await router.push("/");
     } catch (error) {
       console.error("Failed to create wallet:", error);

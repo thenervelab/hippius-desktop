@@ -9,6 +9,8 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import DashboardTitleWrapper from "../components/dashboard-title-wrapper";
+import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 // import IpfsTest from "@/components/upload-download";
 
 type IpfsInfo = {
@@ -38,7 +40,15 @@ function useIpfsInfo() {
 }
 
 export default function Home() {
+  const { polkadotAddress } = useWalletAuth();
   const ipfsInfo = useIpfsInfo();
+
+  useEffect(() => {
+    if (polkadotAddress) {
+      invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
+      invoke("start_folder_sync_tauri", { accountId: polkadotAddress });
+    }
+  }, [polkadotAddress]);
 
   return (
     <DashboardTitleWrapper mainText="">
