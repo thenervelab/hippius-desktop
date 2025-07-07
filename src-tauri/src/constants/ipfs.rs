@@ -4,6 +4,8 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 pub enum AppSetupPhase {
     CheckingBinary,
+    DownloadingBinary,
+    InitializingRepo,
     ConfiguringCors,
     StartingDaemon,
     ConnectingToNetwork,

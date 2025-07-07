@@ -7,13 +7,15 @@ use sha2::{Digest, Sha256};
 use sodiumoxide::crypto::secretbox;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+// use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration as StdDuration;
 use tokio::sync::Mutex;
 use tokio::task;
 use crate::constants::ipfs::KUBO_VERSION;
+use tauri::Emitter;
+use std::process::Command;
 
 static DOWNLOAD_STATE: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
 
@@ -28,7 +30,7 @@ pub fn get_binary_path() -> Result<PathBuf, String> {
     Ok(home.join(".hippius").join("bin").join(binary_name))
 }
 
-pub async fn ensure_ipfs_binary() -> Result<PathBuf, String> {
+pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String> {
     let binary_path = get_binary_path()?;
 
     // If binary already exists, check if it's executable and valid
@@ -56,6 +58,9 @@ pub async fn ensure_ipfs_binary() -> Result<PathBuf, String> {
         {
             Ok(_) => {
                 println!("Valid IPFS binary found at {:?}", binary_path);
+                // Emit DownloadingBinary event even when binary exists (for frontend consistency)
+                app.emit(crate::constants::ipfs::APP_SETUP_EVENT, crate::constants::ipfs::AppSetupPhase::DownloadingBinary)
+                    .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
                 return Ok(binary_path);
             }
             Err(e) => {
@@ -81,6 +86,10 @@ pub async fn ensure_ipfs_binary() -> Result<PathBuf, String> {
     };
 
     if should_download {
+        // Emit DownloadingBinary event
+        app.emit(crate::constants::ipfs::APP_SETUP_EVENT, crate::constants::ipfs::AppSetupPhase::DownloadingBinary)
+            .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
+
         println!("Starting IPFS binary download");
         // We're the downloading thread
         let result = task::spawn_blocking(move || download_and_extract_binary(&binary_path))
@@ -92,6 +101,10 @@ pub async fn ensure_ipfs_binary() -> Result<PathBuf, String> {
         *download_state = None;
 
         return Ok(result);
+    }else {
+        // Emit DownloadingBinary event
+        app.emit(crate::constants::ipfs::APP_SETUP_EVENT, crate::constants::ipfs::AppSetupPhase::DownloadingBinary)
+        .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
     }
 
     // We're not the downloading thread, wait for the download to complete
@@ -294,4 +307,27 @@ fn get_download_url() -> Result<String, String> {
         "https://github.com/ipfs/kubo/releases/download/v{}/kubo_v{}_{}-{}.{}",
         KUBO_VERSION, KUBO_VERSION, os_name, arch_name, ext
     ))
+}
+
+/// Ensures the IPFS repo is initialized (i.e., ~/.ipfs/config exists). If not, runs 'ipfs init'.
+pub fn ensure_ipfs_repo_initialized(bin_path: &PathBuf) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
+    let repo_path = home.join(".ipfs").join("config");
+    if repo_path.exists() {
+        println!("IPFS repo already initialized at {:?}", repo_path);
+        return Ok(());
+    }
+    println!("No IPFS repo found, running 'ipfs init'...");
+    let output = Command::new(bin_path)
+        .arg("init")
+        .output()
+        .map_err(|e| format!("Failed to run 'ipfs init': {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "'ipfs init' failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    println!("IPFS repo initialized successfully.");
+    Ok(())
 }

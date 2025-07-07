@@ -1,4 +1,4 @@
-use tauri::{Builder,  Wry};
+use tauri::{Builder, Wry, Manager};
 use crate::commands::node::stop_ipfs_daemon;
 
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
