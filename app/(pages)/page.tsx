@@ -40,13 +40,13 @@ function useIpfsInfo() {
 }
 
 export default function Home() {
-  const { polkadotAddress } = useWalletAuth();
+  const { polkadotAddress, mnemonic } = useWalletAuth();
   const ipfsInfo = useIpfsInfo();
 
   useEffect(() => {
     if (polkadotAddress) {
       invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
-      invoke("start_folder_sync_tauri", { accountId: polkadotAddress });
+      invoke("start_folder_sync_tauri", { accountId: polkadotAddress , seedPhrase : mnemonic});
     }
   }, [polkadotAddress]);
 
