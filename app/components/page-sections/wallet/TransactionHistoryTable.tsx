@@ -23,6 +23,7 @@ import useBillingTransactions, {
   TransactionObject,
 } from "@/app/lib/hooks/api/useBillingTransactions";
 import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export const formatDate = (
   date: Date,
@@ -58,6 +59,7 @@ const columnHelper = createColumnHelper<TransactionObject>();
 
 const TransactionHistoryTable: React.FC = () => {
   const { data: transactions, isPending } = useBillingTransactions();
+  const { polkadotAddress } = useWalletAuth(); // Get the user's polkadot address
 
   const baseColumns = useMemo(
     () => [
@@ -88,6 +90,42 @@ const TransactionHistoryTable: React.FC = () => {
           cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]",
         },
       }),
+
+      columnHelper.accessor("to", {
+        id: "to",
+        header: "TO",
+        cell: (info) => (
+          <CopyableCell
+            copyAbleText={info.getValue()}
+            title="Copy Account"
+            toastMessage="Account Copied Successfully!"
+            isTable={true}
+          />
+        ),
+        meta: {
+          cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]",
+        },
+      }),
+
+      columnHelper.accessor(
+        (row) => {
+          if (row.from === polkadotAddress) {
+            return "Sent";
+          } else if (row.to === polkadotAddress) {
+            return "Received";
+          }
+          return "-";
+        },
+        {
+          id: "transactionType",
+          header: "TRANSACTION TYPE",
+          cell: (info) => (
+            <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
+              {info.getValue()}
+            </span>
+          ),
+        }
+      ),
       columnHelper.accessor("date", {
         id: "date",
         header: "TRANSACTION DATE",
@@ -95,7 +133,7 @@ const TransactionHistoryTable: React.FC = () => {
         enableSorting: true,
       }),
     ],
-    []
+    [polkadotAddress] // Add polkadotAddress as dependency
   );
 
   const columns = baseColumns;

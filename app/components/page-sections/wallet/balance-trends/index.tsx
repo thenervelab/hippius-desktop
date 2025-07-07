@@ -18,7 +18,6 @@ import { COLORS } from "./constants";
 const timeRangeOptions: Option[] = [
   { value: "week", label: "This Week" },
   { value: "month", label: "This Month" },
-  { value: "quarter", label: "3 Months" },
   { value: "year", label: "This Year" },
 ];
 

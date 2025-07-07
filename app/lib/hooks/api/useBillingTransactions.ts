@@ -39,6 +39,7 @@ export interface TransactionObject {
   block: number;
   amount: number;
   from: string;
+  to: string;
   date: string;
 }
 
@@ -85,6 +86,7 @@ export default function useBillingTransactions(
         block: transfer.block_number,
         amount: parseFloat(transfer.amount),
         from: transfer.from_account,
+        to: transfer.to_account,
         date: transfer.processed_timestamp,
       }));
     },
