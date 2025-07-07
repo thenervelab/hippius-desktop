@@ -5,6 +5,7 @@ use serde::Serialize;
 pub enum AppSetupPhase {
     CheckingBinary,
     DownloadingBinary,
+    InitializingRepo,
     ConfiguringCors,
     StartingDaemon,
     ConnectingToNetwork,

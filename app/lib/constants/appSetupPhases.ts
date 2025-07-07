@@ -3,6 +3,7 @@ import { ReactNode } from "react";
 export const APP_SETUP_PHASES = [
   "checking_binary",
   "downloading_binary",
+  "initializing_repo",
   "configuring_cors",
   "starting_daemon",
   "connecting_to_network",

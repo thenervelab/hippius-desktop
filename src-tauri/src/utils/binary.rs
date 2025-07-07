@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use sodiumoxide::crypto::secretbox;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+// use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration as StdDuration;
@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 use tokio::task;
 use crate::constants::ipfs::KUBO_VERSION;
 use tauri::Emitter;
+use std::process::Command;
 
 static DOWNLOAD_STATE: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
 
@@ -306,4 +307,27 @@ fn get_download_url() -> Result<String, String> {
         "https://github.com/ipfs/kubo/releases/download/v{}/kubo_v{}_{}-{}.{}",
         KUBO_VERSION, KUBO_VERSION, os_name, arch_name, ext
     ))
+}
+
+/// Ensures the IPFS repo is initialized (i.e., ~/.ipfs/config exists). If not, runs 'ipfs init'.
+pub fn ensure_ipfs_repo_initialized(bin_path: &PathBuf) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
+    let repo_path = home.join(".ipfs").join("config");
+    if repo_path.exists() {
+        println!("IPFS repo already initialized at {:?}", repo_path);
+        return Ok(());
+    }
+    println!("No IPFS repo found, running 'ipfs init'...");
+    let output = Command::new(bin_path)
+        .arg("init")
+        .output()
+        .map_err(|e| format!("Failed to run 'ipfs init': {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "'ipfs init' failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    println!("IPFS repo initialized successfully.");
+    Ok(())
 }

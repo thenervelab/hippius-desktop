@@ -54,6 +54,10 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| format!("Binary fetch failed: {e}"))?;
 
+    let app = emit_and_update_phase(app, AppSetupPhase::InitializingRepo).await;
+    crate::utils::binary::ensure_ipfs_repo_initialized(&bin_path)
+        .map_err(|e| format!("IPFS repo init failed: {e}"))?;
+
     // Configure CORS before starting daemon
     let app = emit_and_update_phase(app, AppSetupPhase::ConfiguringCors).await;
     configure_ipfs_cors(&bin_path).await?;

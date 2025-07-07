@@ -14,6 +14,11 @@ export const PHASE_CONTENT: Record<AppSetupPhases, AppSetupPhaseContent> = {
     status: "Downloading IPFS",
     subStatus: "Fetching and installing IPFS binary ....",
   },
+  initializing_repo: {
+    icon: <FiSettings className="h-[135px] w-[135px] animate-spin text-green-500" />,
+    status: "Initializing IPFS Repo",
+    subStatus: "Setting up IPFS repository ....",
+  },
   configuring_cors: {
     icon: <FiSettings className="h-[135px] w-[135px] animate-spin text-yellow-500" />,
     status: "Configuring CORS",
