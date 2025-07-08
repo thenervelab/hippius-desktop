@@ -23,6 +23,7 @@ export const AUTH_CONFIG = {
 export const IPFS_NODE_CONFIG = {
   baseURL: "http://127.0.0.1:5001",
 } as const;
+
 export const HIPPIUS_EXPLORER_CONFIG = {
   baseUrl: "https://hipstats.com",
 } as const;
