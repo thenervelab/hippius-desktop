@@ -72,13 +72,16 @@ const Home: React.FC = () => {
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <DetailsCard
+          key="network-connections"
           icon={Icons.WifiSquare}
           title="Network Connections"
           value={ipfsInfo?.Addresses?.length ?? "--"}
           subtitle="Active Network Connections"
+          showInfo={false}
         />
 
         <DetailsCard
+          key="node-status"
           icon={Icons.ShieldTick}
           title="Node Status"
           value="--"
@@ -88,25 +91,30 @@ const Home: React.FC = () => {
         />
 
         <DetailsCard
+          key="upload-speed"
           icon={Icons.DocumentUpload}
           title="Upload Speed"
           value="--"
           speed="-"
           isIncrease
+          showInfo={false}
         />
 
         <DetailsCard
+          key="download-speed"
           icon={Icons.DocumentDownload}
           title="Download Speed"
           value="--"
           speed="-"
           isIncrease={false}
+          showInfo={false}
         />
       </div>
       <div className="flex gap-4 mt-6 w-full h-full">
         <CreditUsageTrends
           chartData={transformedCreditsData}
           isLoading={isLoadingCredits}
+
         />
         <div className="w-full"></div>
       </div>
