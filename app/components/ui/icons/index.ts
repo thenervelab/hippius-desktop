@@ -110,3 +110,8 @@ export { default as DownloadingIPFS } from "./DownloadingIPFS";
 export { default as ConfiguringCORS } from "./ConfiguringCORS";
 export { default as InitializeRepo } from "./InitializeRepo";
 export { default as BoxTime } from "./BoxTime";
+export { default as DocumentUpload } from "./DocumentUpload";
+export { default as ShieldTick } from "./ShieldTick";
+export { default as WifiSquare } from "./WifiSquare";
+export { default as TrendUp } from "./TrendUp";
+export { default as TrendDown } from "./TrendDown";

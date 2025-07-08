@@ -16,7 +16,7 @@ const Card: React.FC<{
   >
     <div
       className={cn(
-        "flex gap-x-2 font-medium px-2 py-2.5 border-b border-grey-80 text-base lg:text-xl",
+        "flex gap-x-2 font-medium px-2 py-2.5  text-base lg:text-xl",
         titleClassName
       )}
     >
