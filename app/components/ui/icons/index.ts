@@ -109,3 +109,4 @@ export { default as KeySquare } from "./KeySquare";
 export { default as DownloadingIPFS } from "./DownloadingIPFS";
 export { default as ConfiguringCORS } from "./ConfiguringCORS";
 export { default as InitializeRepo } from "./InitializeRepo";
+export { default as BoxTime } from "./BoxTime";

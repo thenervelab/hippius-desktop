@@ -5,13 +5,13 @@ import { ArrowLeft } from "lucide-react";
 import DialogContainer from "../../ui/dialog-container";
 import { CardButton, Graphsheet, Icons } from "../../ui";
 import { exportWalletAsZip } from "../../../lib/helpers/exportWallet";
+import { toast } from "sonner";
 
 export interface DeleteAccountConfirmationProps {
   open: boolean;
   onClose: () => void;
   onDelete: () => void;
   onBack: () => void;
-  onBackupData?: () => void;
   loading?: boolean;
 }
 
@@ -20,7 +20,6 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
   onClose,
   onDelete,
   onBack,
-  onBackupData,
   loading = false,
 }) => {
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -30,19 +29,14 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
     try {
       const success = await exportWalletAsZip();
       if (success) {
-        console.log("Wallet backup exported successfully");
-      } else {
-        console.log("Backup export cancelled or failed");
+        toast.success("Backup file exported successfully", {
+          duration: 3000,
+        });
       }
     } catch (error) {
       console.error("Backup export failed:", error);
     } finally {
       setIsBackingUp(false);
-    }
-
-    // Call original onBackupData if provided
-    if (onBackupData) {
-      onBackupData();
     }
   };
 

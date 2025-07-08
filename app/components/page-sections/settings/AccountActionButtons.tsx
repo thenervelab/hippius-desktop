@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Button, CardButton, RevealTextLine } from "../../ui";
+import { CardButton, RevealTextLine } from "../../ui";
 import { Trash } from "../../ui/icons";
 import { InView } from "react-intersection-observer";
 import DeleteAccountConfirmation from "./DeleteAccountConfirmation";
@@ -32,24 +32,23 @@ const AccountActionButtons = () => {
     }
   };
 
-  const handleBackupData = () => {
-    // Implement backup data logic here
-  };
-
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
-        <div ref={ref} className="flex border-t border-grey-80 py-4 w-full">
-          <RevealTextLine rotate reveal={inView} className="delay-300 ">
-            <Button
-              variant="ghost"
-              className="text-grey-10 text-lg font-medium w-[260px]"
-            >
-              Remove Backup & Account
-            </Button>
+        <div ref={ref} className="flex gap-6  w-full">
+          <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
+            <div className="flex gap-0.5 flex-col">
+              <div className="text-grey-10 text-lg leading-6 font-medium ">
+                Remove Your Account
+              </div>
+              <div className="text-sm text-grey-60 ">
+                This will permanently remove your account. Ensure you have a
+                backup first.
+              </div>
+            </div>
           </RevealTextLine>
 
-          <RevealTextLine rotate reveal={inView} className="delay-300">
+          <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <CardButton
               className="text-base"
               variant="error"
@@ -67,7 +66,6 @@ const AccountActionButtons = () => {
             onClose={handleCloseDeleteDialog}
             onDelete={handleDeleteAccount}
             onBack={handleCloseDeleteDialog}
-            onBackupData={handleBackupData}
             loading={isDeleting}
           />
         </div>
