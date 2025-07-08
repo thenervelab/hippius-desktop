@@ -84,7 +84,7 @@ const Home: React.FC = () => {
           key="node-status"
           icon={Icons.ShieldTick}
           title="Node Status"
-          value="--"
+          value={ipfsInfo === null ? "Loading..." : ipfsInfo.ID ? "Connected" : "Disconnected"}
           peerId={`${ipfsInfo?.ID ? shortId(ipfsInfo.ID) : "Loading..."}`}
           showStatus={true}
           showInfo={false}
