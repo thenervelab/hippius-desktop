@@ -1,10 +1,9 @@
 import React, { useState } from "react";
 import { Label } from "../../ui/label";
-import { CardButton, Input, RevealTextLine } from "../../ui";
+import { CardButton, Icons, Input } from "../../ui";
 import { cn } from "@/app/lib/utils";
 import { PASSWORD_FIELDS } from "./FieldsContent";
 import { AlertCircle } from "lucide-react";
-import { InView } from "react-intersection-observer";
 import UpdateSuccessDialog from "../../update-success-dialog";
 import { Eye, EyeOff } from "../../ui/icons";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -15,6 +14,7 @@ import {
   encryptMnemonic,
 } from "@/app/lib/helpers/crypto";
 import { toast } from "sonner";
+import { AbstractIconWrapper } from "../../ui";
 
 type PasscodeFields = {
   currentPasscode: string;
@@ -25,7 +25,7 @@ type PasscodeFields = {
 type PasscodeField = "currentPasscode" | "newPasscode" | "confirmPasscode";
 type FieldErrorState = { [key in PasscodeField]?: string | null };
 
-const ChangePasscode = () => {
+const ChangePasscode = ({ className }: { className?: string }) => {
   const { setSession } = useWalletAuth();
   const [fieldsData, setFieldsData] = useState<PasscodeFields>({
     currentPasscode: "",
@@ -189,64 +189,71 @@ const ChangePasscode = () => {
     Object.values(fieldError).every((v) => !v);
 
   return (
-    <InView triggerOnce>
-      {({ inView, ref }) => (
-        <div ref={ref} className="flex border-t border-grey-80 py-4 w-full">
-          <div className="w-[260px] text-grey-10 text-lg font-medium">
-            <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-              Change Passcode
-            </RevealTextLine>
+    <div className="w-full relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
+      <div
+        className={cn(
+          "border relative border-grey-80 overflow-hidden rounded-xl w-full h-full",
+          className
+        )}
+      >
+        <div className="w-full flex flex-col xl:flex-row gap-4 2xl:gap-6 p-4 xl:pr-2 relative">
+          <div className="flex items-start">
+            <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
+              <Icons.WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
+            </AbstractIconWrapper>
+            <div className="flex flex-col ml-4">
+              <span className="text-lg leading-6 font-medium mb-0.5  tracking-[-0.28px] text-grey-10">
+                Change Passcode
+              </span>
+              <div className="text-sm xl:w-[160px] mb-1  text-grey-60">
+                Set a new passcode for your account security
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 w-[calc(100%-260px)]">
+          <div className="w-full bg-white grid  grid-cols-2 gap-3 p-2 ">
             {PASSWORD_FIELDS.map((field) => (
               <div
                 key={field.name}
                 className={cn("flex flex-col gap-2", field?.grid)}
               >
-                <RevealTextLine
-                  rotate
-                  reveal={inView}
-                  className="delay-300 w-full flex flex-col gap-2"
-                >
-                  <Label htmlFor={field.name} className="text-grey-70">
-                    {field.label}
-                  </Label>
-                  <div className="relative">
-                    <Input
-                      id={field.name}
-                      name={field.name}
-                      value={fieldsData[field.name as keyof PasscodeFields]}
-                      type={
-                        showPasscodes[field.name as PasscodeField]
-                          ? "text"
-                          : "password"
+                <Label htmlFor={field.name} className="text-grey-70">
+                  {field.label}
+                </Label>
+                <div className="relative">
+                  <Input
+                    id={field.name}
+                    name={field.name}
+                    value={fieldsData[field.name as keyof PasscodeFields]}
+                    type={
+                      showPasscodes[field.name as PasscodeField]
+                        ? "text"
+                        : "password"
+                    }
+                    placeholder={field.placeholder}
+                    onChange={(e) =>
+                      handleInputChange(e, field.name as PasscodeField)
+                    }
+                    className="border-grey-80 h-14 text-grey-30 w-full
+                    bg-transparent p-4 font-medium text-base rounded-lg duration-300 outline-none 
+                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
+                  />
+                  {!showPasscodes[field.name as PasscodeField] ? (
+                    <Eye
+                      onClick={() =>
+                        togglePasscodeVisibility(field.name as PasscodeField)
                       }
-                      placeholder={field.placeholder}
-                      onChange={(e) =>
-                        handleInputChange(e, field.name as PasscodeField)
-                      }
-                      className="border-grey-80 h-14 text-grey-30 w-full
-                      bg-transparent p-4 font-medium text-base rounded-lg duration-300 outline-none 
-                      hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
+                      className="size-6 absolute right-3 top-[28px] transform -translate-y-1/2 text-grey-60 cursor-pointer"
                     />
-                    {!showPasscodes[field.name as PasscodeField] ? (
-                      <Eye
-                        onClick={() =>
-                          togglePasscodeVisibility(field.name as PasscodeField)
-                        }
-                        className="size-6 absolute right-3 top-[28px] transform -translate-y-1/2 text-grey-60 cursor-pointer"
-                      />
-                    ) : (
-                      <EyeOff
-                        onClick={() =>
-                          togglePasscodeVisibility(field.name as PasscodeField)
-                        }
-                        className="size-6 absolute right-3 top-[28px] transform -translate-y-1/2 text-grey-60 cursor-pointer"
-                      />
-                    )}
-                  </div>
-                </RevealTextLine>
+                  ) : (
+                    <EyeOff
+                      onClick={() =>
+                        togglePasscodeVisibility(field.name as PasscodeField)
+                      }
+                      className="size-6 absolute right-3 top-[28px] transform -translate-y-1/2 text-grey-60 cursor-pointer"
+                    />
+                  )}
+                </div>
                 {fieldError[field.name as PasscodeField] && (
                   <div className="flex text-error-70 text-sm font-medium mt-2 items-center gap-2">
                     <AlertCircle className="size-4 !relative" />
@@ -255,28 +262,28 @@ const ChangePasscode = () => {
                 )}
               </div>
             ))}
-            <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
+            <div className="col-span-2 mt-3">
               <CardButton
-                className="w-20 h-10 mt-1"
+                className="w-20 h-10"
                 disabled={!canSave || isLoading}
                 loading={isLoading}
                 onClick={handleChangePasscode}
               >
                 {isLoading ? "Saving..." : "Save"}
               </CardButton>
-            </RevealTextLine>
+            </div>
           </div>
-
-          <UpdateSuccessDialog
-            open={isDialogOpen}
-            onClose={handleCloseDialog}
-            onDone={handleCloseDialog}
-            button="Done"
-            heading="Passcode Successfully Updated!"
-          />
         </div>
-      )}
-    </InView>
+      </div>
+
+      <UpdateSuccessDialog
+        open={isDialogOpen}
+        onClose={handleCloseDialog}
+        onDone={handleCloseDialog}
+        button="Done"
+        heading="Passcode Successfully Updated!"
+      />
+    </div>
   );
 };
 
