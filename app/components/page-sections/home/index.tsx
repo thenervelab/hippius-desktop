@@ -2,18 +2,13 @@ import { useEffect, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import DetailsCard from "./DetailsCard";
-import { Icons } from "../../ui";
+import DetailList from "./DetailList";
 
 import CreditUsageTrends from "./credit-usage-trends";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
 import { IPFS_NODE_CONFIG } from "@/app/lib/config";
 import { useIpfsBandwidth } from "@/app/lib/hooks/api/useIpfsBandwidth";
-
-
-
-// import IpfsTest from "@/components/upload-download";
 
 type IpfsInfo = {
   ID?: string;
@@ -22,11 +17,6 @@ type IpfsInfo = {
   ProtocolVersion?: string;
   // [key: string]: any;
 };
-
-function shortId(id?: string) {
-  if (!id || id.length <= 8) return id || "";
-  return `${id.slice(0, 3)}...${id.slice(-3)}`;
-}
 
 function useIpfsInfo() {
   const [ipfsInfo, setIpfsInfo] = useState<IpfsInfo | null>(null);
@@ -76,48 +66,12 @@ const Home: React.FC = () => {
       </section>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        <DetailsCard
-          key="network-connections"
-          icon={Icons.WifiSquare}
-          title="Network Connections"
-          value={ipfsInfo?.Addresses?.length ?? "--"}
-          subtitle="Active Network Connections"
-          showInfo={false}
-        />
+      <DetailList ipfsInfo={ipfsInfo} upload={upload} download={download} />
 
-        <DetailsCard
-          key="node-status"
-          icon={Icons.ShieldTick}
-          title="Node Status"
-          value={ipfsInfo === null ? "Loading..." : ipfsInfo.ID ? "Online" : "Offline"}
-          isOnline={ipfsInfo?.ID ? true : false}
-          peerId={`${ipfsInfo?.ID ? shortId(ipfsInfo.ID) : "Loading..."}`}
-          showStatus={true}
-          showInfo={false}
-        />
-
-        <DetailsCard
-          key="upload-speed"
-          icon={Icons.DocumentUpload}
-          title="Upload Speed"
-          value={upload}
-          showInfo={false}
-        />
-
-        <DetailsCard
-          key="download-speed"
-          icon={Icons.DocumentDownload}
-          title="Download Speed"
-          value={download}
-          showInfo={false}
-        />
-      </div>
       <div className="flex gap-4 mt-6 w-full h-full">
         <CreditUsageTrends
           chartData={transformedCreditsData}
           isLoading={isLoadingCredits}
-
         />
         <div className="w-full"></div>
       </div>
