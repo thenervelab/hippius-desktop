@@ -31,7 +31,7 @@ export default function DetailList({
       title: "Network Connections",
       value: ipfsInfo?.Addresses?.length ?? "--",
       subtitle: "Active Network Connections",
-      showInfo: false,
+      info: "Shows the number of active network addresses your IPFS node is listening on. Multiple addresses indicate better network connectivity and peer discovery.",
     },
     {
       id: "node-status",
@@ -42,21 +42,21 @@ export default function DetailList({
       isOnline: ipfsInfo?.ID ? true : false,
       peerId: `${ipfsInfo?.ID ? shortId(ipfsInfo.ID) : "Loading..."}`,
       showStatus: true,
-      showInfo: false,
+      info: "Indicates whether your IPFS node is running and connected to the network. When online, you can upload, download, and share files on the distributed network.",
     },
     {
       id: "upload-speed",
       icon: Icons.DocumentUpload,
       title: "Upload Speed",
       value: upload,
-      showInfo: false,
+      info: "Real-time upload speed showing how fast data is being sent from your node to the IPFS network. This includes file uploads and data sharing with other peers.",
     },
     {
       id: "download-speed",
       icon: Icons.DocumentDownload,
       title: "Download Speed",
       value: download,
-      showInfo: false,
+      info: "Real-time download speed showing how fast data is being received by your node from the IPFS network. This includes file downloads and data synchronization.",
     },
   ];
 
@@ -72,7 +72,7 @@ export default function DetailList({
           showStatus={card.showStatus}
           isOnline={card.isOnline}
           peerId={card.peerId}
-          showInfo={card.showInfo}
+          info={card.info}
         />
       ))}
     </div>

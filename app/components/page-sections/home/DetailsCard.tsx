@@ -4,6 +4,7 @@ import { IconComponent } from "@/app/lib/types";
 import { cn } from "@/app/lib/utils";
 import { useState } from "react";
 import { toast } from "sonner";
+import InfoTooltip from "../../ui/info-tooltip";
 
 interface DetailsCardProps {
   icon: IconComponent;
@@ -13,7 +14,7 @@ interface DetailsCardProps {
   showStatus?: boolean;
   isOnline?: boolean;
   peerId?: string;
-  showInfo?: boolean;
+  info?: string;
   speed?: string;
   isIncrease?: boolean;
 }
@@ -26,7 +27,7 @@ export default function DetailsCard({
   showStatus = false,
   isOnline = false,
   peerId,
-  showInfo = true,
+  info = "",
   speed,
   isIncrease = false,
 }: DetailsCardProps) {
@@ -50,9 +51,9 @@ export default function DetailsCard({
         <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
           <Icon className="absolute text-primary-40 size-4 sm:size-5" />
         </AbstractIconWrapper>
-        {showInfo && (
+        {info && (
           <div className="size-6 rounded border border-grey-80 bg-grey-90 flex items-center justify-center">
-            <Info size={16} className="text-grey-60" />
+            <InfoTooltip iconColor="text-grey-60">{info}</InfoTooltip>
           </div>
         )}
       </div>
