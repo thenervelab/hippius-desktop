@@ -9,6 +9,9 @@ import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
 import { IPFS_NODE_CONFIG } from "@/app/lib/config";
 import { useIpfsBandwidth } from "@/app/lib/hooks/api/useIpfsBandwidth";
+import StorageUsageTrends from "./storage-usage-trends";
+import useFiles from "@/app/lib/hooks/api/useFilesSize";
+import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
 
 type IpfsInfo = {
   ID?: string;
@@ -38,13 +41,19 @@ const Home: React.FC = () => {
 
   // Fetch marketplace credits with a higher limit to get good chart data
   const { data: marketplaceCredits, isLoading: isLoadingCredits } =
-    useMarketplaceCredits({ limit: 100 });
+    useMarketplaceCredits({ limit: 1000 });
+
+  // Fetch files data for storage usage chart
+  const { data: filesData, isLoading: isLoadingFiles } = useFiles();
 
   // Transform marketplace credits to the format expected by the chart
   const transformedCreditsData = transformMarketplaceCreditsToAccounts(
     marketplaceCredits || []
   );
-  console.log(transformedCreditsData, "transformedCreditsData");
+
+  // Transform files data to the format expected by the storage chart
+  const transformedFilesData = transformFilesToStorageData(filesData || []);
+  console.log(transformedFilesData, "transformedFilesData");
 
   useEffect(() => {
     if (polkadotAddress) {
@@ -73,7 +82,10 @@ const Home: React.FC = () => {
           chartData={transformedCreditsData}
           isLoading={isLoadingCredits}
         />
-        <div className="w-full"></div>
+        <StorageUsageTrends
+          chartData={transformedFilesData}
+          isLoading={isLoadingFiles}
+        />
       </div>
       {/* IPFS Upload/Download Test */}
       {/* <section>

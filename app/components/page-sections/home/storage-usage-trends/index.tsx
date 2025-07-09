@@ -7,22 +7,20 @@ import {
   Select,
   H4,
   RevealTextLine,
-  AreaLineChart,
+  BarChart,
 } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
 import { Option } from "@/components/ui/select";
 import { Account } from "@/app/lib/types/accounts";
-import {
-  formatAccountsForChartByRange,
-  ChartPoint,
-} from "@/app/lib/utils/getFormatDataForCreditsUsageChart";
+import { ChartPoint } from "@/app/lib/utils/getFormatDataForCreditsUsageChart";
+import { formatStorageForChartByRange } from "@/app/lib/utils/getFormatDataForStorageUsageChart";
 import { InView } from "react-intersection-observer";
 import {
   getQuarterDateLabels,
   MONTHS,
 } from "@/app/lib/utils/getXlablesForAccounts";
-import CreditUsedTooltip from "./CreditsUsedTooltip";
-import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
+import StorageUsedTooltip from "./StorageUsedTooltip";
+import { formatBytes } from "@/app/lib/utils/formatBytes";
 
 // === Time‐Range Options ===
 const timeRangeOptions: Option[] = [
@@ -32,52 +30,34 @@ const timeRangeOptions: Option[] = [
   { value: "year", label: "This Year" },
 ];
 
-// === Line + Area Colors ===
+// === Bar Colors ===
 const COLORS = {
-  line: "#2563eb",
-  area: "url(#area-gradient)", // Use the gradient defined in AreaLineChart
+  bar: "#3B82F6", // primary-50 color
 };
 
-const CreditUsageTrends: React.FC<{
+const StorageUsageTrends: React.FC<{
   chartData?: Account[];
   isLoading?: boolean;
   className?: string;
   onRetry?: () => void;
 }> = ({ chartData, isLoading, className }) => {
-  console.log(chartData, "chartData in CreditUsageTrends");
+  console.log(chartData, "chartData in StorageUsageTrends");
 
   const [timeRange, setTimeRange] = useState<string>("week");
 
   // Format raw account‐data into ChartPoint[] according to the selected range
+  // Now using our storage-specific formatter
   const formattedChartData: ChartPoint[] = useMemo(() => {
     if (!chartData || chartData.length === 0) {
       return [];
     }
-    return formatAccountsForChartByRange(
+    return formatStorageForChartByRange(
       chartData,
-      timeRange as "week" | "month" | "lastMonth" | "quarter" | "year" // Add lastMonth to type
+      timeRange as "week" | "month" | "lastMonth" | "quarter" | "year"
     );
   }, [chartData, timeRange]);
 
-  // Calculate total credits used
-  const totalCreditsUsed = useMemo(() => {
-    if (!chartData || chartData.length === 0) return "0";
-
-    // Sum up the total_balance from all account data
-    const total = chartData.reduce((sum, account) => {
-      // Extract just the numeric part - need to convert from string to BigInt since these are large numbers
-      const balance = BigInt(account.total_balance);
-      console.log(`Account: ${account.account_id}, Balance: ${balance}`);
-      // Accumulate the balance
-      // Using BigInt to handle large numbers accurately
-      return sum + balance;
-    }, BigInt(0));
-    console.log(total, "Total Credits Used in BigInt");
-    // Format to a readable number with commas
-    return formatBalance(total.toString());
-  }, [chartData]);
-
-  // Create “nice” Y ticks that always start at 0
+  // Create "nice" Y ticks that always start at 0
   function getNiceTicksAlways(min: number, max: number, tickCount = 5) {
     min = 0;
     if (max === 0 || Math.abs(max - min) < 1e-6) {
@@ -101,8 +81,8 @@ const CreditUsageTrends: React.FC<{
   // Compute Y‐ticks
   const yTicks = useMemo(() => {
     if (!formattedChartData.length) return [0, 1];
-    const balances = formattedChartData.map((d) => d.balance);
-    const max = Math.max(...balances, 0);
+    const sizes = formattedChartData.map((d) => d.balance);
+    const max = Math.max(...sizes, 0);
     return getNiceTicksAlways(0, max, 5);
   }, [formattedChartData]);
 
@@ -175,7 +155,7 @@ const CreditUsageTrends: React.FC<{
     xLabels = MONTHS.slice(0, monthsToShow);
   }
 
-  // Compute a “half‐band” paddingOuter so the first tick sits half a band away
+  // Compute a "half‐band" paddingOuter so the first tick sits half a band away
   const paddingOuter = xLabels.length > 0 ? 1 / (2 * xLabels.length) : 0;
 
   return (
@@ -192,14 +172,14 @@ const CreditUsageTrends: React.FC<{
                       inView && "opacity-100 translate-y-0"
                     )}
                   >
-                    <Icons.Tag2 className="relative size-4 sm:size-5 text-primary-50" />
+                    <Icons.Chart className="relative size-4 sm:size-5 text-primary-50" />
                   </AbstractIconWrapper>
                   <H4
                     size="sm"
                     className="max-w-screen-sm text-center ml-2 transition-colors !text-[16px] sm:!text-[24px] text-grey-10"
                   >
                     <RevealTextLine rotate reveal={inView}>
-                      Credit Usage
+                      Storage Usage
                     </RevealTextLine>
                   </H4>
                 </div>
@@ -240,22 +220,12 @@ const CreditUsageTrends: React.FC<{
                 <div className="flex font-medium flex-col items-center justify-center w-full h-full">
                   <Icons.Search className="size-8 text-primary-60" />
                   <span className="max-w-40 text-center text-grey-40 mt-4">
-                    No Credits Data Available
+                    No Storage Usage Data Available
                   </span>
                 </div>
               ) : (
-                <div className="w-full h-full pt-12">
-                  {/* Total Credits Used Display - Added based on image */}
-                  <div className="absolute top-1 left-14 border border-grey-80 rounded bg-white px-2 py-1 z-50">
-                    <div className="text-grey-60 text-base mb-1 font-medium">
-                      Total Credits Used
-                    </div>
-                    <div className="text-2xl font-medium text-grey-10">
-                      {totalCreditsUsed}
-                    </div>
-                  </div>
-
-                  <AreaLineChart
+                <div className="w-full h-full pt-4">
+                  <BarChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
                     data={formattedChartData}
                     plots={[
@@ -264,13 +234,13 @@ const CreditUsageTrends: React.FC<{
                         xAccessor: (d: ChartPoint) =>
                           d.bandLabel ? d.bandLabel : d?.x,
                         yAccessor: (d: ChartPoint) => d?.balance || 0,
-                        lineColor: COLORS.line,
-                        areaColor: COLORS.area,
+                        barColor: COLORS.bar,
+                        barOpacity: 1,
                       },
                     ]}
-                    xScaleType="band" // Always use band for every range
+                    xScaleType="band"
                     yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
-                    margin={{ top: 34, left: 45, bottom: 30, right: 5 }}
+                    margin={{ top: 34, left: 60, bottom: 30, right: 5 }}
                     showVerticalCrosshair={true}
                     showHorizontalCrosshair={true}
                     xAxisProps={{
@@ -291,32 +261,33 @@ const CreditUsageTrends: React.FC<{
                       tickValues: yTicks,
                       label: "",
                       tickFormat: (v) => {
+                        // Format y-axis tick labels as file sizes
                         const num = Number(v);
-                        if (num >= 0.0001) {
-                          if (num >= 1000000)
-                            return `${(num / 1000000).toFixed(1)}M`;
-                          if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-                          return num.toFixed(num < 0.01 ? 4 : 2);
-                        }
-                        return num.toString();
+                        if (num === 0) return "0 B";
+                        console.log(
+                          formatBytes(num, 1),
+                          num,
+                          "num in yAxisProps"
+                        );
+                        return num > 1 ? formatBytes(num, 1) : num.toString();
                       },
                       tickLabelProps: () => ({
                         fontSize: 10,
                         fill: "#6B7280",
                         textAnchor: "end",
                         verticalAnchor: "middle",
+                        width: 150,
                         angle: -35,
-                        dx: -2,
+                        dx: -3,
                       }),
                     }}
-                    // Pass our computed "half‐band" paddingOuter here
                     bandScaleConfig={{
                       paddingInner: 0.3,
                       paddingOuter,
                       align: 0,
                     }}
                     renderTooltip={(tooltipData) => (
-                      <CreditUsedTooltip tooltipData={tooltipData} />
+                      <StorageUsedTooltip tooltipData={tooltipData} />
                     )}
                   />
                 </div>
@@ -329,4 +300,4 @@ const CreditUsageTrends: React.FC<{
   );
 };
 
-export default CreditUsageTrends;
+export default StorageUsageTrends;

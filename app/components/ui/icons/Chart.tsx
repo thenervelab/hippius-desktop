@@ -2,37 +2,29 @@ import { IconComponent } from "@/app/lib/types";
 
 export const Chart: IconComponent = (props) => (
   <svg
-    viewBox="0 0 30 30"
-    fill="none"
     xmlns="http://www.w3.org/2000/svg"
     {...props}
+    viewBox="0 0 16 16"
+    fill="none"
   >
     <path
-      d="M3 27H27"
+      d="M3.212 4.38249C2.45 5.39049 2 6.64449 2 8.00049C2 11.3125 4.688 14.0005 8 14.0005C11.312 14.0005 14 11.3125 14 8.00049C14 4.68849 11.312 2.00049 8 2.00049"
       stroke="currentColor"
-      strokeWidth="2"
-      strokeMiterlimit="10"
+      strokeWidth="1.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
     <path
-      d="M12.3 5.4V27H17.7V5.4C17.7 4.08 17.16 3 15.54 3H14.46C12.84 3 12.3 4.08 12.3 5.4Z"
+      d="M3.80078 8.00029C3.80078 10.3223 5.67878 12.2003 8.00078 12.2003C10.3228 12.2003 12.2008 10.3223 12.2008 8.00029C12.2008 5.67829 10.3228 3.80029 8.00078 3.80029"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="1.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />
     <path
-      d="M4.20001 12.6002V27.0002H9.00001V12.6002C9.00001 11.2802 8.52001 10.2002 7.08001 10.2002H6.12001C4.68001 10.2002 4.20001 11.2802 4.20001 12.6002Z"
+      d="M8 10.4001C9.326 10.4001 10.4 9.3261 10.4 8.0001C10.4 6.6741 9.326 5.6001 8 5.6001"
       stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M21 18.6002V27.0002H25.8V18.6002C25.8 17.2802 25.32 16.2002 23.88 16.2002H22.92C21.48 16.2002 21 17.2802 21 18.6002Z"
-      stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="1.2"
       strokeLinecap="round"
       strokeLinejoin="round"
     />

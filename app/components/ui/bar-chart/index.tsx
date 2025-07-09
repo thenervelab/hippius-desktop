@@ -2,8 +2,7 @@
 import {
   AnimatedAxis,
   XYChart,
-  AnimatedLineSeries,
-  AnimatedAreaSeries,
+  AnimatedBarSeries,
   Margin,
   AxisScale,
   Tooltip,
@@ -28,24 +27,22 @@ type Props<T extends object> = {
   xScaleType?: ScaleType;
   xDomain?: [any, any];
   yDomain?: [any, any];
-  // New prop for specifying band‐scale config from parent
   bandScaleConfig?: BandConfig;
   plots: {
     dataKey: string;
     xAccessor: (data: T) => any;
     yAccessor: (data: T) => any;
-    lineColor?: string;
-    lineType?: "solid" | "dashed";
-    lineModifier?: "faded";
-    areaColor?: string;
+    barColor?: string;
+    barOpacity?: number;
   }[];
   xAxisProps?: Partial<AnimatedAxisProps<AxisScale>>;
   yAxisProps?: Partial<AnimatedAxisProps<AxisScale>>;
   showVerticalCrosshair?: boolean;
   showHorizontalCrosshair?: boolean;
+  className?: string;
 };
 
-function AreaLineChart<T extends object>({
+function BarChart<T extends object>({
   data,
   xAxisProps,
   yAxisProps,
@@ -58,54 +55,46 @@ function AreaLineChart<T extends object>({
   showHorizontalCrosshair,
   showVerticalCrosshair,
   renderTooltip,
-  bandScaleConfig, // <— we now accept this
+  bandScaleConfig,
+  className,
 }: Props<T>) {
-  // Only one gradient is defined for all area series for now.
-  const gradientId = "area-gradient";
-
   return (
-    <ParentSize>
+    <ParentSize className={className}>
       {({ width, height }) => (
         <XYChart
           width={width}
           height={height}
           xScale={{
-            type: xScaleType || "time",
-            // If it’s a band scale, spread in bandScaleConfig
+            type: xScaleType || "band",
             ...(xScaleType === "band" && bandScaleConfig
               ? {
-                  paddingInner: 1,
+                  paddingInner: bandScaleConfig.paddingInner,
                   paddingOuter: bandScaleConfig.paddingOuter,
                   align: bandScaleConfig.align,
                 }
-              : {}),
+              : {
+                  paddingInner: 0.4,
+                  paddingOuter: 0.2,
+                  align: 0.5,
+                }),
             ...(xDomain ? { domain: xDomain } : {}),
           }}
           yScale={{
             type: yScaleType || "linear",
             ...(yDomain ? { domain: yDomain } : {}),
           }}
-          margin={margin}
+          margin={
+            margin || {
+              top: 20,
+              bottom: 40,
+              left: 40,
+              right: 20,
+            }
+          }
         >
-          {/* SVG defs for linear gradient */}
-          <defs>
-            <linearGradient id="area-gradient" x1="0" x2="0" y1="0" y2="1">
-              <stop
-                offset="0%"
-                stopColor="rgba(37, 99, 235, 0.15)"
-                stopOpacity="1"
-              />
-              <stop
-                offset="100%"
-                stopColor="rgba(37, 99, 235, 0.01)"
-                stopOpacity="0"
-              />
-            </linearGradient>
-          </defs>
-
           {/* X Axis */}
           <AnimatedAxis
-            key="x-axis"
+            key={"x-axis"}
             labelProps={{
               className: "fill-grey-10 animate-fade-in-0.3",
               fontSize: 12,
@@ -122,7 +111,7 @@ function AreaLineChart<T extends object>({
 
           {/* Y Axis */}
           <AnimatedAxis
-            key="y-axis"
+            key={"y-axis"}
             labelProps={{
               className: "fill-grey-10 animate-fade-in-0.3",
               fontSize: 12,
@@ -134,7 +123,6 @@ function AreaLineChart<T extends object>({
                 textAnchor: "end",
                 verticalAnchor: "middle",
                 dx: -2,
-                angle: -35, // Tilt labels to save horizontal space
                 fontSize: 10,
               }
             }
@@ -146,44 +134,16 @@ function AreaLineChart<T extends object>({
             {...yAxisProps}
           />
 
-          {plots.map(
-            ({
-              dataKey,
-              xAccessor,
-              yAccessor,
-              lineColor,
-              lineType,
-              lineModifier,
-              areaColor,
-            }) => (
-              <g key={dataKey}>
-                {/* Area Series with gradient fill */}
-                <AnimatedAreaSeries
-                  key={dataKey + "-area"}
-                  dataKey={dataKey + "-area"}
-                  data={data}
-                  xAccessor={xAccessor}
-                  yAccessor={yAccessor}
-                  fill={areaColor || `url(#${gradientId})`}
-                  stroke="none"
-                  opacity={1}
-                  className="duration-300"
-                />
-                {/* Line Series */}
-                <AnimatedLineSeries
-                  dataKey={dataKey}
-                  key={dataKey + "-line"}
-                  data={data}
-                  xAccessor={xAccessor}
-                  yAccessor={yAccessor}
-                  stroke={lineColor || "#3167DD"}
-                  strokeDasharray={lineType === "dashed" ? "4 4" : undefined}
-                  opacity={lineModifier === "faded" ? 0.15 : 1}
-                  className="duration-300"
-                />
-              </g>
-            )
-          )}
+          {plots.map(({ dataKey, xAccessor, yAccessor, barColor }) => (
+            <AnimatedBarSeries
+              key={dataKey}
+              dataKey={dataKey}
+              data={data}
+              xAccessor={xAccessor}
+              yAccessor={yAccessor}
+              colorAccessor={() => barColor || "#3B82F6"} // primary-50 color#$
+            />
+          ))}
 
           {/* Tooltip (optional) */}
           {renderTooltip && (
@@ -216,4 +176,4 @@ function AreaLineChart<T extends object>({
   );
 }
 
-export default AreaLineChart;
+export default BarChart;
