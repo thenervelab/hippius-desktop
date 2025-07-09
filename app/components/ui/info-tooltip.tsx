@@ -36,12 +36,12 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({
       const viewportWidth = window.innerWidth;
 
       // Calculate horizontal position
-      let newTooltipStyle: React.CSSProperties = {
+      const newTooltipStyle: React.CSSProperties = {
         maxWidth: "260px",
         width: "max-content",
       };
 
-      let newArrowStyle: React.CSSProperties = {
+      const newArrowStyle: React.CSSProperties = {
         position: "absolute",
         width: 0,
         height: 0,

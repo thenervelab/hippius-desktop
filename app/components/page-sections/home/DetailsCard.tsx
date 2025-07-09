@@ -1,4 +1,4 @@
-import { Check, Info } from "lucide-react";
+import { Check } from "lucide-react";
 import { AbstractIconWrapper, Icons } from "../../ui";
 import { IconComponent } from "@/app/lib/types";
 import { cn } from "@/app/lib/utils";
