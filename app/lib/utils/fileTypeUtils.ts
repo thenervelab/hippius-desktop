@@ -1,0 +1,106 @@
+import React from 'react';
+import {
+    Document,
+    Video,
+    Image,
+    ImageWhite,
+    PDF,
+    Presentation,
+    Sheet,
+    SVG,
+    Terminal,
+    TerminalWhite,
+    EC,
+    File,
+} from "@/components/ui/icons";
+import { FileTypes } from "@/lib/types/fileTypes";
+import { getFilePartsFromFileName } from './getFilePartsFromFileName';
+
+export const DEFAULT_FILE_FORMAT: FileTypes = "document";
+
+export const DIRECTORY_SUFFIX = ".ec_metadata";
+
+export const isDirectory = (filename: string): boolean => {
+    return filename.endsWith(DIRECTORY_SUFFIX);
+}
+
+export const formatDisplayName = (rawName: string): string => {
+    let name = isDirectory(rawName) ? rawName.slice(0, -DIRECTORY_SUFFIX.length) : rawName;
+
+    const { fileName, fileFormat } = getFilePartsFromFileName(name);
+    if (fileName.length > 20) {
+        name = `${fileName.slice(0, 10)}...${fileName.slice(-6)}.${fileFormat.length > 6 ? fileFormat.slice(0, 3) + "..." : fileFormat
+            }`;
+    }
+
+    return name;
+}
+
+export const getFileIcon = (fileType: FileTypes | undefined, isDir: boolean): {
+    icon: React.FC<Record<string, unknown>>;
+    color: string;
+} => {
+    if (isDir) {
+        return { icon: EC, color: "#8e24aa" };
+    }
+
+    switch (fileType) {
+        case "video":
+            return { icon: Video, color: "text-[#ea4335]" };
+        case "ec":
+            return { icon: EC, color: "text-primary-40" };
+        case "document":
+            return { icon: File, color: "text-primary-70 fill-primary-60" };
+        case "pdfDocument":
+            return { icon: PDF, color: "text-[#ea4335]" };
+        case "presentationDocument":
+            return { icon: Presentation, color: "text-[#fbbc04]" };
+        case "spreadSheet":
+            return { icon: Sheet, color: "text-[#34a853]" };
+        case "code":
+            return { icon: Terminal, color: "text-[#4285F4]" };
+        case "svg":
+            return { icon: SVG, color: "text-black" };
+        case "doc":
+            return { icon: Document, color: "text-[#4285F4]" };
+        case "image":
+            return { icon: Image, color: "text-[#ea4335]" };
+        default:
+            return { icon: File, color: "text-primary-70 fill-primary-60" };
+    }
+}
+
+// Get icon for thumbnails/white icons (used in FileTypeIcon)
+export const getFileIconForThumbnail = (fileType: FileTypes | undefined, isDir: boolean): {
+    icon: React.FC<Record<string, unknown>>;
+    color?: string;
+} => {
+    if (isDir) {
+        return { icon: EC };
+    }
+
+    switch (fileType) {
+        case "video":
+            return { icon: Video };
+        case "ec":
+            return { icon: EC };
+        case "document":
+            return { icon: File, color: "fill-white" };
+        case "pdfDocument":
+            return { icon: PDF };
+        case "presentationDocument":
+            return { icon: Presentation };
+        case "spreadSheet":
+            return { icon: Sheet };
+        case "code":
+            return { icon: TerminalWhite };
+        case "svg":
+            return { icon: SVG };
+        case "doc":
+            return { icon: Document };
+        case "image":
+            return { icon: ImageWhite };
+        default:
+            return { icon: File, color: "fill-white" };
+    }
+}
