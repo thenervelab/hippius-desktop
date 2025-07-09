@@ -54,7 +54,7 @@ export default function useFiles(
         throw new Error("No wallet address available");
       }
 
-      const url = `${API_BASE_URL}/user-total-files-size?limit=${limit}&account_id=${polkadotAddress}`;
+      const url = `${API_BASE_URL}/ipfs/user-total-files-size?limit=${limit}&account_id=${polkadotAddress}`;
 
       const response = await fetch(url, {
         headers: {
