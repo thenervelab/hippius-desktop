@@ -16,6 +16,7 @@ export { default as Card } from "./card";
 export { default as GoBackButton } from "./go-back-button";
 export { default as ScrollToTop } from "./scroll-to-top";
 export { default as LineChart } from "./line-chart";
+export { default as BarChart } from "./bar-chart";
 export { default as ScatterPlot } from "./scatter-plot";
 export * from "./typography";
 export * as Icons from "./icons";

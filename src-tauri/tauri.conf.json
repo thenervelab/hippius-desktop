@@ -20,9 +20,14 @@
         "dragDropEnabled": false,
         "title": "Hippius",
         "width": 1320,
-        "height": 800
+        "height": 1000
       }
     ],
+    "trayIcon": {
+      "id": "macos-tray",
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": false
+    },
     "security": {
       "csp": null,
       "capabilities": ["default"]

@@ -40,15 +40,15 @@ const LeftCarouselPanel = () => {
             >
               {SWIPE_CONTENT.map((item) => (
                 <SwiperSlide key={item.heading}>
-                  <div className="py-[84px] px-5 w-full h-full items-center  flex  justify-between flex-col">
+                  <div className=" py-8 [@media(min-height:880px)]:py-[84px] px-5 w-full h-full items-center  flex  justify-between flex-col">
                     <RevealTextLine
                       rotate
                       reveal={inView}
                       className="delay-300 w-full"
                     >
                       <div
-                        className="text-center xl:text-[40px] text-[28px] 
-                      font-medium text-grey-100 mb-12  "
+                        className="hidden [@media(min-height:750px)]:block text-center xl:text-[40px] text-[28px] 
+                      font-medium text-grey-100 [@media(min-height:750px)]:mb-12  "
                       >
                         {item.heading}
                       </div>
@@ -56,7 +56,7 @@ const LeftCarouselPanel = () => {
                     <div className="w-full flex items-center justify-center">
                       {item.icon}
                     </div>
-                    <div className="flex flex-col gap-1 items-center justify-center font-normal mt-10 w-full px-10 relative z-30">
+                    <div className="flex flex-col gap-1 items-center justify-center font-normal [@media(min-height:750px)]:mt-10 w-full px-10 relative z-30">
                       <RevealTextLine
                         rotate
                         reveal={inView}
