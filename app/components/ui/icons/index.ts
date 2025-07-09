@@ -135,4 +135,4 @@ export { default as Grid } from "./Grid";
 export { default as Box } from "./Box";
 export { default as DocumentNormal } from "./DocumentNormal";
 export { default as FolderAdd } from "./FolderAdd";
-
+export { default as FileFilter } from "./FileFilter";

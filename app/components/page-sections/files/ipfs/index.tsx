@@ -9,8 +9,12 @@ import UploadStatusWidget from "./upload-status-widget";
 import CardView from "./card-view";
 import { cn } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
-import FileDetailsDialog, { FileDetail } from "./files-table/unpin-files-dialog";
+import FileDetailsDialog, {
+  FileDetail,
+} from "./files-table/unpin-files-dialog";
 import InsufficientCreditsDialog from "./insufficient-credits-dialog";
+import SidebarDialog from "@/components/ui/sidebar-dialog";
+import FilterDialogContent from "./filter-dialog-content";
 
 const Ipfs: FC = () => {
   const {
@@ -24,7 +28,7 @@ const Ipfs: FC = () => {
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [filterMode, setFilterMode] = useState<"all" | "date" | "type">("all");
-
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
 
   // Unpinned files state - moved from FilesTable to parent
   const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
@@ -78,10 +82,9 @@ const Ipfs: FC = () => {
     <div className="w-full relative mt-6">
       <div className="flex items-center w-full justify-between gap-6 flex-wrap">
         <div className="flex items-center">
-          <P
-            size="xl"
-            className="animate-fade-in-from-b-0.3 opacity-0"
-          >Your Files</P>
+          <P size="xl" className="animate-fade-in-from-b-0.3 opacity-0">
+            Your Files
+          </P>
         </div>
         <div className="flex items-center gap-x-4">
           <RefreshButton
@@ -95,14 +98,24 @@ const Ipfs: FC = () => {
 
           <div className="flex gap-2 border border-grey-80 p-1 rounded">
             <button
-              className={cn("p-1 rounded", viewMode === "list" ? "bg-primary-100 border border-primary-80 text-primary-40 rounded" : "bg-grey-100 text-grey-70")}
+              className={cn(
+                "p-1 rounded",
+                viewMode === "list"
+                  ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                  : "bg-grey-100 text-grey-70"
+              )}
               onClick={() => setViewMode("list")}
               aria-label="List View"
             >
               <Icons.Grid className="size-5" />
             </button>
             <button
-              className={cn("p-1 rounded", viewMode === "card" ? "bg-primary-100 border border-primary-80 text-primary-40 rounded" : "bg-grey-100 text-grey-70")}
+              className={cn(
+                "p-1 rounded",
+                viewMode === "card"
+                  ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                  : "bg-grey-100 text-grey-70"
+              )}
               onClick={() => setViewMode("card")}
               aria-label="Card View"
             >
@@ -112,8 +125,13 @@ const Ipfs: FC = () => {
 
           <div className="flex border border-grey-80 p-1 rounded">
             <button
-              className={cn("p-1 rounded", filterMode === "date" ? "bg-primary-100 border border-primary-80 text-primary-40 rounded" : "bg-grey-100 text-grey-70")}
-              onClick={() => setFilterMode("date")}
+              className={cn(
+                "p-1 rounded cursor-pointer",
+                filterMode === "date"
+                  ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                  : "bg-grey-100 text-grey-70"
+              )}
+              onClick={() => setIsFilterOpen(true)}
               aria-label="Date Filter"
             >
               <Icons.Filter className="size-5" />
@@ -142,13 +160,9 @@ const Ipfs: FC = () => {
 
       <div className="w-full mt-4">
         {viewMode === "list" ? (
-          <FilesTable
-            showUnpinnedDialog={false}
-          />
+          <FilesTable showUnpinnedDialog={false} />
         ) : (
-          <CardView
-            showUnpinnedDialog={false}
-          />
+          <CardView showUnpinnedDialog={false} />
         )}
       </div>
 
@@ -161,6 +175,16 @@ const Ipfs: FC = () => {
 
       <UploadStatusWidget />
       <InsufficientCreditsDialog />
+
+      {/* Filter Sidebar Dialog */}
+
+      <SidebarDialog
+        heading="Filter"
+        open={isFilterOpen}
+        onOpenChange={setIsFilterOpen}
+      >
+        <FilterDialogContent />
+      </SidebarDialog>
     </div>
   );
 };
