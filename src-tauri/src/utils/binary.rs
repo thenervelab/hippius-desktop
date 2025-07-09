@@ -7,7 +7,6 @@ use sha2::{Digest, Sha256};
 use sodiumoxide::crypto::secretbox;
 use std::collections::HashMap;
 use std::fs;
-// use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration as StdDuration;
