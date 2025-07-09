@@ -46,6 +46,7 @@ import VideoDialog, { VideoDialogTrigger } from "./video-dialog";
 import ImageDialog, { ImageDialogTrigger } from "./image-dialog";
 import PdfDialog, { PdfDialogTrigger } from "./pdf-dialog";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
+import FileContextMenu from "@/components/ui/context-menu/file-context-menu";
 
 // Custom event names for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -77,6 +78,12 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
 
   const [selectedFile, setSelectedFile] =
     useState<FormattedUserIpfsFile | null>(null);
+
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    file: FormattedUserIpfsFile;
+  } | null>(null);
 
   const dragCounterRef = useRef<number>(0);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -339,12 +346,15 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
       }),
       columnHelper.display({
         id: "actions",
+        header: "",
+        size: 40,
+        maxSize: 40,
         cell: ({ cell }) => {
           const { cid, name } = cell.row.original;
           const { fileFormat } = getFilePartsFromFileName(name);
 
           return (
-            <div className="block max-w-[20px] pr-8">
+            <div className="flex justify-center items-center w-10">
               <TableActionMenu
                 dropdownTitle="IPFS Options"
                 items={[
@@ -402,7 +412,7 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
                     : []),
                 ]}
               >
-                <Button variant="ghost" size="icon" className="text-grey-70">
+                <Button variant="ghost" size="icon" className="h-8 w-8 p-0 text-grey-70">
                   <MoreVertical className="size-4" />
                 </Button>
               </TableActionMenu>
@@ -419,6 +429,11 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
     data: data || [],
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    columnResizeMode: "onChange",
+    defaultColumn: {
+      minSize: 40,
+      size: undefined,
+    },
   });
 
   const handleDelete = () => {
@@ -432,6 +447,16 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
   const selectedFileType = selectedFileFormat
     ? getFileTypeFromExtension(selectedFileFormat)
     : null;
+
+  // Handle right-click on table row
+  const handleRowContextMenu = (e: React.MouseEvent, file: FormattedUserIpfsFile) => {
+    e.preventDefault(); // Prevent default browser context menu
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      file: file
+    });
+  };
 
   return (
     <>
@@ -558,6 +583,7 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
                           rowState === "pending" && "animate-pulse",
                           rowState === "error" && "bg-red-200/20"
                         )}
+                        onContextMenu={(e) => handleRowContextMenu(e, rowData)}
                       >
                         {row.getVisibleCells().map((cell) => (
                           <TableModule.Td
@@ -617,6 +643,25 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
             setSelectedFile(null);
           }}
           file={selectedFile}
+        />
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <FileContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          file={contextMenu.file}
+          onClose={() => setContextMenu(null)}
+          onDelete={(file) => {
+            setFileToDelete(file);
+            handleDelete();
+            setContextMenu(null);
+          }}
+          onSelectFile={(file) => {
+            setSelectedFile(file);
+            setContextMenu(null);
+          }}
         />
       )}
     </>

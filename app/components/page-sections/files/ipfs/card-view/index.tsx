@@ -22,6 +22,7 @@ import PdfDialog from "../files-table/pdf-dialog";
 import * as TableModule from "@/components/ui/alt-table";
 import { useRouter } from 'next/navigation';
 import FileDetailsDialog, { FileDetail } from "../files-table/unpin-files-dialog";
+import FileContextMenu from "@/components/ui/context-menu/file-context-menu";
 
 // Custom event names for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -53,6 +54,12 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true }) => {
 
     const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
     const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
+
+    const [contextMenu, setContextMenu] = useState<{
+        x: number;
+        y: number;
+        file: FormattedUserIpfsFile;
+    } | null>(null);
 
     useEffect(() => {
         if (isDragging) {
@@ -205,6 +212,15 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true }) => {
         }
     }, [unpinnedFileDetails.length, showUnpinnedDialog]);
 
+    const handleCardContextMenu = (e: React.MouseEvent, file: FormattedUserIpfsFile) => {
+        e.preventDefault();
+        setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            file: file
+        });
+    };
+
     return (
         <>
             <div className="flex flex-col gap-y-8 relative">
@@ -311,71 +327,76 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true }) => {
                                     };
 
                                     return (
-                                        <FileCard
-                                            key={file.cid}
-                                            file={file}
-                                            state={cardState}
-                                            onClick={handleCardClick}
-                                            actionMenu={
-                                                <TableActionMenu
-                                                    dropdownTitle="IPFS Options"
-                                                    dropDownMenuTriggerClass="size-5 text-grey-60 flex items-center"
-                                                    items={[
-                                                        {
-                                                            icon: <LinkIcon className="size-4" />,
-                                                            itemTitle: "View on IPFS",
-                                                            onItemClick: () => {
-                                                                if (fileType === "video") {
-                                                                    setSelectedFile(file);
-                                                                } else {
-                                                                    window.open(
-                                                                        `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`,
-                                                                        "_blank"
-                                                                    );
-                                                                }
-                                                            },
-                                                        },
-                                                        {
-                                                            icon: <Copy className="size-4" />,
-                                                            itemTitle: "Copy Link",
-                                                            onItemClick: () => {
-                                                                navigator.clipboard
-                                                                    .writeText(
-                                                                        `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
-                                                                    )
-                                                                    .then(() => {
-                                                                        toast.success("Copied to clipboard successfully!");
-                                                                    });
-                                                            },
-                                                        },
-                                                        {
-                                                            icon: <Download className="size-4" />,
-                                                            itemTitle: "Download",
-                                                            onItemClick: async () => {
-                                                                downloadIpfsFile(file);
-                                                            },
-                                                        },
-                                                        ...(file.isAssigned
-                                                            ? [
-                                                                {
-                                                                    icon: <Trash2 className="size-4" />,
-                                                                    itemTitle: "Delete",
-                                                                    onItemClick: () => {
-                                                                        setFileToDelete(file);
-                                                                        handleDelete();
-                                                                    },
-                                                                    variant: "destructive" as const,
+                                        <div
+                                            className="card-container"
+                                            onContextMenu={(e) => handleCardContextMenu(e, file)}
+                                        >
+                                            <FileCard
+                                                key={file.cid}
+                                                file={file}
+                                                state={cardState}
+                                                onClick={handleCardClick}
+                                                actionMenu={
+                                                    <TableActionMenu
+                                                        dropdownTitle="IPFS Options"
+                                                        dropDownMenuTriggerClass="size-5 text-grey-60 flex items-center"
+                                                        items={[
+                                                            {
+                                                                icon: <LinkIcon className="size-4" />,
+                                                                itemTitle: "View on IPFS",
+                                                                onItemClick: () => {
+                                                                    if (fileType === "video") {
+                                                                        setSelectedFile(file);
+                                                                    } else {
+                                                                        window.open(
+                                                                            `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`,
+                                                                            "_blank"
+                                                                        );
+                                                                    }
                                                                 },
-                                                            ]
-                                                            : []),
-                                                    ]}
-                                                >
-                                                    <Button variant="ghost" size="icon" className="text-grey-70">
-                                                        <MoreVertical className="size-4" />
-                                                    </Button>
-                                                </TableActionMenu>
-                                            }
-                                        />
+                                                            },
+                                                            {
+                                                                icon: <Copy className="size-4" />,
+                                                                itemTitle: "Copy Link",
+                                                                onItemClick: () => {
+                                                                    navigator.clipboard
+                                                                        .writeText(
+                                                                            `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
+                                                                        )
+                                                                        .then(() => {
+                                                                            toast.success("Copied to clipboard successfully!");
+                                                                        });
+                                                                },
+                                                            },
+                                                            {
+                                                                icon: <Download className="size-4" />,
+                                                                itemTitle: "Download",
+                                                                onItemClick: async () => {
+                                                                    downloadIpfsFile(file);
+                                                                },
+                                                            },
+                                                            ...(file.isAssigned
+                                                                ? [
+                                                                    {
+                                                                        icon: <Trash2 className="size-4" />,
+                                                                        itemTitle: "Delete",
+                                                                        onItemClick: () => {
+                                                                            setFileToDelete(file);
+                                                                            handleDelete();
+                                                                        },
+                                                                        variant: "destructive" as const,
+                                                                    },
+                                                                ]
+                                                                : []),
+                                                        ]}
+                                                    >
+                                                        <Button variant="ghost" size="icon" className="text-grey-70">
+                                                            <MoreVertical className="size-4" />
+                                                        </Button>
+                                                    </TableActionMenu>
+                                                }
+                                            />
+                                        </div>
                                     );
                                 })}
                             </div>
@@ -422,6 +443,24 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true }) => {
                         setSelectedFile(null);
                     }}
                     file={selectedFile}
+                />
+            )}
+
+            {contextMenu && (
+                <FileContextMenu
+                    x={contextMenu.x}
+                    y={contextMenu.y}
+                    file={contextMenu.file}
+                    onClose={() => setContextMenu(null)}
+                    onDelete={(file) => {
+                        setFileToDelete(file);
+                        handleDelete();
+                        setContextMenu(null);
+                    }}
+                    onSelectFile={(file) => {
+                        setSelectedFile(file);
+                        setContextMenu(null);
+                    }}
                 />
             )}
         </>

@@ -2,7 +2,7 @@
 
 import { FC, useEffect, useRef, useMemo, useState } from "react";
 import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
-import { RefreshButton, Icons, P } from "@/components/ui";
+import { RefreshButton, Icons, P, SearchInput, Button } from "@/components/ui";
 import AddButton from "./add-file-button";
 import FilesTable from "./files-table";
 import UploadStatusWidget from "./upload-status-widget";
@@ -89,6 +89,10 @@ const Ipfs: FC = () => {
             onClick={() => refetchUserFiles()}
           />
 
+          <div className="">
+            <SearchInput className="h-9" />
+          </div>
+
           <div className="flex gap-2 border border-grey-80 p-1 rounded">
             <button
               className={cn("p-1 rounded", viewMode === "list" ? "bg-primary-100 border border-primary-80 text-primary-40 rounded" : "bg-grey-100 text-grey-70")}
@@ -115,6 +119,16 @@ const Ipfs: FC = () => {
               <Icons.Filter className="size-5" />
             </button>
           </div>
+          <div className="bg-grey-90 hover:bg-grey-80 rounded">
+            <button
+              className="px-4 py-3 bg-grey-90 hover:bg-grey-80 rounded text-sm font-medium text-grey-10 flex items-center gap-1 h-10"
+              aria-label="Add Folder"
+            >
+              <Icons.FolderAdd className="size-4 text-grey-10" />
+              <span>New Folder</span>
+            </button>
+          </div>
+
           <AddButton ref={addButtonRef} className="h-9" />
         </div>
       </div>
