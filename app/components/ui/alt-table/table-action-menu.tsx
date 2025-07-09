@@ -24,6 +24,7 @@ interface TableActionMenuProps {
     dropdownTitle: string;
     items: ActionItem[];
     children: React.ReactNode;
+    dropDownMenuTriggerClass?: string;
 }
 
 // Use memo to prevent unnecessary re-renders
@@ -31,6 +32,7 @@ const TableActionMenu = memo(function TableActionMenu({
     dropdownTitle,
     items,
     children,
+    dropDownMenuTriggerClass,
 }: TableActionMenuProps) {
     // Memoize the filtered items to prevent recreating the array on each render
     const filteredItems = useMemo(
@@ -40,7 +42,7 @@ const TableActionMenu = memo(function TableActionMenu({
 
     return (
         <DropdownMenu>
-            <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+            <DropdownMenuTrigger className={dropDownMenuTriggerClass} asChild>{children}</DropdownMenuTrigger>
             <DropdownMenuContent
                 align="end"
                 className="bg-white border border-grey-80 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)]

@@ -344,67 +344,69 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
           const { fileFormat } = getFilePartsFromFileName(name);
 
           return (
-            <TableActionMenu
-              dropdownTitle="IPFS Options"
-              items={[
-                {
-                  icon: <LinkIcon className="size-4" />,
-                  itemTitle: "View on IPFS",
-                  onItemClick: () => {
-                    const { fileFormat } = getFilePartsFromFileName(name);
-                    const fileType = getFileTypeFromExtension(
-                      fileFormat || null
-                    );
-
-                    if (fileType === "video") {
-                      setSelectedFile(cell.row.original);
-                    } else {
-                      window.open(
-                        `https://get.hippius.network/ipfs/${decodeHexCid(cid)}`,
-                        "_blank"
+            <div className="block max-w-[20px] pr-8">
+              <TableActionMenu
+                dropdownTitle="IPFS Options"
+                items={[
+                  {
+                    icon: <LinkIcon className="size-4" />,
+                    itemTitle: "View on IPFS",
+                    onItemClick: () => {
+                      const { fileFormat } = getFilePartsFromFileName(name);
+                      const fileType = getFileTypeFromExtension(
+                        fileFormat || null
                       );
-                    }
-                  },
-                },
-                {
-                  icon: <Copy className="size-4" />,
-                  itemTitle: "Copy Link",
-                  onItemClick: () => {
-                    navigator.clipboard
-                      .writeText(
-                        `https://get.hippius.network/ipfs/${decodeHexCid(cid)}`
-                      )
-                      .then(() => {
-                        toast.success("Copied to clipboard successfully!");
-                      });
-                  },
-                },
-                {
-                  icon: <Download className="size-4" />,
-                  itemTitle: "Download",
-                  onItemClick: async () => {
-                    downloadIpfsFile(cell.row.original);
-                  },
-                },
-                ...(cell.row.original.isAssigned
-                  ? [
-                    {
-                      icon: <Trash2 className="size-4" />,
-                      itemTitle: "Delete",
-                      onItemClick: () => {
-                        setFileToDelete(cell.row.original);
-                        handleDelete();
-                      },
-                      variant: "destructive" as const,
+
+                      if (fileType === "video") {
+                        setSelectedFile(cell.row.original);
+                      } else {
+                        window.open(
+                          `https://get.hippius.network/ipfs/${decodeHexCid(cid)}`,
+                          "_blank"
+                        );
+                      }
                     },
-                  ]
-                  : []),
-              ]}
-            >
-              <Button variant="ghost" size="icon" className="text-grey-70">
-                <MoreVertical className="size-4" />
-              </Button>
-            </TableActionMenu>
+                  },
+                  {
+                    icon: <Copy className="size-4" />,
+                    itemTitle: "Copy Link",
+                    onItemClick: () => {
+                      navigator.clipboard
+                        .writeText(
+                          `https://get.hippius.network/ipfs/${decodeHexCid(cid)}`
+                        )
+                        .then(() => {
+                          toast.success("Copied to clipboard successfully!");
+                        });
+                    },
+                  },
+                  {
+                    icon: <Download className="size-4" />,
+                    itemTitle: "Download",
+                    onItemClick: async () => {
+                      downloadIpfsFile(cell.row.original);
+                    },
+                  },
+                  ...(cell.row.original.isAssigned
+                    ? [
+                      {
+                        icon: <Trash2 className="size-4" />,
+                        itemTitle: "Delete",
+                        onItemClick: () => {
+                          setFileToDelete(cell.row.original);
+                          handleDelete();
+                        },
+                        variant: "destructive" as const,
+                      },
+                    ]
+                    : []),
+                ]}
+              >
+                <Button variant="ghost" size="icon" className="text-grey-70">
+                  <MoreVertical className="size-4" />
+                </Button>
+              </TableActionMenu>
+            </div>
           );
         },
       }),

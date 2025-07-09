@@ -116,9 +116,6 @@ const FileDetailsDialog: React.FC<FileDetailsDialogProps> = ({
     const hoursRemaining = Math.floor(msRemaining / 3_600_000);
     const minutesRemaining = Math.floor((msRemaining % 3_600_000) / 60_000);
 
-    // Debug log to see if we're hitting low minute values
-    setDebugTimeInfo(`Blocks: ${blocksRemaining}, Time: ${hoursRemaining}h ${minutesRemaining}m`);
-
     // Create the progress object with the calculated values
     const progress = {
       percentage,

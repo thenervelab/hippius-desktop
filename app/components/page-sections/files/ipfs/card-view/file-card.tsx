@@ -178,12 +178,12 @@ const FileCard: React.FC<FileCardProps> = ({
             />)}
 
             {/* Header with filename and actions */}
-            <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-[40px]">
+            <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-[40px] w-full">
                 {isDir ? (
                     <Link href={`/dashboard/storage/ipfs/${decodeHexCid(file.cid)}`}>
                         <div className="flex items-center">
                             <Icon className={cn("size-5 mr-1", color)} />
-                            <span className={cn("text-sm text-grey-20 hover:text-primary-40 transition truncate max-w-[200px]")}>
+                            <span className={cn("text-sm text-grey-20 hover:text-primary-40 transition truncate")}>
                                 {displayName}
                             </span>
                         </div>
@@ -191,10 +191,10 @@ const FileCard: React.FC<FileCardProps> = ({
                 ) : (
                     <div className="flex items-center">
                         <Icon className={cn("size-5 mr-1", color)} />
-                        <span className="text-sm text-grey-20 truncate max-w-[200px]">{displayName}</span>
+                        <span className="text-sm text-grey-20 truncate">{displayName}</span>
                     </div>
                 )}
-                <div className="flex-shrink-0">
+                <div className="max-w-[20px] pr-8">
                     {actionMenu}
                 </div>
             </div>
