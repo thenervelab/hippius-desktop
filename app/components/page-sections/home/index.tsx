@@ -44,7 +44,9 @@ const Home: React.FC = () => {
     useMarketplaceCredits({ limit: 1000 });
 
   // Fetch files data for storage usage chart
-  const { data: filesData, isLoading: isLoadingFiles } = useFiles();
+  const { data: filesData, isLoading: isLoadingFiles } = useFiles({
+    limit: 1000,
+  });
 
   // Transform marketplace credits to the format expected by the chart
   const transformedCreditsData = transformMarketplaceCreditsToAccounts(
