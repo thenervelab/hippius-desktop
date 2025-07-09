@@ -6,22 +6,28 @@ import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import BoxSimple from "../ui/icons/BoxSimple";
 import { Icons, RevealTextLine } from "../ui";
 import { InView } from "react-intersection-observer";
+import { IPFS_NODE_CONFIG } from "@/app/lib/config";
 
 const BlockchainStats: React.FC = () => {
-  const { api, isConnected } = usePolkadotApi();
+  const { isConnected } = usePolkadotApi();
   const [peerCount, setPeerCount] = useState<number | null>(null);
 
   useEffect(() => {
-    if (api && isConnected) {
-      // Fetch peer count from the node
-      api.rpc.system
-        .peers()
-        .then((peers) => setPeerCount(peers.length))
+    const fetchPeers = () => {
+      fetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/swarm/peers`, { method: "POST" })
+        .then((res) => res.json())
+        .then((response) => {
+          setPeerCount(response?.Peers.length);
+        })
         .catch(() => setPeerCount(null));
-    } else {
-      setPeerCount(null);
-    }
-  }, [api, isConnected]);
+    };
+
+    fetchPeers();
+
+    const intervalId = setInterval(fetchPeers, 1000);
+
+    return () => clearInterval(intervalId);
+  }, []);
 
   return (
     <InView triggerOnce>
@@ -48,7 +54,7 @@ const BlockchainStats: React.FC = () => {
               <span className="text-grey-10">Blockchain:</span>
 
               <span className="s bg-grey-80 text-grey-60 px-2 py-1 rounded">
-                {isConnected ? "Connected" : "Not Connected"}
+                {isConnected ? "Connected" : "Disconnected"}
               </span>
             </div>
           </RevealTextLine>

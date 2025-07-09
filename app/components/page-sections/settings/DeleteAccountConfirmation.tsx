@@ -92,7 +92,7 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
 
           {/* Message */}
           <div className="font-medium text-base text-grey-20  mb-4 text-center ">
-            This action is permanent
+            Deleting your account will erase all Hippius data stored on this device. It won’t affect your on-chain account or data. Make sure you back up encrypted seed before you proceed.
           </div>
 
           {/* Backup Button */}

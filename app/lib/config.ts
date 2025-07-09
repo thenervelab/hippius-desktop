@@ -19,3 +19,7 @@ export const AUTH_CONFIG = {
   tokenStorageKey: "hippius_session_token",
   tokenExpiryKey: "hippius_token_expiry",
 } as const;
+
+export const IPFS_NODE_CONFIG = {
+  baseURL: "http://127.0.0.1:5001",
+} as const;

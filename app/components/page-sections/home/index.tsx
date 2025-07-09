@@ -8,6 +8,10 @@ import { Icons } from "../../ui";
 import CreditUsageTrends from "./credit-usage-trends";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
+import { IPFS_NODE_CONFIG } from "@/app/lib/config";
+import { useIpfsBandwidth } from "@/app/lib/hooks/api/useIpfsBandwidth";
+
+
 
 // import IpfsTest from "@/components/upload-download";
 
@@ -28,7 +32,7 @@ function useIpfsInfo() {
   const [ipfsInfo, setIpfsInfo] = useState<IpfsInfo | null>(null);
 
   useEffect(() => {
-    fetch("http://127.0.0.1:5001/api/v0/id", { method: "POST" })
+    fetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/id`, { method: "POST" })
       .then((res) => res.json())
       .then(setIpfsInfo)
       .catch(() => setIpfsInfo(null));
@@ -36,9 +40,11 @@ function useIpfsInfo() {
 
   return ipfsInfo;
 }
+
 const Home: React.FC = () => {
   const { polkadotAddress, mnemonic } = useWalletAuth();
   const ipfsInfo = useIpfsInfo();
+  const { download, upload } = useIpfsBandwidth(1000);
 
   // Fetch marketplace credits with a higher limit to get good chart data
   const { data: marketplaceCredits, isLoading: isLoadingCredits } =
@@ -84,7 +90,8 @@ const Home: React.FC = () => {
           key="node-status"
           icon={Icons.ShieldTick}
           title="Node Status"
-          value={ipfsInfo === null ? "Loading..." : ipfsInfo.ID ? "Connected" : "Disconnected"}
+          value={ipfsInfo === null ? "Loading..." : ipfsInfo.ID ? "Online" : "Offline"}
+          isOnline={ipfsInfo?.ID ? true : false}
           peerId={`${ipfsInfo?.ID ? shortId(ipfsInfo.ID) : "Loading..."}`}
           showStatus={true}
           showInfo={false}
@@ -94,9 +101,7 @@ const Home: React.FC = () => {
           key="upload-speed"
           icon={Icons.DocumentUpload}
           title="Upload Speed"
-          value="--"
-          speed="-"
-          isIncrease
+          value={upload}
           showInfo={false}
         />
 
@@ -104,9 +109,7 @@ const Home: React.FC = () => {
           key="download-speed"
           icon={Icons.DocumentDownload}
           title="Download Speed"
-          value="--"
-          speed="-"
-          isIncrease={false}
+          value={download}
           showInfo={false}
         />
       </div>
