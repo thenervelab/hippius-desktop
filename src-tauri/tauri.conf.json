@@ -19,7 +19,7 @@
       {
         "dragDropEnabled": false,
         "title": "Hippius",
-        "width": 1000,
+        "width": 1320,
         "height": 800
       }
     ],
@@ -37,6 +37,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": ["icons", "icons/icon.png"]
   }
 }

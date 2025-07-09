@@ -166,7 +166,7 @@ const SubAccounts: React.FC = () => {
   }, []);
 
   return (
-    <div className="w-full space-y-6 my-6 border-t border-grey-80 py-4">
+    <div className="w-full space-y-6 ">
       {/* header */}
       <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center flex-wrap gap-2">
         <div className="flex justify-between w-full sm:w-auto">
@@ -193,6 +193,13 @@ const SubAccounts: React.FC = () => {
             <RefreshCw className="size-4" />
           </button>
           <button
+            onClick={handleGenerateWallet}
+            disabled={generatingKey}
+            className="border border-grey-80 p-2.5 sm:px-3 sm:py-2.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
+          >
+            Generate New Account
+          </button>
+          <button
             onClick={handleOpenEmptySubAccountForm}
             className="p-1 bg-primary-50 text-white border border-primary-40 rounded hover:bg-primary-40 transition text-base font-medium"
           >
@@ -202,13 +209,6 @@ const SubAccounts: React.FC = () => {
                 <span className="hidden sm:inline-block">New</span> Sub Account
               </span>
             </div>
-          </button>
-          <button
-            onClick={handleGenerateWallet}
-            disabled={generatingKey}
-            className="border border-grey-80 p-2.5 sm:px-3 sm:py-2.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
-          >
-            Generate New Account
           </button>
         </div>
       </div>

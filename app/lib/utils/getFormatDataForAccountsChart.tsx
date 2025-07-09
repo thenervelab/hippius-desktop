@@ -1,6 +1,6 @@
 // getFormatDataForAccountsChart.tsx
 import { Account } from "../types";
-import { formatBalance } from "../utils";
+import { formatBalance } from "./formatters/formatBalance";
 
 export interface ChartPoint {
   x: Date;
@@ -154,16 +154,50 @@ export const formatAccountsForChartByRange = (
   }
 
   if (range === "year") {
-    const start = new Date(now.getFullYear(), 0, 1);
-    const yearDates = getAllDatesInRange(start, now);
-    return fillDataWithCarryForward(
-      chartPoints,
-      yearDates,
-      (date) => MONTHS[date.getMonth()]
-    ).map((pt) => ({
-      ...pt,
-      bandLabel: MONTHS[pt.x.getMonth()],
-    }));
+    // Create a monthly data map instead of using daily data
+    const monthlyData: Map<number, ChartPoint> = new Map();
+
+    // Process each data point to group by month
+    chartPoints.forEach((point) => {
+      const month = point.x.getMonth();
+
+      if (
+        !monthlyData.has(month) ||
+        point.x > (monthlyData.get(month)?.x || new Date(0))
+      ) {
+        // Use the most recent data point for each month
+        monthlyData.set(month, {
+          ...point,
+          bandLabel: MONTHS[month],
+        });
+      }
+    });
+
+    // Create a point for each month of the year up to current month
+    const result: ChartPoint[] = [];
+    for (let m = 0; m <= now.getMonth(); m++) {
+      const monthDate = new Date(now.getFullYear(), m, 1);
+
+      // If we have data for this month, use it
+      if (monthlyData.has(m)) {
+        result.push(monthlyData.get(m)!);
+      } else {
+        // Otherwise carry forward from the previous month
+        const lastPoint = result.length > 0 ? result[result.length - 1] : null;
+        result.push({
+          x: monthDate,
+          balance: lastPoint ? lastPoint.balance : 0,
+          formattedBalance: lastPoint ? lastPoint.formattedBalance : "0",
+          credit: lastPoint ? lastPoint.credit : 0,
+          formattedCredit: lastPoint ? lastPoint.formattedCredit : "0",
+          timestamp: lastPoint ? lastPoint.timestamp : "",
+          dayLabel: MONTHS[m],
+          bandLabel: MONTHS[m],
+        });
+      }
+    }
+
+    return result;
   }
 
   return chartPoints;

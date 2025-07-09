@@ -17,6 +17,8 @@ use sqlx::sqlite::SqlitePool;
 use once_cell::sync::OnceCell;
 use dirs;
 use tauri::{Manager, Builder};
+use crate::user_profile_sync::start_user_profile_sync_tauri;
+use crate::folder_sync::start_folder_sync_tauri;
 
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
@@ -38,7 +40,9 @@ fn main() {
             read_file,
             storage_request_tauri,
             storage_unpin_request_tauri,
-            get_sync_path
+            get_sync_path,
+            start_user_profile_sync_tauri,
+            start_folder_sync_tauri
         ]);
 
     let builder = setup(builder);

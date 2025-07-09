@@ -11,6 +11,8 @@ import { InView } from "react-intersection-observer";
 import { encryptMnemonic, hashPasscode } from "@/app/lib/helpers/crypto";
 import { saveWallet } from "@/app/lib/helpers/walletDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useAtomValue } from "jotai";
+import { phaseAtom } from "../splash-screen/atoms";
 
 const passcodeFields = [
   {
@@ -42,6 +44,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
 
   const router = useRouter();
   const { setSession } = useWalletAuth();
+  const phase = useAtomValue(phaseAtom);
 
   const validateNewPass = (val: string) => {
     if (!val) return "Please enter a passcode.";
@@ -127,7 +130,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                 <div className="text-grey-70 text-sm font-medium">
                   <RevealTextLine rotate reveal={inView} className="delay-300">
                     Your access key is encrypted with your passcode for
-                    security. You’ll need this passcode to log in next time.
+                    security. You&apos;ll need this passcode to log in next time.
                   </RevealTextLine>
                 </div>
               </div>
@@ -162,7 +165,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                           type={showPasscode ? "text" : "password"}
                           value={
                             passCode[
-                              item?.name as "newPassCode" | "confirmPassCode"
+                            item?.name as "newPassCode" | "confirmPassCode"
                             ]
                           }
                           onChange={(e) =>
@@ -211,7 +214,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                   <OctagonAlert className="text-warning-50 size-6" />
                   <div className="text-grey-50 font-medium text-sm flex gap-2 items-center">
                     <span>
-                      We can{"'"}t restore this passcode, so please save it in
+                      We can&apos;t restore this passcode, so please save it in
                       your password manager
                     </span>
                   </div>
@@ -229,10 +232,14 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                     className={cn(
                       "w-full h-[60px] text-white font-medium text-lg"
                     )}
-                    disabled={logginIn}
+                    disabled={logginIn || phase !== "ready"}
                     icon={<Icons.ArrowRight />}
                   >
-                    {logginIn ? "Creating Account..." : "Create Account"}
+                    {logginIn
+                      ? "Creating Account..."
+                      : phase !== "ready"
+                        ? "Initializing..."
+                        : "Create Account"}
                   </Button>
                 </RevealTextLine>
               </div>

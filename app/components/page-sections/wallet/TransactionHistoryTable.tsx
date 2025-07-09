@@ -5,7 +5,7 @@ import {
   getSortedRowModel,
 } from "@tanstack/react-table";
 
-import { useEffect, useState, useMemo } from "react";
+import { useMemo } from "react";
 import {
   TableWrapper,
   Table,
@@ -14,15 +14,16 @@ import {
   Th,
   THead,
   TBody,
+  CopyableCell,
 } from "@/components/ui/alt-table";
 import { Loader2 } from "lucide-react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { Dollar, ArrowCircleDown } from "@/components/ui/icons";
-import TransactionDetailDialog from "./TransactionDetailDialog";
-import TransactionTypeBadge from "./TransactionTypeBadge";
+import { Dollar } from "@/components/ui/icons";
 import useBillingTransactions, {
   TransactionObject,
 } from "@/app/lib/hooks/api/useBillingTransactions";
+import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export const formatDate = (
   date: Date,
@@ -58,42 +59,73 @@ const columnHelper = createColumnHelper<TransactionObject>();
 
 const TransactionHistoryTable: React.FC = () => {
   const { data: transactions, isPending } = useBillingTransactions();
-
-  const [init, setInit] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-  const [selectedRow, setSelectedRow] = useState<TransactionObject | null>(
-    null
-  );
-
-  useEffect(() => {
-    // getTransactions();
-    setInit(true);
-
-    const mql = window.matchMedia("(max-width: 768px)");
-    setIsMobile(mql.matches);
-    const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mql.addEventListener("change", onChange);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
+  const { polkadotAddress } = useWalletAuth(); // Get the user's polkadot address
 
   const baseColumns = useMemo(
     () => [
-      //   columnHelper.accessor("id", {
-      //     id: "ID",
-      //     header: "ID",
-      //     cell: (d) => d.getValue(),
-      //   }),
+      columnHelper.accessor("block", {
+        id: "block",
+        header: "BLOCK",
+        cell: (d) => d.getValue(),
+        enableSorting: true,
+      }),
       columnHelper.accessor("amount", {
         id: "amount",
         header: "AMOUNT",
-        cell: (d) => `$ ${d.getValue().toLocaleString()}`,
+        cell: (d) => `$ ${formatBalance(d.getValue(), 6)}`,
         enableSorting: true,
       }),
-      columnHelper.accessor("type", {
-        id: "type",
-        header: "TRANSACTION TYPE",
-        cell: (d) => <TransactionTypeBadge type={d.getValue()} />,
+      columnHelper.accessor("from", {
+        id: "from",
+        header: "FROM",
+        cell: (info) => (
+          <CopyableCell
+            copyAbleText={info.getValue()}
+            title="Copy Account"
+            toastMessage="Account Copied Successfully!"
+            isTable={true}
+          />
+        ),
+        meta: {
+          cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]",
+        },
       }),
+
+      columnHelper.accessor("to", {
+        id: "to",
+        header: "TO",
+        cell: (info) => (
+          <CopyableCell
+            copyAbleText={info.getValue()}
+            title="Copy Account"
+            toastMessage="Account Copied Successfully!"
+            isTable={true}
+          />
+        ),
+        meta: {
+          cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]",
+        },
+      }),
+
+      columnHelper.accessor(
+        (row) => {
+          if (row.from === polkadotAddress) {
+            return "Sent";
+          } else if (row.to === polkadotAddress) {
+            return "Received";
+          }
+          return "-";
+        },
+        {
+          id: "transactionType",
+          header: "TRANSACTION TYPE",
+          cell: (info) => (
+            <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
+              {info.getValue()}
+            </span>
+          ),
+        }
+      ),
       columnHelper.accessor("date", {
         id: "date",
         header: "TRANSACTION DATE",
@@ -101,41 +133,10 @@ const TransactionHistoryTable: React.FC = () => {
         enableSorting: true,
       }),
     ],
-    []
+    [polkadotAddress] // Add polkadotAddress as dependency
   );
 
-  const mobileColumns = useMemo(
-    () => [
-      columnHelper.accessor("description", {
-        id: "description",
-        header: "DESCRIPTION",
-        cell: (d) => (
-          <div className="text-grey-20 text-base">{d.getValue()}</div>
-        ),
-        enableSorting: true,
-      }),
-      baseColumns.find((c) => c.id === "amount")!,
-      columnHelper.display({
-        id: "expand",
-        header: "",
-        cell: ({ row }) => (
-          <div className="flex items-center justify-center">
-            <button
-              onClick={() => {
-                console.log("selected row", row.original);
-                setSelectedRow(row.original);
-              }}
-            >
-              <ArrowCircleDown className="size-4 text-grey-10" />
-            </button>
-          </div>
-        ),
-      }),
-    ],
-    [baseColumns]
-  );
-
-  const columns = isMobile ? mobileColumns : baseColumns;
+  const columns = baseColumns;
 
   const table = useReactTable({
     columns,
@@ -161,7 +162,7 @@ const TransactionHistoryTable: React.FC = () => {
             {table.getRowModel().rows.map((row) => (
               <Tr key={row.id} transparent>
                 {row.getVisibleCells().map((cell) => (
-                  <Td key={cell.id} cell={cell} />
+                  <Td className="text-grey-20" key={cell.id} cell={cell} />
                 ))}
               </Tr>
             ))}
@@ -174,25 +175,19 @@ const TransactionHistoryTable: React.FC = () => {
           </div>
         )}
 
-        {init && transactions && !transactions.length && (
+        {transactions && !transactions.length && (
           <div className="w-full h-[350px] flex items-center justify-center p-6">
             <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
               <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
                 <Dollar className="absolute size-6" />
               </AbstractIconWrapper>
               <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
-                You have not made a transaction yet
+                You have not received any transactions yet
               </span>
             </div>
           </div>
         )}
       </TableWrapper>
-
-      <TransactionDetailDialog
-        open={Boolean(selectedRow)}
-        transaction={selectedRow}
-        onClose={() => setSelectedRow(null)}
-      />
     </>
   );
 };

@@ -9,6 +9,8 @@ import { Eye, EyeOff, Key } from "../ui/icons";
 import { InView } from "react-intersection-observer";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useRouter } from "next/navigation";
+import { useAtomValue } from "jotai";
+import { phaseAtom } from "../splash-screen/atoms";
 
 const LoginWithPassCodeForm = () => {
   const [error, setError] = useState<string | null>(null);
@@ -18,6 +20,7 @@ const LoginWithPassCodeForm = () => {
 
   const { unlockWithPasscode } = useWalletAuth();
   const router = useRouter();
+  const phase = useAtomValue(phaseAtom);
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -116,10 +119,10 @@ const LoginWithPassCodeForm = () => {
                     className={cn(
                       "w-full h-[60px] text-white font-medium text-lg"
                     )}
-                    disabled={logginIn}
+                    disabled={logginIn || phase !== "ready"}
                     icon={<Icons.ArrowRight />}
                   >
-                    {logginIn ? "Logging in..." : "Login"}
+                    {logginIn ? "Logging in..." : phase !== "ready" ? "Initializing..." : "Login"}
                   </Button>
                 </RevealTextLine>
               </div>

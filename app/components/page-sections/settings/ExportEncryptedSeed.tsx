@@ -1,15 +1,16 @@
 import React, { useState } from "react";
-import { RevealTextLine } from "../../ui";
-import { CardButton } from "../../ui";
+import { AbstractIconWrapper, CardButton, Icons } from "../../ui";
 import { Zip } from "../../ui/icons";
 import { exportWalletAsZip } from "../../../lib/helpers/exportWallet";
+import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface ExportEncryptedSeedProps {
-  inView: boolean;
+  className?: string;
 }
 
 const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
-  inView,
+  className,
 }) => {
   const [isExporting, setIsExporting] = useState(false);
 
@@ -18,11 +19,9 @@ const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
     try {
       const success = await exportWalletAsZip();
       if (success) {
-        // Optional: Show success message
-        console.log("Wallet exported successfully");
-      } else {
-        // Optional: Show error message
-        console.log("Export cancelled or failed");
+        toast.success("Backup file exported successfully", {
+          duration: 3000,
+        });
       }
     } catch (error) {
       console.error("Export failed:", error);
@@ -32,28 +31,46 @@ const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
   };
 
   return (
-    <div className="flex items-center mb-5">
-      <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-        <div className="w-[260px] text-grey-10 text-lg font-medium">
-          Export encrypted seed
-        </div>
-      </RevealTextLine>
-      <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-        <CardButton
-          className="h-[40px] w-fit p-1"
-          onClick={handleExport}
-          disabled={isExporting}
-        >
-          <div className="flex items-center gap-2 text-grey-100 text-base font-medium p-2">
-            <div>
-              <Zip className="size-4" />
+    <div className="w-full  relative bg-[url('/assets/subscription-bg-layer.png')] bg-repeat bg-cover">
+      <div
+        className={cn(
+          "border flex justify-between flex-col relative border-grey-80 overflow-hidden rounded-xl w-full h-full",
+          className
+        )}
+      >
+        <div className="w-full  px-4 py-4 relative">
+          <div className="flex items-start">
+            <AbstractIconWrapper className="min-w-[40px] size-8 sm:size-10 text-primary-40">
+              <Icons.Wallet className="absolute text-primary-40 size-4 sm:size-5" />
+            </AbstractIconWrapper>
+            <div className="flex flex-col ml-4">
+              <span className="text-base leading-[22px] font-medium mb-3 text-grey-60">
+                Encrypted seed
+              </span>
+              <div className="text-[22px] leading-8 mb-1 font-medium text-grey-10">
+                Export your encrypted seed
+              </div>
+              <div className="text-sm text-grey-60 mb-3">
+                Download an encrypted backup for secure storage and recovery.
+              </div>
             </div>
-            <span className="flex items-center">
-              {isExporting ? "Exporting..." : "Download Zip"}
-            </span>
           </div>
-        </CardButton>
-      </RevealTextLine>
+        </div>
+        <div className="relative mx-11 pb-6   bg-grey-100 w-auto">
+          <CardButton
+            className="w-full"
+            onClick={handleExport}
+            disabled={isExporting}
+          >
+            <div className="flex items-center gap-2">
+              <Zip className="size-4" />
+              <span className="flex items-center">
+                {isExporting ? "Downloading..." : "Download"}
+              </span>
+            </div>
+          </CardButton>
+        </div>
+      </div>
     </div>
   );
 };

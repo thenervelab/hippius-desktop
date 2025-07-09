@@ -18,7 +18,6 @@ import { COLORS } from "./constants";
 const timeRangeOptions: Option[] = [
   { value: "week", label: "This Week" },
   { value: "month", label: "This Month" },
-  { value: "quarter", label: "3 Months" },
   { value: "year", label: "This Year" },
 ];
 
@@ -100,7 +99,7 @@ const BalanceTrends: React.FC<{
   return (
     <InView triggerOnce threshold={0.2}>
       {({ ref }) => (
-        <div ref={ref} className={`p-4 w-full ${className || ""}`}>
+        <div ref={ref} className={`py-4 pr-4 pl-8 w-full ${className || ""}`}>
           <div className="border border-grey-80 rounded-lg h-full relative">
             <div className="absolute left-2  z-50">
               <div className="flex ml-8 mt-4 text-grey-70 font-medium items-center gap-x-3 text-xs">
