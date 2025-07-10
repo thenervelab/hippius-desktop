@@ -4,24 +4,23 @@ use std::sync::mpsc::channel;
 use std::thread;
 use crate::constants::substrate::{SYNC_PATH};
 use crate::constants::ipfs::{API_URL};
-use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
+use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse, DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
 use crate::commands::ipfs_commands::{encrypt_and_upload_file};
 use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
 use tauri::async_runtime::block_on;
 use std::fs;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use crate::DB_POOL;
+use std::ffi::OsStr;
 
 pub static SYNC_STATUS: once_cell::sync::Lazy<Arc<Mutex<SyncStatus>>> = once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
 
-const DEFAULT_K: usize = 3;
-const DEFAULT_M: usize = 5;
-const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024;
-
 pub fn start_folder_sync(account_id: String, seed_phrase: String) {
     let sync_path = PathBuf::from(SYNC_PATH);
-    let account_id = account_id.clone(); // Only clone here for thread move
-
-    // Spawn a thread so the watcher doesn't block the main async runtime
+    let watcher_account_id = account_id.clone();
+    let watcher_seed_phrase = seed_phrase.clone();
+    // Watcher thread (existing code)
     thread::spawn(move || {
         let (tx, rx) = channel();
 
@@ -34,8 +33,32 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
 
         for res in rx {
             match res {
-                Ok(event) => handle_event(event, &account_id, &seed_phrase),
+                Ok(event) => handle_event(event, &watcher_account_id, &watcher_seed_phrase),
                 Err(e) => eprintln!("[FolderSync] Watch error: {:?}", e),
+            }
+        }
+    });
+
+    // Periodic checker thread
+    let sync_path_clone = PathBuf::from(SYNC_PATH);
+    let checker_account_id = account_id;
+    let checker_seed_phrase = seed_phrase;
+    thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(120)); // 2 minutes
+
+            println!("[FolderSync] Periodic check: scanning for unsynced files...");
+
+            // Recursively collect all files in sync_path_clone
+            let mut files_to_check = Vec::new();
+            collect_files_recursively(&sync_path_clone, &mut files_to_check);
+
+            for file_path in files_to_check {
+                // Check if file is in profile DB
+                if !is_file_in_profile_db(&file_path, &checker_account_id) {
+                    println!("[FolderSync] File {:?} not in profile DB, uploading...", file_path);
+                    upload_file(&file_path, &checker_account_id, &checker_seed_phrase);
+                }
             }
         }
     });
@@ -150,6 +173,47 @@ fn replace_file_and_db_records(path: &Path, account_id: &str, seed_phrase: &str)
     } else {
         eprintln!("[FolderSync] Failed to delete/unpin old records for '{}', skipping upload.", file_name);
     }
+}
+
+// Helper to recursively collect files
+fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                files.push(path);
+            } else if path.is_dir() {
+                collect_files_recursively(&path, files);
+            }
+        }
+    }
+}
+
+fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
+    // Extract file name as string
+    let file_name = match file_path.file_name().and_then(OsStr::to_str) {
+        Some(name) => name,
+        None => return false,
+    };
+
+    // Get the DB pool
+    let pool = match DB_POOL.get() {
+        Some(pool) => pool,
+        None => return false,
+    };
+
+    // Run the query in a blocking context
+    let result = tauri::async_runtime::block_on(async {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT 1 FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+        )
+        .bind(account_id)
+        .bind(file_name)
+        .fetch_optional(pool)
+        .await
+    });
+
+    matches!(result, Ok(Some(_)))
 }
 
 #[tauri::command]
