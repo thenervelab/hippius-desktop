@@ -63,12 +63,12 @@ pub async fn storage_request_tauri(
     let files_input: Vec<FileInput> = files_input.into_iter().map(FileInput::from).collect();
 
     let tx = custom_runtime::tx().marketplace().storage_request(files_input, miner_ids);
-    let result = api
+    let _result = api
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(format!("storage_request submitted: {:?}", result))
+    Ok(format!("storage_request submitted Successfully !"))
 }
 
 #[tauri::command]
