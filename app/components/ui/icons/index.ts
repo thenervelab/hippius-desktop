@@ -115,3 +115,4 @@ export { default as ShieldTick } from "./ShieldTick";
 export { default as WifiSquare } from "./WifiSquare";
 export { default as TrendUp } from "./TrendUp";
 export { default as TrendDown } from "./TrendDown";
+export { default as MaximizeCircle } from "./MaximizeCircle";

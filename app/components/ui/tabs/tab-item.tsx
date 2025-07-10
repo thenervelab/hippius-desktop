@@ -8,6 +8,8 @@ export interface TabItemProps {
   icon: React.ReactNode;
   isActive: boolean;
   onClick: () => void;
+  width?: string;
+  height?: string;
 }
 
 const TabItem: React.FC<TabItemProps> = ({
@@ -15,12 +17,16 @@ const TabItem: React.FC<TabItemProps> = ({
   icon,
   isActive,
   onClick,
+  width = "min-w-[148px]",
+  height = "h-[36px]",
 }) => {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 px-4 relative transition-all duration-300 cursor-pointer min-w-[148px] h-[36px]",
-        isActive ? "text-primary-50" : "text-grey-70 "
+        "flex items-center gap-2 px-4 relative transition-all duration-300 cursor-pointer",
+        width,
+        height,
+        isActive ? "text-primary-50" : "text-grey-70"
       )}
       onClick={onClick}
     >
@@ -36,7 +42,7 @@ const TabItem: React.FC<TabItemProps> = ({
             className: "size-[18px]",
           })}
         </span>
-        <span className={"font-medium text-[14px]"}>{label}</span>
+        <span className="font-medium text-[14px]">{label}</span>
       </div>
     </div>
   );
