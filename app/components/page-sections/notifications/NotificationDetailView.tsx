@@ -4,6 +4,7 @@ import { IconComponent } from "@/app/lib/types";
 import NotificationType from "./NotificationType";
 import { openLinkByKey } from "@/app/lib/utils/links";
 import { MoreVertical } from "lucide-react";
+import TimeAgo from "react-timeago";
 
 interface NotificationDetailViewProps {
   selectedNotification: {
@@ -11,7 +12,8 @@ interface NotificationDetailViewProps {
     type: string;
     title: string;
     description: string;
-    time: string;
+    time: string | number;
+    timestamp?: number;
     actionText?: string;
     actionLink?: string;
   } | null;
@@ -34,6 +36,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     title,
     description,
     time,
+    timestamp,
     actionText,
     actionLink,
   } = selectedNotification;
@@ -58,7 +61,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
 
         {/* Time */}
         <span className="text-xs text-grey-60 leading-[18px] mb-[7px]">
-          {time}
+          {timestamp ? <TimeAgo date={timestamp} /> : time}
         </span>
 
         {/* Action button */}

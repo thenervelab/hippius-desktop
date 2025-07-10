@@ -1,45 +1,37 @@
 import React from "react";
 import NotificationItem from "./NotificationItem";
-import { IconComponent } from "@/app/lib/types";
-
-interface NotificationData {
-  id: number;
-  icon: IconComponent;
-  type: string;
-  text: string;
-  time: string;
-  buttonText?: string;
-  buttonLink?: string;
-  unread?: boolean;
-  description?: string;
-  title?: string;
-}
+import { UiNotification } from "./types";
 
 interface NotificationListProps {
-  notifications: NotificationData[];
+  notifications: UiNotification[];
   selectedNotificationId: number | null;
   onSelectNotification: (id: number) => void;
+  onReadStatusChange?: (id: number, isUnread: boolean) => void;
 }
 
 const NotificationList: React.FC<NotificationListProps> = ({
   notifications,
   selectedNotificationId,
   onSelectNotification,
+  onReadStatusChange,
 }) => {
   return (
-    <div className="flex flex-col gap-4 w-full border border-grey-80 rounded p-4 max-h-[80.9vh] overflow-y-auto pr-2">
+    <div className="flex flex-col gap-4 w-full border border-grey-80 rounded p-4 max-h-[80.9vh] overflow-y-auto overflow-x-hidden pr-2">
       {notifications.map((notification) => (
         <NotificationItem
           key={notification.id}
+          id={notification.id}
           icon={notification.icon}
           notificationType={notification.type}
-          notificationText={notification.text}
+          notificationText={notification.title}
           notificationTime={notification.time}
+          timestamp={notification.timestamp}
           buttonText={notification.buttonText}
           buttonLink={notification.buttonLink}
           unread={notification.unread}
           selected={notification.id === selectedNotificationId}
           onClick={() => onSelectNotification(notification.id)}
+          onReadStatusChange={onReadStatusChange}
         />
       ))}
     </div>
