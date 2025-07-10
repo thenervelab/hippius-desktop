@@ -1,8 +1,8 @@
 "use client";
 
 import { FC, useEffect, useRef, useMemo, useState } from "react";
-import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
-import { RefreshButton, Icons, P, SearchInput, Button } from "@/components/ui";
+import useUserIpfsFiles, { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { RefreshButton, Icons, P, SearchInput, Button, WaitAMoment } from "@/components/ui";
 import AddButton from "./add-file-button";
 import FilesTable from "./files-table";
 import UploadStatusWidget from "./upload-status-widget";
@@ -15,6 +15,7 @@ import FileDetailsDialog, {
 import InsufficientCreditsDialog from "./insufficient-credits-dialog";
 import SidebarDialog from "@/components/ui/sidebar-dialog";
 import FilterDialogContent from "./filter-dialog-content";
+import IPFSNoEntriesFound from "./files-table/ipfs-no-entries-found";
 
 const Ipfs: FC = () => {
   const {
@@ -33,6 +34,14 @@ const Ipfs: FC = () => {
   // Unpinned files state - moved from FilesTable to parent
   const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
   const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
+
+  // Filter out deleted files
+  const filteredData = useMemo(() => {
+    if (data?.files) {
+      return data.files.filter((file) => !file.deleted);
+    }
+    return [];
+  }, [data?.files]);
 
   // Extract unpinned file details from data
   const unpinnedFileDetails = useMemo(() => {
@@ -77,6 +86,43 @@ const Ipfs: FC = () => {
       console.error("Error in useUserIpfsFiles:", error);
     }
   }, [error]);
+
+  const renderContent = () => {
+    if (error) {
+      return (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded my-4">
+          There was an error loading your files. Please refresh the page or try
+          again later.
+        </div>
+      );
+    }
+
+    if (isLoading) {
+      return <WaitAMoment />;
+    }
+
+    if (!filteredData.length) {
+      return <IPFSNoEntriesFound />;
+    }
+
+    if (viewMode === "list") {
+      return (
+        <FilesTable
+          showUnpinnedDialog={false}
+          files={filteredData}
+        // No need to pass isLoading or error as we're handling that here
+        />
+      );
+    } else {
+      return (
+        <CardView
+          showUnpinnedDialog={false}
+          files={filteredData}
+        // No need to pass isLoading or error as we're handling that here
+        />
+      );
+    }
+  };
 
   return (
     <div className="w-full relative mt-6">
@@ -151,19 +197,8 @@ const Ipfs: FC = () => {
         </div>
       </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
-          There was an error loading your files. Please refresh the page or try
-          again later.
-        </div>
-      )}
-
       <div className="w-full mt-4">
-        {viewMode === "list" ? (
-          <FilesTable showUnpinnedDialog={false} />
-        ) : (
-          <CardView showUnpinnedDialog={false} />
-        )}
+        {renderContent()}
       </div>
 
       {unpinnedFiles && unpinnedFiles.length > 0 && (
@@ -177,7 +212,6 @@ const Ipfs: FC = () => {
       <InsufficientCreditsDialog />
 
       {/* Filter Sidebar Dialog */}
-
       <SidebarDialog
         heading="Filter"
         open={isFilterOpen}
