@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import React, { useEffect, useState } from "react";
@@ -7,6 +8,7 @@ import DashboardTitleWrapper from "../../dashboard-title-wrapper";
 import TabList from "../../ui/tabs/tab-list";
 import NotificationList from "./NotificationList";
 import NotificationDetailView from "./NotificationDetailView";
+import NoNotificationsFound from "./NoNotificationsFound";
 import { UiNotification } from "./types";
 import {
   listNotifications,
@@ -15,13 +17,12 @@ import {
   markUnread,
 } from "@/app/lib/helpers/notificationsDb";
 import { IconComponent } from "@/app/lib/types";
+import { Toaster, toast } from "sonner";
 // match DB → UI
 const iconMap: Record<string, IconComponent> = {
-  Blockchain: Icons.WalletAdd,
   Credits: Icons.WalletAdd,
   Files: Icons.DocumentText,
   Hippius: Icons.HippiusLogo,
-  Subscription: Icons.Document,
 };
 const Notifications = () => {
   const [activeTab, setActiveTab] = useState("All");
@@ -99,15 +100,24 @@ const Notifications = () => {
             : notification
         )
       );
+      toast.success(isUnread ? "Marked as unread" : "Marked as read");
     } catch (error) {
       console.error("Failed to update notification read status:", error);
     }
   };
 
-  // Filter notifications if onlyShowUnread is true
-  const filteredNotifications = onlyShowUnread
-    ? notifications.filter((n) => n.unread)
-    : notifications;
+  // Filter notifications based on active tab and read status
+  const filteredNotifications = notifications
+    .filter(
+      (notification) =>
+        // First filter by tab selection
+        activeTab === "All" || notification.type === activeTab
+    )
+    .filter(
+      (notification) =>
+        // Then filter by read status if needed
+        !onlyShowUnread || notification.unread
+    );
 
   const selectedNotification = selectedNotificationId
     ? filteredNotifications.find(
@@ -117,14 +127,17 @@ const Notifications = () => {
 
   const detailViewData = selectedNotification
     ? {
+        id: selectedNotification.id,
         icon: selectedNotification.icon,
         type: selectedNotification.type,
         title: selectedNotification.title || "",
         description: selectedNotification.description || "",
         time: selectedNotification.time,
+        timestamp: selectedNotification.timestamp,
         actionText: selectedNotification.buttonText,
         actionLink:
           selectedNotification.buttonLink || selectedNotification.buttonLink,
+        unread: selectedNotification.unread,
       }
     : null;
 
@@ -142,7 +155,7 @@ const Notifications = () => {
         }))
       );
 
-      // Optional: Show success notification or toast here
+      toast.success("All notifications marked as read!");
     } catch (error) {
       console.error("Failed to mark all notifications as read:", error);
       // Optional: Show error notification or toast here
@@ -153,6 +166,21 @@ const Notifications = () => {
   const handleNotificationSetting = () => {
     // Implement your logic here
   };
+
+  // Reset selected notification when changing tabs if it's no longer visible
+  useEffect(() => {
+    if (
+      selectedNotificationId &&
+      !filteredNotifications.some((n) => n.id === selectedNotificationId)
+    ) {
+      setSelectedNotificationId(null);
+    }
+  }, [
+    activeTab,
+    onlyShowUnread,
+    filteredNotifications,
+    selectedNotificationId,
+  ]);
 
   return (
     <DashboardTitleWrapper mainText="Notifications">
@@ -183,7 +211,7 @@ const Notifications = () => {
 
         {/* Mark all as Read */}
         <button
-          className="px-4 py-2.5 bg-grey-90 rounded hover:bg-grey-80 text-grey-10 leading-5 text-[14px] font-medium transition-colors"
+          className="px-4 py-2.5 bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
           onClick={handleMarkAllAsRead}
         >
           Mark all as Read
@@ -200,14 +228,24 @@ const Notifications = () => {
       </div>
 
       <div className="mt-4 flex gap-4">
-        <NotificationList
-          notifications={filteredNotifications}
-          selectedNotificationId={selectedNotificationId}
-          onSelectNotification={setSelectedNotificationId}
-          onReadStatusChange={handleReadStatusChange}
-        />
-        <NotificationDetailView selectedNotification={detailViewData} />
+        {filteredNotifications.length === 0 ? (
+          <NoNotificationsFound />
+        ) : (
+          <>
+            <NotificationList
+              notifications={filteredNotifications}
+              selectedNotificationId={selectedNotificationId}
+              onSelectNotification={setSelectedNotificationId}
+              onReadStatusChange={handleReadStatusChange}
+            />
+            <NotificationDetailView
+              onReadStatusChange={handleReadStatusChange}
+              selectedNotification={detailViewData}
+            />
+          </>
+        )}
       </div>
+      <Toaster />
     </DashboardTitleWrapper>
   );
 };

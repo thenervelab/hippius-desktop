@@ -1,6 +1,6 @@
 import React from "react";
 import { cn } from "@/lib/utils";
-import TabItem, { TabItemProps } from "./tab-item";
+import TabItem from "./tab-item";
 
 export interface TabOption {
   tabName: string;

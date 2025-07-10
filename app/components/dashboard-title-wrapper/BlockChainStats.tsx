@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import { Database } from "lucide-react";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import BoxSimple from "../ui/icons/BoxSimple";
-import { Icons, RevealTextLine } from "../ui";
+import { RevealTextLine } from "../ui";
 import { InView } from "react-intersection-observer";
 import { IPFS_NODE_CONFIG } from "@/app/lib/config";
+import CreditNotificationUpdater from "./CreditNotificationUpdater";
 
 const BlockchainStats: React.FC = () => {
   const { isConnected } = usePolkadotApi();
@@ -14,7 +15,9 @@ const BlockchainStats: React.FC = () => {
 
   useEffect(() => {
     const fetchPeers = () => {
-      fetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/swarm/peers`, { method: "POST" })
+      fetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/swarm/peers`, {
+        method: "POST",
+      })
         .then((res) => res.json())
         .then((response) => {
           setPeerCount(response?.Peers.length);
@@ -63,11 +66,7 @@ const BlockchainStats: React.FC = () => {
             <div className="w-0.5 h-4 bg-grey-80 mx-2"></div>
           </RevealTextLine>
 
-          <RevealTextLine reveal={inView} className="delay-500">
-            <span className="text-grey-60 bg-grey-90 p-2.5 rounded">
-              <Icons.Notification className="text-grey-70 size-4" />
-            </span>
-          </RevealTextLine>
+          <CreditNotificationUpdater />
         </div>
       )}
     </InView>

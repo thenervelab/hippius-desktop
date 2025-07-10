@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { IconComponent } from "@/app/lib/types";
 import { AbstractIconWrapper, Icons } from "../../ui";
 import { cn } from "@/app/lib/utils";
@@ -7,10 +7,11 @@ import NotificationType from "./NotificationType";
 import { InView } from "react-intersection-observer";
 import RevealTextLine from "../../ui/reveal-text-line";
 import TimeAgo from "react-timeago";
-import * as Menubar from "@radix-ui/react-menubar";
+import NotificationContextMenu from "./NotificationContextMenu";
+import { useRouter } from "next/navigation";
 
 interface NotificationItemProps {
-  id?: number;  // Add id for the notification
+  id?: number;
   icon: IconComponent;
   notificationType: string;
   notificationText: string;
@@ -21,7 +22,7 @@ interface NotificationItemProps {
   unread?: boolean;
   selected?: boolean;
   onClick?: () => void;
-  onReadStatusChange?: (id: number, isUnread: boolean) => void;  // Add callback for read status change
+  onReadStatusChange?: (id: number, isUnread: boolean) => void;
 }
 
 const NotificationItem: React.FC<NotificationItemProps> = ({
@@ -38,11 +39,21 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   onClick,
   onReadStatusChange,
 }) => {
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const router = useRouter();
+
   const handleLinkClick = (e: React.MouseEvent) => {
     if (buttonLink) {
       e.preventDefault();
       e.stopPropagation();
-      openLinkByKey(buttonLink);
+      if (buttonLink.startsWith("https")) {
+        openLinkByKey(buttonLink);
+      } else {
+        router.push(buttonLink);
+      }
     }
   };
 
@@ -52,102 +63,94 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
     }
   };
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  };
+
   return (
-    <Menubar.Root>
+    <>
       <InView triggerOnce>
         {({ inView, ref }) => (
-          <Menubar.Menu>
-            <Menubar.Trigger asChild>
-              <div
-                ref={ref}
-                className={cn(
-                  "flex items-start gap-3 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer",
-                  selected && "border border-primary-70 bg-primary-100"
-                )}
-                onClick={onClick}
-              >
-                <AbstractIconWrapper className="min-w-[32px] size-8 text-primary-40">
-                  <Icon className="absolute text-primary-40 size-5" />
-                </AbstractIconWrapper>
+          <div
+            ref={ref}
+            className={cn(
+              "flex items-start gap-3 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer",
+              selected && "border border-primary-70 bg-primary-100"
+            )}
+            onClick={onClick}
+            onContextMenu={handleContextMenu}
+          >
+            <AbstractIconWrapper className="min-w-[32px] size-8 text-primary-40">
+              <Icon className="absolute text-primary-40 size-5" />
+            </AbstractIconWrapper>
 
-                <div className="flex justify-between gap-4 w-full">
-                  <div className="flex flex-col">
-                    {/* Type badge  */}
-                    <RevealTextLine rotate reveal={inView} className="delay-200">
-                      <NotificationType type={notificationType} />
-                    </RevealTextLine>
+            <div className="flex justify-between gap-4 w-full">
+              <div className="flex flex-col">
+                {/* Type badge  */}
+                <RevealTextLine rotate reveal={inView} className="delay-200">
+                  <NotificationType type={notificationType} />
+                </RevealTextLine>
 
-                    {/* Notification text */}
-                    <RevealTextLine rotate reveal={inView} className="delay-300">
-                      <p
-                        className="text-sm text-grey-30 leading-5 mb-1 truncate max-w-[300px]"
-                        title={notificationText}
-                      >
-                        {notificationText}
-                      </p>
-                    </RevealTextLine>
+                {/* Notification text */}
+                <RevealTextLine rotate reveal={inView} className="delay-300">
+                  <p
+                    className="text-sm text-grey-30 leading-5 mb-1 truncate max-w-[300px]"
+                    title={notificationText}
+                  >
+                    {notificationText}
+                  </p>
+                </RevealTextLine>
 
-                    {/* Time */}
-                    <RevealTextLine rotate reveal={inView} className="delay-400">
-                      <span className="text-xs text-grey-60 leading-[18px]">
-                        {timestamp ? <TimeAgo date={timestamp} /> : notificationTime}
-                      </span>
-                    </RevealTextLine>
-                  </div>
-
-                  {/* Button & unread symbol */}
-                  <div className="flex gap-3">
-                    {buttonText && buttonLink && (
-                      <RevealTextLine rotate reveal={inView} className="delay-500">
-                        <button
-                          onClick={handleLinkClick}
-                          className="text-sm font-medium rounded py-2 self-start px-3 text-grey-10 flex items-center justify-center bg-grey-90 group-hover:bg-grey-100 whitespace-nowrap"
-                        >
-                          {buttonText}
-                          <Icons.ArrowRight className="size-[14px] text-grey-10 ml-1" />
-                        </button>
-                      </RevealTextLine>
+                {/* Time */}
+                <RevealTextLine rotate reveal={inView} className="delay-400">
+                  <span className="text-xs text-grey-60 leading-[18px]">
+                    {timestamp ? (
+                      <TimeAgo date={timestamp} />
+                    ) : (
+                      notificationTime
                     )}
-
-                    <div
-                      className={cn("flex size-2 bg-primary-50 rounded-full", {
-                        "opacity-0": !unread,
-                        "opacity-100": unread,
-                      })}
-                    ></div>
-                  </div>
-                </div>
+                  </span>
+                </RevealTextLine>
               </div>
-            </Menubar.Trigger>
 
-            <Menubar.Portal>
-              <Menubar.Content
-                className="min-w-[220px] bg-white rounded-md p-1 shadow-md z-50"
-                align="start"
-                sideOffset={5}
-              >
-                <Menubar.Item
-                  className="flex items-center gap-2 p-2 text-sm cursor-pointer hover:bg-grey-90 rounded"
-                  onClick={handleReadStatusToggle}
-                >
-                  {unread ? (
-                    <>
-                      <Icons.Eye className="size-4" />
-                      <span>Mark as read</span>
-                    </>
-                  ) : (
-                    <>
-                      <Icons.EyeOff className="size-4" />
-                      <span>Mark as unread</span>
-                    </>
-                  )}
-                </Menubar.Item>
-              </Menubar.Content>
-            </Menubar.Portal>
-          </Menubar.Menu>
+              {/* Button & unread symbol */}
+              <div className="flex gap-3">
+                {buttonText && buttonLink && (
+                  <RevealTextLine rotate reveal={inView} className="delay-500">
+                    <button
+                      onClick={handleLinkClick}
+                      className="text-sm font-medium rounded py-2 self-start px-3 text-grey-10 flex items-center justify-center bg-grey-90 group-hover:bg-grey-100 whitespace-nowrap"
+                    >
+                      {buttonText}
+                      <Icons.ArrowRight className="size-[14px] text-grey-10 ml-1" />
+                    </button>
+                  </RevealTextLine>
+                )}
+
+                <div
+                  className={cn("flex size-2 bg-primary-50 rounded-full", {
+                    "opacity-0": !unread,
+                    "opacity-100": unread,
+                  })}
+                ></div>
+              </div>
+            </div>
+          </div>
         )}
       </InView>
-    </Menubar.Root>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <NotificationContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          isUnread={unread}
+          onClose={() => setContextMenu(null)}
+          onToggleReadStatus={handleReadStatusToggle}
+        />
+      )}
+    </>
   );
 };
 

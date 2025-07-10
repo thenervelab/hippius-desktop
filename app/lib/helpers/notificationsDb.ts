@@ -80,10 +80,41 @@ export async function isFirstTime(): Promise<boolean> {
   const res = db.exec("SELECT isFirstTime FROM app_state WHERE id = 1");
   return (res[0].values[0][0] as number) === 1;
 }
+// notificationsDb.ts
+export async function creditAlreadyNotified(ts: string): Promise<boolean> {
+  const db = await getDb();
+  const res = db.exec(
+    `SELECT COUNT(*) FROM notifications
+       WHERE notificationType = 'Credits'
+         AND notificationSubtype = ?`,
+    [`MintedAccountCredits-${ts}`]
+  );
+  return (res[0]?.values[0][0] as number) > 0;
+}
+
+export async function lowCreditSubtypeExists(
+  subtype: string
+): Promise<boolean> {
+  const db = await getDb();
+  const res = db.exec(
+    `SELECT COUNT(*) FROM notifications
+       WHERE notificationType = 'Credits'
+         AND notificationSubtype = ?`,
+    [subtype]
+  );
+  return (res[0]?.values[0][0] as number) > 0;
+}
 
 export async function markFirstTimeSeen() {
   const db = await getDb();
   db.run("UPDATE app_state SET isFirstTime = 0 WHERE id = 1");
+  await saveBytes(db.export());
+}
+export async function updateIsAboveHalfCredit(isAboveHalfCredit: boolean) {
+  const db = await getDb();
+  db.run("UPDATE app_state SET isAboveHalfCredit = ? WHERE id = 1", [
+    isAboveHalfCredit ? 1 : 0,
+  ]);
   await saveBytes(db.export());
 }
 export async function listNotifications(limit = 50) {
@@ -121,4 +152,10 @@ export async function unreadCount(): Promise<number> {
   const db = await getDb();
   const res = db.exec(`SELECT COUNT(*) FROM notifications WHERE isUnread = 1`);
   return res[0]?.values[0][0] as number;
+}
+
+export async function isAboveHalfCredit(): Promise<boolean> {
+  const db = await getDb();
+  const res = db.exec("SELECT isAboveHalfCredit FROM app_state WHERE id = 1");
+  return (res[0].values[0][0] as number) === 1;
 }

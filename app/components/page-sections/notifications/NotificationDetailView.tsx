@@ -1,13 +1,18 @@
-import React from "react";
-import { AbstractIconWrapper, Button, CardButton } from "../../ui";
+import React, { useState } from "react";
+import { AbstractIconWrapper, CardButton } from "../../ui";
 import { IconComponent } from "@/app/lib/types";
 import NotificationType from "./NotificationType";
 import { openLinkByKey } from "@/app/lib/utils/links";
 import { MoreVertical } from "lucide-react";
 import TimeAgo from "react-timeago";
+import NotificationContextMenu from "./NotificationContextMenu";
+import RevealTextLine from "../../ui/reveal-text-line";
+import { InView } from "react-intersection-observer";
+import { useRouter } from "next/navigation";
 
 interface NotificationDetailViewProps {
   selectedNotification: {
+    id?: number;
     icon: IconComponent;
     type: string;
     title: string;
@@ -16,12 +21,21 @@ interface NotificationDetailViewProps {
     timestamp?: number;
     actionText?: string;
     actionLink?: string;
+    unread?: boolean;
   } | null;
+  onReadStatusChange?: (id: number, isUnread: boolean) => void;
 }
 
 const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   selectedNotification,
+  onReadStatusChange,
 }) => {
+  const router = useRouter();
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+
   if (!selectedNotification) {
     return (
       <div className="flex items-center justify-center w-full h-[80.9vh] border border-grey-80 rounded p-4">
@@ -31,6 +45,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   }
 
   const {
+    id,
     icon: Icon,
     type,
     title,
@@ -39,47 +54,109 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     timestamp,
     actionText,
     actionLink,
+    unread = false,
   } = selectedNotification;
+
+  const handleMoreClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const button = e.currentTarget;
+    const rect = button.getBoundingClientRect();
+    setContextMenu({
+      x: rect.left,
+      y: rect.bottom,
+    });
+  };
+
+  const handleReadStatusToggle = () => {
+    if (id && onReadStatusChange) {
+      onReadStatusChange(id, !unread);
+    }
+  };
+  const handleLinkClick = (e: React.MouseEvent) => {
+    if (actionLink) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (actionLink.startsWith("http")) {
+        openLinkByKey(actionLink);
+      } else {
+        router.push(actionLink);
+      }
+    }
+  };
+
   return (
-    <div className="w-full flex gap-3 border border-grey-80 rounded p-4 h-[80.9vh]">
-      <AbstractIconWrapper className="min-w-[32px] size-8 text-primary-40">
-        <Icon className="absolute text-primary-40 size-5" />
-      </AbstractIconWrapper>
-      <div className="flex flex-col">
-        {/* Type badge */}
-        <NotificationType type={type} />
+    <InView triggerOnce>
+      {({ inView, ref }) => (
+        <div
+          ref={ref}
+          className="w-full flex gap-3 border border-grey-80 rounded p-4 h-[80.9vh]"
+        >
+          <AbstractIconWrapper className="min-w-[32px] size-8 text-primary-40">
+            <Icon className="absolute text-primary-40 size-5" />
+          </AbstractIconWrapper>
+          <div className="flex flex-col">
+            {/* Type badge */}
+            <RevealTextLine rotate reveal={inView} className="delay-200">
+              <NotificationType type={type} />
+            </RevealTextLine>
 
-        {/* Title */}
-        <h2 className="text-[22px] leading-8 font-semibold text-grey-10 mt-[3px] mb-[7px]">
-          {title}
-        </h2>
+            {/* Title */}
+            <RevealTextLine rotate reveal={inView} className="delay-300">
+              <h2 className="text-[22px] leading-8 font-semibold text-grey-10 mt-[3px] mb-[7px]">
+                {title}
+              </h2>
+            </RevealTextLine>
 
-        {/* Description */}
-        <p className="text-sm text-grey-30 font-medium leading-5 mb-[7px]">
-          {description}
-        </p>
+            {/* Description */}
+            <RevealTextLine rotate reveal={inView} className="delay-400">
+              <p className="text-sm text-grey-30 font-medium leading-5 mb-[7px]">
+                {description}
+              </p>
+            </RevealTextLine>
 
-        {/* Time */}
-        <span className="text-xs text-grey-60 leading-[18px] mb-[7px]">
-          {timestamp ? <TimeAgo date={timestamp} /> : time}
-        </span>
+            {/* Time */}
+            <RevealTextLine rotate reveal={inView} className="delay-500">
+              <span className="text-xs text-grey-60 leading-[18px] mb-[7px]">
+                {timestamp ? <TimeAgo date={timestamp} /> : time}
+              </span>
+            </RevealTextLine>
 
-        {/* Action button */}
-        {actionText && (
-          <CardButton
-            className="max-w-[152px] h-10"
-            onClick={() => openLinkByKey(actionLink || "")}
+            {/* Action button */}
+            {actionText && (
+              <CardButton
+                className="max-w-[152px] h-10"
+                onClick={handleLinkClick}
+              >
+                <span className="flex items-center text-lg font-medium">
+                  {actionText}
+                </span>
+              </CardButton>
+            )}
+          </div>
+          <button
+            className="text-grey-70 p-2 hover:bg-primary-100 rounded self-start"
+            onClick={handleMoreClick}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              handleMoreClick(e);
+            }}
           >
-            <span className="flex items-center text-lg font-medium">
-              {actionText}
-            </span>
-          </CardButton>
-        )}
-      </div>
-      <button className="text-grey-70 p-2 hover:bg-primary-100 rounded self-start">
-        <MoreVertical className="size-4" />
-      </button>
-    </div>
+            <MoreVertical className="size-4" />
+          </button>
+
+          {/* Context Menu */}
+          {contextMenu && (
+            <NotificationContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              isUnread={unread}
+              onClose={() => setContextMenu(null)}
+              onToggleReadStatus={handleReadStatusToggle}
+            />
+          )}
+        </div>
+      )}
+    </InView>
   );
 };
 
