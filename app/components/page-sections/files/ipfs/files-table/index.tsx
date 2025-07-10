@@ -311,37 +311,38 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
       }),
 
       columnHelper.accessor("cid", {
-        header: "CID",
+        header: "DATE UPLOADED",
         enableSorting: true,
-        id: "cid",
+        id: "date_uploaded",
         cell: (cell) => {
           const value = cell.getValue();
-          const cidValue = decodeHexCid(value);
+          const createdAt = cell.row.original.createdAt;
+
+          // Format the timestamp to a readable date
+          const date = new Date(createdAt);
+          const formattedDate = date.toLocaleDateString('en-US', {
+            month: '2-digit',
+            day: '2-digit',
+            year: '2-digit'
+          });
+
+          const formattedTime = date.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+          }).toLowerCase();
+
           return (
-            <div className="px-4 py-[22px] group cursor-pointer">
-              <TableModule.CopyableCell
-                title="Copy CID"
-                toastMessage="CID Copied Successfully!"
-                copyAbleText={cidValue}
-                link={`${HIPPIUS_EXPLORER_CONFIG.baseUrl}/cid-tracker/${cidValue}`}
-                truncationStyle="middle"
-                className="max-sm:[200px] max-w-[400px] h-full"
-                linkClassName="group-hover:underline group-hover:text-primary-50"
-              />
-            </div>
+            <div>{formattedDate}  {formattedTime}</div>
           );
         },
       }),
       columnHelper.display({
-        header: "NODES",
-        id: "miners",
+        header: "LOCATION",
+        id: "location",
         enableSorting: false,
         cell: ({ row: { original } }) => (
-          <MinersCell
-            isAssigned={original.isAssigned}
-            minerIds={original.minerIds}
-            fileDetails={original.fileDetails}
-          />
+          <div>/Hippius</div>
         ),
       }),
       columnHelper.display({
