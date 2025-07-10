@@ -332,7 +332,7 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
         id: "location",
         enableSorting: false,
         cell: ({ row: { original } }) => (
-          <div>/Hippius</div>
+          <div>{original.source}</div>
         ),
       }),
       columnHelper.display({

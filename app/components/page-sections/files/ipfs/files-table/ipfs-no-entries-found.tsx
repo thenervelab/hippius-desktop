@@ -105,7 +105,7 @@ const IPFSNoEntriesFound: React.FC<React.PropsWithChildren<{}>> = ({ children })
                 <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
                     <Graphsheet
                         majorCell={{
-                            lineColor: [221, 227, 245, 0],
+                            lineColor: [221, 227, 245, 1],
                             lineWidth: 1,
                             cellDim: 40,
                         }}
@@ -114,7 +114,7 @@ const IPFSNoEntriesFound: React.FC<React.PropsWithChildren<{}>> = ({ children })
                             lineWidth: 1,
                             cellDim: 40,
                         }}
-                        className="absolute w-full h-full top-0 bottom-0 left-0 duration-300 opacity-40 hidden sm:block"
+                        className="absolute w-full h-full top-0 bottom-0 left-0 duration-300 opacity-10 hidden sm:block"
                     />
                     <div className="bg-large-white-cloud-gradient absolute w-full h-full" />
                     <div className="flex items-center justify-center h-8 w-8 bg-primary-50 rounded-[8px] relative">

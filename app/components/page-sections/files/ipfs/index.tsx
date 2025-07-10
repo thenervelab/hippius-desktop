@@ -88,20 +88,12 @@ const Ipfs: FC = () => {
   }, [error]);
 
   const renderContent = () => {
-    if (error) {
-      return (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded my-4">
-          There was an error loading your files. Please refresh the page or try
-          again later.
-        </div>
-      );
-    }
 
     if (isLoading) {
       return <WaitAMoment />;
     }
 
-    if (!filteredData.length) {
+    if (error || !filteredData.length) {
       return <IPFSNoEntriesFound />;
     }
 
@@ -110,7 +102,6 @@ const Ipfs: FC = () => {
         <FilesTable
           showUnpinnedDialog={false}
           files={filteredData}
-        // No need to pass isLoading or error as we're handling that here
         />
       );
     } else {
@@ -118,7 +109,6 @@ const Ipfs: FC = () => {
         <CardView
           showUnpinnedDialog={false}
           files={filteredData}
-        // No need to pass isLoading or error as we're handling that here
         />
       );
     }
@@ -126,12 +116,7 @@ const Ipfs: FC = () => {
 
   return (
     <div className="w-full relative mt-6">
-      <div className="flex items-center w-full justify-between gap-6 flex-wrap">
-        <div className="flex items-center">
-          <P size="xl" className="animate-fade-in-from-b-0.3 opacity-0">
-            Your Files
-          </P>
-        </div>
+      <div className="flex items-center w-full justify-end gap-6 flex-wrap">
         <div className="flex items-center gap-x-4">
           <RefreshButton
             refetching={isRefetching || isFetching}

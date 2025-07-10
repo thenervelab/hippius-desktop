@@ -24,6 +24,7 @@ export type FormattedUserIpfsFile = {
     deleted?: boolean;
     fileHash?: string | number[] | Uint8Array;
     fileDetails?: FileDetail[];
+    source?: string;
 };
 
 // Add new type for database results
@@ -58,6 +59,7 @@ type UserProfileFile = {
     fileHash: string;
     selectedValidator?: string;
     isAssigned: boolean;
+    source: string;
 };
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
@@ -106,6 +108,7 @@ export const useUserIpfsFiles = () => {
                     size: file.fileSizeInBytes,
                     createdAt: file.lastChargedAt,
                     cid: file.cid || file.fileHash,
+                    source: file.source || "Unknown",
                     minerIds: file.selectedValidator ? [file.selectedValidator] : [],
                     isAssigned: file.isAssigned,
                     lastChargedAt: file.lastChargedAt,
