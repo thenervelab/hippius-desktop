@@ -9,6 +9,12 @@ use hex;
 use serde::Serialize;
 use sqlx::FromRow;
 use sqlx::Row;
+use std::collections::HashSet;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+// Track which accounts are already syncing to prevent duplicates
+static SYNCING_ACCOUNTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 #[derive(Debug, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -34,14 +40,24 @@ fn decode_bounded_vec_to_string(bytes: &[u8]) -> String {
 }
 
 pub fn start_user_profile_sync(account_id: &str) {
+    // Check if this account is already syncing
+    {
+        let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+        if syncing_accounts.contains(account_id) {
+            println!("[UserProfileSync] Account {} is already syncing, skipping.", account_id);
+            return;
+        }
+        syncing_accounts.insert(account_id.to_string());
+    }
+    
     let account_id = account_id.to_string();
     tokio::spawn(async move {
         let client = Client::new();
         loop {
             // sync profile after every 2 mins
             time::sleep(Duration::from_secs(120)).await;
-            // sync profile after every 2 mins
-            time::sleep(Duration::from_secs(120)).await;
+
+            println!("[ProfileSync] Periodic check: scanning for unsynced files...");
 
             let api = match get_substrate_client().await {
                 Ok(api) => api,
@@ -121,8 +137,6 @@ pub fn start_user_profile_sync(account_id: &str) {
                                                 is_assigned, last_charged_at, main_req_hash, 
                                                 selected_validator, total_replicas, block_number, profile_cid, source
                                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                                                selected_validator, total_replicas, block_number, profile_cid, source
-                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                                         )
                                         .bind(&account_id)
                                         .bind(&cid)
@@ -141,7 +155,6 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         .await;
 
                                         match insert_result {
-                                            Ok(_) => {},
                                             Ok(_) => {},
                                             Err(e) => eprintln!("[UserProfileSync] Failed to insert file '{}' for owner '{}': {e}", file_name, account_id),
                                         }
@@ -168,52 +181,6 @@ pub async fn start_user_profile_sync_tauri(account_id: String) {
     println!("starting profile sync {:?}", account_id);
     start_user_profile_sync(&account_id);
 }
-
-#[tauri::command]
-pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>, String> {
-    if let Some(pool) = DB_POOL.get() {
-        // Use dynamic query instead of compile-time checked macro
-        let query = sqlx::query(
-            r#"
-            SELECT owner, cid, file_hash, file_name,
-                   file_size_in_bytes, is_assigned, last_charged_at,
-                   main_req_hash, selected_validator,
-                   total_replicas, block_number, profile_cid, source
-              FROM user_profiles
-             WHERE owner = ?
-            "#
-        )
-        .bind(owner);
-        
-        match query.fetch_all(pool).await {
-            Ok(rows) => {
-                let mut files = Vec::new();
-                for row in rows {
-                    files.push(UserProfileFile {
-                        owner: row.get("owner"),
-                        cid: row.get("cid"),
-                        file_hash: row.get("file_hash"),
-                        file_name: row.get("file_name"),
-                        file_size_in_bytes: row.get("file_size_in_bytes"),
-                        is_assigned: row.get("is_assigned"),
-                        last_charged_at: row.get("last_charged_at"),
-                        main_req_hash: row.get("main_req_hash"),
-                        selected_validator: row.get("selected_validator"),
-                        total_replicas: row.get("total_replicas"),
-                        block_number: row.get("block_number"),
-                        profile_cid: row.get("profile_cid"),
-                        source: row.get("source"),
-                    });
-                }
-                Ok(files)
-            },
-            Err(e) => Err(format!("Database error: {}", e)),
-        }
-    } else {
-        Err("DB not initialized".to_string())
-    }
-}
-
 
 #[tauri::command]
 pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>, String> {

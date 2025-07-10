@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import DetailList from "./DetailList";
 import CreditUsageTrends from "./credit-usage-trends";
@@ -57,16 +56,6 @@ const Home: React.FC = () => {
   // Transform files data to the format expected by the storage chart
   const transformedFilesData = transformFilesToStorageData(filesData || []);
   console.log(transformedFilesData, "transformedFilesData");
-
-  useEffect(() => {
-    if (polkadotAddress) {
-      invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
-      invoke("start_folder_sync_tauri", {
-        accountId: polkadotAddress,
-        seedPhrase: mnemonic,
-      });
-    }
-  }, [polkadotAddress, mnemonic]);
 
   return (
     <div className="flex flex-col mt-6">

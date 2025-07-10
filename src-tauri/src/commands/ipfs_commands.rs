@@ -156,7 +156,7 @@ pub async fn encrypt_and_upload_file(
     .map_err(|e| e.to_string())??;
 
     // Log the metadata CID
-    println!("[encrypt_and_upload_file] Metadata CID: {}", metadata_cid);
+    println!(" Metadata CID: {}", metadata_cid);
 
     // Call request_file_storage and log its returned CID
     let storage_result = request_file_storage(&file_name, &metadata_cid, &api_url, &seed_phrase).await;
