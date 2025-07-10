@@ -54,8 +54,8 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
             // Call the unpin request
             let result = storage_unpin_request_tauri(file_hash_wrapper, seed_phrase.to_string()).await;
             match result {
-                Ok(msg) => println!("[unpin_user_file_by_name] Unpin request result: {}", msg),
-                Err(e) => println!("[unpin_user_file_by_name] Unpin request error: {}", e),
+                Ok(msg) => println!("{}", msg),
+                Err(e) => println!("Unpin request error: {}", e),
             }
         } else {
             println!("[unpin_user_file_by_name] No main_req_hash found for file '{}', nothing to unpin.", file_name);
@@ -71,6 +71,8 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 pub async fn delete_and_unpin_user_file_records_by_name(file_name: &str, seed_phrase: &str) -> Result<u64, String> {
     // Unpin first
     let unpin_result = unpin_user_file_by_name(file_name, seed_phrase).await;
+    // we should wait 6 secs so that this block is passed before doing next tx
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
     if unpin_result.is_err() {
         return Err(format!("Unpin failed for '{}': {}", file_name, unpin_result.unwrap_err()));
     }
