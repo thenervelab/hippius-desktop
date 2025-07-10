@@ -13,8 +13,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use crate::DB_POOL;
 use std::ffi::OsStr;
+use once_cell::sync::Lazy;
 
 pub static SYNC_STATUS: once_cell::sync::Lazy<Arc<Mutex<SyncStatus>>> = once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
+
+pub static UPLOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 pub fn start_folder_sync(account_id: String, seed_phrase: String) {
     let sync_path = PathBuf::from(SYNC_PATH);
@@ -34,7 +37,29 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
         for res in rx {
             match res {
                 Ok(event) => handle_event(event, &watcher_account_id, &watcher_seed_phrase),
+                Ok(event) => handle_event(event, &watcher_account_id, &watcher_seed_phrase),
                 Err(e) => eprintln!("[FolderSync] Watch error: {:?}", e),
+            }
+        }
+    });
+
+    // Periodic checker thread
+    let sync_path_clone = PathBuf::from(SYNC_PATH);
+    let checker_account_id = account_id;
+    let checker_seed_phrase = seed_phrase;
+    thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(120)); // 2 minutes
+
+            println!("[FolderSync] Periodic check: scanning for unsynced files...");
+
+            // Recursively collect all files in sync_path_clone
+            let mut files_to_check = Vec::new();
+            collect_files_recursively(&sync_path_clone, &mut files_to_check);
+
+            for file_path in files_to_check {
+                // Check if file is in profile DB and update source
+                let _ = is_file_in_profile_db(&file_path, &checker_account_id)
             }
         }
     });
@@ -72,9 +97,12 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) {
 
     // Check if file is already in the DB
     if is_file_in_profile_db(path, account_id) {
-        println!("[FolderSync] File {:?} already in profile DB, skipping upload.", path);
+        println!("[FolderSync] File {:?} already in profile, skipping upload.", path);
         return;
     }
+
+    // Acquire the lock before uploading
+    let _guard = UPLOAD_LOCK.lock().unwrap();
 
     // Set sync status for single file
     {
@@ -98,8 +126,8 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) {
     ));
 
     match result {
-        Ok(cid) => println!("[FolderSync] Uploaded file, metadata CID: {}", cid),
-        Err(e) => eprintln!("[FolderSync] Upload failed: {}", e),
+        Ok(cid) => println!("Uploaded file: {}", cid),
+        Err(e) => eprintln!("Upload failed: {}", e),
     }
 
     {
@@ -154,20 +182,6 @@ fn replace_file_and_db_records(path: &Path, account_id: &str, seed_phrase: &str)
         upload_file(path, account_id, seed_phrase);
     } else {
         eprintln!("[FolderSync] Failed to delete/unpin old records for '{}', skipping upload.", file_name);
-    }
-}
-
-// Helper to recursively collect files
-fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                files.push(path);
-            } else if path.is_dir() {
-                collect_files_recursively(&path, files);
-            }
-        }
     }
 }
 

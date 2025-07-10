@@ -160,8 +160,10 @@ pub async fn encrypt_and_upload_file(
 
     // Call request_file_storage and log its returned CID
     let storage_result = request_file_storage(&file_name, &metadata_cid, &api_url, &seed_phrase).await;
+    // we should wait 6 secs so that this block is passed before doing next tx
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;    
     match &storage_result {
-        Ok(cid) => println!("[encrypt_and_upload_file] Storage request CID: {}", cid),
+        Ok(res) => println!("[encrypt_and_upload_file] : {}", res),
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
     }
     storage_result
