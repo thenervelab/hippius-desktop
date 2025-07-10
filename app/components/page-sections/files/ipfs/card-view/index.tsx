@@ -30,13 +30,11 @@ const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
 interface CardViewProps {
     showUnpinnedDialog?: boolean;
+    files: FormattedUserIpfsFile[];
 }
 
-const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true }) => {
+const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
     const router = useRouter();
-    const { data: queryData, isLoading, error } = useUserIpfsFiles();
-
-    const files = useMemo(() => queryData?.files || [], [queryData]);
 
     const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
     const [openDeleteModal, setOpenDeleteModal] = useState(false);
@@ -162,12 +160,8 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true }) => {
     }, []);
 
     const filteredData = useMemo(() => {
-        if (files) {
-            return files.filter((d) => {
-                if (d.deleted) return false;
-                return true;
-            });
-        }
+        // No need to filter deleted files as parent component already did this
+        return files;
     }, [files]);
 
     const {
@@ -292,115 +286,103 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true }) => {
                         </div>
                     )}
 
-                    {/* Card view container */}
+                    {/* Card view container - Remove loading/error handling as it's now in parent */}
                     <div className="duration-300 delay-300">
-                        {error ? (
-                            <div className="w-full h-[800px] flex items-center justify-center p-6">
-                                <p className="text-error-70 font-medium">
-                                    Oops an error occured...
-                                </p>
-                            </div>
-                        ) : isLoading || !data ? (
-                            <WaitAMoment />
-                        ) : !data.length ? (
-                            <IPFSNoEntriesFound />
-                        ) : (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                                {data.map((file) => {
-                                    const { fileFormat } = getFilePartsFromFileName(file.name);
-                                    const fileType = getFileTypeFromExtension(fileFormat || null);
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            {data.map((file) => {
+                                const { fileFormat } = getFilePartsFromFileName(file.name);
+                                const fileType = getFileTypeFromExtension(fileFormat || null);
 
-                                    let cardState: "success" | "pending" | "error" = "success";
-                                    if (file.tempData) {
-                                        cardState = "pending";
-                                        if (Date.now() - file.tempData.uploadTime > TIME_BEFORE_ERR) {
-                                            cardState = "error";
-                                        }
+                                let cardState: "success" | "pending" | "error" = "success";
+                                if (file.tempData) {
+                                    cardState = "pending";
+                                    if (Date.now() - file.tempData.uploadTime > TIME_BEFORE_ERR) {
+                                        cardState = "error";
                                     }
+                                }
 
-                                    const handleCardClick = () => {
-                                        if (fileType === "video" || fileType === "image" || fileType === "pdfDocument") {
-                                            setSelectedFile(file);
-                                        } else if (fileType === "ec") {
-                                            router.push(`/dashboard/storage/ipfs/${decodeHexCid(file.cid)}`);
-                                        }
-                                    };
+                                const handleCardClick = () => {
+                                    if (fileType === "video" || fileType === "image" || fileType === "pdfDocument") {
+                                        setSelectedFile(file);
+                                    } else if (fileType === "ec") {
+                                        router.push(`/dashboard/storage/ipfs/${decodeHexCid(file.cid)}`);
+                                    }
+                                };
 
-                                    return (
-                                        <div
-                                            className="card-container"
-                                            onContextMenu={(e) => handleCardContextMenu(e, file)}
-                                        >
-                                            <FileCard
-                                                key={file.cid}
-                                                file={file}
-                                                state={cardState}
-                                                onClick={handleCardClick}
-                                                actionMenu={
-                                                    <TableActionMenu
-                                                        dropdownTitle="IPFS Options"
-                                                        dropDownMenuTriggerClass="size-5 text-grey-60 flex items-center"
-                                                        items={[
-                                                            {
-                                                                icon: <LinkIcon className="size-4" />,
-                                                                itemTitle: "View on IPFS",
-                                                                onItemClick: () => {
-                                                                    if (fileType === "video") {
-                                                                        setSelectedFile(file);
-                                                                    } else {
-                                                                        window.open(
-                                                                            `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`,
-                                                                            "_blank"
-                                                                        );
-                                                                    }
-                                                                },
+                                return (
+                                    <div
+                                        className="card-container"
+                                        onContextMenu={(e) => handleCardContextMenu(e, file)}
+                                    >
+                                        <FileCard
+                                            key={file.cid}
+                                            file={file}
+                                            state={cardState}
+                                            onClick={handleCardClick}
+                                            actionMenu={
+                                                <TableActionMenu
+                                                    dropdownTitle="IPFS Options"
+                                                    dropDownMenuTriggerClass="size-5 text-grey-60 flex items-center"
+                                                    items={[
+                                                        {
+                                                            icon: <LinkIcon className="size-4" />,
+                                                            itemTitle: "View on IPFS",
+                                                            onItemClick: () => {
+                                                                if (fileType === "video") {
+                                                                    setSelectedFile(file);
+                                                                } else {
+                                                                    window.open(
+                                                                        `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`,
+                                                                        "_blank"
+                                                                    );
+                                                                }
                                                             },
-                                                            {
-                                                                icon: <Copy className="size-4" />,
-                                                                itemTitle: "Copy Link",
-                                                                onItemClick: () => {
-                                                                    navigator.clipboard
-                                                                        .writeText(
-                                                                            `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
-                                                                        )
-                                                                        .then(() => {
-                                                                            toast.success("Copied to clipboard successfully!");
-                                                                        });
-                                                                },
+                                                        },
+                                                        {
+                                                            icon: <Copy className="size-4" />,
+                                                            itemTitle: "Copy Link",
+                                                            onItemClick: () => {
+                                                                navigator.clipboard
+                                                                    .writeText(
+                                                                        `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
+                                                                    )
+                                                                    .then(() => {
+                                                                        toast.success("Copied to clipboard successfully!");
+                                                                    });
                                                             },
-                                                            {
-                                                                icon: <Download className="size-4" />,
-                                                                itemTitle: "Download",
-                                                                onItemClick: async () => {
-                                                                    downloadIpfsFile(file);
-                                                                },
+                                                        },
+                                                        {
+                                                            icon: <Download className="size-4" />,
+                                                            itemTitle: "Download",
+                                                            onItemClick: async () => {
+                                                                downloadIpfsFile(file);
                                                             },
-                                                            ...(file.isAssigned
-                                                                ? [
-                                                                    {
-                                                                        icon: <Trash2 className="size-4" />,
-                                                                        itemTitle: "Delete",
-                                                                        onItemClick: () => {
-                                                                            setFileToDelete(file);
-                                                                            handleDelete();
-                                                                        },
-                                                                        variant: "destructive" as const,
+                                                        },
+                                                        ...(file.isAssigned
+                                                            ? [
+                                                                {
+                                                                    icon: <Trash2 className="size-4" />,
+                                                                    itemTitle: "Delete",
+                                                                    onItemClick: () => {
+                                                                        setFileToDelete(file);
+                                                                        handleDelete();
                                                                     },
-                                                                ]
-                                                                : []),
-                                                        ]}
-                                                    >
-                                                        <Button variant="ghost" size="icon" className="text-grey-70">
-                                                            <MoreVertical className="size-4" />
-                                                        </Button>
-                                                    </TableActionMenu>
-                                                }
-                                            />
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        )}
+                                                                    variant: "destructive" as const,
+                                                                },
+                                                            ]
+                                                            : []),
+                                                    ]}
+                                                >
+                                                    <Button variant="ghost" size="icon" className="text-grey-70">
+                                                        <MoreVertical className="size-4" />
+                                                    </Button>
+                                                </TableActionMenu>
+                                            }
+                                        />
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
                     <div className="my-8">
                         {totalPages > 1 && (

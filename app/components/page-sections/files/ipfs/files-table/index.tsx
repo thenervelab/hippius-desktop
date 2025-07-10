@@ -33,13 +33,11 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePagination } from "@/lib/hooks";
 import NameCell from "./name-cell";
-import MinersCell from "./miners-cell";
 import FileDetailsDialog, { FileDetail } from "./unpin-files-dialog";
 import IPFSNoEntriesFound from "./ipfs-no-entries-found";
 import TableActionMenu from "@/components/ui/alt-table/table-action-menu";
 import DeleteConfirmationDialog from "@/components/delete-confirmation-dialog";
 import { useDeleteIpfsFile } from "@/lib/hooks";
-import { HIPPIUS_EXPLORER_CONFIG } from "@/lib/config";
 import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import VideoDialog, { VideoDialogTrigger } from "./video-dialog";
@@ -56,15 +54,11 @@ const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
 
 interface FilesTableProps {
   showUnpinnedDialog?: boolean;
+  files: FormattedUserIpfsFile[];
 }
 
-const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
-  const { data: queryData, isLoading, error } = useUserIpfsFiles();
-
-  const files = useMemo(() => queryData?.files || [], [queryData]);
-
-  const [fileToDelete, setFileToDelete] =
-    useState<FormattedUserIpfsFile | null>(null);
+const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) => {
+  const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
     cid: fileToDelete?.cid || "",
@@ -190,12 +184,8 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
   }, []);
 
   const filteredData = useMemo(() => {
-    if (files) {
-      return files.filter((d) => {
-        if (d.deleted) return false;
-        return true;
-      });
-    }
+    // No need to filter deleted files as parent component already did this
+    return files;
   }, [files]);
 
   const unpinnedFileDetails = useMemo(() => {
@@ -462,10 +452,6 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
   return (
     <>
       <div className="flex flex-col gap-y-8 relative">
-        {/* <DeleteFileDialog
-        fileToDelete={fileToDelete}
-        setFileToDelete={setFileToDelete}
-      /> */}
         <DeleteConfirmationDialog
           open={openDeleteModal}
           onClose={() => {
@@ -537,72 +523,60 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true }) => {
             </div>
           )}
 
-          {/* Table wrapper */}
+          {/* Table wrapper - Remove loading/error handling as it's now in parent */}
           <TableModule.TableWrapper className="duration-300 delay-300">
-            {error ? (
-              <div className="w-full h-[800px] flex items-center justify-center p-6">
-                <P className="text-error-70 font-medium">
-                  Oops an error occured...
-                </P>
-              </div>
-            ) : isLoading || !data ? (
-              <WaitAMoment />
-            ) : !data.length ? (
-              <IPFSNoEntriesFound />
-            ) : (
-              <TableModule.Table>
-                <TableModule.THead>
-                  {table.getHeaderGroups().map((headerGroup) => (
-                    <TableModule.Tr key={headerGroup.id}>
-                      {headerGroup.headers.map((header) => (
-                        <TableModule.Th key={header.id} header={header} />
+            <TableModule.Table>
+              <TableModule.THead>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableModule.Tr key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableModule.Th key={header.id} header={header} />
+                    ))}
+                  </TableModule.Tr>
+                ))}
+              </TableModule.THead>
+
+              <TableModule.TBody>
+                {table.getRowModel().rows?.map((row) => {
+                  const rowData = row.original;
+                  let rowState: "success" | "pending" | "error" = "success";
+
+                  if (rowData.tempData) {
+                    rowState = "pending";
+                    if (
+                      Date.now() - rowData.tempData.uploadTime >
+                      TIME_BEFORE_ERR
+                    ) {
+                      rowState = "error";
+                    }
+                  }
+                  return (
+                    <TableModule.Tr
+                      rowHover
+                      key={`${row.id}-${rowState}`}
+                      transparent
+                      className={cn(
+                        rowState === "pending" && "animate-pulse",
+                        rowState === "error" && "bg-red-200/20"
+                      )}
+                      onContextMenu={(e) => handleRowContextMenu(e, rowData)}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <TableModule.Td
+                          className={cn(
+                            cell.column.id === "actions" && "w-8",
+                            cell.column.id === "name" && "p-0",
+                            cell.column.id === "cid" && "p-0"
+                          )}
+                          key={cell.id}
+                          cell={cell}
+                        />
                       ))}
                     </TableModule.Tr>
-                  ))}
-                </TableModule.THead>
-
-                <TableModule.TBody>
-                  {table.getRowModel().rows?.map((row) => {
-                    const rowData = row.original;
-                    let rowState: "success" | "pending" | "error" = "success";
-
-                    if (rowData.tempData) {
-                      rowState = "pending";
-                      if (
-                        Date.now() - rowData.tempData.uploadTime >
-                        TIME_BEFORE_ERR
-                      ) {
-                        rowState = "error";
-                      }
-                    }
-                    return (
-                      <TableModule.Tr
-                        rowHover
-                        key={`${row.id}-${rowState}`}
-                        transparent
-                        className={cn(
-                          rowState === "pending" && "animate-pulse",
-                          rowState === "error" && "bg-red-200/20"
-                        )}
-                        onContextMenu={(e) => handleRowContextMenu(e, rowData)}
-                      >
-                        {row.getVisibleCells().map((cell) => (
-                          <TableModule.Td
-                            className={cn(
-                              cell.column.id === "actions" && "w-8",
-                              cell.column.id === "name" && "p-0",
-                              cell.column.id === "cid" && "p-0"
-                            )}
-                            key={cell.id}
-                            cell={cell}
-                          />
-                        ))}
-                      </TableModule.Tr>
-                    );
-                  })}
-                </TableModule.TBody>
-              </TableModule.Table>
-            )}
+                  );
+                })}
+              </TableModule.TBody>
+            </TableModule.Table>
           </TableModule.TableWrapper>
           <div className="my-8">
             {totalPages > 1 && (
