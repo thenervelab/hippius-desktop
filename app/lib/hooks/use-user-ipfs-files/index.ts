@@ -98,11 +98,13 @@ export const useUserIpfsFiles = () => {
                     owner: polkadotAddress,
                 });
 
+                console.log("Fetched files from DB:", dbFiles);
+
                 // Format the data to match what the UI expects
                 const formattedFiles = dbFiles.map((file): FormattedUserIpfsFile => ({
                     name: file.fileName || "Unnamed File",
                     size: file.fileSizeInBytes,
-                    createdAt: file.lastChargedAt - 86400, // Approximate creation date if not available
+                    createdAt: file.lastChargedAt,
                     cid: file.cid || file.fileHash,
                     minerIds: file.selectedValidator ? [file.selectedValidator] : [],
                     isAssigned: file.isAssigned,

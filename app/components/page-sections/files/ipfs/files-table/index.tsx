@@ -323,7 +323,7 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
           }).toLowerCase();
 
           return (
-            <div>{formattedDate}  {formattedTime}</div>
+            <div>{createdAt}</div>
           );
         },
       }),
