@@ -25,6 +25,7 @@ pub struct UserProfileFile {
   pub total_replicas: i64,
   pub block_number: i64,
   pub profile_cid: String,
+  pub source: String, // <-- new field
 }
 
 /// Decode BoundedVec<u8> into a readable string
@@ -37,8 +38,8 @@ pub fn start_user_profile_sync(account_id: &str) {
     tokio::spawn(async move {
         let client = Client::new();
         loop {
-            // sync profile after every 40 secs
-            time::sleep(Duration::from_secs(40)).await;
+            // sync profile after every 2 mins
+            time::sleep(Duration::from_secs(120)).await;
 
             let api = match get_substrate_client().await {
                 Ok(api) => api,
@@ -116,8 +117,8 @@ pub fn start_user_profile_sync(account_id: &str) {
                                             "INSERT INTO user_profiles (
                                                 owner, cid, file_hash, file_name, file_size_in_bytes, 
                                                 is_assigned, last_charged_at, main_req_hash, 
-                                                selected_validator, total_replicas, block_number, profile_cid
-                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                                selected_validator, total_replicas, block_number, profile_cid, source
+                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                                         )
                                         .bind(&account_id)
                                         .bind(&cid)
@@ -131,11 +132,12 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         .bind(total_replicas)
                                         .bind(0)
                                         .bind("")
+                                        .bind("Hippius") // <-- default value for user profile sync
                                         .execute(pool)
                                         .await;
 
                                         match insert_result {
-                                            Ok(_) => println!("[UserProfileSync] Inserted file '{}' for owner '{}'", file_name, account_id),
+                                            Ok(_) => {},
                                             Err(e) => eprintln!("[UserProfileSync] Failed to insert file '{}' for owner '{}': {e}", file_name, account_id),
                                         }
                                     }
@@ -171,7 +173,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
             SELECT owner, cid, file_hash, file_name,
                    file_size_in_bytes, is_assigned, last_charged_at,
                    main_req_hash, selected_validator,
-                   total_replicas, block_number, profile_cid
+                   total_replicas, block_number, profile_cid, source
               FROM user_profiles
              WHERE owner = ?
             "#
@@ -195,6 +197,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                         total_replicas: row.get("total_replicas"),
                         block_number: row.get("block_number"),
                         profile_cid: row.get("profile_cid"),
+                        source: row.get("source"),
                     });
                 }
                 Ok(files)
