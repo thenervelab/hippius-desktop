@@ -164,3 +164,7 @@ fn resolve_icon_path(filename: &str, app_handle: &tauri::AppHandle) -> PathBuf {
     
     prod_path
 }
+
+
+// auto sync issue if file is not in db 
+// is assigned should be true only when profile parsing 

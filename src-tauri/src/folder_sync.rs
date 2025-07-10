@@ -38,30 +38,6 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
             }
         }
     });
-
-    // Periodic checker thread
-    let sync_path_clone = PathBuf::from(SYNC_PATH);
-    let checker_account_id = account_id;
-    let checker_seed_phrase = seed_phrase;
-    thread::spawn(move || {
-        loop {
-            std::thread::sleep(Duration::from_secs(120)); // 2 minutes
-
-            println!("[FolderSync] Periodic check: scanning for unsynced files...");
-
-            // Recursively collect all files in sync_path_clone
-            let mut files_to_check = Vec::new();
-            collect_files_recursively(&sync_path_clone, &mut files_to_check);
-
-            for file_path in files_to_check {
-                // Check if file is in profile DB
-                if !is_file_in_profile_db(&file_path, &checker_account_id) {
-                    println!("[FolderSync] File {:?} not in profile DB, uploading...", file_path);
-                    upload_file(&file_path, &checker_account_id, &checker_seed_phrase);
-                }
-            }
-        }
-    });
 }
 
 fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
@@ -91,6 +67,12 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
 
 fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) {
     if !path.is_file() {
+        return;
+    }
+
+    // Check if file is already in the DB
+    if is_file_in_profile_db(path, account_id) {
+        println!("[FolderSync] File {:?} already in profile DB, skipping upload.", path);
         return;
     }
 
