@@ -106,8 +106,7 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
       window.dispatchEvent(event);
 
       toast.success(
-        `${files.length} ${files.length === 1 ? "file" : "files"
-        } ready to upload`
+        `${files.length} ${files.length === 1 ? "file" : "files"} ready to upload`
       );
     }
   }, []);
@@ -161,7 +160,6 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
       // Reset counter and states
       dragCounterRef.current = 0;
       setIsDragging(false);
-      setAnimateCloud(false);
 
       if (dragTimeoutRef.current) {
         clearTimeout(dragTimeoutRef.current);
@@ -175,13 +173,46 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
     [handleFiles]
   );
 
+  // put this at the top of your FilesTable (or in App.tsx if you prefer)
   useEffect(() => {
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) {
+        e.preventDefault()
+      }
+    }
+    const onDrop = (e: DragEvent) => {
+      if (e.dataTransfer?.files.length) {
+        e.preventDefault()
+      }
+    }
+    window.addEventListener("dragover", onDragOver)
+    window.addEventListener("drop", onDrop)
     return () => {
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
+      window.removeEventListener("dragover", onDragOver)
+      window.removeEventListener("drop", onDrop)
+    }
+  }, [])
+
+  // Global listeners to prevent default file-open behavior on drag-and-drop
+  useEffect(() => {
+    const onWindowDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.items && Array.from(e.dataTransfer.items).some(item => item.kind === "file")) {
+        e.preventDefault();
       }
     };
+    const onWindowDrop = (e: DragEvent) => {
+      if (e.dataTransfer?.items && Array.from(e.dataTransfer.items).some(item => item.kind === "file")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("dragover", onWindowDragOver);
+    window.addEventListener("drop", onWindowDrop);
+    return () => {
+      window.removeEventListener("dragover", onWindowDragOver);
+      window.removeEventListener("drop", onWindowDrop);
+    };
   }, []);
+
 
   const filteredData = useMemo(() => {
     // No need to filter deleted files as parent component already did this
@@ -439,6 +470,7 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
     ? getFileTypeFromExtension(selectedFileFormat)
     : null;
 
+
   // Handle right-click on table row
   const handleRowContextMenu = (e: React.MouseEvent, file: FormattedUserIpfsFile) => {
     e.preventDefault(); // Prevent default browser context menu
@@ -477,8 +509,7 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
               });
           }}
           button={isDeleting ? "Deleting..." : "Delete File"}
-          text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""
-            }`}
+          text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""}`}
           heading="Delete File"
           disableButton={isDeleting}
         />
