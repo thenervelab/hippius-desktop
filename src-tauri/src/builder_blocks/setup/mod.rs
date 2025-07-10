@@ -11,9 +11,8 @@ use std::path::PathBuf;
 
 use crate::{
     commands::node::start_ipfs_daemon,
+    DB_POOL,
 };
-
-static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {

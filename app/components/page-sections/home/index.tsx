@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import DetailList from "./DetailList";
-
 import CreditUsageTrends from "./credit-usage-trends";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
@@ -12,6 +11,8 @@ import { useIpfsBandwidth } from "@/app/lib/hooks/api/useIpfsBandwidth";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
+import UserSyncedFiles from '@/app/components/user-profile-sync'
+
 
 type IpfsInfo = {
   ID?: string;
@@ -89,6 +90,8 @@ const Home: React.FC = () => {
           isLoading={isLoadingFiles}
         />
       </div>
+      {/* Add this line below */}
+      <UserSyncedFiles />
       {/* IPFS Upload/Download Test */}
       {/* <section>
           <h2 className="text-xl font-semibold mb-2">
