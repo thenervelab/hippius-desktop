@@ -6,6 +6,26 @@ use reqwest::Client;
 use crate::DB_POOL;
 use crate::commands::substrate_tx::custom_runtime;
 use hex;
+use serde::Serialize;
+use sqlx::FromRow;
+use sqlx::Row;
+
+#[derive(Debug, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct UserProfileFile {
+  pub owner: String,
+  pub cid: String,
+  pub file_hash: String,
+  pub file_name: String,
+  pub file_size_in_bytes: i64,
+  pub is_assigned: bool,
+  pub last_charged_at: i64,
+  pub main_req_hash: String,
+  pub selected_validator: String,
+  pub total_replicas: i64,
+  pub block_number: i64,
+  pub profile_cid: String,
+}
 
 /// Decode BoundedVec<u8> into a readable string
 fn decode_bounded_vec_to_string(bytes: &[u8]) -> String {
@@ -140,4 +160,48 @@ pub fn start_user_profile_sync(account_id: &str) {
 pub async fn start_user_profile_sync_tauri(account_id: String) {
     println!("starting profile sync {:?}", account_id);
     start_user_profile_sync(&account_id);
+}
+
+#[tauri::command]
+pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>, String> {
+    if let Some(pool) = DB_POOL.get() {
+        // Use dynamic query instead of compile-time checked macro
+        let query = sqlx::query(
+            r#"
+            SELECT owner, cid, file_hash, file_name,
+                   file_size_in_bytes, is_assigned, last_charged_at,
+                   main_req_hash, selected_validator,
+                   total_replicas, block_number, profile_cid
+              FROM user_profiles
+             WHERE owner = ?
+            "#
+        )
+        .bind(owner);
+        
+        match query.fetch_all(pool).await {
+            Ok(rows) => {
+                let mut files = Vec::new();
+                for row in rows {
+                    files.push(UserProfileFile {
+                        owner: row.get("owner"),
+                        cid: row.get("cid"),
+                        file_hash: row.get("file_hash"),
+                        file_name: row.get("file_name"),
+                        file_size_in_bytes: row.get("file_size_in_bytes"),
+                        is_assigned: row.get("is_assigned"),
+                        last_charged_at: row.get("last_charged_at"),
+                        main_req_hash: row.get("main_req_hash"),
+                        selected_validator: row.get("selected_validator"),
+                        total_replicas: row.get("total_replicas"),
+                        block_number: row.get("block_number"),
+                        profile_cid: row.get("profile_cid"),
+                    });
+                }
+                Ok(files)
+            },
+            Err(e) => Err(format!("Database error: {}", e)),
+        }
+    } else {
+        Err("DB not initialized".to_string())
+    }
 }
