@@ -7,7 +7,7 @@ import Ipfs from "./ipfs";
 export default function Files() {
     return (
         <>
-            <DashboardTitleWrapper mainText="">
+            <DashboardTitleWrapper mainText="Your Files">
                 <Ipfs />
             </DashboardTitleWrapper>
         </>
