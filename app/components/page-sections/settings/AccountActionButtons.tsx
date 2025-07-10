@@ -35,15 +35,14 @@ const AccountActionButtons = () => {
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
-        <div ref={ref} className="flex gap-6  w-full">
+        <div ref={ref} className="flex gap-6 w-full">
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <div className="flex gap-0.5 flex-col">
               <div className="text-grey-10 text-lg leading-6 font-medium ">
                 Remove Your Account
               </div>
-              <div className="text-sm text-grey-60 ">
-                This will permanently remove your account. Ensure you have a
-                backup first.
+              <div className="text-sm text-grey-60">
+                Deleting your account will erase all Hippius data stored on this device. Make sure you back up encrypted seed before you proceed.
               </div>
             </div>
           </RevealTextLine>

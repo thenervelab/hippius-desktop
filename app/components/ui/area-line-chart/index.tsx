@@ -105,7 +105,7 @@ function AreaLineChart<T extends object>({
 
           {/* X Axis */}
           <AnimatedAxis
-            key={xAxisProps?.label}
+            key="x-axis"
             labelProps={{
               className: "fill-grey-10 animate-fade-in-0.3",
               fontSize: 12,
@@ -122,7 +122,7 @@ function AreaLineChart<T extends object>({
 
           {/* Y Axis */}
           <AnimatedAxis
-            key={yAxisProps?.label}
+            key="y-axis"
             labelProps={{
               className: "fill-grey-10 animate-fade-in-0.3",
               fontSize: 12,
@@ -159,6 +159,7 @@ function AreaLineChart<T extends object>({
               <g key={dataKey}>
                 {/* Area Series with gradient fill */}
                 <AnimatedAreaSeries
+                  key={dataKey + "-area"}
                   dataKey={dataKey + "-area"}
                   data={data}
                   xAccessor={xAccessor}
@@ -171,6 +172,7 @@ function AreaLineChart<T extends object>({
                 {/* Line Series */}
                 <AnimatedLineSeries
                   dataKey={dataKey}
+                  key={dataKey + "-line"}
                   data={data}
                   xAccessor={xAccessor}
                   yAccessor={yAccessor}

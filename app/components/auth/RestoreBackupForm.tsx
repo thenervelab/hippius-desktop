@@ -190,7 +190,7 @@ const RestoreBackupForm: React.FC = () => {
                         </div>
                       )}
                       <div className="text-grey-60 text-sm font-medium">
-                        Drag and drop or click to add file here to upload
+                        Click to add file here to upload
                       </div>
                       <input
                         ref={fileInput}

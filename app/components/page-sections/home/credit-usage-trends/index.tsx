@@ -240,7 +240,7 @@ const CreditUsageTrends: React.FC<{
                 <div className="flex font-medium flex-col items-center justify-center w-full h-full">
                   <Icons.Search className="size-8 text-primary-60" />
                   <span className="max-w-40 text-center text-grey-40 mt-4">
-                    No Account Data Available
+                    No Credits Data Available
                   </span>
                 </div>
               ) : (
