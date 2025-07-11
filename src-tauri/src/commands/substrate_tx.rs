@@ -5,6 +5,7 @@ use crate::substrate_client::get_substrate_client;
 use serde::Deserialize;
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
+use sp_core::crypto::Ss58Codec;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -55,37 +56,47 @@ pub static SUBSTRATE_TX_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 pub async fn storage_request_tauri(
     files_input: Vec<FileInputWrapper>,
     miner_ids: Option<Vec<Vec<u8>>>,
-    seed_phrase: String
+    seed_phrase: String,
 ) -> Result<String, String> {
-
-    println!("files_input: {:?}", files_input);
-    println!("miner_ids: {:?}", miner_ids);
-
     // Acquire the global lock
     let _lock = SUBSTRATE_TX_LOCK.lock().await;
 
     let pair = sr25519::Pair::from_string(&seed_phrase, None)
-        .map_err(|e| {
-            eprintln!("[storage_request_tauri] Failed to create pair: {:?}", e);
-            format!("Failed to create pair: {:?}", e)
-        })?;
-
+        .map_err(|e| format!("Failed to create signer pair: {e:?}"))?;
     let signer = PairSigner::new(pair);
-    let api = get_substrate_client().await?;
+    let account_id = signer.account_id();
 
-    // Convert Vec<FileInputWrapper> to Vec<FileInput>
-    let files_input: Vec<FileInput> = files_input.into_iter().map(FileInput::from).collect();
-    println!("doing tx ");
+    let api = get_substrate_client()
+        .await
+        .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
+
+    // Convert file inputs
+    let files_input: Vec<FileInput> = files_input
+        .into_iter()
+        .map(FileInput::from)
+        .collect();
+
     let tx = custom_runtime::tx().marketplace().storage_request(files_input, miner_ids);
-    let _result = api
+
+    // Submit tx
+    println!("Submitting storage request transaction");
+    let tx_hash = api
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| e.to_string())?;
-    println!(" tx submited");
+        .map_err(|e| format!("Failed to submit transaction: {}", e))?
+        .wait_for_finalized_success()
+        .await
+        .map_err(|e| format!("Transaction failed: {}", e))?
+        .extrinsic_hash();
+
+    println!("Transaction submitted with hash: {:?}", tx_hash);
     // we should wait 6 secs so that this block is passed before doing next tx
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-    Ok(format!("storage_request submitted Successfully !!!"))
+    
+    Ok(format!(
+        "✅ storage_request submitted successfully!\n📦 Finalized in block: {tx_hash}"
+    ))
 }
 
 #[tauri::command]
@@ -103,15 +114,22 @@ pub async fn storage_unpin_request_tauri(
     let file_hash = FileHash::try_from(file_hash_wrapper)
         .map_err(|e| format!("FileHash conversion error: {}", e))?;
     let tx = custom_runtime::tx().marketplace().storage_unpin_request(file_hash);
-    let result = api
+
+    println!("Submitting unpin request transaction");
+    let tx_hash = api
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
-        .map_err(|e| e.to_string())?;
-    println!("storage_unpin_request submitted: {:?}", result);
+        .map_err(|e| format!("Failed to submit transaction: {}", e))?
+        .wait_for_finalized_success()
+        .await
+        .map_err(|e| format!("Transaction failed: {}", e))?
+        .extrinsic_hash();
+    println!("Transaction submitted with hash: {:?}", tx_hash);
+
     // we should wait 6 secs so that this block is passed before doing next tx
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-    Ok(format!("storage_unpin_request submitted: {:?}", result))
+    Ok(format!("storage_unpin_request submitted: {:?}", tx_hash))
 }
 
 #[tauri::command]

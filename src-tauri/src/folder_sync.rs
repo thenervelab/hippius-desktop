@@ -189,15 +189,14 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                         continue;
                     }
                 }
-                
                 match kind {
                     CreateKind::File => {
                         let sender = UPLOAD_SENDER.get().unwrap();
                         sender.send(UploadJob { account_id: account_id.to_string(), seed_phrase: seed_phrase.to_string(), file_path: file_path_str.clone() }).unwrap();
                     }
                     CreateKind::Folder => {
-                        let sender = UPLOAD_SENDER.get().unwrap();
-                        sender.send(UploadJob { account_id: account_id.to_string(), seed_phrase: seed_phrase.to_string(), file_path: file_path_str.clone() }).unwrap();
+                        // Restore previous logic: upload all files in the folder directly
+                        upload_folder(&path, account_id, seed_phrase);
                     }
                     _ => {}
                 }
@@ -213,7 +212,6 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                         continue;
                     }
                 }
-                
                 // clear db and unpin, then upload
                 replace_file_and_db_records(&path, account_id, seed_phrase);
             }
@@ -319,26 +317,20 @@ fn upload_folder(folder_path: &Path, account_id: &str, seed_phrase: &str) {
     if !folder_path.is_dir() {
         return;
     }
-    // Recursively walk the folder and upload each file
     let walker = fs::read_dir(folder_path);
     if let Ok(entries) = walker {
-        let files: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-        {
-            let mut status = SYNC_STATUS.lock().unwrap();
-            status.total_files = files.len();
-            status.synced_files = 0;
-            status.in_progress = true;
-        }
-        for file in files {
-            let upload_success = upload_file(&file, account_id, seed_phrase);
-            if upload_success {
-            let mut status = SYNC_STATUS.lock().unwrap();
-            status.synced_files += 1;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                // Enqueue each file for upload
+                if let Some(sender) = UPLOAD_SENDER.get() {
+                    sender.send(UploadJob {
+                        account_id: account_id.to_string(),
+                        seed_phrase: seed_phrase.to_string(),
+                        file_path: path.to_string_lossy().to_string(),
+                    }).unwrap();
+                }
             }
-        }
-        {
-            let mut status = SYNC_STATUS.lock().unwrap();
-            status.in_progress = false;
         }
     }
 }

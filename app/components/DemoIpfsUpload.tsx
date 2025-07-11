@@ -3,21 +3,42 @@ import React, { useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 
-/**
- * Calls the Tauri storage_request_tauri command directly.
- * @param files FileList from an <input type="file" />
- * @param seedPhrase The user's mnemonic/seed phrase as a string
- */
+async function uploadToIpfs(file: File): Promise<string> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch("http://localhost:5001/api/v0/add", {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`IPFS upload failed: ${response.statusText}`);
+  }
+
+  // The response is NDJSON (newline-delimited JSON), but for a single file, it's just one line
+  const text = await response.text();
+  // Each line is a JSON object; for a single file, just parse the first line
+  const firstLine = text.split("\n")[0];
+  const data = JSON.parse(firstLine);
+
+  // The CID is in the "Hash" field
+  return data.Hash;
+}
+
 export async function directStorageRequest(files: FileList, seedPhrase: string) {
-  // Prepare the input format expected by the backend
+  // 1. Upload each file to IPFS and get the CID
   const inputs = await Promise.all(
-    Array.from(files).map(async file => ({
-      file_hash: Array.from(new Uint8Array(await file.arrayBuffer())),
-      file_name: Array.from(new TextEncoder().encode(file.name)),
-    }))
+    Array.from(files).map(async file => {
+      const cid = await uploadToIpfs(file); // <-- Upload and get CID
+      return {
+        file_hash: Array.from(new TextEncoder().encode(cid)), // Convert CID to Vec<u8>
+        file_name: Array.from(new TextEncoder().encode(file.name)),
+      };
+    })
   );
 
-  // Call the Tauri command
+  // 2. Call the Tauri command
   return invoke<string>("storage_request_tauri", {
     filesInput: inputs,
     minerIds: null,
