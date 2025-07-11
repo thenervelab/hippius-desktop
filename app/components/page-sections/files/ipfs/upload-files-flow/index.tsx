@@ -1,11 +1,10 @@
+// src/app/components/page-sections/files/ipfs/UploadFilesFlow.tsx
 import { FC, useState, useEffect, useCallback } from "react";
 import useFilesUpload from "@/lib/hooks/useFilesUpload";
 import { Icons, Button } from "@/components/ui";
 import FileDropzone from "./FileDropzone";
 import { useSetAtom } from "jotai";
-import {
-  insufficientCreditsDialogOpenAtom,
-} from "../atoms/query-atoms";
+import { insufficientCreditsDialogOpenAtom } from "../atoms/query-atoms";
 import { Trash2 } from "lucide-react";
 
 interface UploadFilesFlowProps {
@@ -20,7 +19,10 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
 
   const { upload } = useFilesUpload({
     onError(err) {
-      if (err instanceof Error && err.message.includes("Insufficient Credits")) {
+      if (
+        err instanceof Error &&
+        err.message.includes("Insufficient Credits")
+      ) {
         setInsufficient(true);
       }
     },
@@ -37,19 +39,22 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
   }, [initialFiles]);
 
   const appendFiles = useCallback((newFiles: FileList | null) => {
-    if (!newFiles || !newFiles.length) return;
-    setFiles(prev => {
+    if (!newFiles?.length) return;
+    setFiles((prev) => {
       if (!prev) return newFiles;
       const seen = new Set(
-        Array.from(prev).map(f => `${f.name}-${f.size}-${f.lastModified}`)
+        Array.from(prev).map(
+          (f) => `${f.name}-${f.size}-${f.lastModified}`
+        )
       );
       const unique = Array.from(newFiles).filter(
-        f => !seen.has(`${f.name}-${f.size}-${f.lastModified}`)
+        (f) =>
+          !seen.has(`${f.name}-${f.size}-${f.lastModified}`)
       );
       if (!unique.length) return prev;
       const combined = [...Array.from(prev), ...unique];
       const dt = new DataTransfer();
-      combined.forEach(f => dt.items.add(f));
+      combined.forEach((f) => dt.items.add(f));
       if (combined.length > 1) setRevealFiles(true);
       return dt.files;
     });
@@ -61,7 +66,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
       const arr = Array.from(files).filter((_, i) => i !== idx);
       if (!arr.length) return void setFiles(null);
       const dt = new DataTransfer();
-      arr.forEach(f => dt.items.add(f));
+      arr.forEach((f) => dt.items.add(f));
       setFiles(dt.files);
       if (arr.length === 1) setRevealFiles(false);
     },
@@ -87,7 +92,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
             <div className="flex items-center gap-x-2">
               {files.length > 1 && (
                 <button
-                  onClick={() => setRevealFiles(v => !v)}
+                  onClick={() => setRevealFiles((v) => !v)}
                   className="flex items-center gap-x-2 text-sm text-grey-10"
                 >
                   {revealFiles ? "Hide" : "View"}{" "}
@@ -131,9 +136,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
       <div className="mt-4 flex flex-col gap-y-3">
         <Button
           onClick={() => {
-            if (files) {
-              upload(files);
-            }
+            if (files) upload(files);
           }}
           disabled={!files?.length}
           className="w-full"
