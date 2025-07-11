@@ -107,7 +107,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
           notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
           notificationDescription: `🎉 Welcome to Hippius! You’re now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you’re spending. You can check your remaining credits at any time in the Wallets tab, and top up when you need more. When you’re ready, tap Check Out to launch your first storage session.`,
           notificationLinkText: "Check Out",
-          notificationLink: "/files",
+          notificationLink: "/",
         });
       }
     }
