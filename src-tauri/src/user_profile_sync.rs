@@ -131,6 +131,17 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default();
                                         let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
 
+                                        if let Some(pool) = DB_POOL.get() {
+                                            // Delete any unassigned record for this file
+                                            let _ = sqlx::query(
+                                                "DELETE FROM user_profiles WHERE owner = ? AND file_name = ? AND is_assigned = ?"
+                                            )
+                                            .bind(&account_id)
+                                            .bind(file_name)
+                                            .bind(false)
+                                            .execute(pool)
+                                            .await;
+
                                         let insert_result = sqlx::query(
                                             "INSERT INTO user_profiles (
                                                 owner, cid, file_hash, file_name, file_size_in_bytes, 
@@ -157,6 +168,7 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         match insert_result {
                                             Ok(_) => {},
                                             Err(e) => eprintln!("[UserProfileSync] Failed to insert file '{}' for owner '{}': {e}", file_name, account_id),
+                                            }
                                         }
                                     }
                                 } else {

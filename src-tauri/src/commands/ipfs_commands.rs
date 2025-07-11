@@ -18,6 +18,8 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 use crate::DB_POOL;
 use crate::commands::types::*;
+use once_cell::sync::Lazy;
+use tokio::sync::Mutex;
 
 #[tauri::command]
 pub async fn encrypt_and_upload_file(
@@ -30,7 +32,6 @@ pub async fn encrypt_and_upload_file(
     seed_phrase: String
 ) -> Result<String, String> {
     use std::path::Path;
-
     // Extract file name from file_path
     let file_name = Path::new(&file_path)
         .file_name()
@@ -160,8 +161,6 @@ pub async fn encrypt_and_upload_file(
 
     // Call request_file_storage and log its returned CID
     let storage_result = request_file_storage(&file_name, &metadata_cid, &api_url, &seed_phrase).await;
-    // we should wait 6 secs so that this block is passed before doing next tx
-    tokio::time::sleep(std::time::Duration::from_secs(6)).await;    
     match &storage_result {
         Ok(res) => println!("[encrypt_and_upload_file] : {}", res),
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),

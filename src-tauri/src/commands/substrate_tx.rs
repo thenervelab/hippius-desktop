@@ -3,6 +3,8 @@ use sp_core::{Pair, sr25519};
 use crate::substrate_client::get_substrate_client;
 // use crate::constants::substrate::SEED_PHRASE;
 use serde::Deserialize;
+use once_cell::sync::Lazy;
+use tokio::sync::Mutex;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -47,12 +49,17 @@ impl From<FileInputWrapper> for FileInput {
     }
 }
 
+pub static SUBSTRATE_TX_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
 #[tauri::command]
 pub async fn storage_request_tauri(
     files_input: Vec<FileInputWrapper>,
     miner_ids: Option<Vec<Vec<u8>>>,
     seed_phrase: String
 ) -> Result<String, String> {
+    // Acquire the global lock
+    let _lock = SUBSTRATE_TX_LOCK.lock().await;
+
     let pair = sr25519::Pair::from_string(&seed_phrase, None)
         .map_err(|e| format!("Failed to create pair: {:?}", e))?;
 
@@ -68,6 +75,8 @@ pub async fn storage_request_tauri(
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
         .map_err(|e| e.to_string())?;
+    // we should wait 12 secs so that this block is passed before doing next tx
+    tokio::time::sleep(std::time::Duration::from_secs(12)).await;
     Ok(format!("storage_request submitted Successfully !"))
 }
 
@@ -76,6 +85,9 @@ pub async fn storage_unpin_request_tauri(
     file_hash_wrapper: FileHashWrapper,
     seed_phrase: String
 ) -> Result<String, String> {
+    // Acquire the global lock
+    let _lock = SUBSTRATE_TX_LOCK.lock().await;
+
     let pair = sr25519::Pair::from_string(&seed_phrase, None).map_err(|e| e.to_string())?;
     let signer = PairSigner::new(pair);
     let api = get_substrate_client().await?;
@@ -88,6 +100,8 @@ pub async fn storage_unpin_request_tauri(
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
         .map_err(|e| e.to_string())?;
+    // we should wait 12 secs so that this block is passed before doing next tx
+    tokio::time::sleep(std::time::Duration::from_secs(12)).await;
     Ok(format!("storage_unpin_request submitted: {:?}", result))
 }
 

@@ -71,8 +71,6 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 pub async fn delete_and_unpin_user_file_records_by_name(file_name: &str, seed_phrase: &str) -> Result<u64, String> {
     // Unpin first
     let unpin_result = unpin_user_file_by_name(file_name, seed_phrase).await;
-    // we should wait 6 secs so that this block is passed before doing next tx
-    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
     if unpin_result.is_err() {
         return Err(format!("Unpin failed for '{}': {}", file_name, unpin_result.unwrap_err()));
     }

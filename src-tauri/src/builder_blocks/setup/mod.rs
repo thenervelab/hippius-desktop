@@ -147,7 +147,6 @@ fn resolve_icon_path(filename: &str, app_handle: &tauri::AppHandle) -> PathBuf {
     if !prod_path.exists() {
         // Log resource directory contents for debugging
         if let Ok(entries) = std::fs::read_dir(&resource_dir) {
-            println!("[Setup] Resource directory contents:");
             for entry in entries {
                 if let Ok(entry) = entry {
                     println!("[Setup] - {}", entry.path().display());
