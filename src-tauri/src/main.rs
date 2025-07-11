@@ -8,6 +8,7 @@ mod utils;
 mod substrate_client;
 mod user_profile_sync;
 mod folder_sync;
+mod user_storage_requests_sync;
 
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
@@ -20,6 +21,8 @@ use tauri::{Manager, Builder};
 use crate::user_profile_sync::start_user_profile_sync_tauri;
 use crate::user_profile_sync::get_user_synced_files;
 use crate::folder_sync::start_folder_sync_tauri;
+use crate::user_storage_requests_sync::start_user_storage_requests_sync_tauri;
+use crate::user_storage_requests_sync::get_user_storage_requests;
 
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
@@ -44,7 +47,9 @@ fn main() {
             get_sync_path,
             start_user_profile_sync_tauri,
             start_folder_sync_tauri,
-            get_user_synced_files
+            get_user_synced_files,
+            start_user_storage_requests_sync_tauri,
+            get_user_storage_requests
         ]);
 
     let builder = setup(builder);
