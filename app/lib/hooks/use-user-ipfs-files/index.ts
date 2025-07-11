@@ -1,8 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { hexToAsciiString } from "@/lib/utils/hexToAsciiString";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { invoke } from "@tauri-apps/api/core";
 
 export type FileDetail = {
@@ -25,23 +23,6 @@ export type FormattedUserIpfsFile = {
     fileHash?: string | number[] | Uint8Array;
     fileDetails?: FileDetail[];
     source?: string;
-};
-
-// Add new type for database results
-type DbUserFile = {
-    id: number;
-    owner: string;
-    cid: string;
-    file_hash: string;
-    file_name: string;
-    file_size_in_bytes: number;
-    is_assigned: boolean;
-    last_charged_at: number;
-    created_at: number;
-    main_req_hash: string;
-    selected_validator: string;
-    total_replicas: number;
-    profile_cid: string;
 };
 
 // Add new type to include total storage size and length
@@ -87,8 +68,9 @@ export const useUserIpfsFiles = () => {
                 if (api && isConnected) {
                     try {
                         const userTotalStorageResult = await api.query.ipfsPallet.userTotalFilesSize(polkadotAddress);
-                        if (userTotalStorageResult.isSome) {
-                            totalStorageSize = userTotalStorageResult.unwrap().toBigInt();
+                        // Check if Option has a value using .isEmpty (for Option<Balance>), otherwise assign directly
+                        if (userTotalStorageResult && !userTotalStorageResult.isEmpty) {
+                            totalStorageSize = BigInt(userTotalStorageResult.toString());
                         }
                     } catch (error) {
                         console.error("Error fetching total storage size:", error);

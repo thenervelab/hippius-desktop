@@ -26,9 +26,7 @@ import { cn } from "@/lib/utils";
 const HIPPIUS_DROP_EVENT = 'hippius:file-drop';
 const HIPPIUS_OPEN_MODAL_EVENT = 'hippius:open-modal';
 
-const FILE_ADD_STATES = ["upload-file", "upload-csv", "add-cid"] as const;
-
-type FileAddStates = (typeof FILE_ADD_STATES)[number];
+type FileAddStates = "upload-file" | "upload-csv" | "add-cid";
 
 // Move this outside component to prevent recreation
 const getDialogTitle = (addState: FileAddStates | null) => {
@@ -190,7 +188,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(({ className }, ref) 
   return (
     <>
       <CardButton
-        className="h-[40px] w-fit p-1"
+        className={cn("h-[40px] w-fit p-1", className)}
         onClick={() => {
           setCurrentStep('options');
           setDroppedFiles(null);

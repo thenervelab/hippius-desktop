@@ -12,12 +12,11 @@ import {
   useReactTable,
   getSortedRowModel,
 } from "@tanstack/react-table";
-import useUserIpfsFiles, {
+import {
   FormattedUserIpfsFile,
 } from "@/lib/hooks/use-user-ipfs-files";
 import * as TableModule from "@/components/ui/alt-table";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
-import { WaitAMoment, P } from "@/components/ui";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,17 +31,16 @@ import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePagination } from "@/lib/hooks";
-import NameCell from "./name-cell";
-import FileDetailsDialog, { FileDetail } from "./unpin-files-dialog";
-import IPFSNoEntriesFound from "./ipfs-no-entries-found";
+import NameCell from "./NameCell";
+import FileDetailsDialog, { FileDetail } from "./UnpinFilesDialog";
 import TableActionMenu from "@/components/ui/alt-table/table-action-menu";
 import DeleteConfirmationDialog from "@/components/delete-confirmation-dialog";
 import { useDeleteIpfsFile } from "@/lib/hooks";
 import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
-import VideoDialog, { VideoDialogTrigger } from "./video-dialog";
-import ImageDialog, { ImageDialogTrigger } from "./image-dialog";
-import PdfDialog, { PdfDialogTrigger } from "./pdf-dialog";
+import VideoDialog, { VideoDialogTrigger } from "./VideoDialog";
+import ImageDialog, { ImageDialogTrigger } from "./ImageDialog";
+import PdfDialog, { PdfDialogTrigger } from "./PdfDialog";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import FileContextMenu from "@/components/ui/context-menu/file-context-menu";
 
@@ -182,7 +180,7 @@ const FilesTable: FC<FilesTableProps> = ({
       setUnpinnedFiles(null);
       setIsUnpinnedOpen(false);
     }
-  }, [unpinnedDetails.length, showUnpinnedDialog]);
+  }, [unpinnedDetails, showUnpinnedDialog]);
 
   const columns = useMemo(
     () => [
@@ -271,22 +269,22 @@ const FilesTable: FC<FilesTableProps> = ({
         enableSorting: true,
         id: "date_uploaded",
         cell: (cell) => {
-          const value = cell.getValue();
+          // const value = cell.getValue();
           const createdAt = cell.row.original.createdAt;
 
           // Format the timestamp to a readable date
-          const date = new Date(createdAt);
-          const formattedDate = date.toLocaleDateString('en-US', {
-            month: '2-digit',
-            day: '2-digit',
-            year: '2-digit'
-          });
+          // const date = new Date(createdAt);
+          // const formattedDate = date.toLocaleDateString('en-US', {
+          //   month: '2-digit',
+          //   day: '2-digit',
+          //   year: '2-digit'
+          // });
 
-          const formattedTime = date.toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
-          }).toLowerCase();
+          // const formattedTime = date.toLocaleTimeString('en-US', {
+          //   hour: 'numeric',
+          //   minute: '2-digit',
+          //   hour12: true
+          // }).toLowerCase();
 
           return (
             <div>{createdAt}</div>
@@ -308,7 +306,6 @@ const FilesTable: FC<FilesTableProps> = ({
         maxSize: 40,
         cell: ({ cell }) => {
           const { cid, name } = cell.row.original;
-          const { fileFormat } = getFilePartsFromFileName(name);
 
           return (
             <div className="flex justify-center items-center w-10">
@@ -369,7 +366,7 @@ const FilesTable: FC<FilesTableProps> = ({
                     : []),
                 ]}
               >
-                <Button variant="ghost" size="icon" className="h-8 w-8 p-0 text-grey-70">
+                <Button variant="ghost" size="md" className="h-8 w-8 p-0 text-grey-70">
                   <MoreVertical className="size-4" />
                 </Button>
               </TableActionMenu>
@@ -553,7 +550,7 @@ const FilesTable: FC<FilesTableProps> = ({
 
         {showUnpinnedDialog && unpinnedFiles && unpinnedFiles.length > 0 && (
           <FileDetailsDialog
-            open={!isLoading && isUnpinnedOpen}
+            open={isUnpinnedOpen}
             unpinnedFiles={unpinnedFiles}
           />
         )}

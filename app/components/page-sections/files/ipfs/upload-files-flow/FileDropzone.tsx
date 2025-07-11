@@ -14,7 +14,6 @@ import { cn } from "@/lib/utils";
 import { Icons, AbstractIconWrapper, P } from "@/components/ui";
 
 const FileDropzone: FC<{
-  // eslint-disable-next-line no-unused-vars
   setFiles: (files: FileList | null) => void;
 }> = ({ setFiles }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -77,7 +76,7 @@ const FileDropzone: FC<{
         )}
       >
         <div className="flex flex-col items-center">
-          <AbstractIconWrapper transparent className="size-8">
+          <AbstractIconWrapper className="size-8">
             <Icons.Box className="relative" />
           </AbstractIconWrapper>
 

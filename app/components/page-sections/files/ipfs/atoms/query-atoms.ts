@@ -58,14 +58,14 @@ export const uploadFilesToIpfsAtom = atomWithMutation(() => {
 
         const data = response.data;
 
-        const parsed: any = (data as string)
+        const parsed: unknown[] = (data as string)
           .split("\n")
           .filter((line) => line.trim())
           .map((line) => JSON.parse(line));
 
         return {
           filename: file.name,
-          cid: parsed[0].Hash as string,
+          cid: (parsed[0] as { Hash: string }).Hash,
         };
       };
 
@@ -93,7 +93,7 @@ export const submitFilesToBlockchainAtom = atomWithMutation(() => {
     mutationKey: ["submit-files-to-blockchain"],
     mutationFn: async (args: {
       infoFile: { filename: string; cid: string };
-      polkadotPair: any;
+      polkadotPair: import('@polkadot/keyring/types').KeyringPair;
       api: ApiPromise;
     }) => {
       const { infoFile, api, polkadotPair } = args;
@@ -124,6 +124,7 @@ export const submitFilesToBlockchainAtom = atomWithMutation(() => {
                   : "unknown";
 
               // Check for events
+              /* eslint-disable @typescript-eslint/no-explicit-any */
               events.forEach(({ event }: { event: any }) => {
                 if (api.events.system.ExtrinsicSuccess.is(event)) {
                   resolve(blockHash);
@@ -192,7 +193,7 @@ export const uploadFileCIDsToIpfsAtom = atomWithMutation(() => {
         props.onUploadProgress?.(100);
 
         const data = response.data;
-
+        /* eslint-disable @typescript-eslint/no-explicit-any */
         const parsed: any = (data as string)
           .split("\n")
           .filter((line) => line.trim())

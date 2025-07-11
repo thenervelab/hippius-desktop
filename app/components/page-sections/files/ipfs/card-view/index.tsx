@@ -1,5 +1,5 @@
 import React, { FC, useState, useEffect, useMemo, useCallback, useRef } from "react";
-import useUserIpfsFiles, { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { Button } from "@/components/ui/button";
 import { MoreVertical, LinkIcon, Copy, Download, Trash2, HardDrive } from "lucide-react";
 import { toast } from "sonner";
@@ -9,19 +9,17 @@ import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
-import { WaitAMoment } from "@/components/ui";
-import IPFSNoEntriesFound from "../files-table/ipfs-no-entries-found";
-import FileCard from "./file-card";
+import FileCard from "./FileCard";
 import TableActionMenu from "@/components/ui/alt-table/table-action-menu";
 import DeleteConfirmationDialog from "@/components/delete-confirmation-dialog";
 import { useDeleteIpfsFile } from "@/lib/hooks";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import VideoDialog from "../files-table/video-dialog";
-import ImageDialog from "../files-table/image-dialog";
-import PdfDialog from "../files-table/pdf-dialog";
+import VideoDialog from "../files-table/VideoDialog";
+import ImageDialog from "../files-table/ImageDialog";
+import PdfDialog from "../files-table/PdfDialog";
 import * as TableModule from "@/components/ui/alt-table";
 import { useRouter } from 'next/navigation';
-import FileDetailsDialog, { FileDetail } from "../files-table/unpin-files-dialog";
+import FileDetailsDialog, { FileDetail } from "../files-table/UnpinFilesDialog";
 import FileContextMenu from "@/components/ui/context-menu/file-context-menu";
 
 // Custom event names for file drop communication
@@ -204,7 +202,7 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
             setUnpinnedFiles(null);
             setIsUnpinnedOpen(false);
         }
-    }, [unpinnedFileDetails.length, showUnpinnedDialog]);
+    }, [unpinnedFileDetails, showUnpinnedDialog]);
 
     const handleCardContextMenu = (e: React.MouseEvent, file: FormattedUserIpfsFile) => {
         e.preventDefault();
@@ -289,7 +287,7 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                     {/* Card view container - Remove loading/error handling as it's now in parent */}
                     <div className="duration-300 delay-300">
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                            {data.map((file) => {
+                            {data.map((file, index) => {
                                 const { fileFormat } = getFilePartsFromFileName(file.name);
                                 const fileType = getFileTypeFromExtension(fileFormat || null);
 
@@ -311,6 +309,7 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
 
                                 return (
                                     <div
+                                        key={index}
                                         className="card-container"
                                         onContextMenu={(e) => handleCardContextMenu(e, file)}
                                     >
@@ -373,7 +372,7 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                                                             : []),
                                                     ]}
                                                 >
-                                                    <Button variant="ghost" size="icon" className="text-grey-70">
+                                                    <Button variant="ghost" size="md" className="text-grey-70">
                                                         <MoreVertical className="size-4" />
                                                     </Button>
                                                 </TableActionMenu>
@@ -397,7 +396,7 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
 
                 {showUnpinnedDialog && unpinnedFiles && unpinnedFiles.length > 0 && (
                     <FileDetailsDialog
-                        open={!isLoading && isUnpinnedOpen}
+                        open={isUnpinnedOpen}
                         unpinnedFiles={unpinnedFiles}
                     />
                 )}

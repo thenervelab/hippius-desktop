@@ -1,21 +1,20 @@
 "use client";
 
 import { FC, useEffect, useRef, useMemo, useState } from "react";
-import useUserIpfsFiles, { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
-import { RefreshButton, Icons, P, SearchInput, Button, WaitAMoment } from "@/components/ui";
-import AddButton from "./add-file-button";
+import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
+import { RefreshButton, Icons, SearchInput, WaitAMoment } from "@/components/ui";
+import AddButton from "./AddFileButton";
 import FilesTable from "./files-table";
-import UploadStatusWidget from "./upload-status-widget";
 import CardView from "./card-view";
 import { cn } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import FileDetailsDialog, {
   FileDetail,
-} from "./files-table/unpin-files-dialog";
-import InsufficientCreditsDialog from "./insufficient-credits-dialog";
+} from "./files-table/UnpinFilesDialog";
+import InsufficientCreditsDialog from "./InsufficientCreditsDialog";
 import SidebarDialog from "@/components/ui/sidebar-dialog";
 import FilterDialogContent from "./filter-dialog-content";
-import IPFSNoEntriesFound from "./files-table/ipfs-no-entries-found";
+import IPFSNoEntriesFound from "./files-table/IpfsNoEntriesFound";
 
 const Ipfs: FC = () => {
   const {
@@ -28,7 +27,7 @@ const Ipfs: FC = () => {
   } = useUserIpfsFiles();
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
-  const [filterMode, setFilterMode] = useState<"all" | "date" | "type">("all");
+  const [filterMode] = useState<"all" | "date" | "type">("all");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
 
   // Unpinned files state - moved from FilesTable to parent
@@ -64,7 +63,7 @@ const Ipfs: FC = () => {
       setUnpinnedFiles(null);
       setIsUnpinnedOpen(false);
     }
-  }, [unpinnedFileDetails.length]);
+  }, [unpinnedFileDetails]);
 
   // Load the table once on mount and set up interval refresh
   useEffect(() => {
@@ -193,7 +192,6 @@ const Ipfs: FC = () => {
         />
       )}
 
-      <UploadStatusWidget />
       <InsufficientCreditsDialog />
 
       {/* Filter Sidebar Dialog */}

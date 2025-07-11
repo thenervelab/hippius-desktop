@@ -1,4 +1,3 @@
-/* eslint-disable @next/next/no-img-element */
 import React, { ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";

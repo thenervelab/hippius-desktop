@@ -98,7 +98,7 @@ const FileDropzone: FC<{
         )}
       >
         <div className="flex flex-col items-center">
-          <AbstractIconWrapper transparent className="size-8">
+          <AbstractIconWrapper className="size-8">
             <Icons.BoxSimple2 className="relative" />
           </AbstractIconWrapper>
 

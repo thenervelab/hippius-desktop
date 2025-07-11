@@ -4,7 +4,7 @@ import * as React from "react";
 import * as SliderPrimitive from "@radix-ui/react-slider";
 import * as Menubar from "@radix-ui/react-menubar";
 import { cn } from "@/lib/utils";
-import { UnitMenuItem } from "./unit-menu-item";
+import { UnitMenuItem } from "./UnitMenuItem";
 
 // Unit conversion constants
 const UNITS = {
