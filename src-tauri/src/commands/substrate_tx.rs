@@ -12,13 +12,13 @@ use custom_runtime::runtime_types::ipfs_pallet::types::FileInput;
 use custom_runtime::marketplace::calls::types::storage_unpin_request::FileHash;
 use custom_runtime::runtime_types::bounded_collections::bounded_vec::BoundedVec;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct FileInputWrapper {
     pub file_hash: Vec<u8>,
     pub file_name: Vec<u8>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct FileHashWrapper {
     pub file_hash: Vec<u8>,
 }
@@ -57,6 +57,11 @@ pub async fn storage_request_tauri(
     miner_ids: Option<Vec<Vec<u8>>>,
     seed_phrase: String
 ) -> Result<String, String> {
+
+    println!("files_input: {:?}", files_input);
+    println!("miner_ids: {:?}", miner_ids);
+    println!("seed_phrase: {}", seed_phrase);
+
     // Acquire the global lock
     let _lock = SUBSTRATE_TX_LOCK.lock().await;
 
@@ -77,7 +82,7 @@ pub async fn storage_request_tauri(
         .map_err(|e| e.to_string())?;
     // we should wait 12 secs so that this block is passed before doing next tx
     tokio::time::sleep(std::time::Duration::from_secs(12)).await;
-    Ok(format!("storage_request submitted Successfully !"))
+    Ok(format!("storage_request submitted Successfully !!!"))
 }
 
 #[tauri::command]

@@ -1,4 +1,4 @@
-// src/lib/hooks/useUploadIpfsFileAndSubmitToBlockchain.ts
+// src/lib/hooks/useFilesUpload.ts
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "../use-user-credits";
@@ -12,7 +12,7 @@ export type UploadFilesHandlers = {
     onError?: (err: Error | unknown) => void;
 };
 
-export function useUploadIpfsFileAndSubmitToBlockchain(
+export function useFilesUpload(
     handlers: UploadFilesHandlers
 ) {
     const { onSuccess, onError } = handlers;
@@ -55,6 +55,7 @@ export function useUploadIpfsFileAndSubmitToBlockchain(
                 }))
             );
 
+            console.log("inputs:", inputs);
             // 3. Invoke & report 75%
             setRequestState("submitting");
             setProgress(75);
@@ -79,4 +80,4 @@ export function useUploadIpfsFileAndSubmitToBlockchain(
     return { upload, requestState };
 }
 
-export default useUploadIpfsFileAndSubmitToBlockchain;
+export default useFilesUpload;

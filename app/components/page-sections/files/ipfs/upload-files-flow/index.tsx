@@ -1,5 +1,5 @@
 import { FC, useState, useEffect, useCallback } from "react";
-import { useUploadIpfsFileAndSubmitToBlockchain } from "@/lib/hooks";
+import { useFilesUpload } from "@/lib/hooks";
 
 import { Icons, Button } from "@/components/ui";
 import FileDropzone from "./FileDropzone";
@@ -91,7 +91,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
     }
   }, [files]);
 
-  const { upload } = useUploadIpfsFileAndSubmitToBlockchain({
+  const { upload } = useFilesUpload({
     onError(error) {
       if (error instanceof Error && error.message.includes("Insufficient Credits")) {
         setInsufficientCreditsDialogOpen(true);
