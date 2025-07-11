@@ -52,9 +52,11 @@ pub fn start_user_profile_sync(account_id: &str) {
     
     let account_id = account_id.to_string();
     tokio::spawn(async move {
+        
         let client = Client::new();
         loop {
-            // (1) Do the sync work immediately on startup
+            // (2) Wait 2 minutes before the next sync
+            time::sleep(Duration::from_secs(120)).await;
             println!("[ProfileSync] Periodic check: scanning for unsynced files...");
 
             let api = match get_substrate_client().await {
@@ -182,9 +184,6 @@ pub fn start_user_profile_sync(account_id: &str) {
                     eprintln!("[UserProfileSync] Failed to fetch from IPFS: {e}");
                 }
             }
-
-            // (2) Wait 2 minutes before the next sync
-            time::sleep(Duration::from_secs(120)).await;
         }
     });
 }

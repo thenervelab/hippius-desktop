@@ -11,6 +11,7 @@ import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
 import UserSyncedFiles from '@/app/components/user-profile-sync'
+import DirectStorageRequestDemo from '@/app/components/DemoIpfsUpload';
 
 
 type IpfsInfo = {
@@ -69,18 +70,11 @@ const Home: React.FC = () => {
       {/* Stats Cards */}
       <DetailList ipfsInfo={ipfsInfo} upload={upload} download={download} />
 
-      <div className="flex gap-4 mt-6 w-full h-full">
-        <CreditUsageTrends
-          chartData={transformedCreditsData}
-          isLoading={isLoadingCredits}
-        />
-        <StorageUsageTrends
-          chartData={transformedFilesData}
-          isLoading={isLoadingFiles}
-        />
+      <div className="flex flex-col gap-4 mt-6 w-full h-full">
+        {mnemonic && <DirectStorageRequestDemo seedPhrase={mnemonic} />}
+        <UserSyncedFiles />
       </div>
       {/* Add this line below */}
-      <UserSyncedFiles />
       {/* IPFS Upload/Download Test */}
       {/* <section>
           <h2 className="text-xl font-semibold mb-2">
