@@ -163,7 +163,7 @@ pub fn start_user_storage_requests_sync(account_id: &str) {
                     .await;
 
                     match insert_result {
-                        Ok(_) => println!("[StorageRequestsSync] Inserted storage request for file: {}", file_name),
+                        Ok(_) => {},
                         Err(e) => eprintln!("[StorageRequestsSync] Failed to insert storage request '{}': {e}", file_name),
                     }
                 }
