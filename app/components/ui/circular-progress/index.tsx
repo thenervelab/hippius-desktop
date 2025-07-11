@@ -15,7 +15,6 @@ const CircularProgress: React.FC<{
     >
         <div className="h-full w-full rounded-full overflow-hidden bg-primary-100 p-1">
             <AbstractIconWrapper
-                transparent
                 className="h-full w-full rounded-full p-0"
             >
                 {children}

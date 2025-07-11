@@ -1,3 +1,4 @@
+// src/app/components/page-sections/files/ipfs/files-table/VideoPlayer.tsx
 import React, { useEffect, useRef, useState } from "react";
 import { MediaPlayer, MediaProvider } from "@vidstack/react";
 import "@vidstack/react/player/styles/default/theme.css";
@@ -8,7 +9,7 @@ import {
 } from "@vidstack/react/player/layouts/default";
 import { SUPPORTED_VIDEO_MIME_TYPES } from "@/lib/constants/supportedMimeTypes";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
-import VideoPlayerError from "./video-player-error";
+import VideoPlayerError from "./VideoPlayerError";
 
 interface VideoPlayerProps {
   videoUrl: string;
@@ -23,8 +24,8 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
 }) => {
   const [error, setError] = useState<string>("");
   const [reloadKey, setReloadKey] = useState<number>(0);
-  const timeoutRef = useRef<number>();
-  const LOAD_TIMEOUT = 120_000; // 120s
+  const timeoutRef = useRef<number | undefined>(undefined);
+  const LOAD_TIMEOUT = 120_000;
 
   const ua =
     typeof navigator !== "undefined" ? navigator.userAgent.toLowerCase() : "";
@@ -46,16 +47,13 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     setError("");
     clearLoadTimer();
-
     if (isFirefox && ["mkv", "3gp"].includes(fileFormat)) {
       setError("This video format isn't supported in Firefox");
       return;
     }
-
     timeoutRef.current = window.setTimeout(() => {
       setError("Video is taking too long to load");
     }, LOAD_TIMEOUT);
-
     return clearLoadTimer;
   }, [videoUrl, fileFormat, isFirefox, reloadKey]);
 
@@ -67,7 +65,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       autoPlay
       src={{
         src: videoUrl,
-        type: SUPPORTED_VIDEO_MIME_TYPES[fileFormat] as any,
+        type: SUPPORTED_VIDEO_MIME_TYPES[fileFormat] as import("@vidstack/react").VideoMimeType,
       }}
       playsInline
       onLoadedData={clearLoadTimer}
@@ -78,11 +76,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     >
       <MediaProvider />
       {error ? (
-        <VideoPlayerError
-          message={error}
-          file={file}
-          onReload={handleReload}
-        />
+        <VideoPlayerError message={error} file={file} onReload={handleReload} />
       ) : (
         <DefaultVideoLayout icons={defaultLayoutIcons} />
       )}

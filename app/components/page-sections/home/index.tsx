@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import DetailList from "./DetailList";
+
 import CreditUsageTrends from "./credit-usage-trends";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
@@ -10,9 +12,6 @@ import { useIpfsBandwidth } from "@/app/lib/hooks/api/useIpfsBandwidth";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
-import UserSyncedFiles from '@/app/components/user-profile-sync'
-import DirectStorageRequestDemo from '@/app/components/DemoIpfsUpload';
-
 
 type IpfsInfo = {
   ID?: string;
@@ -58,6 +57,16 @@ const Home: React.FC = () => {
   const transformedFilesData = transformFilesToStorageData(filesData || []);
   console.log(transformedFilesData, "transformedFilesData");
 
+  useEffect(() => {
+    if (polkadotAddress) {
+      invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
+      invoke("start_folder_sync_tauri", {
+        accountId: polkadotAddress,
+        seedPhrase: mnemonic,
+      });
+    }
+  }, [polkadotAddress, mnemonic]);
+
   return (
     <div className="flex flex-col mt-6">
       <section className="mb-6">
@@ -70,11 +79,16 @@ const Home: React.FC = () => {
       {/* Stats Cards */}
       <DetailList ipfsInfo={ipfsInfo} upload={upload} download={download} />
 
-      <div className="flex flex-col gap-4 mt-6 w-full h-full">
-        {mnemonic && <DirectStorageRequestDemo seedPhrase={mnemonic} />}
-        <UserSyncedFiles />
+      <div className="flex gap-4 mt-6 w-full h-full">
+        <CreditUsageTrends
+          chartData={transformedCreditsData}
+          isLoading={isLoadingCredits}
+        />
+        <StorageUsageTrends
+          chartData={transformedFilesData}
+          isLoading={isLoadingFiles}
+        />
       </div>
-      {/* Add this line below */}
       {/* IPFS Upload/Download Test */}
       {/* <section>
           <h2 className="text-xl font-semibold mb-2">

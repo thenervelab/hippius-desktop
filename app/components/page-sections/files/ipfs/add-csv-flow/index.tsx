@@ -1,5 +1,5 @@
 import { FC, useEffect, useState } from "react";
-import FileDropzone from "./file-dropzone";
+import FileDropzone from "./FileDropzone";
 import { toast } from "sonner";
 import {
   submitFilesToBlockchainAtom,

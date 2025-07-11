@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as Dialog from "@radix-ui/react-dialog";
 import { Copy, ChevronDown, ChevronUp } from "lucide-react";
 import { Graphsheet } from "@/components/ui";
@@ -66,10 +67,15 @@ const FileDetailsDialog: React.FC<FileDetailsDialogProps> = ({
         const validatorData = await api.query.ipfsPallet.currentEpochValidator();
 
         // Parse the Option<(AccountId32,u64)> response
-        if (validatorData.isSome) {
-          // Extract the block number from the tuple
-          const [_, blockNumber] = validatorData.unwrap();
-          setCurrentValidatorBlock(blockNumber.toNumber());
+        if (validatorData && typeof (validatorData as any).unwrapOrDefault === "function") {
+          const tuple = (validatorData as any).unwrapOrDefault();
+          // Check if tuple is not empty/default
+          if (Array.isArray(tuple) && tuple.length === 2) {
+            const [, blockNumber] = tuple;
+            setCurrentValidatorBlock(blockNumber.toNumber());
+          } else {
+            console.warn("No current epoch validator found");
+          }
         } else {
           console.warn("No current epoch validator found");
         }
@@ -77,9 +83,14 @@ const FileDetailsDialog: React.FC<FileDetailsDialogProps> = ({
         // Set up polling to periodically refresh validator block
         if (api && isConnected) {
           const updatedValidatorData = await api.query.ipfsPallet.currentEpochValidator();
-          if (updatedValidatorData.isSome) {
-            const [_, blockNumber] = updatedValidatorData.unwrap();
-            setCurrentValidatorBlock(blockNumber.toNumber());
+
+          // Use unwrapOrDefault to safely extract the tuple
+          if (typeof (updatedValidatorData as any).unwrapOrDefault === "function") {
+            const tuple = (updatedValidatorData as any).unwrapOrDefault();
+            if (Array.isArray(tuple) && tuple.length === 2) {
+              const [, blockNumber] = tuple;
+              setCurrentValidatorBlock(blockNumber.toNumber());
+            }
           }
         }
 
@@ -88,11 +99,10 @@ const FileDetailsDialog: React.FC<FileDetailsDialogProps> = ({
       }
     };
 
-    const cleanupInterval = fetchCurrentValidator();
+    fetchCurrentValidator();
 
     return () => {
       unsubBlocks?.();
-      cleanupInterval?.then(cleanup => cleanup?.());
     };
   }, [api, isConnected, open]);
 
@@ -178,7 +188,7 @@ const FileDetailsDialog: React.FC<FileDetailsDialogProps> = ({
   // find max remaining - this will be the same for all files now
   const { hours: maxH, minutes: maxM } = Object.values(fileProgress).length > 0
     ? Object.values(fileProgress)[0].timeRemaining
-    : { hours: 0, minutes: 0, total: 0 };
+    : { hours: 0, minutes: 0 };
 
   const timeLeftText = `~ ${maxH > 0 ? `${maxH} hrs ` : ''}${maxM} mins left`;
   const totalChunks = unpinnedFiles.length;
@@ -241,7 +251,7 @@ const FileDetailsDialog: React.FC<FileDetailsDialogProps> = ({
 
                   {/* Icon wrapper */}
                   <div className="absolute inset-0 size-12 flex items-center justify-center">
-                    <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[50%]" iconGridClassName="rounded-[50%]">
+                    <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[50%]">
                       <Icons.SendSquare className="size-6 relative text-primary-50" />
                     </AbstractIconWrapper>
                   </div>

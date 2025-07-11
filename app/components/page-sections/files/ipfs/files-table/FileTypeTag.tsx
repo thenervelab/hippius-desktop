@@ -42,7 +42,8 @@ const fileTypeVariants = cva(
 const FileTypeTag: React.FC<{ extension: string | null }> = ({ extension }) => {
   const fileType = getFileTypeFromExtension(extension);
 
-  const { label, Icon } = getLabelData(fileType || DEFAULT_FILE_FORMAT);
+  const labelData = getLabelData(fileType || DEFAULT_FILE_FORMAT) ?? { label: "Unknown", Icon: File };
+  const { label, Icon } = labelData;
 
   return (
     <div

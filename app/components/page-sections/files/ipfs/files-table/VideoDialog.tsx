@@ -6,7 +6,7 @@ import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import VideoPlayer from "./video-player";
+import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 
 export const VideoDialogTrigger: React.FC<{

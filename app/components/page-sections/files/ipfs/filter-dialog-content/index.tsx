@@ -1,12 +1,12 @@
 import { CardButton, Icons } from "@/components/ui";
 import React, { useState } from "react";
-import FilterLabel from "./filter-label";
-import FilterSearchInput from "./filter-search-input";
-import FileTypeSelector from "./file-type-selector";
-import DateSelector from "./date-selector";
+import FilterLabel from "./FilterLabel";
+import FilterSearchInput from "./FilterSearchInput";
+import FileTypeSelector from "./FileTypeSelector";
+import DateSelector from "./DateSelector";
 import { FileTypes } from "@/lib/types/fileTypes";
-import { FileSizeSelector } from "./file-size-selector";
-import LocationTypeSelector from "./location-type-selector";
+import { FileSizeSelector } from "./FileSizeSelector";
+import LocationTypeSelector from "./LocationType-Selector";
 
 const FilterDialogContent: React.FC = () => {
   const [selectedFileTypes, setSelectedFileTypes] = useState<FileTypes[]>([]);

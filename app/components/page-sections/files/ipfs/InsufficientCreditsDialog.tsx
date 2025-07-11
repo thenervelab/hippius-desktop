@@ -20,7 +20,7 @@ const InsufficientCreditsDialog: React.FC = () => {
         >
             <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 animate-in fade-in">
                 <div className="flex flex-col items-center">
-                    <AbstractIconWrapper transparent className="size-8 mb-4">
+                    <AbstractIconWrapper className="size-8 mb-4">
                         <Icons.BoxSimple2 className="relative size-5 text-primary-50" />
                     </AbstractIconWrapper>
 

@@ -1,14 +1,12 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Icons } from "@/components/ui/icons";
-import { FormattedUserIpfsFile } from "@/hooks/useUserIpfsFiles";
-import useDeleteIpfsFile from "@/hooks/useDeleteIpfsFile";
-import { P } from "@/components/ui/typography";
-import Button from "@/components/ui/button-new";
+import { Icons, P, Button } from "@/components/ui";
+import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
 import React from "react";
+import { toast } from "sonner";
 
 const DeleteFileDialog: React.FC<{
   fileToDelete: FormattedUserIpfsFile | null;
-  // eslint-disable-next-line no-unused-vars
   setFileToDelete: (v: FormattedUserIpfsFile | null) => void;
 }> = ({ setFileToDelete, fileToDelete }) => {
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
@@ -55,9 +53,15 @@ const DeleteFileDialog: React.FC<{
                   disabled={isDeleting}
                   className="w-full mt-4"
                   onClick={() => {
-                    deleteFile().then(() => {
-                      setFileToDelete(null);
-                    });
+                    deleteFile()
+                      .then(() => {
+                        toast.success("Request submitted. File will be deleted!");
+                        setFileToDelete(null);
+                      })
+                      .catch((error) => {
+                        console.error("Delete error:", error);
+                        toast.error(error.message || "Failed to delete file");
+                      });
                   }}
                 >
                   Yes, Delete

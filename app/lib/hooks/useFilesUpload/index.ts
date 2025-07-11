@@ -22,16 +22,21 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     const [requestState, setRequestState] = useState<
         "idle" | "uploading" | "submitting"
     >("idle");
-    const idleTimeout = useRef<ReturnType<typeof setTimeout>>();
+    const idleTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
-        return () => clearTimeout(idleTimeout.current);
+        const timeout = idleTimeout.current;
+        return () => {
+            if (timeout) clearTimeout(timeout);
+        };
     }, []);
 
     async function upload(files: FileList) {
-        clearTimeout(idleTimeout.current);
+        if (idleTimeout.current) {
+            clearTimeout(idleTimeout.current);
+        }
         console.log("⚡ upload() fired")
-        let msg = files.length > 1
+        const msg = files.length > 1
             ? `Uploading ${files.length} files: 0%`
             : "Uploading file: 0%";
         const toastId = toast.loading(msg);
