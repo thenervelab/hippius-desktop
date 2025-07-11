@@ -54,8 +54,7 @@ export function useCreditsNotification() {
               notificationType: "Credits",
               notificationSubtype: warningSubtype,
               notificationTitleText: "You're running low on credits.",
-              notificationDescription:
-                "Your credit balance is running low. Add more credits or buy a subscription plan to continue using all features without interruption.",
+              notificationDescription: `Your credit balance is running low. You've only got ${creditNumber} credit left. Add more credits or buy a subscription plan to continue using all features without interruption.`,
               notificationLinkText: "Add Credits",
               notificationLink: "BILLING",
             });

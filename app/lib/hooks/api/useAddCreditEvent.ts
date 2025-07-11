@@ -63,6 +63,8 @@ export default function useAddCreditEvent(
 
   return useQuery<CreditEventsResponse, Error, CreditEventObject[]>({
     queryKey: ["creditEvents", polkadotAddress, page, limit],
+    refetchInterval: 30000,
+    refetchIntervalInBackground: true,
     queryFn: async () => {
       if (!polkadotAddress) {
         throw new Error("No wallet address available");
