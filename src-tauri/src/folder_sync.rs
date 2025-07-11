@@ -79,8 +79,6 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
     let _checker_seed_phrase = seed_phrase.clone();
     thread::spawn(move || {
         loop {
-            std::thread::sleep(Duration::from_secs(120)); // 2 minutes
-
             println!("[FolderSync] Periodic check: scanning for unsynced files...");
 
             // Recursively collect all files in sync_path_clone
@@ -110,6 +108,8 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                 // Check if file is in profile DB and update source
                 let _ = is_file_in_profile_db(&file_path, &checker_account_id);
             }
+
+            std::thread::sleep(Duration::from_secs(120)); // 2 minutes
         }
     });
 
