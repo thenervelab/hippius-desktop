@@ -177,11 +177,13 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
   useEffect(() => {
     const onDragOver = (e: DragEvent) => {
       if (e.dataTransfer?.types.includes("Files")) {
+        console.log("onDragOver ");
         e.preventDefault()
       }
     }
     const onDrop = (e: DragEvent) => {
       if (e.dataTransfer?.files.length) {
+        console.log("onDrop ");
         e.preventDefault()
       }
     }
