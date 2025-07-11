@@ -54,9 +54,7 @@ pub fn start_user_profile_sync(account_id: &str) {
     tokio::spawn(async move {
         let client = Client::new();
         loop {
-            // sync profile after every 2 mins
-            time::sleep(Duration::from_secs(120)).await;
-
+            // (1) Do the sync work immediately on startup
             println!("[ProfileSync] Periodic check: scanning for unsynced files...");
 
             let api = match get_substrate_client().await {
@@ -184,6 +182,9 @@ pub fn start_user_profile_sync(account_id: &str) {
                     eprintln!("[UserProfileSync] Failed to fetch from IPFS: {e}");
                 }
             }
+
+            // (2) Wait 2 minutes before the next sync
+            time::sleep(Duration::from_secs(120)).await;
         }
     });
 }
