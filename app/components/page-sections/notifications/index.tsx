@@ -119,6 +119,21 @@ const Notifications = () => {
         !onlyShowUnread || notification.unread
     );
 
+  // Marks the selected notification as read if it's unread
+  const markSelectedNotificationAsRead = (id: number) => {
+    if (id && notifications.length > 0) {
+      const notif = notifications.find((n) => n.id === id);
+      if (notif && notif.unread) {
+        // Mark as read in DB and update state
+        markRead(id).then(() => {
+          setNotifications((prev) =>
+            prev.map((n) => (n.id === id ? { ...n, unread: false } : n))
+          );
+        });
+      }
+    }
+  };
+
   const selectedNotification = selectedNotificationId
     ? filteredNotifications.find(
         (notification) => notification.id === selectedNotificationId
@@ -211,7 +226,7 @@ const Notifications = () => {
 
         {/* Mark all as Read */}
         <button
-          className="px-4 py-2.5 bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+          className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
           onClick={handleMarkAllAsRead}
         >
           Mark all as Read
@@ -219,7 +234,7 @@ const Notifications = () => {
 
         {/* Notification Setting */}
         <button
-          className="px-4 py-2.5 bg-grey-90 rounded hover:bg-grey-80 text-grey-10 leading-5 text-[14px] font-medium flex items-center gap-2 transition-colors"
+          className="px-4 py-2.5 bg-grey-90 rounded  text-grey-10 leading-5 text-[14px] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
           onClick={handleNotificationSetting}
         >
           <Icons.Setting className="size-4" />
@@ -235,7 +250,10 @@ const Notifications = () => {
             <NotificationList
               notifications={filteredNotifications}
               selectedNotificationId={selectedNotificationId}
-              onSelectNotification={setSelectedNotificationId}
+              onSelectNotification={(id) => {
+                markSelectedNotificationAsRead(id);
+                setSelectedNotificationId(id);
+              }}
               onReadStatusChange={handleReadStatusChange}
             />
             <NotificationDetailView

@@ -66,7 +66,7 @@ const CreditNotificationUpdater: React.FC<CreditNotificationUpdaterProps> = ({
             await addNotification({
               notificationType: "Credits",
               notificationSubtype: warningSubtype,
-              notificationTitleText: "You're running low on credits",
+              notificationTitleText: "You're running low on credits.",
               notificationDescription:
                 "Your credit balance is running low. Add more credits or buy a subscription plan to continue using all features without interruption.",
               notificationLinkText: "Add Credits",

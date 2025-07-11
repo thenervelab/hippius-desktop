@@ -49,7 +49,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
     if (buttonLink) {
       e.preventDefault();
       e.stopPropagation();
-      if (buttonLink.startsWith("https")) {
+      if (buttonLink.includes("BILLING")) {
         openLinkByKey(buttonLink);
       } else {
         router.push(buttonLink);
