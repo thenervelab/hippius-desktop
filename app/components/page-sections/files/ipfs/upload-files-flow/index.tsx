@@ -92,13 +92,13 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
   }, [files]);
 
   const { upload } = useUploadIpfsFileAndSubmitToBlockchain({
-    onUploadProgress: setProgress,
     onError(error) {
       if (error instanceof Error && error.message.includes("Insufficient Credits")) {
         setInsufficientCreditsDialogOpen(true);
       } else if (error instanceof Error) {
         toast.error(error.message);
       } else {
+        console.log("error", error);
         toast.error("Oops and error occured!");
       }
       setProgress(0);

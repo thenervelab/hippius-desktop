@@ -46,7 +46,6 @@ import PdfDialog, { PdfDialogTrigger } from "./pdf-dialog";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import FileContextMenu from "@/components/ui/context-menu/file-context-menu";
 
-// Custom event names for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
@@ -57,7 +56,10 @@ interface FilesTableProps {
   files: FormattedUserIpfsFile[];
 }
 
-const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) => {
+const FilesTable: FC<FilesTableProps> = ({
+  showUnpinnedDialog = true,
+  files,
+}) => {
   const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
@@ -70,186 +72,117 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
 
-  const [selectedFile, setSelectedFile] =
-    useState<FormattedUserIpfsFile | null>(null);
-
+  const [selectedFile, setSelectedFile] = useState<FormattedUserIpfsFile | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     file: FormattedUserIpfsFile;
   } | null>(null);
 
-  const dragCounterRef = useRef<number>(0);
+  const dragCounterRef = useRef(0);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (isDragging) {
-      const timer = setTimeout(() => {
-        setAnimateCloud(true);
-      }, 200);
-      return () => clearTimeout(timer);
+      const t = setTimeout(() => setAnimateCloud(true), 200);
+      return () => clearTimeout(t);
     } else {
       setAnimateCloud(false);
     }
   }, [isDragging]);
 
-  const handleFiles = useCallback((files: FileList) => {
-    if (!files.length) {
-      toast.error("No Files Found");
-      return;
-    }
+  // Global listeners: toggle isDragging on dragover, dragleave, drop
+  useEffect(() => {
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) {
+        e.preventDefault();
+        setIsDragging(true);
+      }
+    };
+    const onDragLeaveOrDrop = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) {
+        e.preventDefault();
+        setIsDragging(false);
+      }
+    };
 
-    if (typeof window !== "undefined") {
-      const event = new CustomEvent(HIPPIUS_DROP_EVENT, {
-        detail: { files },
-      });
-      window.dispatchEvent(event);
-
-      toast.success(
-        `${files.length} ${files.length === 1 ? "file" : "files"} ready to upload`
-      );
-    }
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeaveOrDrop);
+    window.addEventListener("drop", onDragLeaveOrDrop);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeaveOrDrop);
+      window.removeEventListener("drop", onDragLeaveOrDrop);
+    };
   }, []);
 
-  const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
+  // Dispatch files to your upload logic
+  const handleFiles = useCallback((files: FileList) => {
+    if (!files.length) return toast.error("No Files Found");
+    const ev = new CustomEvent(HIPPIUS_DROP_EVENT, { detail: { files } });
+    window.dispatchEvent(ev);
+    toast.success(`${files.length} ${files.length === 1 ? "file" : "files"} ready to upload`);
+  }, []);
 
-    if (
-      e.dataTransfer.items &&
-      Array.from(e.dataTransfer.items).some(item => item.kind === "file")
-    ) {
+  // Local container handlers
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    if (Array.from(e.dataTransfer.items || []).some(i => i.kind === "file")) {
       dragCounterRef.current += 1;
       setIsDragging(true);
-
       if (dragTimeoutRef.current) clearTimeout(dragTimeoutRef.current);
-      dragTimeoutRef.current = setTimeout(() => {
-        setAnimateCloud(true);
-      }, 200);
+      dragTimeoutRef.current = setTimeout(() => setAnimateCloud(true), 200);
     }
   }, []);
 
-  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation();
     dragCounterRef.current -= 1;
-
     if (dragCounterRef.current === 0) {
       setIsDragging(false);
       setAnimateCloud(false);
     }
   }, []);
 
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (
-      e.dataTransfer.items &&
-      Array.from(e.dataTransfer.items).some(item => item.kind === "file")
-    ) {
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (Array.from(e.dataTransfer.items || []).some(i => i.kind === "file")) {
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = "copy";
     }
   }, []);
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      e.stopPropagation();
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+    if (dragTimeoutRef.current) clearTimeout(dragTimeoutRef.current);
+    if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+  }, [handleFiles]);
 
-      // Reset counter and states
-      dragCounterRef.current = 0;
-      setIsDragging(false);
+  const filteredData = useMemo(() => files, [files]);
+  const { paginatedData: data, setCurrentPage, currentPage, totalPages } =
+    usePagination(filteredData, 10);
 
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-      }
-
-      const targetFiles = e.dataTransfer.files;
-      if (targetFiles && targetFiles.length > 0) {
-        handleFiles(targetFiles);
-      }
-    },
-    [handleFiles]
-  );
-
-  // put this at the top of your FilesTable (or in App.tsx if you prefer)
-  useEffect(() => {
-    const onDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes("Files")) {
-        console.log("onDragOver ");
-        e.preventDefault()
-      }
-    }
-    const onDrop = (e: DragEvent) => {
-      if (e.dataTransfer?.files.length) {
-        console.log("onDrop ");
-        e.preventDefault()
-      }
-    }
-    window.addEventListener("dragover", onDragOver)
-    window.addEventListener("drop", onDrop)
-    return () => {
-      window.removeEventListener("dragover", onDragOver)
-      window.removeEventListener("drop", onDrop)
-    }
-  }, [])
-
-  // Global listeners to prevent default file-open behavior on drag-and-drop
-  useEffect(() => {
-    const onWindowDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.items && Array.from(e.dataTransfer.items).some(item => item.kind === "file")) {
-        e.preventDefault();
-      }
-    };
-    const onWindowDrop = (e: DragEvent) => {
-      if (e.dataTransfer?.items && Array.from(e.dataTransfer.items).some(item => item.kind === "file")) {
-        e.preventDefault();
-      }
-    };
-    window.addEventListener("dragover", onWindowDragOver);
-    window.addEventListener("drop", onWindowDrop);
-    return () => {
-      window.removeEventListener("dragover", onWindowDragOver);
-      window.removeEventListener("drop", onWindowDrop);
-    };
-  }, []);
-
-
-  const filteredData = useMemo(() => {
-    // No need to filter deleted files as parent component already did this
-    return files;
-  }, [files]);
-
-  const unpinnedFileDetails = useMemo(() => {
-    if (!showUnpinnedDialog || !files) return [];
-
-    const filteredUnpinnedFiles = files.filter((file) => !file.isAssigned);
-    return filteredUnpinnedFiles.map((file) => ({
-      filename: file.name || "Unnamed File",
-      cid: decodeHexCid(file.cid),
-      createdAt: file.createdAt,
+  const unpinnedDetails = useMemo(() => {
+    if (!showUnpinnedDialog) return [];
+    return files.filter(f => !f.isAssigned).map(f => ({
+      filename: f.name || "Unnamed File",
+      cid: decodeHexCid(f.cid),
+      createdAt: f.createdAt,
     }));
   }, [files, showUnpinnedDialog]);
 
   useEffect(() => {
     if (!showUnpinnedDialog) return;
-
-    if (unpinnedFileDetails.length > 0) {
-      setUnpinnedFiles(unpinnedFileDetails);
+    if (unpinnedDetails.length) {
+      setUnpinnedFiles(unpinnedDetails);
       setIsUnpinnedOpen(true);
     } else {
       setUnpinnedFiles(null);
       setIsUnpinnedOpen(false);
     }
-  }, [unpinnedFileDetails.length, showUnpinnedDialog]);
-
-  const {
-    paginatedData: data,
-    setCurrentPage,
-    currentPage,
-    totalPages,
-  } = usePagination(filteredData || [], 10);
+  }, [unpinnedDetails.length, showUnpinnedDialog]);
 
   const columns = useMemo(
     () => [
@@ -475,12 +408,8 @@ const FilesTable: FC<FilesTableProps> = ({ showUnpinnedDialog = true, files }) =
 
   // Handle right-click on table row
   const handleRowContextMenu = (e: React.MouseEvent, file: FormattedUserIpfsFile) => {
-    e.preventDefault(); // Prevent default browser context menu
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      file: file
-    });
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, file });
   };
 
   return (
