@@ -1,4 +1,3 @@
-// src/lib/hooks/useFilesUpload.ts
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "../use-user-credits";
@@ -6,15 +5,14 @@ import { useUserIpfsFiles } from "../use-user-ipfs-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom } from "jotai";
 import { uploadProgressAtom } from "@/app/components/page-sections/files/ipfs/atoms/query-atoms";
+import { toast } from "sonner";
 
 export type UploadFilesHandlers = {
     onSuccess?: () => void;
     onError?: (err: Error | unknown) => void;
 };
 
-export function useFilesUpload(
-    handlers: UploadFilesHandlers
-) {
+export function useFilesUpload(handlers: UploadFilesHandlers) {
     const { onSuccess, onError } = handlers;
     const setProgress = useSetAtom(uploadProgressAtom);
     const { refetch: checkCredits } = useUserCredits();
@@ -26,28 +24,36 @@ export function useFilesUpload(
     >("idle");
     const idleTimeout = useRef<ReturnType<typeof setTimeout>>();
 
-    useEffect(() => () => clearTimeout(idleTimeout.current), []);
+    useEffect(() => {
+        return () => clearTimeout(idleTimeout.current);
+    }, []);
 
     async function upload(files: FileList) {
         clearTimeout(idleTimeout.current);
+        console.log("⚡ upload() fired")
+        let msg = files.length > 1
+            ? `Uploading ${files.length} files: 0%`
+            : "Uploading file: 0%";
+        const toastId = toast.loading(msg);
         setRequestState("uploading");
         setProgress(0);
 
         try {
-            // 1. Credits check
             const credits = (await checkCredits()).data;
             if (!credits || credits <= BigInt(0)) {
                 throw new Error("Insufficient Credits. Please add credits.");
             }
 
-            // 2. Build inputs & report 0–50%
             const arr = Array.from(files);
             for (let i = 0; i < arr.length; i++) {
-                const buf = await arr[i].arrayBuffer();
-                // no need to await hash: just collect
-                await Promise.resolve();
+                await arr[i].arrayBuffer();
                 setProgress(Math.round(((i + 1) / arr.length) * 50));
+                const msg = files.length > 1
+                    ? `Uploading ${files.length} files: ${Math.round(((i + 1) / arr.length) * 100)}%`
+                    : `Uploading file: ${Math.round(((i + 1) / arr.length) * 100)}%`;
+                toast.loading(msg, { id: toastId });
             }
+
             const inputs = await Promise.all(
                 arr.map(async file => ({
                     file_hash: Array.from(new Uint8Array(await file.arrayBuffer())),
@@ -55,25 +61,38 @@ export function useFilesUpload(
                 }))
             );
 
-            console.log("inputs:", inputs);
-            // 3. Invoke & report 75%
             setRequestState("submitting");
             setProgress(75);
+            toast.loading(files.length > 1
+                ? `Uploading ${files.length} files: 75%`
+                : `Uploading file: 75%`, { id: toastId });
+
             await invoke<string>("storage_request_tauri", {
                 filesInput: inputs,
                 minerIds: null,
                 seedPhrase: mnemonic,
             });
 
-            // 4. Finish
             setProgress(100);
+            toast.loading(files.length > 1
+                ? `Uploading ${files.length} files: 100%`
+                : `Uploading file: 100%`, { id: toastId });
+
             setRequestState("idle");
-            onSuccess?.();
-            refetchUserFiles();
+            setTimeout(() => {
+                refetchUserFiles();
+                onSuccess?.();
+                toast.success(files.length > 1
+                    ? `${files.length} files successfully uploaded!`
+                    : `File successfully uploaded!`, { id: toastId });
+            }, 2000);
         } catch (err) {
             setRequestState("idle");
             setProgress(0);
             onError?.(err);
+            toast.error(files.length > 1
+                ? `${files.length} files failed to upload!`
+                : `File failed to upload!`, { id: toastId });
         }
     }
 

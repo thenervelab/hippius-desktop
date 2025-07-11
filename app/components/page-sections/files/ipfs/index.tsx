@@ -168,7 +168,7 @@ const Ipfs: FC = () => {
               <Icons.Filter className="size-5" />
             </button>
           </div>
-          <div className="bg-grey-90 hover:bg-grey-80 rounded">
+          {/* <div className="bg-grey-90 hover:bg-grey-80 rounded">
             <button
               className="px-4 py-3 bg-grey-90 hover:bg-grey-80 rounded text-sm font-medium text-grey-10 flex items-center gap-1 h-10"
               aria-label="Add Folder"
@@ -176,7 +176,7 @@ const Ipfs: FC = () => {
               <Icons.FolderAdd className="size-4 text-grey-10" />
               <span>New Folder</span>
             </button>
-          </div>
+          </div> */}
 
           <AddButton ref={addButtonRef} className="h-9" />
         </div>
