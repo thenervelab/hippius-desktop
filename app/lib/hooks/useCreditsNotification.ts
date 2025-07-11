@@ -21,7 +21,6 @@ export function useCreditsNotification() {
   const { data: creditEvents, isSuccess } = useAddCreditEvent({ limit: 50 });
   const { data: credits, isLoading: isCreditsLoading } = useUserCredits();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
-
   // Handle low credit notifications based on balance
   useEffect(() => {
     if (isCreditsLoading || credits === undefined) return;
