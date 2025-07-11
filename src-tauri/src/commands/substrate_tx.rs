@@ -60,28 +60,31 @@ pub async fn storage_request_tauri(
 
     println!("files_input: {:?}", files_input);
     println!("miner_ids: {:?}", miner_ids);
-    println!("seed_phrase: {}", seed_phrase);
 
     // Acquire the global lock
     let _lock = SUBSTRATE_TX_LOCK.lock().await;
 
     let pair = sr25519::Pair::from_string(&seed_phrase, None)
-        .map_err(|e| format!("Failed to create pair: {:?}", e))?;
+        .map_err(|e| {
+            eprintln!("[storage_request_tauri] Failed to create pair: {:?}", e);
+            format!("Failed to create pair: {:?}", e)
+        })?;
 
     let signer = PairSigner::new(pair);
     let api = get_substrate_client().await?;
 
     // Convert Vec<FileInputWrapper> to Vec<FileInput>
     let files_input: Vec<FileInput> = files_input.into_iter().map(FileInput::from).collect();
-
+    println!("doing tx ");
     let tx = custom_runtime::tx().marketplace().storage_request(files_input, miner_ids);
     let _result = api
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
         .map_err(|e| e.to_string())?;
-    // we should wait 12 secs so that this block is passed before doing next tx
-    tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+    println!(" tx submited");
+    // we should wait 6 secs so that this block is passed before doing next tx
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
     Ok(format!("storage_request submitted Successfully !!!"))
 }
 
@@ -105,8 +108,9 @@ pub async fn storage_unpin_request_tauri(
         .sign_and_submit_then_watch_default(&tx, &signer)
         .await
         .map_err(|e| e.to_string())?;
-    // we should wait 12 secs so that this block is passed before doing next tx
-    tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+    println!("storage_unpin_request submitted: {:?}", result);
+    // we should wait 6 secs so that this block is passed before doing next tx
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
     Ok(format!("storage_unpin_request submitted: {:?}", result))
 }
 
