@@ -243,24 +243,15 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
         .find(|path| path.exists())
         .ok_or_else(|| format!("IPFS binary not found after extraction in {:?}", temp_dir))?;
 
-    println!("Found binary at {:?}", source_binary);
-
     // Remove existing binary if it exists
     if binary_path.exists() {
-        println!("Removing existing binary");
         fs::remove_file(binary_path)
             .map_err(|e| format!("Failed to remove existing binary: {}", e))?;
     }
 
-    println!(
-        "Moving binary from {:?} to {:?}",
-        source_binary, binary_path
-    );
-
     // Copy instead of rename in case of cross-filesystem issues
     fs::copy(&source_binary, binary_path).map_err(|e| format!("Failed to copy binary: {}", e))?;
 
-    println!("Cleaning up temporary directory");
     fs::remove_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to remove temporary directory: {}", e))?;
 
