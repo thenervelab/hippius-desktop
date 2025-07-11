@@ -1,99 +1,82 @@
-import { useEffect, useRef } from "react";
-import { useAtom, useAtomValue, useSetAtom } from "jotai";
-import {
-    uploadFilesToIpfsAtom,
-    submitFilesToBlockchainAtom,
-    uploadToIpfsAndSubmitToBlockcahinRequestStateAtom,
-    UploadFilesToIpfsAtomHandlers,
-    uploadProgressAtom,
-} from "@/components/page-sections/files/ipfs/atoms/query-atoms";
+// src/lib/hooks/useUploadIpfsFileAndSubmitToBlockchain.ts
+import { useState, useRef, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "../use-user-credits";
+import { useUserIpfsFiles } from "../use-user-ipfs-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { usePolkadotApi } from "@/lib/polkadot-api-context";
-import useUserIpfsFiles from "../use-user-ipfs-files";
+import { useSetAtom } from "jotai";
+import { uploadProgressAtom } from "@/app/components/page-sections/files/ipfs/atoms/query-atoms";
 
-export const useUploadIpfsFileAndSubmitToBlockchain = (
-    props: UploadFilesToIpfsAtomHandlers & {
-        onSuccess?: () => void;
-        onError?: (err: Error | unknown) => void;
-    }
-) => {
-    const { mutateAsync: uploadFilesToIpfs } = useAtomValue(
-        uploadFilesToIpfsAtom
-    );
-    const { mutateAsync: submitFiles } = useAtomValue(
-        submitFilesToBlockchainAtom
-    );
-    const idleSetterTimeout = useRef<ReturnType<typeof setTimeout>>();
-
-    const { refetch: refetchUserFiles } = useUserIpfsFiles();
-
-    const [requestState, setRquestState] = useAtom(
-        uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
-    );
-    const { refetch: getUserCredits } = useUserCredits();
-    const setUploadProgress = useSetAtom(uploadProgressAtom);
-
-    const { polkadotAddress, walletManager } = useWalletAuth();
-
-    const { api, isConnected } = usePolkadotApi();
-
-    if (!api || !isConnected || !polkadotAddress) {
-        throw new Error("Blockchain connection not available");
-    }
-
-    if (!walletManager || !walletManager.polkadotPair) {
-        throw new Error("Wallet keypair not available");
-    }
-
-    const upload = (files: Parameters<typeof uploadFilesToIpfs>[0]["files"]) => {
-        clearTimeout(idleSetterTimeout.current);
-        setRquestState("uploading");
-        setUploadProgress(0);
-
-        uploadFilesToIpfs({
-            files,
-            creditsChecker: getUserCredits,
-            onUploadProgress: (value) => {
-                setUploadProgress(value);
-            },
-        })
-            .then(({ infoFile }) => {
-                setRquestState("submitting");
-
-                return submitFiles({
-                    infoFile,
-                    polkadotPair: walletManager.polkadotPair,
-                    api,
-                });
-            })
-            .then(() => {
-                setRquestState("idle");
-                if (props.onSuccess) {
-                    props.onSuccess();
-                }
-                refetchUserFiles();
-            })
-            .catch((error) => {
-                setRquestState("idle");
-                if (props.onError) {
-                    props.onError(error);
-                }
-            });
-    };
-
-    useEffect(() => {
-        const currentTimeout = idleSetterTimeout.current;
-
-        return () => {
-            clearTimeout(currentTimeout);
-        };
-    }, [props]);
-
-    return {
-        upload,
-        requestState,
-    };
+export type UploadFilesHandlers = {
+    onSuccess?: () => void;
+    onError?: (err: Error | unknown) => void;
 };
+
+export function useUploadIpfsFileAndSubmitToBlockchain(
+    handlers: UploadFilesHandlers
+) {
+    const { onSuccess, onError } = handlers;
+    const setProgress = useSetAtom(uploadProgressAtom);
+    const { refetch: checkCredits } = useUserCredits();
+    const { refetch: refetchUserFiles } = useUserIpfsFiles();
+    const { mnemonic } = useWalletAuth();
+
+    const [requestState, setRequestState] = useState<
+        "idle" | "uploading" | "submitting"
+    >("idle");
+    const idleTimeout = useRef<ReturnType<typeof setTimeout>>();
+
+    useEffect(() => () => clearTimeout(idleTimeout.current), []);
+
+    async function upload(files: FileList) {
+        clearTimeout(idleTimeout.current);
+        setRequestState("uploading");
+        setProgress(0);
+
+        try {
+            // 1. Credits check
+            const credits = (await checkCredits()).data;
+            if (!credits || credits <= BigInt(0)) {
+                throw new Error("Insufficient Credits. Please add credits.");
+            }
+
+            // 2. Build inputs & report 0–50%
+            const arr = Array.from(files);
+            for (let i = 0; i < arr.length; i++) {
+                const buf = await arr[i].arrayBuffer();
+                // no need to await hash: just collect
+                await Promise.resolve();
+                setProgress(Math.round(((i + 1) / arr.length) * 50));
+            }
+            const inputs = await Promise.all(
+                arr.map(async file => ({
+                    file_hash: Array.from(new Uint8Array(await file.arrayBuffer())),
+                    file_name: Array.from(new TextEncoder().encode(file.name)),
+                }))
+            );
+
+            // 3. Invoke & report 75%
+            setRequestState("submitting");
+            setProgress(75);
+            await invoke<string>("storage_request_tauri", {
+                filesInput: inputs,
+                minerIds: null,
+                seedPhrase: mnemonic,
+            });
+
+            // 4. Finish
+            setProgress(100);
+            setRequestState("idle");
+            onSuccess?.();
+            refetchUserFiles();
+        } catch (err) {
+            setRequestState("idle");
+            setProgress(0);
+            onError?.(err);
+        }
+    }
+
+    return { upload, requestState };
+}
 
 export default useUploadIpfsFileAndSubmitToBlockchain;
