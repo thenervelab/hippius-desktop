@@ -3,7 +3,6 @@
 import { FC, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { AddCircle, Refresh, WalletAdd } from "@/components/ui/icons";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import * as Typography from "@/components/ui/typography";
 import { AbstractIconWrapper, CardButton, Icons } from "../../ui";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
@@ -14,6 +13,7 @@ import BalanceTrends from "./balance-trends";
 import useCredits from "@/app/lib/hooks/api/useCredits";
 import useBalance from "@/app/lib/hooks/api/useBalance";
 import { Account } from "@/app/lib/types";
+import { openLinkByKey } from "@/app/lib/utils/links";
 
 interface WalletBalanceWidgetWithGraphProps {
   className?: string;
@@ -90,13 +90,8 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
 
   const isChartDataLoading = isCreditsLoading || isBalanceLoading;
 
-  const handleOpenConsoleBillingPage = async () => {
-    try {
-      await openUrl("https://console.hippius.com/dashboard/billing");
-    } catch (error) {
-      console.error("Failed to open URL:", error);
-    }
-  };
+  const handleOpenConsoleBillingPage = () => openLinkByKey("BILLING");
+
   console.log("Chart Data:", chartData);
   return (
     <div className="w-full  relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
@@ -117,7 +112,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
               </span>
               <div className="text-2xl mb-1 font-medium text-grey-10">
                 {credits !== undefined
-                  ? `$${formatCreditBalance(credits)}`
+                  ? `${formatCreditBalance(credits)}`
                   : error
                     ? "ERROR"
                     : "- - - -"}

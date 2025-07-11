@@ -31,10 +31,9 @@ export const navItems: NavItemData[] = [
     icon: <Icons.Wallet />,
   },
   {
-    label: "Notification",
-    path: "/notification",
+    label: "Notifications",
+    path: "/notifications",
     icon: <Icons.Notification />,
-    comingSoon: true,
   },
   {
     label: "Settings",

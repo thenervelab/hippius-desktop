@@ -44,8 +44,6 @@ const CreditUsageTrends: React.FC<{
   className?: string;
   onRetry?: () => void;
 }> = ({ chartData, isLoading, className }) => {
-  console.log(chartData, "chartData in CreditUsageTrends");
-
   const [timeRange, setTimeRange] = useState<string>("week");
 
   // Format raw account‐data into ChartPoint[] according to the selected range
@@ -67,12 +65,10 @@ const CreditUsageTrends: React.FC<{
     const total = chartData.reduce((sum, account) => {
       // Extract just the numeric part - need to convert from string to BigInt since these are large numbers
       const balance = BigInt(account.total_balance);
-      console.log(`Account: ${account.account_id}, Balance: ${balance}`);
       // Accumulate the balance
       // Using BigInt to handle large numbers accurately
       return sum + balance;
     }, BigInt(0));
-    console.log(total, "Total Credits Used in BigInt");
     // Format to a readable number with commas
     return formatBalance(total.toString());
   }, [chartData]);

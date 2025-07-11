@@ -13,6 +13,11 @@ import { saveWallet } from "@/app/lib/helpers/walletDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useAtomValue } from "jotai";
 import { phaseAtom } from "../splash-screen/atoms";
+import {
+  addNotification,
+  isFirstTime,
+  listNotifications,
+} from "@/app/lib/helpers/notificationsDb";
 
 const passcodeFields = [
   {
@@ -93,7 +98,19 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
       return;
     }
     setLoggingIn(true);
-
+    if (await isFirstTime()) {
+      const notifications = await listNotifications(1);
+      if (notifications.length === 0) {
+        await addNotification({
+          notificationType: "Hippius",
+          notificationSubtype: "Welcome",
+          notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
+          notificationDescription: `🎉 Welcome to Hippius! You’re now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you’re spending. You can check your remaining credits at any time in the Wallets tab, and top up when you need more. When you’re ready, tap Check Out to launch your first storage session.`,
+          notificationLinkText: "Check Out",
+          notificationLink: "/",
+        });
+      }
+    }
     try {
       // Encrypt mnemonic with passcode, and hash the passcode
       const encryptedMnemonic = encryptMnemonic(mnemonic, passCode.newPassCode);
@@ -130,7 +147,8 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                 <div className="text-grey-70 text-sm font-medium">
                   <RevealTextLine rotate reveal={inView} className="delay-300">
                     Your access key is encrypted with your passcode for
-                    security. You&apos;ll need this passcode to log in next time.
+                    security. You&apos;ll need this passcode to log in next
+                    time.
                   </RevealTextLine>
                 </div>
               </div>
@@ -165,7 +183,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                           type={showPasscode ? "text" : "password"}
                           value={
                             passCode[
-                            item?.name as "newPassCode" | "confirmPassCode"
+                              item?.name as "newPassCode" | "confirmPassCode"
                             ]
                           }
                           onChange={(e) =>

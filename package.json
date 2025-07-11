@@ -25,6 +25,7 @@
     "@radix-ui/react-navigation-menu": "^1.2.10",
     "@radix-ui/react-progress": "^1.1.5",
     "@radix-ui/react-select": "^2.2.2",
+    "@radix-ui/react-switch": "^1.2.5",
     "@radix-ui/react-tooltip": "^1.2.4",
     "@react-spring/three": "^9.7.2",
     "@react-three/drei": "^10.0.7",

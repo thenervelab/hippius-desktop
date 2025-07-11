@@ -41,8 +41,6 @@ const StorageUsageTrends: React.FC<{
   className?: string;
   onRetry?: () => void;
 }> = ({ chartData, isLoading, className }) => {
-  console.log(chartData, "chartData in StorageUsageTrends");
-
   const [timeRange, setTimeRange] = useState<string>("week");
 
   // Format raw account‐data into ChartPoint[] according to the selected range

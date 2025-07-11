@@ -17,7 +17,7 @@ const TABLE_SCHEMA = `
   );
 `;
 
-async function ensureAppDirectory() {
+export async function ensureAppDirectory() {
   try {
     // create the AppLocalData folder structure if missing
     await mkdir("", {
