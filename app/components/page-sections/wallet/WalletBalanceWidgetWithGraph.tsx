@@ -112,7 +112,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
               </span>
               <div className="text-2xl mb-1 font-medium text-grey-10">
                 {credits !== undefined
-                  ? `$${formatCreditBalance(credits)}`
+                  ? `${formatCreditBalance(credits)}`
                   : error
                     ? "ERROR"
                     : "- - - -"}
