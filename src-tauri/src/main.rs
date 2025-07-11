@@ -20,7 +20,7 @@ use dirs;
 use tauri::{Manager, Builder};
 use crate::user_profile_sync::start_user_profile_sync_tauri;
 use crate::user_profile_sync::get_user_synced_files;
-use crate::folder_sync::start_folder_sync_tauri;
+use crate::folder_sync::{start_folder_sync_tauri, get_sync_status};
 use crate::user_storage_requests_sync::start_user_storage_requests_sync_tauri;
 use crate::user_storage_requests_sync::get_user_storage_requests;
 
@@ -49,7 +49,8 @@ fn main() {
             start_folder_sync_tauri,
             get_user_synced_files,
             start_user_storage_requests_sync_tauri,
-            get_user_storage_requests
+            get_user_storage_requests,
+            get_sync_status
         ]);
 
     let builder = setup(builder);
