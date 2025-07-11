@@ -1,14 +1,24 @@
 import React from "react";
 import { Icons, AbstractIconWrapper, RevealTextLine } from "@/components/ui";
 import { InView } from "react-intersection-observer";
+import { cn } from "@/lib/utils";
 
-const NoNotificationsFound: React.FC = () => {
+interface NoNotificationsFoundProps {
+  heightClassName?: string;
+}
+
+const NoNotificationsFound: React.FC<NoNotificationsFoundProps> = ({
+  heightClassName = "h-[80.9vh]",
+}) => {
   return (
     <InView triggerOnce>
       {({ ref, inView }) => (
         <div
           ref={ref}
-          className="p-6 flex flex-col items-center justify-center text-center h-[80.9vh] w-full"
+          className={cn(
+            "p-6 flex flex-col items-center justify-center text-center w-full",
+            heightClassName
+          )}
         >
           <AbstractIconWrapper className="size-12 mb-3 bg-gray-100">
             <Icons.Notification className="relative size-6 text-primary-50" />

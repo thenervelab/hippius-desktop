@@ -7,7 +7,7 @@ import BoxSimple from "../ui/icons/BoxSimple";
 import { RevealTextLine } from "../ui";
 import { InView } from "react-intersection-observer";
 import { IPFS_NODE_CONFIG } from "@/app/lib/config";
-import CreditNotificationUpdater from "./CreditNotificationUpdater";
+import NotificationMenu from "./notifications-menu";
 
 const BlockchainStats: React.FC = () => {
   const { isConnected } = usePolkadotApi();
@@ -66,7 +66,7 @@ const BlockchainStats: React.FC = () => {
             <div className="w-0.5 h-4 bg-grey-80 mx-2"></div>
           </RevealTextLine>
 
-          <CreditNotificationUpdater />
+          <NotificationMenu />
         </div>
       )}
     </InView>

@@ -77,7 +77,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     if (actionLink) {
       e.preventDefault();
       e.stopPropagation();
-      if (actionLink.startsWith("http")) {
+      if (actionLink.startsWith("BILLING")) {
         openLinkByKey(actionLink);
       } else {
         router.push(actionLink);

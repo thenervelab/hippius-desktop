@@ -13,12 +13,14 @@ import {
 } from "@/app/lib/helpers/notificationsDb";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-
+import { useSetAtom } from "jotai";
+import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 const TEST_OFFSET = 0;
 
 export function useCreditsNotification() {
   const { data: creditEvents, isSuccess } = useAddCreditEvent({ limit: 50 });
   const { data: credits, isLoading: isCreditsLoading } = useUserCredits();
+  const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
   // Handle low credit notifications based on balance
   useEffect(() => {
@@ -54,12 +56,13 @@ export function useCreditsNotification() {
               notificationType: "Credits",
               notificationSubtype: warningSubtype,
               notificationTitleText: "You're running low on credits.",
-              notificationDescription: `Your credit balance is running low. You've only got ${creditNumber} credit left. Add more credits or buy a subscription plan to continue using all features without interruption.`,
+              notificationDescription: `Your credit balance is running low. You've only got ${creditNumber.toFixed(4)} credit left. Add more credits or buy a subscription plan to continue using all features without interruption.`,
               notificationLinkText: "Add Credits",
               notificationLink: "BILLING",
             });
           }
           await updateIsAboveHalfCredit(false);
+          await refreshUnread();
         }
       } catch (err) {
         console.error("Credit balance check failed:", err);
@@ -67,7 +70,7 @@ export function useCreditsNotification() {
     };
 
     handleCreditBalanceCheck();
-  }, [credits, isCreditsLoading]);
+  }, [credits, isCreditsLoading, refreshUnread]);
 
   // Process credit events and add as notifications
   useEffect(() => {
@@ -115,6 +118,7 @@ export function useCreditsNotification() {
             notificationLinkText: "Jump to Files",
             notificationLink: "/files",
           });
+          await refreshUnread();
         }
       } catch (err) {
         console.error("Credit-event processing failed:", err);
