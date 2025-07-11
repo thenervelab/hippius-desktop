@@ -186,7 +186,6 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&file_path_str) {
-                        println!("[FolderSync] File {:?} was recently uploaded, skipping event.", path);
                         continue;
                     }
                 }
@@ -211,7 +210,6 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&file_path_str) {
-                        println!("[FolderSync] File {:?} was recently uploaded, skipping modification event.", path);
                         continue;
                     }
                 }
@@ -235,7 +233,6 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
     {
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         if uploading_files.contains(&file_path_str) {
-            println!("[FolderSync] File {:?} is already being uploaded, skipping.", path);
             return false;
         }
         uploading_files.insert(file_path_str.clone());
@@ -243,7 +240,6 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
 
     // Check if file is already in the DB
     if is_file_in_profile_db(path, account_id) {
-        println!("[FolderSync] File {:?} already in profile, skipping upload.", path);
         // Remove from uploading set
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         uploading_files.remove(&file_path_str);
