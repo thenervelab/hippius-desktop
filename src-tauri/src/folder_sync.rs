@@ -4,7 +4,7 @@ use std::sync::mpsc::channel;
 use std::thread;
 use crate::constants::substrate::{SYNC_PATH};
 use crate::constants::ipfs::{API_URL};
-use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse, DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
+use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use crate::commands::ipfs_commands::{encrypt_and_upload_file};
 use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
 use tauri::async_runtime::block_on;
@@ -134,10 +134,6 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                 let result = encrypt_and_upload_file(
                     job.account_id.clone(),
                     job.file_path.clone(),
-                    API_URL.to_string(),
-                    Some(DEFAULT_K),
-                    Some(DEFAULT_M),
-                    Some(DEFAULT_CHUNK_SIZE),
                     job.seed_phrase.clone()
                 ).await;
 
@@ -261,10 +257,6 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
     let result = block_on(encrypt_and_upload_file(
         account_id.to_string(),
         file_path,
-        API_URL.to_string(),
-        Some(DEFAULT_K),
-        Some(DEFAULT_M),
-        Some(DEFAULT_CHUNK_SIZE),
         seed_phrase.to_string()
     ));
 

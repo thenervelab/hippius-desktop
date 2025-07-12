@@ -1,86 +1,93 @@
-// app/components/DemoIpfsUpload.tsx
-import React, { useRef, useState } from "react";
-
+/* eslint-disable @typescript-eslint/no-explicit-any */
+"use client";
+import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-async function uploadToIpfs(file: File): Promise<string> {
-  const formData = new FormData();
-  formData.append("file", file);
+export default function DirectStorageRequestDemo({ 
+  seedPhrase, 
+  accountId 
+}: { 
+  seedPhrase: string; 
+  accountId: string 
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [metadataCid, setMetadataCid] = useState<string>("");
+  const [downloadedUrl, setDownloadedUrl] = useState<string>("");
+  const [status, setStatus] = useState<string>("");
 
-  const response = await fetch("http://localhost:5001/api/v0/add", {
-    method: "POST",
-    body: formData,
-  });
 
-  if (!response.ok) {
-    throw new Error(`IPFS upload failed: ${response.statusText}`);
-  }
-
-  // The response is NDJSON (newline-delimited JSON), but for a single file, it's just one line
-  const text = await response.text();
-  // Each line is a JSON object; for a single file, just parse the first line
-  const firstLine = text.split("\n")[0];
-  const data = JSON.parse(firstLine);
-
-  // The CID is in the "Hash" field
-  return data.Hash;
-}
-
-export async function directStorageRequest(files: FileList, seedPhrase: string) {
-  // 1. Upload each file to IPFS and get the CID
-  const inputs = await Promise.all(
-    Array.from(files).map(async file => {
-      const cid = await uploadToIpfs(file); // <-- Upload and get CID
-      return {
-        file_hash: Array.from(new TextEncoder().encode(cid)), // Convert CID to Vec<u8>
-        file_name: Array.from(new TextEncoder().encode(file.name)),
-      };
-    })
-  );
-
-  // 2. Call the Tauri command
-  return invoke<string>("storage_request_tauri", {
-    filesInput: inputs,
-    minerIds: null,
-    seedPhrase,
-  });
-}
-
-export default function DirectStorageRequestDemo({ seedPhrase }: { seedPhrase: string }) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFile(e.target.files?.[0] || null);
+  };
 
   const handleUpload = async () => {
-    setResult(null);
-    setError(null);
-    const files = fileInputRef.current?.files;
-    if (!files || files.length === 0) {
-      setError("Please select at least one file.");
-      return;
-    }
-    setLoading(true);
+    if (!file) return;
+    setStatus("Uploading...");
     try {
-      const res = await directStorageRequest(files, seedPhrase);
-      setResult(res as string);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
+      const arrayBuffer = await file.arrayBuffer();
+      const tempPath = `/tmp/${file.name}`;
+      // Write file to disk using Rust command
+      await invoke("write_file", {
+        path: tempPath,
+        data: Array.from(new Uint8Array(arrayBuffer)),
+      });
+      // Call the Rust erasure coding upload command
+      const result = await invoke<string>("encrypt_and_upload_file", {
+        accountId: accountId,
+        filePath: tempPath,
+        seedPhrase: seedPhrase,
+      });
+      setMetadataCid(result);
+      setStatus("Upload successful! Metadata CID: " + result);
+    } catch (e: any) {
+      setStatus("Upload failed: " + e.toString());
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!metadataCid || !file) return;
+    setStatus("Downloading...");
+    try {
+      const outputPath = `/tmp/dec_${file.name}`;
+      await invoke("download_and_decrypt_file", {
+        account_id: accountId,
+        metadata_cid: metadataCid,
+        output_file: outputPath,
+      });
+      // Read the file from disk using Rust command
+      const data: number[] = await invoke("read_file", { path: outputPath });
+      const blob = new Blob([new Uint8Array(data)]);
+      const url = URL.createObjectURL(blob);
+      setDownloadedUrl(url);
+      setStatus("Download successful!");
+    } catch (e: any) {
+      setStatus("Download failed: " + e.toString());
     }
   };
 
   return (
-    <div style={{ maxWidth: 400, margin: "2rem auto", padding: 24, border: "1px solid #eee", borderRadius: 8 }}>
-      <h2>Direct Storage Request Demo</h2>
-      <input type="file" multiple ref={fileInputRef} disabled={loading} />
-      <br />
-      <button onClick={handleUpload} disabled={loading} style={{ marginTop: 12 }}>
-        {loading ? "Uploading..." : "Upload"}
+    <div>
+      <h2>IPFS Encrypted Upload/Download (Erasure Coding Test)</h2>
+      <input type="file" onChange={handleFileChange} />
+      <button onClick={handleUpload} disabled={!file}>
+        Upload & Encrypt
       </button>
-      {result && <div style={{ color: "green", marginTop: 12 }}>{result}</div>}
-      {error && <div style={{ color: "red", marginTop: 12 }}>{error}</div>}
+      {metadataCid && (
+        <>
+          <div>
+            <strong>Metadata CID:</strong> {metadataCid}
+          </div>
+          <button onClick={handleDownload}>Download & Decrypt</button>
+        </>
+      )}
+      {downloadedUrl && (
+        <div>
+          <a href={downloadedUrl} download={file ? `dec_${file.name}` : "file"}>
+            Download Decrypted File
+          </a>
+        </div>
+      )}
+      <div>{status}</div>
     </div>
   );
 }
