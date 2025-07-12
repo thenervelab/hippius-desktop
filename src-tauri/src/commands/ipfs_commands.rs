@@ -20,18 +20,21 @@ use crate::DB_POOL;
 use crate::commands::types::*;
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
+use crate::constants::folder_sync::{DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
 
 #[tauri::command]
 pub async fn encrypt_and_upload_file(
     account_id: String,
     file_path: String,
-    api_url: String,
-    k: Option<usize>,
-    m: Option<usize>,
-    chunk_size: Option<usize>,
     seed_phrase: String
 ) -> Result<String, String> {
     use std::path::Path;
+    
+    let api_url = "http://127.0.0.1:5001";
+    let k = DEFAULT_K;
+    let m = DEFAULT_M;
+    let chunk_size = DEFAULT_CHUNK_SIZE; // 1MB
+    
     // Extract file name from file_path
     let file_name = Path::new(&file_path)
         .file_name()
@@ -53,11 +56,8 @@ pub async fn encrypt_and_upload_file(
         }
     }
 
-    let k = k.unwrap_or(DEFAULT_K);
-    let m = m.unwrap_or(DEFAULT_M);
-    let chunk_size = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
     let file_path_cloned = file_path.clone();
-    let api_url_cloned = api_url.clone();
+    let api_url_cloned = api_url.to_string();
     // Run blocking work and return file_name and metadata_cid
     let (file_name, metadata_cid) = tokio::task::spawn_blocking(move || {
         // Read file
@@ -160,7 +160,7 @@ pub async fn encrypt_and_upload_file(
     println!(" Metadata CID: {}", metadata_cid);
 
     // Call request_file_storage and log its returned CID
-    let storage_result = request_file_storage(&file_name, &metadata_cid, &api_url, &seed_phrase).await;
+    let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => println!("[encrypt_and_upload_file] : {}", res),
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
@@ -172,9 +172,11 @@ pub async fn encrypt_and_upload_file(
 pub async fn download_and_decrypt_file(
     account_id: String,
     metadata_cid: String,
-    api_url: String,
     output_file: String,
 ) -> Result<(), String> {
+    // Define the API URL inside the function
+    let api_url = "http://127.0.0.1:5001";
+    
     tokio::task::spawn_blocking(move || {
         // Download metadata
         let metadata_bytes =
