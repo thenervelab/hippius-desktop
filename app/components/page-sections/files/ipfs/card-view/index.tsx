@@ -1,7 +1,7 @@
 import React, { FC, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, LinkIcon, Copy, Download, Trash2, HardDrive } from "lucide-react";
+import { MoreVertical, LinkIcon, Copy, Download, Trash2, HardDrive, Share } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import usePagination from "@/lib/hooks/use-pagination";
@@ -23,6 +23,8 @@ import FileDetailsDialog, { FileDetail } from "../files-table/UnpinFilesDialog";
 import FileContextMenu from "@/app/components/ui/context-menu";
 import SidebarDialog from "@/app/components/ui/sidebar-dialog";
 import FileDetailsDialogContent from "../file-details-dialog-content";
+import { Icons } from "@/app/components/ui";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 // Custom event names for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -336,19 +338,43 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                                                     dropDownMenuTriggerClass="size-5 text-grey-60 flex items-center"
                                                     items={[
                                                         {
-                                                            icon: <LinkIcon className="size-4" />,
-                                                            itemTitle: "View on IPFS",
-                                                            onItemClick: () => {
-                                                                if (fileType === "video") {
+                                                            icon: <Download className="size-4" />,
+                                                            itemTitle: "Download",
+                                                            onItemClick: async () => {
+                                                                downloadIpfsFile(file);
+                                                            },
+                                                        },
+                                                        ...(((fileType === "video" || fileType === "image" || fileType === "pdfDocument")) ?
+                                                            [{
+                                                                icon: <Icons.Eye className="size-4" />,
+                                                                itemTitle: "View",
+                                                                onItemClick: () => {
                                                                     setSelectedFile(file);
-                                                                } else {
-                                                                    window.open(
-                                                                        `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`,
-                                                                        "_blank"
-                                                                    );
+                                                                },
+                                                            }] : []),
+                                                        {
+                                                            icon: <Share className="size-4" />,
+                                                            itemTitle: "Go To Explorer",
+                                                            onItemClick: async () => {
+                                                                try {
+                                                                    await openUrl(`http://hipstats.com/cid-tracker/${decodeHexCid(file.cid)}`);
+                                                                } catch (error) {
+                                                                    console.error("Failed to open Explorer:", error);
                                                                 }
                                                             },
                                                         },
+                                                        {
+                                                            icon: <LinkIcon className="size-4" />,
+                                                            itemTitle: "View on IPFS",
+                                                            onItemClick: async () => {
+                                                                try {
+                                                                    await openUrl(`https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`);
+                                                                } catch (error) {
+                                                                    console.error("Failed to open on IPFS:", error);
+                                                                }
+                                                            },
+                                                        },
+
                                                         {
                                                             icon: <Copy className="size-4" />,
                                                             itemTitle: "Copy Link",
@@ -362,11 +388,12 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                                                                     });
                                                             },
                                                         },
+
                                                         {
-                                                            icon: <Download className="size-4" />,
-                                                            itemTitle: "Download",
-                                                            onItemClick: async () => {
-                                                                downloadIpfsFile(file);
+                                                            icon: <Icons.InfoCircle className="size-4" />,
+                                                            itemTitle: "File Details",
+                                                            onItemClick: () => {
+                                                                handleShowFileDetails(file);
                                                             },
                                                         },
                                                         ...(file.isAssigned

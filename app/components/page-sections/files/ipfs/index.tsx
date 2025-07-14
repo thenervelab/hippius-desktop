@@ -1,37 +1,28 @@
 "use client";
 
 import { FC, useEffect, useRef, useMemo, useState, useCallback } from "react";
-import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
+import useUserIpfsFiles, { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { RefreshButton, Icons, SearchInput, WaitAMoment } from "@/components/ui";
 import AddButton from "./AddFileButton";
 import FilesTable from "./files-table";
 import CardView from "./card-view";
 import { cn } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
-import FileDetailsDialog, {
-  FileDetail,
-} from "./files-table/UnpinFilesDialog";
+import FileDetailsDialog, { FileDetail } from "./files-table/UnpinFilesDialog";
 import InsufficientCreditsDialog from "./InsufficientCreditsDialog";
 import SidebarDialog from "@/components/ui/sidebar-dialog";
 import UploadStatusWidget from "./UploadStatusWidget";
 import FilterDialogContent from "./filter-dialog-content";
 import IPFSNoEntriesFound from "./files-table/IpfsNoEntriesFound";
-import FilterChips, { ActiveFilter } from "./filter-chips";
+import FilterChips from "./filter-chips";
 import { FileTypes } from "@/lib/types/fileTypes";
-import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
-import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
-import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import { filterFiles, generateActiveFilters, ActiveFilter } from "@/lib/utils/fileFilterUtils";
+import { usePolkadotApi } from "@/lib/polkadot-api-context";
+import { enrichFilesWithTimestamps } from "@/lib/utils/blockTimestampUtils";
 
-// Date filter options with their labels
-const DATE_OPTIONS = {
-  today: "Today",
-  last7days: "Last 7 days",
-  last30days: "Last 30 days",
-  thisyear: "This year",
-  lastyear: "Last year",
-};
 
 const Ipfs: FC = () => {
+  const { api } = usePolkadotApi();
   const {
     data,
     isLoading,
@@ -57,9 +48,11 @@ const Ipfs: FC = () => {
   // Active filters state
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
 
-  // Unpinned files state - moved from FilesTable to parent
   const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
   const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
+
+  // New state for files with timestamps
+  const [filesWithTimestamps, setFilesWithTimestamps] = useState<Array<FormattedUserIpfsFile & { timestamp?: Date | null }>>([]);
 
   // Filter out deleted files
   const allFilteredData = useMemo(() => {
@@ -92,125 +85,38 @@ const Ipfs: FC = () => {
     }
   }, [unpinnedFileDetails]);
 
-  // Apply all filters to the data
-  const filteredData = useMemo(() => {
-    if (!allFilteredData.length) return [];
-
-    let result = [...allFilteredData];
-
-    // Apply search filter if search term exists
-    if (searchTerm.trim()) {
-      const search = searchTerm.toLowerCase().trim();
-      result = result.filter(file =>
-        file.name.toLowerCase().includes(search)
-      );
-    }
-
-    // Apply file type filter if any types are selected
-    if (selectedFileTypes.length > 0) {
-      result = result.filter(file => {
-        const { fileFormat } = getFilePartsFromFileName(file.name);
-        const fileType = getFileTypeFromExtension(fileFormat || null);
-        return selectedFileTypes.includes(fileType as FileTypes);
-      });
-    }
-
-    // Apply date filter if selected
-    if (selectedDate) {
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-      switch (selectedDate) {
-        case 'today':
-          result = result.filter(file => {
-            const fileDate = new Date(file.createdAt);
-            return fileDate >= today;
-          });
-          break;
-
-        case 'last7days':
-          const sevenDaysAgo = new Date();
-          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-          result = result.filter(file => {
-            const fileDate = new Date(file.createdAt);
-            return fileDate >= sevenDaysAgo;
-          });
-          break;
-
-        case 'last30days':
-          const thirtyDaysAgo = new Date();
-          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-          result = result.filter(file => {
-            const fileDate = new Date(file.createdAt);
-            return fileDate >= thirtyDaysAgo;
-          });
-          break;
-
-        case 'thisyear':
-          const firstDayOfYear = new Date(now.getFullYear(), 0, 1);
-          result = result.filter(file => {
-            const fileDate = new Date(file.createdAt);
-            return fileDate >= firstDayOfYear;
-          });
-          break;
-
-        case 'lastyear':
-          const firstDayLastYear = new Date(now.getFullYear() - 1, 0, 1);
-          const lastDayLastYear = new Date(now.getFullYear() - 1, 11, 31);
-          result = result.filter(file => {
-            const fileDate = new Date(file.createdAt);
-            return fileDate >= firstDayLastYear && fileDate <= lastDayLastYear;
-          });
-          break;
-      }
-    }
-
-    // Apply file size filter if value is greater than 0
-    if (selectedFileSize > 0) {
-      result = result.filter(file => {
-        if (!file.size) return false; // Skip files without size info
-        return BigInt(file.size) >= BigInt(selectedFileSize);
-      });
-    }
-
-    return result;
-  }, [allFilteredData, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
-
-  // Update active filters whenever applied filters change (not temp filters)
+  // Enrich files with timestamps when allFilteredData or api changes
   useEffect(() => {
-    const newActiveFilters: ActiveFilter[] = [];
+    const enrichFiles = async () => {
+      if (allFilteredData.length && api) {
+        const enriched = await enrichFilesWithTimestamps(api, allFilteredData);
+        // Ensure the enriched array is typed correctly
+        setFilesWithTimestamps(
+          enriched as Array<FormattedUserIpfsFile & { timestamp?: Date | null }>
+        );
+      } else {
+        setFilesWithTimestamps([]);
+      }
+    };
 
-    // Add file type filters
-    selectedFileTypes.forEach(type => {
-      newActiveFilters.push({
-        type: 'fileType',
-        value: type,
-        label: 'Type:',
-        displayValue: type.charAt(0).toUpperCase() + type.slice(1)
-      });
+    enrichFiles();
+  }, [allFilteredData, api]);
+
+  const filteredData = useMemo(() => {
+    return filterFiles(filesWithTimestamps, {
+      searchTerm,
+      fileTypes: selectedFileTypes,
+      dateFilter: selectedDate,
+      fileSize: selectedFileSize
     });
+  }, [filesWithTimestamps, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
 
-    // Add date filter
-    if (selectedDate) {
-      newActiveFilters.push({
-        type: 'date',
-        value: selectedDate,
-        label: 'Date upload:',
-        displayValue: DATE_OPTIONS[selectedDate as keyof typeof DATE_OPTIONS]
-      });
-    }
-
-    // Add file size filter
-    if (selectedFileSize > 0) {
-      newActiveFilters.push({
-        type: 'fileSize',
-        value: String(selectedFileSize),
-        label: 'File size:',
-        // Changed from ≤ to ≥ to reflect the new filter behavior
-        displayValue: `≥ ${formatBytesFromBigInt(BigInt(selectedFileSize))}`
-      });
-    }
-
+  useEffect(() => {
+    const newActiveFilters = generateActiveFilters(
+      selectedFileTypes,
+      selectedDate,
+      selectedFileSize
+    );
     setActiveFilters(newActiveFilters);
   }, [selectedFileTypes, selectedDate, selectedFileSize]);
 
@@ -282,7 +188,7 @@ const Ipfs: FC = () => {
   }, [error]);
 
   const renderContent = () => {
-    if (isLoading) {
+    if (isLoading || isFetching) {
       return <WaitAMoment />;
     }
 
