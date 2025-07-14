@@ -7,6 +7,7 @@ interface NotificationListProps {
   selectedNotificationId?: number | null;
   onSelectNotification: (id: number) => void;
   onReadStatusChange?: (id: number, isUnread: boolean) => void;
+  onClose?: () => void;
 }
 
 const NotificationMenuList: React.FC<NotificationListProps> = ({
@@ -14,6 +15,7 @@ const NotificationMenuList: React.FC<NotificationListProps> = ({
   selectedNotificationId,
   onSelectNotification,
   onReadStatusChange,
+  onClose,
 }) => {
   return (
     <div className="flex flex-col gap-2 w-[396px]   pb-4 h-[340px] overflow-y-auto overflow-x-hidden ">
@@ -21,6 +23,7 @@ const NotificationMenuList: React.FC<NotificationListProps> = ({
         <NotificationMenuItem
           key={notification.id}
           id={notification.id}
+          onClose={onClose}
           icon={notification.icon}
           notificationType={notification.type}
           notificationText={notification.title}

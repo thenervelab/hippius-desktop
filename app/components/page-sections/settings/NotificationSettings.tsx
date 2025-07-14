@@ -1,36 +1,33 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
 import { CardButton, Icons, RevealTextLine } from "../../ui";
 import SectionHeader from "./SectionHeader";
 import { toast } from "sonner";
 import { InView } from "react-intersection-observer";
-
-type NotificationType = {
-  id: string;
-  label: string;
-  description: string;
-};
-
-const NOTIFICATION_TYPES: NotificationType[] = [
-  {
-    id: "credits",
-    label: "Credits",
-    description:
-      "Sends an alert when fresh credits land in your account or when your balance falls near zero, giving you time to top up before uploads pause."
-  },
-  {
-    id: "files",
-    label: "Files",
-    description:
-      "Pings you the moment a file sync completes, confirming your data is stored safely and ready whenever you need it."
-  }
-];
+import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
+import { useSetAtom } from "jotai";
+import { 
+  refreshEnabledTypesAtom,
+  refreshNotificationsAtom 
+} from "@/components/page-sections/notifications/notificationStore";
 
 const NotificationSettings: React.FC = () => {
-  const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>(
-    NOTIFICATION_TYPES.reduce((acc, item) => ({ ...acc, [item.id]: false }), {})
-  );
+  const { preferences, savePreferences } = useNotificationPreferences();
+  const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
+  const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
+  const refreshNotifications = useSetAtom(refreshNotificationsAtom);
+
+  // Update local state when preferences load
+  useEffect(() => {
+    if (preferences.length > 0) {
+      const initialState = preferences.reduce(
+        (acc, item) => ({ ...acc, [item.id]: item.enabled }),
+        {}
+      );
+      setCheckedItems(initialState);
+    }
+  }, [preferences]);
 
   const handleCheckboxChange = (id: string) => {
     setCheckedItems((prev) => ({
@@ -40,7 +37,7 @@ const NotificationSettings: React.FC = () => {
   };
 
   const handleSelectAll = () => {
-    const allSelected = NOTIFICATION_TYPES.reduce(
+    const allSelected = preferences.reduce(
       (acc, item) => ({ ...acc, [item.id]: true }),
       {}
     );
@@ -48,16 +45,25 @@ const NotificationSettings: React.FC = () => {
   };
 
   const handleSelectNone = () => {
-    const noneSelected = NOTIFICATION_TYPES.reduce(
+    const noneSelected = preferences.reduce(
       (acc, item) => ({ ...acc, [item.id]: false }),
       {}
     );
     setCheckedItems(noneSelected);
   };
 
-  const handleSaveChanges = () => {
-    // Here you would implement saving these preferences to your backend
-    toast.success("Notification preferences saved successfully");
+  const handleSaveChanges = async () => {
+    const success = await savePreferences(checkedItems);
+    if (success) {
+      // First refresh enabled notification types
+      await refreshEnabledTypes();
+      // Then refresh the notifications list to apply filtering
+      await refreshNotifications();
+      
+      toast.success("Notification preferences saved successfully");
+    } else {
+      toast.error("Failed to save notification preferences");
+    }
   };
 
   return (
@@ -97,11 +103,11 @@ const NotificationSettings: React.FC = () => {
 
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <div className="mt-4 space-y-4">
-              {NOTIFICATION_TYPES.map((item) => (
+              {preferences.map((item) => (
                 <div key={item.id} className="flex items-start">
                   <Checkbox.Root
                     className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 my-[3px] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50"
-                    checked={checkedItems[item.id]}
+                    checked={checkedItems[item.id] ?? false}
                     onCheckedChange={() => handleCheckboxChange(item.id)}
                     id={item.id}
                   >

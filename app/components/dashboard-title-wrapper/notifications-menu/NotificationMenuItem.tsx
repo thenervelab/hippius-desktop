@@ -23,6 +23,7 @@ interface NotificationItemProps {
   selected?: boolean;
   onClick?: () => void;
   onReadStatusChange?: (id: number, isUnread: boolean) => void;
+  onClose?: () => void;
 }
 
 const NotificationMenuItem: React.FC<NotificationItemProps> = ({
@@ -38,6 +39,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   selected = false,
   onClick,
   onReadStatusChange,
+  onClose,
 }) => {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -54,6 +56,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
       } else {
         router.push(buttonLink);
       }
+      onClose?.();
     }
   };
 

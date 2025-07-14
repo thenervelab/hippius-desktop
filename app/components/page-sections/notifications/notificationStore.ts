@@ -5,6 +5,7 @@ import {
   markRead,
   markUnread,
   markAllRead,
+  getEnabledNotificationTypes,
 } from "@/app/lib/helpers/notificationsDb";
 import { UiNotification } from "../../page-sections/notifications/types";
 import { Icons } from "../../ui";
@@ -13,9 +14,23 @@ import { unreadCount } from "@/lib/helpers/notificationsDb";
 
 export const notificationsAtom = atom<UiNotification[]>([]);
 
+// Atom to store enabled notification types
+export const enabledNotificationTypesAtom = atom<string[]>([]);
+
+// Atom to refresh the enabled notification types
+export const refreshEnabledTypesAtom = atom(null, async (_, set) => {
+  const types = await getEnabledNotificationTypes();
+  set(enabledNotificationTypesAtom, types);
+});
+
 // helper atom → fetch + update list in one call
-export const refreshNotificationsAtom = atom(null, async (_, set) => {
+export const refreshNotificationsAtom = atom(null, async (get, set) => {
+  // First get the enabled types so we can filter by them
+  const enabledTypes = get(enabledNotificationTypesAtom);
+
+  // Fetch all notifications
   const rows = await listNotifications(100);
+
   const mapped = rows.map((r: any[]) => {
     // Extract the timestamp (stored as milliseconds since epoch)
     const timestamp = Number(r[8]);
@@ -38,7 +53,20 @@ export const refreshNotificationsAtom = atom(null, async (_, set) => {
         : new Date(timestamp).toLocaleString(),
     };
   });
-  set(notificationsAtom, mapped);
+
+  const filteredNotifications =
+    enabledTypes.length > 0
+      ? mapped.filter(
+          (notification) =>
+            enabledTypes.includes(notification.type) ||
+            notification.type === "Hippius"
+        )
+      : mapped;
+
+  set(notificationsAtom, filteredNotifications);
+
+  // Make sure to call the refresh function properly
+  set(refreshEnabledTypesAtom);
 });
 
 // write-only atoms for actions
