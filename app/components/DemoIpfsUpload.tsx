@@ -50,9 +50,9 @@ export default function DirectStorageRequestDemo({
     try {
       const outputPath = `/tmp/dec_${file.name}`;
       await invoke("download_and_decrypt_file", {
-        account_id: accountId,
-        metadata_cid: metadataCid,
-        output_file: outputPath,
+        accountId: accountId,
+        metadataCid: metadataCid,
+        outputFile: outputPath,
       });
       // Read the file from disk using Rust command
       const data: number[] = await invoke("read_file", { path: outputPath });
