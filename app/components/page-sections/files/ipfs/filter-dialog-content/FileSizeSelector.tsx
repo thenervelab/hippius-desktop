@@ -25,17 +25,23 @@ const getMaxForUnit = (unit: Unit) => {
 
 interface FileSizeSelectorProps {
   value?: number; // Value in bytes
-  onValueChange?: (value: number) => void; // Callback with value in bytes
+  onValueChange?: (value: number) => void;
+  onUnitChange?: (unit: string) => void;
   className?: string;
+  initialUnit?: string;
 }
 
 export function FileSizeSelector({
   value = 0,
   onValueChange,
+  onUnitChange,
   className,
+  initialUnit = "GB",
 }: FileSizeSelectorProps) {
   const [inputValue, setInputValue] = React.useState("0");
-  const [selectedUnit, setSelectedUnit] = React.useState<Unit>("GB");
+  const [selectedUnit, setSelectedUnit] = React.useState<Unit>(
+    initialUnit as Unit || "GB"
+  );
 
   // Convert bytes to specific unit without changing the selected unit
   const bytesToCurrentUnit = React.useCallback((bytes: number, unit: Unit) => {
@@ -80,6 +86,7 @@ export function FileSizeSelector({
     setSelectedUnit(unit);
     setInputValue(newDisplayValue);
     onValueChange?.(currentBytes);
+    onUnitChange?.(unit);
   };
 
   // Handle slider change
@@ -98,7 +105,7 @@ export function FileSizeSelector({
             value={inputValue}
             onChange={handleInputChange}
             placeholder="0"
-            className="w-[140px] h-12 font-medium font-grotesk pl-3 pr-16 py-3 text-base text-grey-60 placeholder-grey-70 border border-grey-80 rounded-xl focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300 hover:border-grey-70 transition-colors"
+            className="w-[180px] h-12 font-medium font-grotesk pl-3 pr-16 py-3 text-base text-grey-60 placeholder-grey-70 border border-grey-80 rounded-xl focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300 hover:border-grey-70 transition-colors"
           />
           <div className="absolute right-0 top-1/2  h-full">
             <Menubar.Root>

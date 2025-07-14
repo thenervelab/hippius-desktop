@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
-import { request } from "https";
 import { hexToCid } from "../../utils/hexToCid";
 
 export type FileDetail = {
@@ -99,6 +98,8 @@ export const useUserIpfsFiles = () => {
                     fileHash: file.fileHash,
                     fileDetails: []
                 }));
+
+                formattedFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
 
                 return {
                     files: formattedFiles,

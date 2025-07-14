@@ -22,27 +22,27 @@ const fileTypes: Array<{
   icon: React.FC<Record<string, unknown>>;
   color: string;
 }> = [
-  { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
-  { type: "image", label: "Picture", icon: Image, color: "text-[#ea4335]" },
-  {
-    type: "document",
-    label: "Unknown",
-    icon: File,
-    color: "text-primary-70 fill-primary-60",
-  },
-  { type: "pdfDocument", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
-  {
-    type: "presentationDocument",
-    label: "PPT",
-    icon: Presentation,
-    color: "text-[#fbbc04]",
-  },
-  { type: "spreadSheet", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
-  { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
-  { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
-  { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
-  { type: "ec", label: "Folder", icon: EC, color: "text-primary-40" },
-];
+    { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
+    { type: "image", label: "Picture", icon: Image, color: "text-[#ea4335]" },
+    {
+      type: "document",
+      label: "Unknown",
+      icon: File,
+      color: "text-primary-70 fill-primary-60",
+    },
+    { type: "pdfDocument", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
+    {
+      type: "presentationDocument",
+      label: "PPT",
+      icon: Presentation,
+      color: "text-[#fbbc04]",
+    },
+    { type: "spreadSheet", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
+    { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
+    { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
+    { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
+    { type: "ec", label: "Folder", icon: EC, color: "text-primary-40" },
+  ];
 
 interface FileTypeSelectorProps {
   selectedTypes?: FileTypes[];
@@ -105,18 +105,17 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
           {fileTypes.map((fileType) => (
             <Menubar.Item
               key={fileType.type}
-              className="flex items-center gap-2  p-2 hover:bg-grey-80 cursor-pointer rounded text-grey-40 text-xs font-medium outline-none w-full"
-              onSelect={(e) => e.preventDefault()}
+              className="flex items-center gap-2 p-2 hover:bg-grey-80 cursor-pointer rounded text-grey-40 text-xs font-medium outline-none w-full"
+              onSelect={(e) => {
+                e.preventDefault();
+                handleTypeToggle(fileType.type);
+              }}
             >
               <input
                 type="checkbox"
                 checked={selectedTypes.includes(fileType.type)}
-                onChange={(e) => {
-                  e.stopPropagation();
-                  handleTypeToggle(fileType.type);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                className="w-4 h-4 text-primary-60 bg-grey-90 border-grey-70 rounded focus:ring-primary-60 focus:ring-2"
+                readOnly
+                className="w-4 h-4 text-primary-60 bg-grey-90 border-grey-70 rounded focus:ring-primary-60 focus:ring-2 pointer-events-none"
               />
               <div className="flex gap-1.5">
                 <div className="flex justify-center items-center p-0.5">
