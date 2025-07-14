@@ -64,7 +64,7 @@ pub async fn encrypt_and_upload_file(
         // Calculate original file hash
         let mut hasher = Sha256::new();
         hasher.update(&file_data);
-        let _original_file_hash = format!("{:x}", hasher.finalize());
+        let original_file_hash = format!("{:x}", hasher.finalize());
 
         // Encrypt using centralized function
         let to_process = encrypt_file_for_account(&account_id, &file_data)?;
@@ -140,7 +140,7 @@ pub async fn encrypt_and_upload_file(
             original_file: OriginalFileInfo {
                 name: file_name.clone(),
                 size: file_data.len(),
-                hash: String::new(), // Not used here
+                hash: original_file_hash, // <-- store the hash here!
                 extension: file_extension,
             },
             erasure_coding: ErasureCodingInfo {
@@ -176,7 +176,7 @@ pub async fn encrypt_and_upload_file(
         Ok(res) => println!("[encrypt_and_upload_file] : {}", res),
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
     }
-    storage_result
+    Ok(metadata_cid)
 }
 
 #[tauri::command]
