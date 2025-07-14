@@ -13,17 +13,29 @@ import {
 } from "@/app/lib/helpers/notificationsDb";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import { useSetAtom } from "jotai";
-import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
+import { useSetAtom, useAtom } from "jotai";
+import {
+  refreshUnreadCountAtom,
+  enabledNotificationTypesAtom,
+} from "@/components/page-sections/notifications/notificationStore";
 const TEST_OFFSET = 0;
 
 export function useCreditsNotification() {
   const { data: creditEvents, isSuccess } = useAddCreditEvent({ limit: 50 });
   const { data: credits, isLoading: isCreditsLoading } = useUserCredits();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
+  const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
+
+  const areCreditsNotificationsEnabled = enabledTypes.includes("Credits");
+
   // Handle low credit notifications based on balance
   useEffect(() => {
-    if (isCreditsLoading || credits === undefined) return;
+    if (
+      !areCreditsNotificationsEnabled ||
+      isCreditsLoading ||
+      credits === undefined
+    )
+      return;
 
     const handleCreditBalanceCheck = async () => {
       try {
@@ -69,11 +81,17 @@ export function useCreditsNotification() {
     };
 
     handleCreditBalanceCheck();
-  }, [credits, isCreditsLoading, refreshUnread]);
+  }, [
+    credits,
+    isCreditsLoading,
+    refreshUnread,
+    areCreditsNotificationsEnabled,
+  ]);
 
   // Process credit events and add as notifications
   useEffect(() => {
-    if (!isSuccess || !creditEvents?.length) return;
+    if (!areCreditsNotificationsEnabled || !isSuccess || !creditEvents?.length)
+      return;
 
     const run = async () => {
       try {
@@ -110,8 +128,9 @@ export function useCreditsNotification() {
           await addNotification({
             notificationType: "Credits",
             notificationSubtype: subtype,
-            notificationTitleText: `🎁 Woo-hoo! ${amount} credit${+amount > 1 ? "s" : ""
-              } just landed.`,
+            notificationTitleText: `🎁 Woo-hoo! ${amount} credit${
+              +amount > 1 ? "s" : ""
+            } just landed.`,
             notificationDescription: `Fresh ${+amount > 1 ? "credits" : "credit"} are in your wallet. Use them right away to upload or  sync files with zero delay. Hit Jump to 'Files' and make something awesome.`,
             notificationLinkText: "Jump to Files",
             notificationLink: "/",
@@ -124,5 +143,5 @@ export function useCreditsNotification() {
     };
 
     run();
-  }, [creditEvents, isSuccess, refreshUnread]);
+  }, [creditEvents, isSuccess, refreshUnread, areCreditsNotificationsEnabled]);
 }

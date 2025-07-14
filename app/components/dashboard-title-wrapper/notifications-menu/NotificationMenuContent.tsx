@@ -1,33 +1,52 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import NotificationMenuHeader from "./NotificationMenuHeader";
 import NotificationOptionSelect from "./NotificationOptionSelect";
 import NotificationMenuList from "./NotificationMenuList";
 import { useNotifications } from "@/lib/hooks/useNotifications";
-import { useSetAtom } from "jotai";
-import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
+import { useSetAtom, useAtom } from "jotai";
+import {
+  refreshUnreadCountAtom,
+  enabledNotificationTypesAtom,
+  refreshEnabledTypesAtom,
+} from "@/components/page-sections/notifications/notificationStore";
 import { toast } from "sonner";
 import NoNotificationsFound from "../../page-sections/notifications/NoNotificationsFound";
+import NoNotificationsEnabled from "../../page-sections/notifications/NoNotificationsEnabled";
 import NotificationMenuFooter from "./NotificationMenuFooter";
+import {
+  settingsDialogOpenAtom,
+  activeSettingsTabAtom,
+} from "@/app/components/sidebar/sideBarAtoms";
 
 interface Props {
   count: number;
   onClose?: () => void;
 }
 
-const notificationOptions = [
-  { label: "View All", value: "all" },
-  { label: "Credits", value: "credits" },
-  { label: "Files", value: "files" },
-];
-
 const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
-  const [selected, setSelected] = useState(notificationOptions[0].value);
+  const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
+  const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
-
   const router = useRouter();
+  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
+  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
+
+  // Dynamic notification options - only include "View All" if there are enabled types
+  const notificationOptions = useMemo(
+    () => [
+      ...(enabledTypes.length > 0 ? [{ label: "View All", value: "all" }] : []),
+      ...enabledTypes.map((type) => ({
+        label: type,
+        value: type.toLowerCase(),
+      })),
+    ],
+    [enabledTypes]
+  );
+
+  const [selected, setSelected] = useState(notificationOptions[0]?.value || "");
 
   // shared store
   const { notifications, refresh, markRead, markUnread, markAllRead } =
@@ -37,6 +56,21 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Load enabled notification types
+  useEffect(() => {
+    refreshEnabledTypes();
+  }, [refreshEnabledTypes]);
+
+  // Update selected value when options change
+  useEffect(() => {
+    if (
+      notificationOptions.length > 0 &&
+      !notificationOptions.some((opt) => opt.value === selected)
+    ) {
+      setSelected(notificationOptions[0].value);
+    }
+  }, [notificationOptions, selected]);
 
   // filtering (case-insensitive match)
   const visible = notifications.filter((n) =>
@@ -64,35 +98,50 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
     refreshUnread();
   };
 
+  const handleOpenSettings = () => {
+    onClose?.(); // Close the menu
+    // Set the active tab to "Notifications" before opening settings
+    setActiveSettingsTab("Notifications");
+    setSettingsDialogOpen(true);
+  };
+
   return (
     <>
       <NotificationMenuHeader count={count} onClose={onClose} />
 
       <div className="p-4 flex flex-col gap-4">
-        <div className="flex justify-between">
-          <NotificationOptionSelect
-            options={notificationOptions}
-            value={selected}
-            onChange={setSelected}
+        {notificationOptions.length > 0 && (
+          <div className="flex justify-between">
+            <NotificationOptionSelect
+              options={notificationOptions}
+              value={selected}
+              onChange={setSelected}
+            />
+            <button
+              className="px-3 py-2 items-center text-sm rounded-md text-grey-70 hover:bg-gray-100 active:bg-gray-200 active:text-gray-700 focus:bg-gray-200 focus:text-gray-700 leading-5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300"
+              onClick={handleAllRead}
+            >
+              Mark all as Read
+            </button>
+          </div>
+        )}
+        {enabledTypes.length === 0 ? (
+          <NoNotificationsEnabled
+            heightClassName="h-[340px]"
+            onOpenSettings={handleOpenSettings}
           />
-          <button
-            className="px-3 py-2 items-center text-sm rounded-md text-grey-70 hover:bg-gray-100 active:bg-gray-200 active:text-gray-700 focus:bg-gray-200 focus:text-gray-700 leading-5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300"
-            onClick={handleAllRead}
-          >
-            Mark all as Read
-          </button>
-        </div>
-        {visible.length === 0 ? (
+        ) : visible.length === 0 ? (
           <NoNotificationsFound heightClassName="h-[340px]" />
         ) : (
           <NotificationMenuList
             notifications={visible}
             onSelectNotification={handleSelect}
             onReadStatusChange={handleReadToggle}
+            onClose={onClose}
           />
         )}
       </div>
-      <NotificationMenuFooter />
+      <NotificationMenuFooter onClose={onClose} />
     </>
   );
 };

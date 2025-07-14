@@ -1,10 +1,11 @@
 import React, { useState } from "react";
-import { CardButton, RevealTextLine } from "../../ui";
+import { CardButton, Icons, RevealTextLine } from "../../ui";
 import { Trash } from "../../ui/icons";
 import { InView } from "react-intersection-observer";
 import DeleteAccountConfirmation from "./DeleteAccountConfirmation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
+import SectionHeader from "./SectionHeader";
 
 const AccountActionButtons = () => {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -20,7 +21,7 @@ const AccountActionButtons = () => {
       await resetWallet();
 
       toast.success("Your account has been successfully deleted", {
-        duration: 4000,
+        duration: 4000
       });
     } catch (error) {
       console.log("Failed to delete account:", error);
@@ -35,16 +36,16 @@ const AccountActionButtons = () => {
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
-        <div ref={ref} className="flex gap-6 w-full">
+        <div
+          ref={ref}
+          className="flex gap-12 w-full flex-col border broder-grey-80 rounded-lg p-4"
+        >
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-            <div className="flex gap-0.5 flex-col">
-              <div className="text-grey-10 text-lg leading-6 font-medium ">
-                Remove Your Account
-              </div>
-              <div className="text-sm text-grey-60">
-                Deleting your account will erase all Hippius data stored on this device. Make sure you back up encrypted seed before you proceed.
-              </div>
-            </div>
+            <SectionHeader
+              Icon={Icons.Trash}
+              title="Remove Your Account"
+              subtitle="Deleting your account will erase all Hippius data stored on this device. Make sure you back up encrypted seed before you proceed."
+            />
           </RevealTextLine>
 
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">

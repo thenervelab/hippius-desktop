@@ -10,6 +10,7 @@ export interface TabItemProps {
   onClick: () => void;
   width?: string;
   height?: string;
+  isJustifyStart?: boolean;
 }
 
 const TabItem: React.FC<TabItemProps> = ({
@@ -19,14 +20,16 @@ const TabItem: React.FC<TabItemProps> = ({
   onClick,
   width = "min-w-[148px]",
   height = "h-[36px]",
+  isJustifyStart = false
 }) => {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 px-4 relative transition-all duration-300 cursor-pointer",
+        "flex items-center gap-2  relative transition-all duration-300 cursor-pointer",
         width,
         height,
-        isActive ? "text-primary-50" : "text-grey-70"
+        isActive ? "text-primary-50" : "text-grey-70",
+        isJustifyStart ? "px-2" : "px-4"
       )}
       onClick={onClick}
     >
@@ -34,12 +37,13 @@ const TabItem: React.FC<TabItemProps> = ({
       <div
         className={cn(
           "relative z-10 flex items-center justify-center gap-2 w-full",
-          isActive ? "text-primary-50" : "text-grey-70 hover:text-primary-50"
+          isActive ? "text-primary-50" : "text-grey-70 hover:text-primary-50",
+          isJustifyStart ? "justify-start" : "justify-center"
         )}
       >
         <span>
           {React.cloneElement(icon as React.ReactElement<any>, {
-            className: "size-[18px]",
+            className: "size-[18px]"
           })}
         </span>
         <span className="font-medium text-[14px]">{label}</span>

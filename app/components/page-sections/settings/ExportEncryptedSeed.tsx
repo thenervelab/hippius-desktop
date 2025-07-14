@@ -10,7 +10,7 @@ interface ExportEncryptedSeedProps {
 }
 
 const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
-  className,
+  className
 }) => {
   const [isExporting, setIsExporting] = useState(false);
 
@@ -20,7 +20,7 @@ const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
       const success = await exportWalletAsZip();
       if (success) {
         toast.success("Backup file exported successfully", {
-          duration: 3000,
+          duration: 3000
         });
       }
     } catch (error) {
@@ -43,20 +43,20 @@ const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
             <AbstractIconWrapper className="min-w-[40px] size-8 sm:size-10 text-primary-40">
               <Icons.Wallet className="absolute text-primary-40 size-4 sm:size-5" />
             </AbstractIconWrapper>
-            <div className="flex flex-col ml-4">
-              <span className="text-base leading-[22px] font-medium mb-3 text-grey-60">
-                Encrypted seed
-              </span>
-              <div className="text-[22px] leading-8 mb-1 font-medium text-grey-10">
-                Export your encrypted seed
-              </div>
-              <div className="text-sm text-grey-60 mb-3">
-                Download an encrypted backup for secure storage and recovery.
-              </div>
+          </div>
+          <div className="flex flex-col mt-4">
+            <span className="text-base leading-[22px] font-medium mb-3 text-grey-60">
+              Encrypted seed
+            </span>
+            <div className="text-[22px] leading-8 mb-1 font-medium text-grey-10">
+              Export your encrypted seed
+            </div>
+            <div className="text-sm text-grey-60 mb-3">
+              Download an encrypted backup for secure storage and recovery.
             </div>
           </div>
         </div>
-        <div className="relative mx-11 pb-6   bg-grey-100 w-auto">
+        <div className="relative mx-[22px] pb-[22px]   bg-grey-100 w-auto">
           <CardButton
             className="w-full"
             onClick={handleExport}

@@ -11,6 +11,7 @@ interface NavItemProps {
   className?: string;
   inView: boolean;
   comingSoon?: boolean;
+  onClick?: () => void;
 }
 
 const NavItem: React.FC<NavItemProps> = ({
@@ -22,6 +23,7 @@ const NavItem: React.FC<NavItemProps> = ({
   className,
   inView,
   comingSoon,
+  onClick
 }) => {
   // Create the content of the navigation item
   const navContent = (
@@ -35,12 +37,12 @@ const NavItem: React.FC<NavItemProps> = ({
           majorCell={{
             lineColor: [31, 80, 189, 1.0],
             lineWidth: 2,
-            cellDim: 40,
+            cellDim: 40
           }}
           minorCell={{
             lineColor: [49, 103, 211, 1.0],
             lineWidth: 1,
-            cellDim: 5,
+            cellDim: 5
           }}
           className={"absolute w-full h-full top-0 bottom-0 left-0 opacity-20"}
         />
@@ -59,7 +61,7 @@ const NavItem: React.FC<NavItemProps> = ({
 
       <span
         className={cn("size-4 flex-shrink-0", {
-          "opacity-40": comingSoon,
+          "opacity-40": comingSoon
         })}
       >
         {icon}
@@ -99,6 +101,28 @@ const NavItem: React.FC<NavItemProps> = ({
     );
   }
 
+  // If onClick is provided, render a button instead of a Link
+  if (onClick) {
+    return (
+      <button
+        onClick={onClick}
+        className={cn(
+          "transition-all duration-300 relative group w-full text-left",
+          {
+            "bg-blue-50 text-primary-40": active,
+            "hover:bg-gray-100 hover:text-primary-40 text-grey-70":
+              !active && label !== "Logout",
+            "hover:bg-gray-100 hover:text-red-600 text-error-80":
+              label === "Logout"
+          },
+          className
+        )}
+      >
+        {navContent}
+      </button>
+    );
+  }
+
   // Otherwise, render a regular Link
   return (
     <Link
@@ -110,7 +134,7 @@ const NavItem: React.FC<NavItemProps> = ({
           "hover:bg-gray-100 hover:text-primary-40 text-grey-70":
             !active && label !== "Logout",
           "hover:bg-gray-100 hover:text-red-600 text-error-80":
-            label === "Logout",
+            label === "Logout"
         },
         className
       )}

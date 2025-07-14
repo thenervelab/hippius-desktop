@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { Icons } from "../../ui";
 import * as Switch from "@radix-ui/react-switch";
 import DashboardTitleWrapper from "../../dashboard-title-wrapper";
@@ -8,13 +8,23 @@ import TabList from "../../ui/tabs/tab-list";
 import NotificationList from "./NotificationList";
 import NotificationDetailView from "./NotificationDetailView";
 import NoNotificationsFound from "./NoNotificationsFound";
+import NoNotificationsEnabled from "./NoNotificationsEnabled";
 import { IconComponent } from "@/app/lib/types";
 import { Toaster, toast } from "sonner";
-import { useSetAtom } from "jotai";
-import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
+import { useSetAtom, useAtom } from "jotai";
+import {
+  refreshUnreadCountAtom,
+  enabledNotificationTypesAtom,
+  refreshEnabledTypesAtom,
+} from "@/components/page-sections/notifications/notificationStore";
 import { UiNotification } from "./types";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { useSearchParams } from "next/navigation";
+import {
+  settingsDialogOpenAtom,
+  activeSettingsTabAtom,
+} from "@/app/components/sidebar/sideBarAtoms";
+
 // map DB types → icons
 export const iconMap: Record<string, IconComponent> = {
   Credits: Icons.WalletAdd,
@@ -26,17 +36,68 @@ const Notifications = () => {
   const [activeTab, setActiveTab] = useState("All");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [onlyUnread, setOnlyUnread] = useState(false);
+  const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
+  const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
+  const [settingsDialogOpen] = useAtom(settingsDialogOpenAtom);
+
   const searchParams = useSearchParams();
+  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
+  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
 
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
   const { notifications, refresh, markRead, markUnread, markAllRead } =
     useNotifications();
 
+  // Dynamically build tabs based on enabled notification types
+  // Only include "All" tab if there's at least one enabled notification type
+  const tabs = useMemo(
+    () => [
+      ...(enabledTypes.length > 0
+        ? [{ tabName: "All", icon: <Icons.MaximizeCircle /> }]
+        : []),
+      ...enabledTypes.map((type) => ({
+        tabName: type,
+        icon: iconMap[type] ? (
+          React.createElement(iconMap[type])
+        ) : (
+          <Icons.Document />
+        ),
+      })),
+    ],
+    [enabledTypes]
+  );
+
   // load list on mount
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    refreshEnabledTypes();
+  }, [refresh, refreshEnabledTypes]);
+
+  // Refresh enabled types when settings dialog closes
+  useEffect(() => {
+    if (!settingsDialogOpen) {
+      refreshEnabledTypes();
+
+      // If the current active tab is no longer in the enabled types and not "All",
+      // or if "All" is active but there are no enabled types,
+      // reset the active tab to the first available tab
+      if (
+        (activeTab === "All" && enabledTypes.length === 0) ||
+        (activeTab !== "All" && !enabledTypes.includes(activeTab))
+      ) {
+        setActiveTab(tabs[0]?.tabName || "");
+      }
+    }
+  }, [settingsDialogOpen, refreshEnabledTypes, enabledTypes, activeTab, tabs]);
+
+  // Update active tab if tabs change and current active tab is no longer available
+  useEffect(() => {
+    if (tabs.length > 0 && !tabs.some((tab) => tab.tabName === activeTab)) {
+      setActiveTab(tabs[0].tabName);
+    }
+  }, [tabs, activeTab]);
+
   useEffect(() => {
     const raw = searchParams.get("selected");
     if (!raw) return;
@@ -85,27 +146,21 @@ const Notifications = () => {
     setSelectedId(id);
   };
 
-  const tabs = [
-    { tabName: "All", icon: <Icons.MaximizeCircle />, isActive: true },
-    { tabName: "Credits", icon: <Icons.WalletAdd /> },
-    { tabName: "Files", icon: <Icons.DocumentText /> },
-  ];
-
   const selected = selectedId ? visible.find((n) => n.id === selectedId) : null;
 
   const detail = selected
     ? {
-      id: selected.id,
-      icon: selected.icon,
-      type: selected.type,
-      title: selected.title ?? "",
-      description: selected.description ?? "",
-      time: selected.time,
-      timestamp: selected.timestamp,
-      actionText: selected.buttonText,
-      actionLink: selected.buttonLink,
-      unread: selected.unread,
-    }
+        id: selected.id,
+        icon: selected.icon,
+        type: selected.type,
+        title: selected.title ?? "",
+        description: selected.description ?? "",
+        time: selected.time,
+        timestamp: selected.timestamp,
+        actionText: selected.buttonText,
+        actionLink: selected.buttonLink,
+        unread: selected.unread,
+      }
     : null;
 
   const handleAllRead = async () => {
@@ -114,41 +169,53 @@ const Notifications = () => {
     refreshUnread();
   };
 
+  const handleOpenSettings = () => {
+    // Set the active tab to "Notifications" before opening
+    setActiveSettingsTab("Notifications");
+    setSettingsDialogOpen(true);
+  };
+
   return (
     <DashboardTitleWrapper mainText="Notifications">
       {/* controls */}
       <div className="mt-6 flex justify-end gap-4">
-        <TabList
-          tabs={tabs}
-          width="min-w-[89px]"
-          height="h-[32px]"
-          gap="gap-1"
-          activeTab={activeTab}
-          onTabChange={setActiveTab}
-          className="max-w-fit p-1 border border-grey-80"
-        />
+        {tabs.length > 0 && (
+          <>
+            <TabList
+              tabs={tabs}
+              width="min-w-[89px]"
+              height="h-[32px]"
+              gap="gap-1"
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              className="max-w-fit p-1 border border-grey-80"
+            />
 
-        <label className="flex items-center gap-3 cursor-pointer select-none">
-          <span className="text-grey-10 font-medium text-sm leading-5">
-            Only show unread
-          </span>
-          <Switch.Root
-            checked={onlyUnread}
-            onCheckedChange={setOnlyUnread}
-            className="w-[54px] h-[26px] bg-grey-90 rounded-full relative data-[state=checked]:bg-primary-50 transition-all outline-none border border-grey-80"
-          >
-            <Switch.Thumb className="block w-[18px] h-[18px] bg-primary-50 rounded-full shadow transition-transform duration-100 translate-x-0.5 data-[state=checked]:translate-x-8 data-[state=checked]:bg-white" />
-          </Switch.Root>
-        </label>
+            <label className="flex items-center gap-3 cursor-pointer select-none">
+              <span className="text-grey-10 font-medium text-sm leading-5">
+                Only show unread
+              </span>
+              <Switch.Root
+                checked={onlyUnread}
+                onCheckedChange={setOnlyUnread}
+                className="w-[54px] h-[26px] bg-grey-90 rounded-full relative data-[state=checked]:bg-primary-50 transition-all outline-none border border-grey-80"
+              >
+                <Switch.Thumb className="block w-[18px] h-[18px] bg-primary-50 rounded-full shadow transition-transform duration-100 translate-x-0.5 data-[state=checked]:translate-x-8 data-[state=checked]:bg-white" />
+              </Switch.Root>
+            </label>
 
+            <button
+              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+              onClick={handleAllRead}
+            >
+              Mark all as Read
+            </button>
+          </>
+        )}
         <button
-          className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
-          onClick={handleAllRead}
+          className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[14px] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
+          onClick={handleOpenSettings}
         >
-          Mark all as Read
-        </button>
-
-        <button className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[14px] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50">
           <Icons.Setting className="size-4" />
           Notification Setting
         </button>
@@ -156,7 +223,9 @@ const Notifications = () => {
 
       {/* list + detail */}
       <div className="mt-4 flex gap-4">
-        {visible.length === 0 ? (
+        {enabledTypes.length === 0 ? (
+          <NoNotificationsEnabled onOpenSettings={handleOpenSettings} />
+        ) : visible.length === 0 ? (
           <NoNotificationsFound />
         ) : (
           <>
