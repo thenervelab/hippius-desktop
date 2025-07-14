@@ -5,7 +5,7 @@ import {
   writeFile,
   exists,
   BaseDirectory,
-  mkdir,
+  mkdir
 } from "@tauri-apps/plugin-fs";
 
 export const DB_FILENAME = "wallet.db";
@@ -17,12 +17,12 @@ const TABLE_SCHEMA = `
   );
 `;
 
-async function ensureAppDirectory() {
+export async function ensureAppDirectory() {
   try {
     // create the AppLocalData folder structure if missing
     await mkdir("", {
       baseDir: BaseDirectory.AppLocalData,
-      recursive: true, // ← allows nested dirs :contentReference[oaicite:1]{index=1}
+      recursive: true // ← allows nested dirs :contentReference[oaicite:1]{index=1}
     });
   } catch (err) {
     console.error("Failed to create app directory:", err);
@@ -69,7 +69,7 @@ export async function saveWallet(
   const db = await initWalletDb();
   db.run("INSERT INTO wallet (encryptedMnemonic, passcodeHash) VALUES (?, ?)", [
     encryptedMnemonic,
-    passcodeHash,
+    passcodeHash
   ]);
   await saveBytes(db.export());
 }

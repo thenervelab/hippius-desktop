@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Label } from "../../ui/label";
 import { CardButton, Icons, Input } from "../../ui";
 import { cn } from "@/app/lib/utils";
-import { PASSWORD_FIELDS } from "./FieldsContent";
+import { PASSWORD_FIELDS } from "./PasscodeFieldsContent";
 import { AlertCircle } from "lucide-react";
 import UpdateSuccessDialog from "../../update-success-dialog";
 import { Eye, EyeOff } from "../../ui/icons";
@@ -11,10 +11,10 @@ import { getWalletRecord, updateWallet } from "@/app/lib/helpers/walletDb";
 import {
   hashPasscode,
   decryptMnemonic,
-  encryptMnemonic,
+  encryptMnemonic
 } from "@/app/lib/helpers/crypto";
 import { toast } from "sonner";
-import { AbstractIconWrapper } from "../../ui";
+import SectionHeader from "./SectionHeader";
 
 type PasscodeFields = {
   currentPasscode: string;
@@ -30,7 +30,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
   const [fieldsData, setFieldsData] = useState<PasscodeFields>({
     currentPasscode: "",
     newPasscode: "",
-    confirmPasscode: "",
+    confirmPasscode: ""
   });
   const [isLoading, setIsLoading] = useState(false);
   const [fieldError, setFieldError] = useState<FieldErrorState>({});
@@ -38,7 +38,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
   const [showPasscodes, setShowPasscodes] = useState({
     currentPasscode: false,
     newPasscode: false,
-    confirmPasscode: false,
+    confirmPasscode: false
   });
 
   function validateCurrent(val: string) {
@@ -85,7 +85,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
   const togglePasscodeVisibility = (field: PasscodeField) => {
     setShowPasscodes((prev) => ({
       ...prev,
-      [field]: !prev[field],
+      [field]: !prev[field]
     }));
   };
 
@@ -107,7 +107,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
     setFieldError({
       currentPasscode: errCurrent,
       newPasscode: errNew,
-      confirmPasscode: errConfirm,
+      confirmPasscode: errConfirm
     });
 
     if (errCurrent || errNew || errConfirm) {
@@ -127,7 +127,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
       if (currentPasscodeHash !== record.passcodeHash) {
         setFieldError((prev) => ({
           ...prev,
-          currentPasscode: "Current passcode is incorrect",
+          currentPasscode: "Current passcode is incorrect"
         }));
         setIsLoading(false);
         return;
@@ -144,7 +144,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
         console.error("Decryption failed:", error);
         setFieldError((prev) => ({
           ...prev,
-          currentPasscode: "Current passcode is incorrect",
+          currentPasscode: "Current passcode is incorrect"
         }));
         setIsLoading(false);
         return;
@@ -167,14 +167,14 @@ const ChangePasscode = ({ className }: { className?: string }) => {
       setFieldsData({
         currentPasscode: "",
         newPasscode: "",
-        confirmPasscode: "",
+        confirmPasscode: ""
       });
 
       // Show success dialog
       handleOpenDialog();
 
       toast.success("Passcode updated successfully", {
-        duration: 3000,
+        duration: 3000
       });
     } catch (error) {
       console.error("Failed to update passcode:", error);
@@ -196,22 +196,14 @@ const ChangePasscode = ({ className }: { className?: string }) => {
           className
         )}
       >
-        <div className="w-full flex flex-col xl:flex-row gap-4 2xl:gap-6 p-4 xl:pr-2 relative">
-          <div className="flex items-start">
-            <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
-              <Icons.WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
-            </AbstractIconWrapper>
-            <div className="flex flex-col ml-4">
-              <span className="text-lg leading-6 font-medium mb-0.5  tracking-[-0.28px] text-grey-10">
-                Change Passcode
-              </span>
-              <div className="text-sm xl:w-[160px] mb-1  text-grey-60">
-                Set a new passcode for your account security
-              </div>
-            </div>
-          </div>
+        <div className="w-full flex flex-col  gap-6 p-4  relative">
+          <SectionHeader
+            Icon={Icons.WalletAdd}
+            title="Change Passcode"
+            subtitle="Set a new passcode for your account security"
+          />
 
-          <div className="w-full bg-white grid  grid-cols-2 gap-3 p-2 ">
+          <div className="w-full  grid  grid-cols-2 gap-3 p-2 ">
             {PASSWORD_FIELDS.map((field) => (
               <div
                 key={field.name}
@@ -236,7 +228,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
                     }
                     className="border-grey-80 h-14 text-grey-30 w-full
                     bg-transparent p-4 font-medium text-base rounded-lg duration-300 outline-none 
-                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
+                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-white"
                   />
                   {!showPasscodes[field.name as PasscodeField] ? (
                     <Eye

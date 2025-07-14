@@ -11,5 +11,5 @@ export interface UiNotification {
   buttonLink?: string;
   unread: boolean;
   time: string;
-  timestamp?: number; // Add timestamp for TimeAgo component
+  timestamp?: number;
 }

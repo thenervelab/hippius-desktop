@@ -8,14 +8,14 @@ import SubAccountModal, { ModalData } from "./SubAccountModal";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { toast } from "sonner";
-import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { PlusCircle, RefreshCw, AlertCircle } from "lucide-react";
 import { KeySquare } from "@/components/ui/icons";
 import GenerateNewAccountModal from "./GenerateNewAccountModal";
 
-import { ConfirmModal } from "@/app/components/ui";
+import { ConfirmModal, Icons } from "@/app/components/ui";
 import { useSubAccounts } from "@/app/lib/hooks/api/useSubAccounts";
 import { WalletManager } from "@/app/lib/web3/wallet-manager";
+import SectionHeader from "../SectionHeader";
 
 const SubAccounts: React.FC = () => {
   const { subs, loading: tableLoading, reload } = useSubAccounts();
@@ -166,16 +166,15 @@ const SubAccounts: React.FC = () => {
   }, []);
 
   return (
-    <div className="w-full space-y-6 ">
+    <div className="w-full space-y-6 border broder-grey-80 rounded-lg p-4 ">
       {/* header */}
       <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center flex-wrap gap-2">
         <div className="flex justify-between w-full sm:w-auto">
-          <div className="flex items-center gap-2">
-            <AbstractIconWrapper className="size-8 sm:size-10 bg-grey-10 relative">
-              <KeySquare className="absolute size-5 sm:size-6 text-primary-50" />
-            </AbstractIconWrapper>
-            <h2 className="text-lg sm:text-[22px] font-medium">Sub Accounts</h2>
-          </div>
+          <SectionHeader
+            Icon={Icons.KeySquare}
+            title="Sub Accounts"
+            subtitle="Manage your sub accounts for delegated access and permissions."
+          />
           <button
             onClick={reload}
             title="Reload"

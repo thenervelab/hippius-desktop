@@ -15,18 +15,24 @@ import { refreshUnreadCountAtom } from "@/components/page-sections/notifications
 import { UiNotification } from "./types";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { useSearchParams } from "next/navigation";
+import { settingsDialogOpenAtom } from "@/app/components/sidebar/sideBarAtoms";
 // map DB types → icons
 export const iconMap: Record<string, IconComponent> = {
   Credits: Icons.WalletAdd,
   Files: Icons.DocumentText,
-  Hippius: Icons.HippiusLogo,
+  Hippius: Icons.HippiusLogo
 };
-
+const tabs = [
+  { tabName: "All", icon: <Icons.MaximizeCircle />, isActive: true },
+  { tabName: "Credits", icon: <Icons.WalletAdd /> },
+  { tabName: "Files", icon: <Icons.DocumentText /> }
+];
 const Notifications = () => {
   const [activeTab, setActiveTab] = useState("All");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [onlyUnread, setOnlyUnread] = useState(false);
   const searchParams = useSearchParams();
+  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
 
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
@@ -61,7 +67,7 @@ const Notifications = () => {
   // attach icons
   const items: UiNotification[] = notifications.map((n) => ({
     ...n,
-    icon: iconMap[n.type] ?? Icons.Document,
+    icon: iconMap[n.type] ?? Icons.Document
   }));
 
   // filtering
@@ -85,33 +91,31 @@ const Notifications = () => {
     setSelectedId(id);
   };
 
-  const tabs = [
-    { tabName: "All", icon: <Icons.MaximizeCircle />, isActive: true },
-    { tabName: "Credits", icon: <Icons.WalletAdd /> },
-    { tabName: "Files", icon: <Icons.DocumentText /> },
-  ];
-
   const selected = selectedId ? visible.find((n) => n.id === selectedId) : null;
 
   const detail = selected
     ? {
-      id: selected.id,
-      icon: selected.icon,
-      type: selected.type,
-      title: selected.title ?? "",
-      description: selected.description ?? "",
-      time: selected.time,
-      timestamp: selected.timestamp,
-      actionText: selected.buttonText,
-      actionLink: selected.buttonLink,
-      unread: selected.unread,
-    }
+        id: selected.id,
+        icon: selected.icon,
+        type: selected.type,
+        title: selected.title ?? "",
+        description: selected.description ?? "",
+        time: selected.time,
+        timestamp: selected.timestamp,
+        actionText: selected.buttonText,
+        actionLink: selected.buttonLink,
+        unread: selected.unread
+      }
     : null;
 
   const handleAllRead = async () => {
     await markAllRead();
     toast.success("All notifications marked as read");
     refreshUnread();
+  };
+
+  const handleOpenSettings = () => {
+    setSettingsDialogOpen(true);
   };
 
   return (
@@ -148,7 +152,10 @@ const Notifications = () => {
           Mark all as Read
         </button>
 
-        <button className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[14px] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50">
+        <button
+          className="px-4 py-2.5 bg-grey-90 rounded text-grey-10 leading-5 text-[14px] font-medium flex items-center gap-2 transition-colors hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white focus:outline-none focus:ring-2 focus:ring-primary-50"
+          onClick={handleOpenSettings}
+        >
           <Icons.Setting className="size-4" />
           Notification Setting
         </button>
