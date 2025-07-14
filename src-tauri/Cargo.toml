@@ -48,3 +48,4 @@ parity-scale-codec = "3.6"
 tauri-plugin-fs = "2"
 notify = "6.1"
 tauri-plugin-dialog = "2"
+tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }

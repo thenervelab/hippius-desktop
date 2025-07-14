@@ -1,0 +1,169 @@
+import React from "react";
+import { BlockTimestamp, Icons } from "@/components/ui";
+import * as TableModule from "@/components/ui/alt-table";
+import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { decodeHexCid } from "@/lib/utils/decodeHexCid";
+import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
+import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { getFileIcon, isDirectory } from "@/app/lib/utils/fileTypeUtils";
+import { cn } from "@/app/lib/utils";
+
+interface DetailRowProps {
+    label: string;
+    children: React.ReactNode;
+    lastChild?: boolean;
+}
+
+const DetailRow: React.FC<DetailRowProps> = ({ label, children, lastChild }) => (
+    <div className={cn("pb-4 border-b border-grey-80", { "border-b-0": lastChild })}>
+        <div className="text-sm font-medium text-grey-70 mb-2">{label}</div>
+        <div className="text-base leading-[22px] font-medium text-grey-20">{children}</div>
+    </div>
+);
+
+interface FileLocationItemProps {
+    location: string;
+    lastChild?: boolean;
+}
+
+const FileLocationItem: React.FC<FileLocationItemProps> = ({ location, lastChild }) => (
+    <div className="inline-flex items-center text-base text-grey-20">
+        {location}
+        {!lastChild && <span className="mx-2 h-1 w-1 bg-grey-80 rounded-full"></span>}
+    </div>
+);
+
+interface NodeItemProps {
+    nodeId: string;
+}
+
+const NodeItem: React.FC<NodeItemProps> = ({ nodeId }) => (
+    <div className="inline-flex items-center gap-1 hover:bg-grey-90 border border-grey-80 rounded px-2 py-1 text-xs text-grey-10 mr-2 mb-2">
+        {/* {nodeId}
+        <CardButton variant="ghost" size="sm" className="h-5 w-5 p-0 text-grey-70">
+            <Copy className="size-3" />
+        </CardButton> */}
+        <TableModule.CopyableCell
+            title="Copy Node ID"
+            toastMessage="Node ID Copied Successfully!"
+            copyAbleText={nodeId}
+            forSmallScreen
+            className="max-sm:[200px] max-w-[400px] h-full"
+        />
+    </div>
+);
+
+interface FileDetailsDialogContentProps {
+    file?: FormattedUserIpfsFile;
+}
+
+const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ file }) => {
+    if (!file) return null;
+
+    const { fileFormat } = getFilePartsFromFileName(file.name);
+    const fileType = getFileTypeFromExtension(fileFormat || null);
+    const decodedCid = decodeHexCid(file.cid);
+    const isDir = isDirectory(file.name);
+    const { icon: Icon, color } = getFileIcon(fileType ?? undefined, isDir);
+
+
+    // Format file size
+    const fileSize = file.size ? formatBytesFromBigInt(BigInt(file.size)) : "Unknown";
+
+    // Static data for now - will be replaced with real data later
+    const locations = ["Warsaw, PL", "Moscow, PL", "Peckham, GB", "Abuja, NG"];
+    const nodes = ["56pv_v2ioT", "56pv_v2joT", "56pv_v2koT", "56pv_v2loT", "56pv_v2moT"];
+
+    const handleViewOnExplorer = async () => {
+        try {
+            await openUrl(`http://hipstats.com/cid-tracker/${decodedCid}`);
+        } catch (error) {
+            console.error("Failed to open Explorer:", error);
+        }
+    };
+
+    return (
+        <div className="flex justify-between flex-col gap-2 h-full">
+            <div className="flex flex-col gap-3">
+                <DetailRow label="File Name">
+                    {file.name}
+                </DetailRow>
+
+                <DetailRow label="File Type">
+                    <div className="flex items-center gap-1">
+                        <Icon className={cn('size-5', color)} />
+                        {fileType ? fileType.charAt(0).toUpperCase() + fileType.slice(1) : ""}
+                    </div>
+                </DetailRow>
+
+                <DetailRow label="Date Uploaded">
+                    <BlockTimestamp blockNumber={file.lastChargedAt} />
+                </DetailRow>
+
+                <DetailRow label="File Size">
+                    <div className="flex items-center gap-2">
+                        <Icons.File className="size-4 text-grey-70" />
+                        <span>{fileSize}</span>
+                    </div>
+                </DetailRow>
+
+                <DetailRow label="CID">
+
+                    <TableModule.CopyableCell
+                        title="Copy CID"
+                        toastMessage="CID Copied Successfully!"
+                        copyAbleText={decodedCid}
+                        forSmallScreen
+                        className="max-sm:[200px] max-w-[400px] h-full"
+                    />
+                    <div
+                        className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
+                        onClick={handleViewOnExplorer}
+                    >
+                        View CID Tracker
+                        <Icons.SendSquare2 className="size-5 text-primary-50" />
+                    </div>
+                </DetailRow>
+
+                <DetailRow label="Block">
+                    {file.lastChargedAt}
+                </DetailRow>
+
+                <DetailRow label="File Location">
+                    <div className="flex flex-wrap">
+                        {locations.map((location, idx) => (
+                            <FileLocationItem key={idx} location={location} lastChild={idx === locations.length - 1} />
+                        ))}
+                    </div>
+                    <div
+                        className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
+                        onClick={handleViewOnExplorer}
+                    >
+                        View on Explorer
+                        <Icons.SendSquare2 className="size-5 text-primary-50" />
+                    </div>
+                </DetailRow>
+
+                <DetailRow label="Nodes" lastChild>
+                    <div className="flex flex-wrap">
+                        {nodes.map((node, idx) => (
+                            <NodeItem key={idx} nodeId={node} />
+                        ))}
+                    </div>
+                    <div
+                        className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
+                        onClick={handleViewOnExplorer}
+                    >
+                        View on Explorer
+                        <Icons.SendSquare2 className="size-5 text-primary-50" />
+                    </div>
+                </DetailRow>
+            </div>
+
+        </div>
+    );
+};
+
+export default FileDetailsDialogContent;

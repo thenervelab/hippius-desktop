@@ -78,6 +78,7 @@ export { default as StopWatch } from "./StopWatch";
 export { default as TickCircle } from "./TickCircle";
 export { default as Directory } from "./Directory";
 export { default as SendSquare } from "./SendSquare";
+export { default as SendSquare2 } from "./SendSquare2";
 export { default as Marker } from "./Marker";
 export { default as ToggleOff } from "./ToggleOff";
 export { default as SyncData } from "./SyncData";
