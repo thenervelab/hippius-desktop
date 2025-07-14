@@ -18,7 +18,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     const setProgress = useSetAtom(uploadProgressAtom);
     const { refetch: checkCredits } = useUserCredits();
     const { refetch: refetchUserFiles } = useUserIpfsFiles();
-    const { mnemonic } = useWalletAuth();
+    const { mnemonic, polkadotAddress } = useWalletAuth();
+
 
     const [requestState, setRequestState] = useState<"idle" | "uploading" | "submitting">("idle");
     const idleTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -33,16 +34,18 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     async function upload(files: FileList) {
         if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
-        const startMsg =
+        // start toast and progress
+        const toastId = toast.loading(
             files.length > 1
                 ? `Uploading ${files.length} files: 0%`
-                : "Uploading file: 0%";
-        const toastId = toast.loading(startMsg, { position: "top-center" });
-
+                : "Uploading file: 0%",
+            { position: "top-center" }
+        );
         setRequestState("uploading");
         setProgress(0);
 
         try {
+            // check credits as before
             const credits = (await checkCredits()).data;
             if (!credits || credits <= BigInt(0)) {
                 throw new Error("Insufficient Credits. Please add credits.");
@@ -51,26 +54,28 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
             const arr = Array.from(files);
             const cids: string[] = [];
 
-            // 0–50%: upload to IPFS via local HTTP API
+            // encrypt & upload each file via Tauri
             for (let i = 0; i < arr.length; i++) {
                 const file = arr[i];
-                // POST to IPFS daemon
-                const formData = new FormData();
-                formData.append("file", file);
-                const res = await fetch("http://localhost:5001/api/v0/add", {
-                    method: "POST",
-                    body: formData,
+                const arrayBuffer = await file.arrayBuffer();
+                const tempPath = `/tmp/${file.name}`;
+
+                // write to disk
+                await invoke("write_file", {
+                    path: tempPath,
+                    data: Array.from(new Uint8Array(arrayBuffer)),
                 });
-                if (!res.ok) {
-                    throw new Error(`IPFS upload failed: ${res.statusText}`);
-                }
-                const text = await res.text();
-                const firstLine = text.split("\n")[0];
-                const data = JSON.parse(firstLine);
-                const cid = data.Hash as string;
+
+                // encrypt & upload
+                const cid = await invoke<string>("encrypt_and_upload_file", {
+                    accountId: polkadotAddress,
+                    filePath: tempPath,
+                    seedPhrase: mnemonic,
+                });
                 cids.push(cid);
 
-                const percent = Math.round(((i + 1) / arr.length) * 50);
+                // update progress
+                const percent = Math.round(((i + 1) / arr.length) * 100);
                 setProgress(percent);
                 const msg =
                     files.length > 1
@@ -79,37 +84,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
                 toast.loading(msg, { id: toastId, position: "top-center" });
             }
 
-            // 75%: about to call Tauri
-            setRequestState("submitting");
-            setProgress(75);
-            toast.loading(
-                files.length > 1
-                    ? `Uploading ${files.length} files: 75%`
-                    : `Uploading file: 75%`,
-                { id: toastId, position: "top-center" }
-            );
-
-            // build the FileInputWrapper list
-            const inputs = cids.map((cid, idx) => ({
-                file_hash: Array.from(new TextEncoder().encode(cid)),
-                file_name: Array.from(new TextEncoder().encode(arr[idx].name)),
-            }));
-
-            await invoke<string>("storage_request_tauri", {
-                filesInput: inputs,
-                minerIds: null,
-                seedPhrase: mnemonic,
-            });
-
-            // 100%
-            setProgress(100);
-            toast.loading(
-                files.length > 1
-                    ? `Uploading ${files.length} files: 100%`
-                    : `Uploading file: 100%`,
-                { id: toastId, position: "top-center" }
-            );
-
+            // finish up
             setRequestState("idle");
             idleTimeout.current = setTimeout(() => {
                 refetchUserFiles();
@@ -122,7 +97,6 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
                 );
             }, 500);
         } catch (err) {
-            console.log("err", err)
             setRequestState("idle");
             setProgress(0);
             onError?.(err);
@@ -134,6 +108,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
             );
         }
     }
+
 
     return { upload, requestState };
 }

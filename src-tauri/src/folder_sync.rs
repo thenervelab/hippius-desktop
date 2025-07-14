@@ -1,35 +1,42 @@
-use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event, EventKind, event::CreateKind, event::ModifyKind};
+use crate::commands::ipfs_commands::encrypt_and_upload_file;
+use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
+use crate::constants::ipfs::API_URL;
+use crate::constants::substrate::SYNC_PATH;
+use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
+use crate::DB_POOL;
+use notify::{
+    event::CreateKind, event::ModifyKind, Event, EventKind, RecommendedWatcher, RecursiveMode,
+    Watcher,
+};
+use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
+use std::collections::HashSet;
+use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
-use std::thread;
-use crate::constants::substrate::{SYNC_PATH};
-use crate::constants::ipfs::{API_URL};
-use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
-use crate::commands::ipfs_commands::{encrypt_and_upload_file};
-use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
-use tauri::async_runtime::block_on;
-use std::fs;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
-use crate::DB_POOL;
-use std::ffi::OsStr;
-use once_cell::sync::Lazy;
-use std::collections::HashSet;
+use tauri::async_runtime::block_on;
 use tokio::sync::mpsc;
-use once_cell::sync::OnceCell;
 
-pub static SYNC_STATUS: once_cell::sync::Lazy<Arc<Mutex<SyncStatus>>> = once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
+pub static SYNC_STATUS: once_cell::sync::Lazy<Arc<Mutex<SyncStatus>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
 
 pub static UPLOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 // Track files currently being uploaded to prevent duplicates
-pub static UPLOADING_FILES: Lazy<Arc<Mutex<HashSet<String>>>> = Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
+pub static UPLOADING_FILES: Lazy<Arc<Mutex<HashSet<String>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
 
 // Track which accounts are already syncing to prevent duplicates
-pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<String>>>> = Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
+pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<String>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
 
 // Track recently uploaded files to prevent immediate re-processing
-pub static RECENTLY_UPLOADED: Lazy<Arc<Mutex<HashSet<String>>>> = Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
+pub static RECENTLY_UPLOADED: Lazy<Arc<Mutex<HashSet<String>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
 
 #[derive(Clone)]
 pub struct UploadJob {
@@ -45,12 +52,15 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(&account_id) {
-            println!("[FolderSync] Account {} is already syncing, skipping.", account_id);
+            println!(
+                "[FolderSync] Account {} is already syncing, skipping.",
+                account_id
+            );
             return;
         }
         syncing_accounts.insert(account_id.clone());
     }
-    
+
     let sync_path = PathBuf::from(SYNC_PATH);
     let watcher_account_id = account_id.clone();
     let watcher_seed_phrase = seed_phrase.clone();
@@ -91,11 +101,14 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                 {
                     let uploading_files = UPLOADING_FILES.lock().unwrap();
                     if uploading_files.contains(&file_path_str) {
-                        println!("[FolderSync] File {:?} is being uploaded, skipping periodic check.", file_path);
+                        println!(
+                            "[FolderSync] File {:?} is being uploaded, skipping periodic check.",
+                            file_path
+                        );
                         continue;
                     }
                 }
-                
+
                 // Check if file was recently uploaded
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
@@ -104,7 +117,7 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                         continue;
                     }
                 }
-                
+
                 // Check if file is in profile DB and update source
                 let _ = is_file_in_profile_db(&file_path, &checker_account_id);
             }
@@ -125,7 +138,10 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                 {
                     let mut uploading_files = UPLOADING_FILES.lock().unwrap();
                     if uploading_files.contains(&file_path_str) {
-                        println!("[UploadWorker] File {} is already being uploaded, skipping.", file_path_str);
+                        println!(
+                            "[UploadWorker] File {} is already being uploaded, skipping.",
+                            file_path_str
+                        );
                         continue;
                     }
                     uploading_files.insert(file_path_str.clone());
@@ -134,8 +150,9 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                 let result = encrypt_and_upload_file(
                     job.account_id.clone(),
                     job.file_path.clone(),
-                    job.seed_phrase.clone()
-                ).await;
+                    job.seed_phrase.clone(),
+                )
+                .await;
 
                 {
                     let mut uploading_files = UPLOADING_FILES.lock().unwrap();
@@ -188,7 +205,13 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                 match kind {
                     CreateKind::File => {
                         let sender = UPLOAD_SENDER.get().unwrap();
-                        sender.send(UploadJob { account_id: account_id.to_string(), seed_phrase: seed_phrase.to_string(), file_path: file_path_str.clone() }).unwrap();
+                        sender
+                            .send(UploadJob {
+                                account_id: account_id.to_string(),
+                                seed_phrase: seed_phrase.to_string(),
+                                file_path: file_path_str.clone(),
+                            })
+                            .unwrap();
                     }
                     CreateKind::Folder => {
                         // Restore previous logic: upload all files in the folder directly
@@ -222,7 +245,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
     }
 
     let file_path_str = path.to_string_lossy().to_string();
-    
+
     // Check if file is already being uploaded
     {
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
@@ -257,7 +280,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
     let result = block_on(encrypt_and_upload_file(
         account_id.to_string(),
         file_path,
-        seed_phrase.to_string()
+        seed_phrase.to_string(),
     ));
 
     match result {
@@ -274,11 +297,11 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
             // Remove from uploading set
             let mut uploading_files = UPLOADING_FILES.lock().unwrap();
             uploading_files.remove(&file_path_str);
-            
+
             // Add to recently uploaded set to prevent immediate re-processing
             let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
             recently_uploaded.insert(file_path_str.clone());
-            
+
             // Remove from recently uploaded set after 2 seconds
             let file_path_str_clone = file_path_str.clone();
             std::thread::spawn(move || {
@@ -286,15 +309,15 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
                 let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                 recently_uploaded.remove(&file_path_str_clone);
             });
-            
+
             return true;
-        },
+        }
         Err(e) => {
             eprintln!("Upload failed: {}", e);
-    {
-        let mut status = SYNC_STATUS.lock().unwrap();
-        status.synced_files = 1;
-        status.in_progress = false;
+            {
+                let mut status = SYNC_STATUS.lock().unwrap();
+                status.synced_files = 1;
+                status.in_progress = false;
             }
 
             // Remove from uploading set
@@ -316,11 +339,13 @@ fn upload_folder(folder_path: &Path, account_id: &str, seed_phrase: &str) {
             if path.is_file() {
                 // Enqueue each file for upload
                 if let Some(sender) = UPLOAD_SENDER.get() {
-                    sender.send(UploadJob {
-                        account_id: account_id.to_string(),
-                        seed_phrase: seed_phrase.to_string(),
-                        file_path: path.to_string_lossy().to_string(),
-                    }).unwrap();
+                    sender
+                        .send(UploadJob {
+                            account_id: account_id.to_string(),
+                            seed_phrase: seed_phrase.to_string(),
+                            file_path: path.to_string_lossy().to_string(),
+                        })
+                        .unwrap();
                 }
             }
         }
@@ -331,31 +356,37 @@ fn replace_file_and_db_records(path: &Path, account_id: &str, seed_phrase: &str)
     if !path.is_file() {
         return;
     }
-    
+
     let file_path_str = path.to_string_lossy().to_string();
-    
+
     // Check if file is already being uploaded
     {
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         if uploading_files.contains(&file_path_str) {
-            println!("[FolderSync] File {:?} is already being uploaded, skipping replace.", path);
+            println!(
+                "[FolderSync] File {:?} is already being uploaded, skipping replace.",
+                path
+            );
             return;
         }
         uploading_files.insert(file_path_str.clone());
     }
-    
+
     // Extract file name
     let file_name = match path.file_name().map(|s| s.to_string_lossy().to_string()) {
         Some(name) => name,
         None => {
-            eprintln!("[FolderSync] Could not extract file name from path: {}", path.display());
+            eprintln!(
+                "[FolderSync] Could not extract file name from path: {}",
+                path.display()
+            );
             // Remove from uploading set
             let mut uploading_files = UPLOADING_FILES.lock().unwrap();
             uploading_files.remove(&file_path_str);
             return;
         }
     };
-    
+
     // Only upload if file exists in user_profiles and is_assigned is true
     let should_upload = {
         if let Some(pool) = crate::DB_POOL.get() {
@@ -383,23 +414,38 @@ fn replace_file_and_db_records(path: &Path, account_id: &str, seed_phrase: &str)
         uploading_files.remove(&file_path_str);
         return;
     }
-    
+
     println!("[FolderSync] Replacing file: {}", file_name);
-    
+
     // First upload the new file
     let upload_result = upload_file(path, account_id, seed_phrase);
-    
+
     // Only delete/unpin old records if upload was successful
     if upload_result {
-        println!("[FolderSync] Upload successful for '{}', now cleaning up old records...", file_name);
-    let delete_result = block_on(delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase));
+        println!(
+            "[FolderSync] Upload successful for '{}', now cleaning up old records...",
+            file_name
+        );
+        let delete_result = block_on(delete_and_unpin_user_file_records_by_name(
+            &file_name,
+            &seed_phrase,
+        ));
         if delete_result.is_err() {
-            eprintln!("[FolderSync] Failed to delete/unpin old records for '{}', but upload succeeded.", file_name);
+            eprintln!(
+                "[FolderSync] Failed to delete/unpin old records for '{}', but upload succeeded.",
+                file_name
+            );
         } else {
-            println!("[FolderSync] Successfully cleaned up old records for '{}'", file_name);
+            println!(
+                "[FolderSync] Successfully cleaned up old records for '{}'",
+                file_name
+            );
         }
     } else {
-        eprintln!("[FolderSync] Upload failed for '{}', skipping delete/unpin.", file_name);
+        eprintln!(
+            "[FolderSync] Upload failed for '{}', skipping delete/unpin.",
+            file_name
+        );
         // Remove from uploading set since upload failed
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         uploading_files.remove(&file_path_str);
@@ -422,7 +468,7 @@ fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
     // Run the query in a blocking context
     let found = tauri::async_runtime::block_on(async {
         sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT 1 FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+            "SELECT 1 FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
         )
         .bind(account_id)
         .bind(file_name)
@@ -434,14 +480,12 @@ fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
         // Update the source column to the sync folder path for this file
         let file_path_str = file_path.to_string_lossy().to_string();
         let _ = tauri::async_runtime::block_on(async {
-            sqlx::query(
-                "UPDATE user_profiles SET source = ? WHERE owner = ? AND file_name = ?"
-            )
-            .bind(&file_path_str)
-            .bind(account_id)
-            .bind(file_name)
-            .execute(pool)
-            .await
+            sqlx::query("UPDATE user_profiles SET source = ? WHERE owner = ? AND file_name = ?")
+                .bind(&file_path_str)
+                .bind(account_id)
+                .bind(file_name)
+                .execute(pool)
+                .await
         });
         true
     } else {

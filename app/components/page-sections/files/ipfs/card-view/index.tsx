@@ -20,7 +20,9 @@ import PdfDialog from "../files-table/PdfDialog";
 import * as TableModule from "@/components/ui/alt-table";
 import { useRouter } from 'next/navigation';
 import FileDetailsDialog, { FileDetail } from "../files-table/UnpinFilesDialog";
-import FileContextMenu from "@/components/ui/context-menu/file-context-menu";
+import FileContextMenu from "@/app/components/ui/context-menu";
+import SidebarDialog from "@/app/components/ui/sidebar-dialog";
+import FileDetailsDialogContent from "../file-details-dialog-content";
 
 // Custom event names for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -56,6 +58,10 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
         y: number;
         file: FormattedUserIpfsFile;
     } | null>(null);
+
+    // Add state for file details dialog
+    const [fileDetailsFile, setFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
+    const [isFileDetailsOpen, setIsFileDetailsOpen] = useState(false);
 
     useEffect(() => {
         if (isDragging) {
@@ -211,6 +217,12 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
             y: e.clientY,
             file: file
         });
+    };
+
+    // Handler for showing file details
+    const handleShowFileDetails = (file: FormattedUserIpfsFile) => {
+        setFileDetailsFile(file);
+        setIsFileDetailsOpen(true);
     };
 
     return (
@@ -427,6 +439,7 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                 />
             )}
 
+            {/* Context Menu */}
             {contextMenu && (
                 <FileContextMenu
                     x={contextMenu.x}
@@ -442,8 +455,18 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                         setSelectedFile(file);
                         setContextMenu(null);
                     }}
+                    onShowFileDetails={handleShowFileDetails}
                 />
             )}
+
+            {/* File Details Dialog */}
+            <SidebarDialog
+                heading="File Details"
+                open={isFileDetailsOpen}
+                onOpenChange={setIsFileDetailsOpen}
+            >
+                <FileDetailsDialogContent file={fileDetailsFile ?? undefined} />
+            </SidebarDialog>
         </>
     );
 };
