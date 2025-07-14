@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useEffect, useRef, useMemo, useState } from "react";
+import { FC, useEffect, useRef, useMemo, useState, useCallback } from "react";
 import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
 import { RefreshButton, Icons, SearchInput, WaitAMoment } from "@/components/ui";
 import AddButton from "./AddFileButton";
@@ -16,6 +16,20 @@ import SidebarDialog from "@/components/ui/sidebar-dialog";
 import UploadStatusWidget from "./UploadStatusWidget";
 import FilterDialogContent from "./filter-dialog-content";
 import IPFSNoEntriesFound from "./files-table/IpfsNoEntriesFound";
+import FilterChips, { ActiveFilter } from "./filter-chips";
+import { FileTypes } from "@/lib/types/fileTypes";
+import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
+import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+
+// Date filter options with their labels
+const DATE_OPTIONS = {
+  today: "Today",
+  last7days: "Last 7 days",
+  last30days: "Last 30 days",
+  thisyear: "This year",
+  lastyear: "Last year",
+};
 
 const Ipfs: FC = () => {
   const {
@@ -26,17 +40,29 @@ const Ipfs: FC = () => {
     isFetching,
     error,
   } = useUserIpfsFiles();
+
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
-  const [filterMode] = useState<"all" | "date" | "type">("all");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+
+  // Search state
+  const [searchTerm, setSearchTerm] = useState<string>("");
+
+  // Filter states
+  const [selectedFileTypes, setSelectedFileTypes] = useState<FileTypes[]>([]);
+  const [selectedDate, setSelectedDate] = useState<string>("");
+  const [selectedFileSize, setSelectedFileSize] = useState<number>(0);
+  const [selectedSizeUnit, setSelectedSizeUnit] = useState<string>("GB");
+
+  // Active filters state
+  const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
 
   // Unpinned files state - moved from FilesTable to parent
   const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
   const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
 
   // Filter out deleted files
-  const filteredData = useMemo(() => {
+  const allFilteredData = useMemo(() => {
     if (data?.files) {
       return data.files.filter((file) => !file.deleted);
     }
@@ -66,6 +92,174 @@ const Ipfs: FC = () => {
     }
   }, [unpinnedFileDetails]);
 
+  // Apply all filters to the data
+  const filteredData = useMemo(() => {
+    if (!allFilteredData.length) return [];
+
+    let result = [...allFilteredData];
+
+    // Apply search filter if search term exists
+    if (searchTerm.trim()) {
+      const search = searchTerm.toLowerCase().trim();
+      result = result.filter(file =>
+        file.name.toLowerCase().includes(search)
+      );
+    }
+
+    // Apply file type filter if any types are selected
+    if (selectedFileTypes.length > 0) {
+      result = result.filter(file => {
+        const { fileFormat } = getFilePartsFromFileName(file.name);
+        const fileType = getFileTypeFromExtension(fileFormat || null);
+        return selectedFileTypes.includes(fileType as FileTypes);
+      });
+    }
+
+    // Apply date filter if selected
+    if (selectedDate) {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+      switch (selectedDate) {
+        case 'today':
+          result = result.filter(file => {
+            const fileDate = new Date(file.createdAt);
+            return fileDate >= today;
+          });
+          break;
+
+        case 'last7days':
+          const sevenDaysAgo = new Date();
+          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+          result = result.filter(file => {
+            const fileDate = new Date(file.createdAt);
+            return fileDate >= sevenDaysAgo;
+          });
+          break;
+
+        case 'last30days':
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+          result = result.filter(file => {
+            const fileDate = new Date(file.createdAt);
+            return fileDate >= thirtyDaysAgo;
+          });
+          break;
+
+        case 'thisyear':
+          const firstDayOfYear = new Date(now.getFullYear(), 0, 1);
+          result = result.filter(file => {
+            const fileDate = new Date(file.createdAt);
+            return fileDate >= firstDayOfYear;
+          });
+          break;
+
+        case 'lastyear':
+          const firstDayLastYear = new Date(now.getFullYear() - 1, 0, 1);
+          const lastDayLastYear = new Date(now.getFullYear() - 1, 11, 31);
+          result = result.filter(file => {
+            const fileDate = new Date(file.createdAt);
+            return fileDate >= firstDayLastYear && fileDate <= lastDayLastYear;
+          });
+          break;
+      }
+    }
+
+    // Apply file size filter if value is greater than 0
+    if (selectedFileSize > 0) {
+      result = result.filter(file => {
+        if (!file.size) return false; // Skip files without size info
+        return BigInt(file.size) >= BigInt(selectedFileSize);
+      });
+    }
+
+    return result;
+  }, [allFilteredData, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+
+  // Update active filters whenever applied filters change (not temp filters)
+  useEffect(() => {
+    const newActiveFilters: ActiveFilter[] = [];
+
+    // Add file type filters
+    selectedFileTypes.forEach(type => {
+      newActiveFilters.push({
+        type: 'fileType',
+        value: type,
+        label: 'Type:',
+        displayValue: type.charAt(0).toUpperCase() + type.slice(1)
+      });
+    });
+
+    // Add date filter
+    if (selectedDate) {
+      newActiveFilters.push({
+        type: 'date',
+        value: selectedDate,
+        label: 'Date upload:',
+        displayValue: DATE_OPTIONS[selectedDate as keyof typeof DATE_OPTIONS]
+      });
+    }
+
+    // Add file size filter
+    if (selectedFileSize > 0) {
+      newActiveFilters.push({
+        type: 'fileSize',
+        value: String(selectedFileSize),
+        label: 'File size:',
+        // Changed from ≤ to ≥ to reflect the new filter behavior
+        displayValue: `≥ ${formatBytesFromBigInt(BigInt(selectedFileSize))}`
+      });
+    }
+
+    setActiveFilters(newActiveFilters);
+  }, [selectedFileTypes, selectedDate, selectedFileSize]);
+
+  // Handle removing a filter
+  const handleRemoveFilter = (filter: ActiveFilter) => {
+    switch (filter.type) {
+      case 'fileType':
+        setSelectedFileTypes(prev =>
+          prev.filter(type => type !== filter.value)
+        );
+        break;
+
+      case 'date':
+        setSelectedDate('');
+        break;
+
+      case 'fileSize':
+        setSelectedFileSize(0);
+        break;
+    }
+  };
+
+  // Handle applying filters from dialog
+  const handleApplyFilters = useCallback((
+    fileTypes: FileTypes[],
+    date: string,
+    fileSize: number,
+    sizeUnit: string
+  ) => {
+    setSelectedFileTypes(fileTypes);
+    setSelectedDate(date);
+    setSelectedFileSize(fileSize);
+    setSelectedSizeUnit(sizeUnit);
+    setIsFilterOpen(false);
+  }, []);
+
+  // Handle resetting filters
+  const handleResetFilters = useCallback(() => {
+    setSelectedFileTypes([]);
+    setSelectedDate('');
+    setSelectedFileSize(0);
+    setSelectedSizeUnit('GB');
+  }, []);
+
+  // Handle search input change
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchTerm(value);
+  }, []);
+
   // Load the table once on mount and set up interval refresh
   useEffect(() => {
     // Initial fetch
@@ -88,13 +282,24 @@ const Ipfs: FC = () => {
   }, [error]);
 
   const renderContent = () => {
-
     if (isLoading) {
       return <WaitAMoment />;
     }
 
-    if (error || !filteredData.length) {
+    if (error || (!filteredData.length && !searchTerm && activeFilters.length === 0)) {
       return <IPFSNoEntriesFound />;
+    }
+
+    if (!filteredData.length && (searchTerm || activeFilters.length > 0)) {
+      return (
+        <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
+          <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
+            <Icons.File className="size-7 text-primary-50" />
+          </div>
+          <h3 className="text-lg font-medium text-grey-10 mb-1">No matching files found</h3>
+          <p className="text-grey-50 text-sm max-w-[270px] text-center">Try adjusting the filters or clearing them to see more results.</p>
+        </div>
+      );
     }
 
     if (viewMode === "list") {
@@ -124,7 +329,11 @@ const Ipfs: FC = () => {
           />
 
           <div className="">
-            <SearchInput className="h-9" />
+            <SearchInput
+              className="h-9"
+              value={searchTerm}
+              onChange={handleSearchChange}
+            />
           </div>
 
           <div className="flex gap-2 border border-grey-80 p-1 rounded">
@@ -156,31 +365,32 @@ const Ipfs: FC = () => {
 
           <div className="flex border border-grey-80 p-1 rounded">
             <button
-              className={cn(
-                "p-1 rounded cursor-pointer",
-                filterMode === "date"
-                  ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
-                  : "bg-grey-100 text-grey-70"
-              )}
+              className="flex justify-center items-center p-1 cursor-pointer bg-white text-grey-70 rounded"
               onClick={() => setIsFilterOpen(true)}
-              aria-label="Date Filter"
+              aria-label="Filter"
             >
               <Icons.Filter className="size-5" />
+              {activeFilters.length > 0 && (
+                <span className="ml-1 p-1 bg-primary-100 text-primary-30 border border-primary-80 text-xs rounded min-w-4 h-4 flex items-center justify-center">
+                  {activeFilters.length}
+                </span>
+              )}
             </button>
           </div>
-          {/* <div className="bg-grey-90 hover:bg-grey-80 rounded">
-            <button
-              className="px-4 py-3 bg-grey-90 hover:bg-grey-80 rounded text-sm font-medium text-grey-10 flex items-center gap-1 h-10"
-              aria-label="Add Folder"
-            >
-              <Icons.FolderAdd className="size-4 text-grey-10" />
-              <span>New Folder</span>
-            </button>
-          </div> */}
 
           <AddButton ref={addButtonRef} className="h-9" />
         </div>
       </div>
+
+      {/* Active Filters Display */}
+      {activeFilters.length > 0 && (
+        <FilterChips
+          filters={activeFilters}
+          onRemoveFilter={handleRemoveFilter}
+          onOpenFilterDialog={() => setIsFilterOpen(true)}
+          className="mt-4 mb-2"
+        />
+      )}
 
       <div className="w-full mt-4">
         {renderContent()}
@@ -202,7 +412,14 @@ const Ipfs: FC = () => {
         open={isFilterOpen}
         onOpenChange={setIsFilterOpen}
       >
-        <FilterDialogContent />
+        <FilterDialogContent
+          selectedFileTypes={selectedFileTypes}
+          selectedDate={selectedDate}
+          selectedFileSize={selectedFileSize}
+          selectedSizeUnit={selectedSizeUnit}
+          onApplyFilters={handleApplyFilters}
+          onResetFilters={handleResetFilters}
+        />
       </SidebarDialog>
     </div>
   );
