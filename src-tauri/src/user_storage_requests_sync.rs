@@ -141,17 +141,17 @@ pub fn start_user_storage_requests_sync(account_id: &str) {
                             .iter()
                             .map(|id| decode_bounded_vec_to_string(&id.0))
                             .collect();
-                        serde_json::to_string(&miner_ids_vec).unwrap_or_default()
+                        serde_json::to_string(&miner_ids_vec).unwrap_or_else(|_| "[]".to_string())
                     } else {
-                        String::new()
+                        "[]".to_string() // Always return a JSON array string
                     };
 
                     let insert_result = sqlx::query(
                         "INSERT INTO user_profiles (
                             owner, file_hash, file_name, total_replicas, 
                             last_charged_at, selected_validator, 
-                            is_assigned, main_req_hash, source, cid, profile_cid, block_number
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            is_assigned, main_req_hash, source, cid, profile_cid, block_number, miner_ids
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     )
                     .bind(&owner_ss58)
                     .bind(&file_hash_str)
@@ -165,6 +165,7 @@ pub fn start_user_storage_requests_sync(account_id: &str) {
                     .bind(&file_hash_str)
                     .bind("") // profile_cid as empty string
                     .bind(block_number)
+                    .bind(&miner_ids_json) // <-- new binding
                     .execute(pool)
                     .await;
 
