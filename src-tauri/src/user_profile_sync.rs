@@ -143,13 +143,19 @@ pub fn start_user_profile_sync(_account_id: &str) {
                                         let main_req_hash = file.get("main_req_hash").and_then(|v| v.as_str()).unwrap_or_default();
                                         let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default();
                                         let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
-                                        println!("file_hash: {:?} , main_req_hash : {:?}, file: {:?}",file_hash, main_req_hash, file);
                                         let sync_folder_path = SYNC_PATH; 
                                         let file_in_sync_folder = std::path::Path::new(sync_folder_path).join(file_name);
                                         let source_value = if file_in_sync_folder.exists() {
                                             sync_folder_path
                                         } else {
                                             "Hippius"
+                                        };
+
+                                        let miner_ids_json = if let Some(miner_ids) = file.get("miner_ids").and_then(|v| v.as_array()) {
+                                            let ids: Vec<String> = miner_ids.iter().filter_map(|id| id.as_str().map(|s| s.to_string())).collect();
+                                            serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string())
+                                        } else {
+                                            "[]".to_string()
                                         };
 
                                         if let Some(pool) = DB_POOL.get() {
@@ -182,8 +188,8 @@ pub fn start_user_profile_sync(_account_id: &str) {
                                         .bind(total_replicas)
                                         .bind(0)
                                         .bind("")
-                                        .bind(source_value) // <-- here
-                                        .bind("[]") // miner_ids as empty array for now
+                                        .bind(source_value)
+                                        .bind(&miner_ids_json)
                                         .execute(pool)
                                         .await;
 
