@@ -1,6 +1,5 @@
-use sodiumoxide::crypto::secretbox;
 use sha2::{Digest, Sha256};
-
+use sodiumoxide::crypto::secretbox;
 
 pub fn deterministic_key_for_account(account_id: &str) -> secretbox::Key {
     let mut hasher = Sha256::new();
@@ -22,7 +21,10 @@ pub fn encrypt_file_for_account(account_id: &str, file_data: &[u8]) -> Result<Ve
 }
 
 /// Decrypts file data for an account, extracting the nonce and using the deterministic key.
-pub fn decrypt_file_for_account(account_id: &str, encrypted_data: &[u8]) -> Result<Vec<u8>, String> {
+pub fn decrypt_file_for_account(
+    account_id: &str,
+    encrypted_data: &[u8],
+) -> Result<Vec<u8>, String> {
     if encrypted_data.len() < secretbox::NONCEBYTES {
         return Err("Encrypted data too short".to_string());
     }

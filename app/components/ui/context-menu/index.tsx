@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface ContextMenuProps {
     x: number;
@@ -16,6 +17,7 @@ interface ContextMenuProps {
     onClose: () => void;
     onDelete?: (file: FormattedUserIpfsFile) => void;
     onSelectFile?: (file: FormattedUserIpfsFile) => void;
+    onShowFileDetails?: (file: FormattedUserIpfsFile) => void;
 }
 
 export default function FileContextMenu({
@@ -24,7 +26,8 @@ export default function FileContextMenu({
     file,
     onClose,
     onDelete,
-    onSelectFile
+    onSelectFile,
+    onShowFileDetails
 }: ContextMenuProps) {
     const [mounted, setMounted] = useState(false);
 
@@ -62,6 +65,29 @@ export default function FileContextMenu({
     const fileType = getFileTypeFromExtension(fileFormat || null);
     const decodedCid = decodeHexCid(cid);
 
+    const handleGoToExplorer = async () => {
+        try {
+            await openUrl(`http://hipstats.com/cid-tracker/${decodedCid}`);
+        } catch (error) {
+            console.error("Failed to open Explorer:", error);
+        }
+    };
+
+    const handleGoToIPFS = async () => {
+        try {
+            await openUrl(`https://get.hippius.network/ipfs/${decodedCid}`);
+        } catch (error) {
+            console.error("Failed to open IPFS:", error);
+        }
+    };
+
+    const handleShowFileDetails = () => {
+        if (onShowFileDetails && file) {
+            onShowFileDetails(file);
+        }
+        onClose();
+    };
+
     return createPortal(
         <div
             className="fixed z-50"
@@ -73,7 +99,7 @@ export default function FileContextMenu({
                 {/* Menu items */}
                 <div className="flex flex-col">
                     <button
-                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-30 hover:text-grey-40 hover:bg-grey-95 border-b border-grey-80"
+                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
                         onClick={() => {
                             downloadIpfsFile(file);
                             onClose();
@@ -82,20 +108,21 @@ export default function FileContextMenu({
                         <Download className="size-4" />
                         <span>Download</span>
                     </button>
-                    <button
-                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-30 hover:text-grey-40 hover:bg-grey-95 border-b border-grey-80"
+                    {((fileType === "video" || fileType === "image" || fileType === "pdfDocument") && onSelectFile) && <button
+                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
                         onClick={() => {
-                            downloadIpfsFile(file);
+                            onSelectFile(file);
                             onClose();
                         }}
                     >
                         <Icons.Eye className="size-4" />
                         <span>View</span>
                     </button>
+                    }
                     <button
-                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-30 hover:text-grey-40 hover:bg-grey-95 border-b border-grey-80"
+                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
                         onClick={() => {
-                            downloadIpfsFile(file);
+                            handleGoToExplorer();
                             onClose();
                         }}
                     >
@@ -103,16 +130,9 @@ export default function FileContextMenu({
                         <span>Go To Explorer</span>
                     </button>
                     <button
-                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-30 hover:text-grey-40 hover:bg-grey-95 border-b border-grey-80"
+                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
                         onClick={() => {
-                            if (fileType === "video" && onSelectFile) {
-                                onSelectFile(file);
-                            } else {
-                                window.open(
-                                    `https://get.hippius.network/ipfs/${decodedCid}`,
-                                    "_blank"
-                                );
-                            }
+                            handleGoToIPFS()
                             onClose();
                         }}
                     >
@@ -121,7 +141,7 @@ export default function FileContextMenu({
                     </button>
 
                     <button
-                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-30 hover:text-grey-40 hover:bg-grey-95 border-b border-grey-80"
+                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
                         onClick={() => {
                             navigator.clipboard
                                 .writeText(`https://get.hippius.network/ipfs/${decodedCid}`)
@@ -136,25 +156,16 @@ export default function FileContextMenu({
                     </button>
 
                     <button
-                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-30 hover:text-grey-40 hover:bg-grey-95 border-b border-grey-80"
-                        onClick={() => {
-                            navigator.clipboard
-                                .writeText(`https://get.hippius.network/ipfs/${decodedCid}`)
-                                .then(() => {
-                                    toast.success("Copied to clipboard successfully!");
-                                });
-                            onClose();
-                        }}
+                        className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
+                        onClick={handleShowFileDetails}
                     >
                         <Icons.InfoCircle className="size-4" />
                         <span>File Details</span>
                     </button>
 
-
-
                     {file.isAssigned && (
                         <button
-                            className="flex items-center gap-2 p-2 text-xs font-medium text-error-60 hover:text-error-70 hover:bg-grey-95"
+                            className="flex items-center gap-2 p-2 text-xs font-medium text-error-70 hover:text-error-80 hover:bg-grey-90"
                             onClick={() => {
                                 if (onDelete) onDelete(file);
                                 onClose();

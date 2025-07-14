@@ -1,19 +1,19 @@
-use std::time::Duration;
-use tokio::time;
-use crate::substrate_client::get_substrate_client;
-use subxt::utils::AccountId32;
-use reqwest::Client;
-use crate::DB_POOL;
 use crate::commands::substrate_tx::custom_runtime;
+use crate::substrate_client::get_substrate_client;
+use crate::DB_POOL;
 use hex;
+use once_cell::sync::Lazy;
+use reqwest::Client;
 use serde::Serialize;
 use serde_json;
 use sqlx::FromRow;
+use sqlx::Row;
 use std::collections::HashSet;
 use std::sync::Mutex;
-use once_cell::sync::Lazy;
-use sqlx::Row;
+use std::time::Duration;
 use subxt::storage::StorageKeyValuePair;
+use subxt::utils::AccountId32;
+use tokio::time;
 
 static SYNCING_ACCOUNTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
@@ -84,7 +84,7 @@ pub fn start_user_storage_requests_sync(account_id: &str) {
             let storage_query = custom_runtime::storage()
                 .ipfs_pallet()
                 .user_storage_requests_iter();
-            
+
             let mut iter = match storage.iter(storage_query).await {
                 Ok(i) => i,
                 Err(e) => {
@@ -92,21 +92,24 @@ pub fn start_user_storage_requests_sync(account_id: &str) {
                     continue;
                 }
             };
-            
+
             let mut storage_requests = Vec::new();
             let mut total_entries = 0;
             while let Some(result) = iter.next().await {
                 total_entries += 1;
                 match result {
-                    Ok(StorageKeyValuePair { key_bytes, value, .. }) => {
+                    Ok(StorageKeyValuePair {
+                        key_bytes, value, ..
+                    }) => {
                         // Log raw key bytes and value for debugging
                         if let Some(storage_request) = value {
                             if storage_request.owner == account {
-                                let file_hash_str = decode_bounded_vec_to_string(&storage_request.file_hash.0);
-                                let decoded_hash  = hex::decode(&file_hash_str.as_bytes().to_vec()).unwrap_or_else(|_| Vec::new());
-                                let hash_str = std::str::from_utf8(&decoded_hash).unwrap_or_else(|_| {
-                                    ""
-                                });
+                                let file_hash_str =
+                                    decode_bounded_vec_to_string(&storage_request.file_hash.0);
+                                let decoded_hash = hex::decode(&file_hash_str.as_bytes().to_vec())
+                                    .unwrap_or_else(|_| Vec::new());
+                                let hash_str =
+                                    std::str::from_utf8(&decoded_hash).unwrap_or_else(|_| "");
                                 let hash_string = hash_str.to_string();
                                 storage_requests.push((hash_string, storage_request));
                             }
@@ -119,11 +122,12 @@ pub fn start_user_storage_requests_sync(account_id: &str) {
             }
 
             if let Some(pool) = DB_POOL.get() {
-                let _ = sqlx::query("DELETE FROM user_profiles WHERE owner = ? AND is_assigned = ?")
-                    .bind(&account_id)
-                    .bind(false)
-                    .execute(pool)
-                    .await;
+                let _ =
+                    sqlx::query("DELETE FROM user_profiles WHERE owner = ? AND is_assigned = ?")
+                        .bind(&account_id)
+                        .bind(false)
+                        .execute(pool)
+                        .await;
 
                 for (file_hash_str, storage_request) in &storage_requests {
                     let file_name = decode_bounded_vec_to_string(&storage_request.file_name.0);
@@ -132,7 +136,9 @@ pub fn start_user_storage_requests_sync(account_id: &str) {
                     let block_number = storage_request.last_charged_at as i64;
 
                     let miner_ids_json = if let Some(miner_ids) = &storage_request.miner_ids {
-                        let miner_ids_vec: Vec<String> = miner_ids.0.iter()
+                        let miner_ids_vec: Vec<String> = miner_ids
+                            .0
+                            .iter()
                             .map(|id| decode_bounded_vec_to_string(&id.0))
                             .collect();
                         serde_json::to_string(&miner_ids_vec).unwrap_or_default()
@@ -145,7 +151,7 @@ pub fn start_user_storage_requests_sync(account_id: &str) {
                             owner, file_hash, file_name, total_replicas, 
                             last_charged_at, selected_validator, 
                             is_assigned, main_req_hash, source, cid, profile_cid, block_number
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(&owner_ss58)
                     .bind(&file_hash_str)
@@ -163,11 +169,13 @@ pub fn start_user_storage_requests_sync(account_id: &str) {
                     .await;
 
                     match insert_result {
-                        Ok(_) => {},
-                        Err(e) => eprintln!("[StorageRequestsSync] Failed to insert storage request '{}': {e}", file_name),
+                        Ok(_) => {}
+                        Err(e) => eprintln!(
+                            "[StorageRequestsSync] Failed to insert storage request '{}': {e}",
+                            file_name
+                        ),
                     }
                 }
-
             }
             time::sleep(Duration::from_secs(120)).await;
         }
@@ -189,7 +197,7 @@ pub async fn get_user_storage_requests(owner: String) -> Result<Vec<UserStorageR
                    is_assigned, main_req_hash, source
               FROM user_profiles
              WHERE owner = ? AND is_assigned = ?
-            "#
+            "#,
         )
         .bind(&owner)
         .bind(false);

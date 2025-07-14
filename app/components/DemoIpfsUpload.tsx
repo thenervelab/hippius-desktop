@@ -3,12 +3,12 @@
 import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-export default function DirectStorageRequestDemo({ 
-  seedPhrase, 
-  accountId 
-}: { 
-  seedPhrase: string; 
-  accountId: string 
+export default function DirectStorageRequestDemo({
+  seedPhrase,
+  accountId
+}: {
+  seedPhrase: string;
+  accountId: string
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [metadataCid, setMetadataCid] = useState<string>("");
@@ -49,15 +49,23 @@ export default function DirectStorageRequestDemo({
     setStatus("Downloading...");
     try {
       const outputPath = `/tmp/dec_${file.name}`;
+      console.log({
+        accountId: accountId,
+        metadataCid: metadataCid,
+        outputFile: outputPath,
+      })
       await invoke("download_and_decrypt_file", {
-        account_id: accountId,
-        metadata_cid: metadataCid,
-        output_file: outputPath,
+        accountId: accountId,
+        metadataCid: metadataCid,
+        outputFile: outputPath,
       });
+
+
       // Read the file from disk using Rust command
       const data: number[] = await invoke("read_file", { path: outputPath });
       const blob = new Blob([new Uint8Array(data)]);
       const url = URL.createObjectURL(blob);
+      // console.log("Decrypted file URL:", url);
       setDownloadedUrl(url);
       setStatus("Download successful!");
     } catch (e: any) {

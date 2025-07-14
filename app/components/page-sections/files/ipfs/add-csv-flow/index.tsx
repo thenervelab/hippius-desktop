@@ -14,7 +14,7 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { generateId } from "@/lib/utils/generateId";
 import { File } from "lucide-react";
-import { Icons, Button } from "@/components/ui";
+import { Icons, CardButton } from "@/components/ui";
 import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
 
 type Entry = {
@@ -352,16 +352,16 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
       </div>
 
       <div className="flex flex-col gap-y-2 mt-4">
-        <Button
+        <CardButton
           disabled={!ipfsFilesToAdd.length || submittingFiles || uploadingFiles}
           className="w-full"
           onClick={handleSubmit}
         >
           Submit
-        </Button>
-        <Button className="w-full" variant="secondary" onClick={handleReset}>
+        </CardButton>
+        <CardButton className="w-full" variant="secondary" onClick={handleReset}>
           Cancel
-        </Button>
+        </CardButton>
       </div>
     </div>
   );

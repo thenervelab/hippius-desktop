@@ -13,6 +13,7 @@ import FileDetailsDialog, {
 } from "./files-table/UnpinFilesDialog";
 import InsufficientCreditsDialog from "./InsufficientCreditsDialog";
 import SidebarDialog from "@/components/ui/sidebar-dialog";
+import UploadStatusWidget from "./UploadStatusWidget";
 import FilterDialogContent from "./filter-dialog-content";
 import IPFSNoEntriesFound from "./files-table/IpfsNoEntriesFound";
 
@@ -193,6 +194,7 @@ const Ipfs: FC = () => {
       )}
 
       <InsufficientCreditsDialog />
+      <UploadStatusWidget />
 
       {/* Filter Sidebar Dialog */}
       <SidebarDialog

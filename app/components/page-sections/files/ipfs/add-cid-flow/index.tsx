@@ -1,4 +1,4 @@
-import { Button } from "@/components/ui";
+import { CardButton } from "@/components/ui";
 import { P } from "@/components/ui/typography";
 import { useAtomValue, useSetAtom } from "jotai";
 import { Plus, Trash2 } from "lucide-react";
@@ -200,24 +200,24 @@ const AddCidFlow: FC<{
       </div>
 
       <div className="space-x-2 mt-4">
-        <Button size="sm" className="w-fit" onClick={addEntry}>
+        <CardButton size="sm" className="w-fit" onClick={addEntry}>
           <span className="flex items-center gap-x-2">
             <Plus className="size-5" /> Add More
           </span>
-        </Button>
+        </CardButton>
       </div>
 
       <div className="w-full flex flex-col mt-8 gap-y-2">
-        <Button
+        <CardButton
           className="w-full"
           onClick={handleSubmit}
           disabled={ipfsFilesToAdd.some((entry) => entry.cid === "" || entry.name === "")}
         >
           Submit
-        </Button>
-        <Button className="w-full" variant="secondary" onClick={handleCancel}>
+        </CardButton>
+        <CardButton className="w-full" variant="secondary" onClick={handleCancel}>
           Cancel
-        </Button>
+        </CardButton>
       </div>
     </div>
   );

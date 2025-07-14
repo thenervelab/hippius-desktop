@@ -42,7 +42,9 @@ import VideoDialog, { VideoDialogTrigger } from "./VideoDialog";
 import ImageDialog, { ImageDialogTrigger } from "./ImageDialog";
 import PdfDialog, { PdfDialogTrigger } from "./PdfDialog";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import FileContextMenu from "@/components/ui/context-menu/file-context-menu";
+import FileContextMenu from "@/app/components/ui/context-menu";
+import SidebarDialog from "@/app/components/ui/sidebar-dialog";
+import FileDetailsDialogContent from "../file-details-dialog-content";
 
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -63,6 +65,10 @@ const FilesTable: FC<FilesTableProps> = ({
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
     cid: fileToDelete?.cid || "",
   });
+
+  // Add state for file details dialog
+  const [fileDetailsFile, setFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [isFileDetailsOpen, setIsFileDetailsOpen] = useState(false);
 
   const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
   const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
@@ -402,6 +408,11 @@ const FilesTable: FC<FilesTableProps> = ({
     ? getFileTypeFromExtension(selectedFileFormat)
     : null;
 
+  // Handler for showing file details
+  const handleShowFileDetails = (file: FormattedUserIpfsFile) => {
+    setFileDetailsFile(file);
+    setIsFileDetailsOpen(true);
+  };
 
   // Handle right-click on table row
   const handleRowContextMenu = (e: React.MouseEvent, file: FormattedUserIpfsFile) => {
@@ -596,8 +607,18 @@ const FilesTable: FC<FilesTableProps> = ({
             setSelectedFile(file);
             setContextMenu(null);
           }}
+          onShowFileDetails={handleShowFileDetails}
         />
       )}
+
+      {/* File Details Dialog */}
+      <SidebarDialog
+        heading="File Details"
+        open={isFileDetailsOpen}
+        onOpenChange={setIsFileDetailsOpen}
+      >
+        <FileDetailsDialogContent file={fileDetailsFile ?? undefined} />
+      </SidebarDialog>
     </>
   );
 };

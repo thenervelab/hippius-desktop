@@ -1,7 +1,7 @@
 // src/app/components/page-sections/files/ipfs/UploadFilesFlow.tsx
 import { FC, useState, useEffect, useCallback } from "react";
 import useFilesUpload from "@/lib/hooks/useFilesUpload";
-import { Icons, Button } from "@/components/ui";
+import { Icons, CardButton } from "@/components/ui";
 import FileDropzone from "./FileDropzone";
 import { useSetAtom } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "../atoms/query-atoms";
@@ -134,7 +134,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
       )}
 
       <div className="mt-4 flex flex-col gap-y-3">
-        <Button
+        <CardButton
           onClick={() => {
             if (files) upload(files);
           }}
@@ -142,10 +142,10 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
           className="w-full"
         >
           Upload File{files && files.length > 1 ? "s" : ""}
-        </Button>
-        <Button onClick={reset} className="w-full" variant="secondary">
+        </CardButton>
+        <CardButton onClick={reset} className="w-full" variant="secondary">
           Cancel
-        </Button>
+        </CardButton>
       </div>
     </div>
   );

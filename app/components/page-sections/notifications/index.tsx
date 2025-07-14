@@ -150,17 +150,17 @@ const Notifications = () => {
 
   const detail = selected
     ? {
-        id: selected.id,
-        icon: selected.icon,
-        type: selected.type,
-        title: selected.title ?? "",
-        description: selected.description ?? "",
-        time: selected.time,
-        timestamp: selected.timestamp,
-        actionText: selected.buttonText,
-        actionLink: selected.buttonLink,
-        unread: selected.unread,
-      }
+      id: selected.id,
+      icon: selected.icon,
+      type: selected.type,
+      title: selected.title ?? "",
+      description: selected.description ?? "",
+      time: selected.time,
+      timestamp: selected.timestamp,
+      actionText: selected.buttonText,
+      actionLink: selected.buttonLink,
+      unread: selected.unread,
+    }
     : null;
 
   const handleAllRead = async () => {

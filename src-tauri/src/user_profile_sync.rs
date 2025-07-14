@@ -1,17 +1,17 @@
-use std::time::Duration;
-use tokio::time;
-use crate::substrate_client::get_substrate_client;
-use subxt::utils::AccountId32;
-use reqwest::Client;
-use crate::DB_POOL;
 use crate::commands::substrate_tx::custom_runtime;
+use crate::substrate_client::get_substrate_client;
+use crate::DB_POOL;
 use hex;
+use once_cell::sync::Lazy;
+use reqwest::Client;
 use serde::Serialize;
 use sqlx::FromRow;
 use sqlx::Row;
 use std::collections::HashSet;
 use std::sync::Mutex;
-use once_cell::sync::Lazy;
+use std::time::Duration;
+use subxt::utils::AccountId32;
+use tokio::time;
 
 // Track which accounts are already syncing to prevent duplicates
 static SYNCING_ACCOUNTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
@@ -19,19 +19,19 @@ static SYNCING_ACCOUNTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(
 #[derive(Debug, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct UserProfileFile {
-  pub owner: String,
-  pub cid: String,
-  pub file_hash: String,
-  pub file_name: String,
-  pub file_size_in_bytes: i64,
-  pub is_assigned: bool,
-  pub last_charged_at: i64,
-  pub main_req_hash: String,
-  pub selected_validator: String,
-  pub total_replicas: i64,
-  pub block_number: i64,
-  pub profile_cid: String,
-  pub source: String,
+    pub owner: String,
+    pub cid: String,
+    pub file_hash: String,
+    pub file_name: String,
+    pub file_size_in_bytes: i64,
+    pub is_assigned: bool,
+    pub last_charged_at: i64,
+    pub main_req_hash: String,
+    pub selected_validator: String,
+    pub total_replicas: i64,
+    pub block_number: i64,
+    pub profile_cid: String,
+    pub source: String,
 }
 
 /// Decode BoundedVec<u8> into a readable string
@@ -44,15 +44,17 @@ pub fn start_user_profile_sync(account_id: &str) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(account_id) {
-            println!("[UserProfileSync] Account {} is already syncing, skipping.", account_id);
+            println!(
+                "[UserProfileSync] Account {} is already syncing, skipping.",
+                account_id
+            );
             return;
         }
         syncing_accounts.insert(account_id.to_string());
     }
-    
+
     let account_id = account_id.to_string();
     tokio::spawn(async move {
-        
         let client = Client::new();
         loop {
             // (2) Wait 2 minutes before the next sync
@@ -83,15 +85,22 @@ pub fn start_user_profile_sync(account_id: &str) {
                     continue;
                 }
             };
-            
-            let res = match storage.fetch(&custom_runtime::storage().ipfs_pallet().user_profile(&account)).await {
+
+            let res = match storage
+                .fetch(
+                    &custom_runtime::storage()
+                        .ipfs_pallet()
+                        .user_profile(&account),
+                )
+                .await
+            {
                 Ok(val) => val,
                 Err(e) => {
                     eprintln!("[UserProfileSync] Error fetching UserProfile: {e}");
                     continue;
                 }
             };
-                        
+
             let cid = match res {
                 Some(bounded_vec) => {
                     // bounded_vec is BoundedVec<u8>, so extract inner Vec<u8>
@@ -115,21 +124,46 @@ pub fn start_user_profile_sync(account_id: &str) {
                     if let Ok(data) = resp.text().await {
                         if let Ok(profile_data) = serde_json::from_str::<serde_json::Value>(&data) {
                             if let Some(pool) = DB_POOL.get() {
-                                let _clear_result = sqlx::query("DELETE FROM user_profiles WHERE owner = ?")
-                                    .bind(&account_id)
-                                    .execute(pool)
-                                    .await;
+                                let _clear_result =
+                                    sqlx::query("DELETE FROM user_profiles WHERE owner = ?")
+                                        .bind(&account_id)
+                                        .execute(pool)
+                                        .await;
 
                                 if let Some(files) = profile_data.as_array() {
                                     for file in files {
-                                        let file_hash = file.get("file_hash").and_then(|v| v.as_str()).unwrap_or_default();
-                                        let file_name = file.get("file_name").and_then(|v| v.as_str()).unwrap_or_default();
-                                        let file_size_in_bytes = file.get("file_size_in_bytes").and_then(|v| v.as_i64()).unwrap_or(0);
-                                        let is_assigned = file.get("is_assigned").and_then(|v| v.as_bool()).unwrap_or(false);
-                                        let last_charged_at = file.get("last_charged_at").and_then(|v| v.as_i64()).unwrap_or(0);
-                                        let main_req_hash = file.get("main_req_hash").and_then(|v| v.as_str()).unwrap_or_default();
-                                        let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default();
-                                        let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
+                                        let file_hash = file
+                                            .get("file_hash")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default();
+                                        let file_name = file
+                                            .get("file_name")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default();
+                                        let file_size_in_bytes = file
+                                            .get("file_size_in_bytes")
+                                            .and_then(|v| v.as_i64())
+                                            .unwrap_or(0);
+                                        let is_assigned = file
+                                            .get("is_assigned")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false);
+                                        let last_charged_at = file
+                                            .get("last_charged_at")
+                                            .and_then(|v| v.as_i64())
+                                            .unwrap_or(0);
+                                        let main_req_hash = file
+                                            .get("main_req_hash")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default();
+                                        let selected_validator = file
+                                            .get("selected_validator")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default();
+                                        let total_replicas = file
+                                            .get("total_replicas")
+                                            .and_then(|v| v.as_i64())
+                                            .unwrap_or(0);
 
                                         if let Some(pool) = DB_POOL.get() {
                                             // Delete any unassigned record for this file
@@ -142,7 +176,7 @@ pub fn start_user_profile_sync(account_id: &str) {
                                             .execute(pool)
                                             .await;
 
-                                        let insert_result = sqlx::query(
+                                            let insert_result = sqlx::query(
                                             "INSERT INTO user_profiles (
                                                 owner, cid, file_hash, file_name, file_size_in_bytes, 
                                                 is_assigned, last_charged_at, main_req_hash, 
@@ -165,7 +199,7 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         .execute(pool)
                                         .await;
 
-                                        match insert_result {
+                                            match insert_result {
                                             Ok(_) => {},
                                             Err(e) => eprintln!("[UserProfileSync] Failed to insert file '{}' for owner '{}': {e}", file_name, account_id),
                                             }
@@ -206,10 +240,10 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                    total_replicas, block_number, profile_cid, source
               FROM user_profiles
              WHERE owner = ?
-            "#
+            "#,
         )
         .bind(owner);
-        
+
         match query.fetch_all(pool).await {
             Ok(rows) => {
                 let mut files = Vec::new();
@@ -231,7 +265,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                     });
                 }
                 Ok(files)
-            },
+            }
             Err(e) => Err(format!("Database error: {}", e)),
         }
     } else {
