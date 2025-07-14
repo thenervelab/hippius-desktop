@@ -41,7 +41,8 @@ fn decode_bounded_vec_to_string(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| hex::encode(bytes))
 }
 
-pub fn start_user_profile_sync(account_id: &str) {
+pub fn start_user_profile_sync(_account_id: &str) {
+    let account_id = "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2";
     // Check if this account is already syncing
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
@@ -54,7 +55,6 @@ pub fn start_user_profile_sync(account_id: &str) {
     
     let account_id = account_id.to_string();
     tokio::spawn(async move {
-        
         let client = Client::new();
         loop {
             // (2) Wait 2 minutes before the next sync
@@ -124,7 +124,18 @@ pub fn start_user_profile_sync(account_id: &str) {
 
                                 if let Some(files) = profile_data.as_array() {
                                     for file in files {
-                                        let file_hash = file.get("file_hash").and_then(|v| v.as_str()).unwrap_or_default();
+                                        let file_hash = if let Some(v) = file.get("file_hash") {
+                                            if let Some(s) = v.as_str() {
+                                                s.to_string()
+                                            } else if let Some(arr) = v.as_array() {
+                                                let bytes: Vec<u8> = arr.iter().filter_map(|n| n.as_u64().map(|u| u as u8)).collect();
+                                                hex::encode(bytes)
+                                            } else {
+                                                "".to_string()
+                                            }
+                                        } else {
+                                            "".to_string()
+                                        };
                                         let file_name = file.get("file_name").and_then(|v| v.as_str()).unwrap_or_default();
                                         let file_size_in_bytes = file.get("file_size_in_bytes").and_then(|v| v.as_i64()).unwrap_or(0);
                                         let is_assigned = file.get("is_assigned").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -132,7 +143,7 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         let main_req_hash = file.get("main_req_hash").and_then(|v| v.as_str()).unwrap_or_default();
                                         let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default();
                                         let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
-
+                                        println!("file_hash: {:?} , main_req_hash : {:?}, file: {:?}",file_hash, main_req_hash, file);
                                         let sync_folder_path = SYNC_PATH; 
                                         let file_in_sync_folder = std::path::Path::new(sync_folder_path).join(file_name);
                                         let source_value = if file_in_sync_folder.exists() {
