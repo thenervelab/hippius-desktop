@@ -45,6 +45,7 @@ import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import FileContextMenu from "@/app/components/ui/context-menu";
 import SidebarDialog from "@/app/components/ui/sidebar-dialog";
 import FileDetailsDialogContent from "../file-details-dialog-content";
+import BlockTimestamp from "@/app/components/ui/block-timestamp";
 
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -270,30 +271,15 @@ const FilesTable: FC<FilesTableProps> = ({
         },
       }),
 
-      columnHelper.accessor("cid", {
+      columnHelper.accessor("createdAt", {
         header: "DATE UPLOADED",
         enableSorting: true,
         id: "date_uploaded",
         cell: (cell) => {
-          // const value = cell.getValue();
           const createdAt = cell.row.original.createdAt;
-
-          // Format the timestamp to a readable date
-          // const date = new Date(createdAt);
-          // const formattedDate = date.toLocaleDateString('en-US', {
-          //   month: '2-digit',
-          //   day: '2-digit',
-          //   year: '2-digit'
-          // });
-
-          // const formattedTime = date.toLocaleTimeString('en-US', {
-          //   hour: 'numeric',
-          //   minute: '2-digit',
-          //   hour12: true
-          // }).toLowerCase();
-
           return (
-            <div>{createdAt}</div>
+            <BlockTimestamp blockNumber={createdAt} />
+
           );
         },
       }),

@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
+import { request } from "https";
+import { hexToCid } from "../../utils/hexToCid";
 
 export type FileDetail = {
     filename: string;
@@ -89,7 +91,7 @@ export const useUserIpfsFiles = () => {
                     name: file.fileName || "Unnamed File",
                     size: file.fileSizeInBytes,
                     createdAt: file.lastChargedAt,
-                    cid: file.cid || file.fileHash,
+                    cid: hexToCid(file.fileHash) ?? "",
                     source: file.source || "Unknown",
                     minerIds: file.selectedValidator ? [file.selectedValidator] : [],
                     isAssigned: file.isAssigned,
