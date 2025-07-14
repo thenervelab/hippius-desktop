@@ -1,36 +1,40 @@
-use crate::commands::types::*;
-use crate::constants::folder_sync::{DEFAULT_CHUNK_SIZE, DEFAULT_K, DEFAULT_M};
 use crate::utils::{
-    accounts::{decrypt_file_for_account, encrypt_file_for_account},
-    file_operations::request_file_storage,
-    ipfs::{download_from_ipfs, upload_to_ipfs},
+    accounts::{
+        encrypt_file_for_account, decrypt_file_for_account
+    },
+    ipfs::{
+        download_from_ipfs,upload_to_ipfs
+    },
+    file_operations::request_file_storage
 };
-use crate::DB_POOL;
-use once_cell::sync::Lazy;
+use uuid::Uuid;
+use std::fs;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sodiumoxide::crypto::secretbox;
-use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use tempfile::tempdir;
+use crate::DB_POOL;
+use crate::commands::types::*;
+use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
-use uuid::Uuid;
+use crate::constants::folder_sync::{DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
 
 #[tauri::command]
 pub async fn encrypt_and_upload_file(
     account_id: String,
     file_path: String,
-    seed_phrase: String,
+    seed_phrase: String
 ) -> Result<String, String> {
     use std::path::Path;
-
+    
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE; // 1MB
-
+    
     // Extract file name from file_path
     let file_name = Path::new(&file_path)
         .file_name()
@@ -40,7 +44,7 @@ pub async fn encrypt_and_upload_file(
     // Check if file already exists in DB for this account
     if let Some(pool) = DB_POOL.get() {
         let row: Option<(String,)> = sqlx::query_as(
-            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
         )
         .bind(&account_id)
         .bind(&file_name)
@@ -48,10 +52,7 @@ pub async fn encrypt_and_upload_file(
         .await
         .map_err(|e| format!("DB error: {e}"))?;
         if row.is_some() {
-            return Err(format!(
-                "File '{}' already exists for this user.",
-                file_name
-            ));
+            return Err(format!("File '{}' already exists for this user.", file_name));
         }
     }
 
@@ -64,7 +65,7 @@ pub async fn encrypt_and_upload_file(
         // Calculate original file hash
         let mut hasher = Sha256::new();
         hasher.update(&file_data);
-        let _original_file_hash = format!("{:x}", hasher.finalize());
+        let original_file_hash = format!("{:x}", hasher.finalize());
 
         // Encrypt using centralized function
         let to_process = encrypt_file_for_account(&account_id, &file_data)?;
@@ -85,17 +86,15 @@ pub async fn encrypt_and_upload_file(
         for (orig_idx, chunk) in chunks.iter().enumerate() {
             // Split chunk into k sub-blocks
             let sub_block_size = (chunk.len() + k - 1) / k;
-            let sub_blocks: Vec<Vec<u8>> = (0..k)
-                .map(|j| {
-                    let start = j * sub_block_size;
-                    let end = std::cmp::min(start + sub_block_size, chunk.len());
-                    let mut sub_block = chunk[start..end].to_vec();
-                    if sub_block.len() < sub_block_size {
-                        sub_block.resize(sub_block_size, 0);
-                    }
-                    sub_block
-                })
-                .collect();
+            let sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
+                let start = j * sub_block_size;
+                let end = std::cmp::min(start + sub_block_size, chunk.len());
+                let mut sub_block = chunk[start..end].to_vec();
+                if sub_block.len() < sub_block_size {
+                    sub_block.resize(sub_block_size, 0);
+                }
+                sub_block
+            }).collect();
             // Prepare m shards
             let mut shards: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
             for _ in k..m {
@@ -114,8 +113,7 @@ pub async fn encrypt_and_upload_file(
                 let chunk_path = temp_dir.path().join(&chunk_name);
                 let mut f = fs::File::create(&chunk_path).map_err(|e| e.to_string())?;
                 f.write_all(shard).map_err(|e| e.to_string())?;
-                let cid = upload_to_ipfs(&api_url_cloned, chunk_path.to_str().unwrap())
-                    .map_err(|e| e.to_string())?;
+                let cid = upload_to_ipfs(&api_url_cloned, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
                 all_chunk_info.push(ChunkInfo {
                     name: chunk_name,
                     cid,
@@ -126,21 +124,14 @@ pub async fn encrypt_and_upload_file(
             }
         }
         // Build metadata
-        let file_name = std::path::Path::new(&file_path_cloned)
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        let file_extension = std::path::Path::new(&file_path_cloned)
-            .extension()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let file_name = std::path::Path::new(&file_path_cloned).file_name().unwrap().to_string_lossy().to_string();
+        let file_extension = std::path::Path::new(&file_path_cloned).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         let encrypted_size = to_process.len();
         let metadata = Metadata {
             original_file: OriginalFileInfo {
                 name: file_name.clone(),
                 size: file_data.len(),
-                hash: String::new(), // Not used here
+                hash: original_file_hash, // <-- store the hash here!
                 extension: file_extension,
             },
             erasure_coding: ErasureCodingInfo {
@@ -159,8 +150,7 @@ pub async fn encrypt_and_upload_file(
         let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
         fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
         // Upload metadata
-        let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap())
-            .map_err(|e| e.to_string())?;
+        let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
         Ok::<(String, String), String>((file_name, metadata_cid))
     })
     .await
@@ -170,13 +160,12 @@ pub async fn encrypt_and_upload_file(
     println!(" Metadata CID: {}", metadata_cid);
 
     // Call request_file_storage and log its returned CID
-    let storage_result =
-        request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
+    let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => println!("[encrypt_and_upload_file] : {}", res),
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
     }
-    storage_result
+    Ok(metadata_cid)
 }
 
 #[tauri::command]
@@ -187,7 +176,7 @@ pub async fn download_and_decrypt_file(
 ) -> Result<(), String> {
     // Define the API URL inside the function
     let api_url = "http://127.0.0.1:5001";
-
+    
     tokio::task::spawn_blocking(move || {
         // Download metadata
         let metadata_bytes =

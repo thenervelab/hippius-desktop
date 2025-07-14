@@ -1,20 +1,23 @@
-use dirs;
-use once_cell::sync::OnceCell;
-use sqlx::sqlite::SqlitePool;
-use std::path::PathBuf;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     Builder, Manager, Wry,
 };
+use sqlx::sqlite::SqlitePool;
+use once_cell::sync::OnceCell;
+use dirs;
+use std::path::PathBuf;
 
-use crate::{commands::node::start_ipfs_daemon, DB_POOL};
+use crate::{
+    commands::node::start_ipfs_daemon,
+    DB_POOL,
+};
 
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         println!("[Setup] .setup() closure called in setup.rs");
-
+        
         let quit_i = MenuItem::with_id(app, "quit", "Quit Hippius", true, None::<&str>)?;
         let menu = Menu::with_items(app, &[&quit_i])?;
 
@@ -70,7 +73,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // Spawn async task for database initialization and IPFS daemon
         tauri::async_runtime::spawn(async move {
             println!("[Setup] async block started in setup.rs");
-
+            
             // Database initialization
             let home_dir = dirs::home_dir().expect("Failed to get home directory");
             let db_dir = home_dir.join(".hippius");
@@ -103,8 +106,9 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     block_number INTEGER NOT NULL,
                     processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     profile_cid TEXT,
-                    source TEXT
-                )",
+                    source TEXT,
+                    miner_ids TEXT
+                )"
             )
             .execute(&pool)
             .await
@@ -117,7 +121,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 eprintln!("Failed to start IPFS daemon: {e:?}");
             }
         });
-
+        
         Ok(())
     })
 }
@@ -138,7 +142,7 @@ fn resolve_icon_path(filename: &str, app_handle: &tauri::AppHandle) -> PathBuf {
         .resource_dir()
         .expect("Failed to resolve resource directory in production");
     let prod_path = resource_dir.join(filename);
-
+    
     println!("[Setup] Resolved production path: {}", prod_path.display());
 
     if !prod_path.exists() {
@@ -155,11 +159,12 @@ fn resolve_icon_path(filename: &str, app_handle: &tauri::AppHandle) -> PathBuf {
             prod_path.display()
         );
     }
-
+    
     println!("[Setup] Using production path: {}", prod_path.display());
-
+    
     prod_path
 }
 
-// auto sync issue if file is not in db
-// is assigned should be true only when profile parsing
+
+// auto sync issue if file is not in db 
+// is assigned should be true only when profile parsing 
