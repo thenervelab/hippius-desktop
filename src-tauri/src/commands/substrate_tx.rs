@@ -75,7 +75,7 @@ pub async fn storage_request_tauri(
         .into_iter()
         .map(FileInput::from)
         .collect();
-
+    println!("files Input is {:?}", files_input);
     let tx = custom_runtime::tx().marketplace().storage_request(files_input, miner_ids);
 
     // Submit tx

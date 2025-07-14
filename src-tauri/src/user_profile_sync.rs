@@ -146,8 +146,8 @@ pub fn start_user_profile_sync(account_id: &str) {
                                             "INSERT INTO user_profiles (
                                                 owner, cid, file_hash, file_name, file_size_in_bytes, 
                                                 is_assigned, last_charged_at, main_req_hash, 
-                                                selected_validator, total_replicas, block_number, profile_cid, source
-                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                                                selected_validator, total_replicas, block_number, profile_cid, source, miner_ids
+                                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                                         )
                                         .bind(&account_id)
                                         .bind(&cid)
@@ -162,6 +162,7 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         .bind(0)
                                         .bind("")
                                         .bind("Hippius")
+                                        .bind("[]") // miner_ids as empty array for now
                                         .execute(pool)
                                         .await;
 

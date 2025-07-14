@@ -106,7 +106,8 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     block_number INTEGER NOT NULL,
                     processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     profile_cid TEXT,
-                    source TEXT
+                    source TEXT,
+                    miner_ids TEXT
                 )"
             )
             .execute(&pool)
