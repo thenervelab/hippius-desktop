@@ -60,11 +60,6 @@ const NotificationSettings: React.FC = () => {
     toast.success("Notification preferences saved successfully");
   };
 
-  const handleCancel = () => {
-    // Reset to original values or just close modal
-    handleSelectNone();
-  };
-
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
@@ -141,15 +136,6 @@ const NotificationSettings: React.FC = () => {
                   <span className="flex items-center text-lg leading-6 font-medium">
                     Save Changes
                   </span>
-                </div>
-              </CardButton>
-              <CardButton
-                className="max-w-[160px] h-[60px]"
-                variant="secondary"
-                onClick={handleCancel}
-              >
-                <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
-                  Cancel
                 </div>
               </CardButton>
             </div>

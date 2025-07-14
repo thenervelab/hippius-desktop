@@ -6,10 +6,11 @@ import { Icons, RevealTextLine } from "../ui";
 import cn from "@/app/lib/utils/cn";
 import NavItem from "./nav-item";
 import { navItems, footerNavItems } from "./nav-data";
-import { useAtom } from "jotai";
+import { useAtom, useSetAtom } from "jotai";
 import {
   settingsDialogOpenAtom,
-  sidebarCollapsedAtom
+  sidebarCollapsedAtom,
+  activeSettingsTabAtom
 } from "@/app/components/sidebar/sideBarAtoms";
 import { InView } from "react-intersection-observer";
 import FooterNavItem from "./footer-nav-items";
@@ -19,12 +20,16 @@ import SettingsDialogContent from "../page-sections/settings/SettingsDialogConte
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useAtom(sidebarCollapsedAtom);
-  const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(
-    settingsDialogOpenAtom
-  );
+  const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(settingsDialogOpenAtom);
+  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
 
   const toggleSidebar = () => {
     setCollapsed(!collapsed);
+  };
+
+  const openSettingsWithDefaultTab = () => {
+    setActiveSettingsTab("Change Passcode"); 
+    setSettingsDialogOpen(true);
   };
 
   return (
@@ -113,7 +118,7 @@ const Sidebar: React.FC = () => {
                   collapsed={collapsed}
                   onClick={
                     item.label === "Settings"
-                      ? () => setSettingsDialogOpen(true)
+                      ? openSettingsWithDefaultTab
                       : undefined
                   }
                 />

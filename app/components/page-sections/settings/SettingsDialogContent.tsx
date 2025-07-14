@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 import { Icons, RevealTextLine } from "../../ui";
 import TabList, { TabOption } from "../../ui/tabs/tab-list";
 import ChangePasscode from "./ChangePasscode";
@@ -7,9 +7,11 @@ import { InView } from "react-intersection-observer";
 import AccountActionButtons from "./AccountActionButtons";
 import SubAccounts from "./sub-accounts";
 import NotificationSettings from "./NotificationSettings";
+import { useAtom } from "jotai";
+import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 const SettingsDialogContent: React.FC = () => {
-  const [activeTab, setActiveTab] = useState("Change Passcode");
+  const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
 
   const tabs: TabOption[] = [
     {

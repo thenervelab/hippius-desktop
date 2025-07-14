@@ -15,7 +15,10 @@ import { refreshUnreadCountAtom } from "@/components/page-sections/notifications
 import { UiNotification } from "./types";
 import { useNotifications } from "@/lib/hooks/useNotifications";
 import { useSearchParams } from "next/navigation";
-import { settingsDialogOpenAtom } from "@/app/components/sidebar/sideBarAtoms";
+import {
+  settingsDialogOpenAtom,
+  activeSettingsTabAtom
+} from "@/app/components/sidebar/sideBarAtoms";
 // map DB types → icons
 export const iconMap: Record<string, IconComponent> = {
   Credits: Icons.WalletAdd,
@@ -33,6 +36,7 @@ const Notifications = () => {
   const [onlyUnread, setOnlyUnread] = useState(false);
   const searchParams = useSearchParams();
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
+  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
 
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
@@ -115,6 +119,8 @@ const Notifications = () => {
   };
 
   const handleOpenSettings = () => {
+    // Set the active tab to "Notifications" before opening
+    setActiveSettingsTab("Notifications");
     setSettingsDialogOpen(true);
   };
 
