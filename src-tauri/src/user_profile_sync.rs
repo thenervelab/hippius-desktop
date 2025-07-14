@@ -12,6 +12,8 @@ use sqlx::Row;
 use std::collections::HashSet;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
+use std::path::Path;
+use crate::constants::substrate::{SYNC_PATH};
 
 // Track which accounts are already syncing to prevent duplicates
 static SYNCING_ACCOUNTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
@@ -131,6 +133,14 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default();
                                         let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
 
+                                        let sync_folder_path = SYNC_PATH; 
+                                        let file_in_sync_folder = std::path::Path::new(sync_folder_path).join(file_name);
+                                        let source_value = if file_in_sync_folder.exists() {
+                                            sync_folder_path
+                                        } else {
+                                            "Hippius"
+                                        };
+
                                         if let Some(pool) = DB_POOL.get() {
                                             // Delete any unassigned record for this file
                                             let _ = sqlx::query(
@@ -161,7 +171,7 @@ pub fn start_user_profile_sync(account_id: &str) {
                                         .bind(total_replicas)
                                         .bind(0)
                                         .bind("")
-                                        .bind("Hippius")
+                                        .bind(source_value) // <-- here
                                         .bind("[]") // miner_ids as empty array for now
                                         .execute(pool)
                                         .await;
