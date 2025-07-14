@@ -1,4 +1,4 @@
-import React, { ReactNode } from "react";
+import React from "react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { IconComponent } from "@/app/lib/types";
 
@@ -13,7 +13,7 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
   Icon,
   title,
   subtitle,
-  iconSize = "large" // Default to large
+  iconSize = "large", // Default to large
 }) => {
   const wrapperSize = iconSize === "small" ? "size-8" : "size-8 sm:size-10";
   const iconSizeClass = iconSize === "small" ? "size-4" : "size-5 sm:size-6";
