@@ -17,13 +17,13 @@ const FilterDialogContent: React.FC = () => {
   return (
     <div className="flex justify-between flex-col gap-2 h-full">
       <div className="flex flex-col gap-5 ">
-        <div className="py-2 border-b border-grey-80">
+        {/* <div className="py-2 border-b border-grey-80">
           <FilterLabel>File Name</FilterLabel>
           <FilterSearchInput
             placeholder="Search file name"
             className="w-full"
           />
-        </div>
+        </div> */}
 
         <div className="pb-2 border-b border-grey-80 w-full">
           <FilterLabel>File Type</FilterLabel>
@@ -41,20 +41,20 @@ const FilterDialogContent: React.FC = () => {
           />
         </div>
 
-        <div className="pb-2 border-b border-grey-80 w-full">
+        <div className="mb-2 pb-2 w-full">
           <FileSizeSelector
             value={selectedFileSize}
             onValueChange={(value) => setSelectedFileSize(value)}
           />
         </div>
 
-        <div className="pb-2  w-full">
+        {/* <div className="pb-2 w-full">
           <FilterLabel>File Location</FilterLabel>
           <LocationTypeSelector
             selectedPaths={selectedPaths}
             onPathsSelect={setSelectedPaths}
           />
-        </div>
+        </div> */}
       </div>
       <div className="flex gap-2 h-10 mt-auto ">
         <CardButton className="w-full " variant="secondary">
