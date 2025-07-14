@@ -26,6 +26,7 @@ import {
   MoreVertical,
   Trash2,
   HardDrive,
+  Share,
 } from "lucide-react";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { toast } from "sonner";
@@ -46,6 +47,8 @@ import FileContextMenu from "@/app/components/ui/context-menu";
 import SidebarDialog from "@/app/components/ui/sidebar-dialog";
 import FileDetailsDialogContent from "../file-details-dialog-content";
 import BlockTimestamp from "@/app/components/ui/block-timestamp";
+import { Icons } from "@/app/components/ui";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -298,6 +301,9 @@ const FilesTable: FC<FilesTableProps> = ({
         maxSize: 40,
         cell: ({ cell }) => {
           const { cid, name } = cell.row.original;
+          const decodedCid = decodeHexCid(cid);
+          const { fileFormat } = getFilePartsFromFileName(name);
+          const fileType = getFileTypeFromExtension(fileFormat || null);
 
           return (
             <div className="flex justify-center items-center w-10">
@@ -305,21 +311,39 @@ const FilesTable: FC<FilesTableProps> = ({
                 dropdownTitle="IPFS Options"
                 items={[
                   {
+                    icon: <Download className="size-4" />,
+                    itemTitle: "Download",
+                    onItemClick: async () => {
+                      downloadIpfsFile(cell.row.original);
+                    },
+                  },
+                  ...(((fileType === "video" || fileType === "image" || fileType === "pdfDocument")) ?
+                    [{
+                      icon: <Icons.Eye className="size-4" />,
+                      itemTitle: "View",
+                      onItemClick: () => {
+                        setSelectedFile(cell.row.original);
+                      },
+                    }] : []),
+                  {
+                    icon: <Share className="size-4" />,
+                    itemTitle: "Go To Explorer",
+                    onItemClick: async () => {
+                      try {
+                        await openUrl(`http://hipstats.com/cid-tracker/${decodedCid}`);
+                      } catch (error) {
+                        console.error("Failed to open Explorer:", error);
+                      }
+                    },
+                  },
+                  {
                     icon: <LinkIcon className="size-4" />,
                     itemTitle: "View on IPFS",
-                    onItemClick: () => {
-                      const { fileFormat } = getFilePartsFromFileName(name);
-                      const fileType = getFileTypeFromExtension(
-                        fileFormat || null
-                      );
-
-                      if (fileType === "video") {
-                        setSelectedFile(cell.row.original);
-                      } else {
-                        window.open(
-                          `https://get.hippius.network/ipfs/${decodeHexCid(cid)}`,
-                          "_blank"
-                        );
+                    onItemClick: async () => {
+                      try {
+                        await openUrl(`https://get.hippius.network/ipfs/${decodedCid}`);
+                      } catch (error) {
+                        console.error("Failed to open Explorer:", error);
                       }
                     },
                   },
@@ -329,7 +353,7 @@ const FilesTable: FC<FilesTableProps> = ({
                     onItemClick: () => {
                       navigator.clipboard
                         .writeText(
-                          `https://get.hippius.network/ipfs/${decodeHexCid(cid)}`
+                          `https://get.hippius.network/ipfs/${decodedCid}`
                         )
                         .then(() => {
                           toast.success("Copied to clipboard successfully!");
@@ -337,10 +361,10 @@ const FilesTable: FC<FilesTableProps> = ({
                     },
                   },
                   {
-                    icon: <Download className="size-4" />,
-                    itemTitle: "Download",
-                    onItemClick: async () => {
-                      downloadIpfsFile(cell.row.original);
+                    icon: <Icons.InfoCircle className="size-4" />,
+                    itemTitle: "File Details",
+                    onItemClick: () => {
+                      handleShowFileDetails(cell.row.original);
                     },
                   },
                   ...(cell.row.original.isAssigned

@@ -2,12 +2,15 @@ import React from "react";
 import * as Menubar from "@radix-ui/react-menubar";
 import { Icons } from "@/components/ui";
 
+const currentYear = new Date().getFullYear();
+const previousYear = currentYear - 1;
+
 const dateOptions = [
   { value: "today", label: "Today" },
   { value: "last7days", label: "Last 7 days" },
   { value: "last30days", label: "Last 30 days" },
-  { value: "thisyear", label: "This year (2025)" },
-  { value: "lastyear", label: "Last year (2024)" },
+  { value: "thisyear", label: `This year (${currentYear})` },
+  { value: "lastyear", label: `Last year (${previousYear})` },
 ];
 
 interface DateSelectorProps {
