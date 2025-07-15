@@ -17,6 +17,7 @@ interface SyncStatusResponse {
 
 export function useFilesNotification() {
   const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
+  const [invokeCount, setInvokeCount] = useState<number>(0);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const areFilesNotificationsEnabled = enabledTypes.includes("Files");
@@ -31,6 +32,9 @@ export function useFilesNotification() {
     // Function to get sync status
     const getSyncStatus = async () => {
       try {
+        // Increment the invoke counter
+        setInvokeCount((prevCount) => prevCount + 1);
+
         const status = await invoke<SyncStatusResponse>("get_sync_status");
         setSyncStatus(status);
 
@@ -82,5 +86,5 @@ export function useFilesNotification() {
     return () => clearInterval(intervalId);
   }, [areFilesNotificationsEnabled, refreshUnread]);
 
-  return syncStatus;
+  return { syncStatus, invokeCount };
 }

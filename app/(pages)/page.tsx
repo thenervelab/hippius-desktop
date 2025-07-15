@@ -5,7 +5,7 @@ import HomePage from "../components/page-sections/home";
 import { useFilesNotification } from "../lib/hooks/useFilesNotification";
 
 export default function Home() {
-  const syncStatus = useFilesNotification();
+  const { syncStatus, invokeCount } = useFilesNotification();
 
   return (
     <DashboardTitleWrapper mainText="">
@@ -20,6 +20,8 @@ export default function Home() {
             </p>
             <p>Percentage: {syncStatus.percent.toFixed(1)}%</p>
             <p>Status: {syncStatus.in_progress ? "Syncing..." : "Idle"}</p>
+
+            <p>API calls: {invokeCount} times</p>
           </div>
           {syncStatus.in_progress && (
             <div className="w-full bg-grey-80 rounded-full h-2 mt-2">
