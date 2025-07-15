@@ -20,8 +20,8 @@ type Props = {
 
 export default function NotificationMenu({ className = "delay-500" }: Props) {
   useCreditsNotification();
-  useFilesNotification();
   useNotificationPreferences();
+  useFilesNotification();
   const refreshUnreadCount = useSetAtom(refreshUnreadCountAtom);
   const [count] = useAtom(unreadCountAtom);
   const [menuValue, setMenuValue] = useState<string>("");

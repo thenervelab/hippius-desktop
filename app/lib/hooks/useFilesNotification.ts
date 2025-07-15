@@ -5,6 +5,7 @@ import { useSetAtom, useAtom } from "jotai";
 import {
   refreshUnreadCountAtom,
   enabledNotificationTypesAtom,
+  refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 
 // Define interface for sync status response
@@ -19,15 +20,16 @@ export function useFilesNotification() {
   const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
   const [invokeCount, setInvokeCount] = useState<number>(0);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
+  const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
+
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const areFilesNotificationsEnabled = enabledTypes.includes("Files");
 
   // Refs to track sync state changes
   const wasInProgress = useRef(false);
   const notificationSent = useRef(false);
-
   useEffect(() => {
-    // if (!areFilesNotificationsEnabled) return;
+    if (!areFilesNotificationsEnabled) return;
 
     // Function to get sync status
     const getSyncStatus = async () => {
@@ -85,6 +87,9 @@ export function useFilesNotification() {
     // Clean up interval on component unmount
     return () => clearInterval(intervalId);
   }, [areFilesNotificationsEnabled, refreshUnread]);
+  useEffect(() => {
+    refreshEnabledTypes();
+  }, [refreshEnabledTypes]);
 
   return { syncStatus, invokeCount };
 }
