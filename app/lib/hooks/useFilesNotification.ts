@@ -60,7 +60,7 @@ export function useFilesNotification() {
             notificationTitleText: "File Sync Complete!",
             notificationDescription: `All your files have been successfully synchronized. Your files are now up to date.`,
             notificationLinkText: "View Files",
-            notificationLink: "/",
+            notificationLink: "/files",
           });
 
           notificationSent.current = true;
@@ -80,7 +80,7 @@ export function useFilesNotification() {
     getSyncStatus();
 
     // Set up interval to periodically refresh the status
-    const intervalId = setInterval(getSyncStatus, 500);
+    const intervalId = setInterval(getSyncStatus, 1000);
 
     // Clean up interval on component unmount
     return () => clearInterval(intervalId);
