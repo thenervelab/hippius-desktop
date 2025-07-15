@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { IPFS_NODE_CONFIG } from "@/app/lib/config";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { invoke } from "@tauri-apps/api/core";
 
 type Bandwidth = { in: number; out: number };
 
@@ -11,29 +13,76 @@ function formatBytes(bytes: number) {
 
 export function useIpfsBandwidth(intervalMs = 1000) {
     const [bw, setBw] = useState<Bandwidth>({ in: 0, out: 0 });
+    const [isRetrying, setIsRetrying] = useState(false);
+    const [retryCount, setRetryCount] = useState(0);
+    const MAX_RETRIES = 3;
 
     useEffect(() => {
         let mounted = true;
 
-        const fetchBw = async () => {
+        const fetchBandwidth = async () => {
             try {
-                const res = await fetch(
-                    `${IPFS_NODE_CONFIG.baseURL}/api/v0/stats/bw`
-                    , { method: "POST" });
-                const { RateIn, RateOut } = await res.json();
-                if (mounted) setBw({ in: RateIn, out: RateOut });
-            } catch {
-                /* ignore errors */
+                const response = await tauriFetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/stats/bw`, {
+                    method: "POST",
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (mounted) {
+                        setBw({ in: data.RateIn, out: data.RateOut });
+                        setIsRetrying(false);
+                        setRetryCount(0);
+                    }
+                } else {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+            } catch (error) {
+                console.error("Failed to fetch bandwidth stats:", error);
+
+                try {
+                    const bwData = await invoke<{ RateIn: number; RateOut: number }>("get_ipfs_bandwidth");
+                    if (mounted) {
+                        setBw({ in: bwData.RateIn, out: bwData.RateOut });
+                        setIsRetrying(false);
+                        setRetryCount(0);
+                    }
+                } catch (invokeError) {
+                    console.error("Tauri invoke also failed:", invokeError);
+
+                    if (retryCount < MAX_RETRIES) {
+                        setIsRetrying(true);
+                        setRetryCount(prev => prev + 1);
+                    } else if (mounted) {
+                        setBw({ in: 0, out: 0 });
+                        setIsRetrying(false);
+                    }
+                }
             }
         };
 
-        fetchBw();
-        const id = setInterval(fetchBw, intervalMs);
-        return () => { mounted = false; clearInterval(id) };
-    }, [intervalMs]);
+        fetchBandwidth();
+
+        const intervalId = setInterval(fetchBandwidth, intervalMs);
+
+        let retryId: NodeJS.Timeout | null = null;
+        if (isRetrying) {
+            retryId = setTimeout(() => {
+                if (mounted) {
+                    fetchBandwidth();
+                }
+            }, 2000 * retryCount);
+        }
+
+        return () => {
+            mounted = false;
+            clearInterval(intervalId);
+            if (retryId) clearTimeout(retryId);
+        };
+    }, [intervalMs, isRetrying, retryCount]);
 
     return {
         download: formatBytes(bw.in) + "/s",
         upload: formatBytes(bw.out) + "/s",
+        rawData: bw,
     };
 }

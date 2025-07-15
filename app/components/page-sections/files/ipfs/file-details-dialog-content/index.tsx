@@ -60,6 +60,16 @@ interface FileDetailsDialogContentProps {
 }
 
 const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ file }) => {
+    const minerIds = file
+        ? (Array.isArray(file.minerIds)
+            ? file.minerIds
+            : typeof file.minerIds === "string"
+                ? [file.minerIds]
+                : [])
+        : [];
+
+    const { uniqueLocations, isLoading } = useNodeLocations(minerIds);
+
     if (!file) return null;
 
     const { fileFormat } = getFilePartsFromFileName(file.name);
@@ -70,10 +80,6 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
 
     // Format file size
     const fileSize = file.size ? formatBytesFromBigInt(BigInt(file.size)) : "Unknown";
-
-    let minerIds = Array.isArray(file.minerIds) ? file.minerIds : typeof file.minerIds === "string" ? [file.minerIds] : [];
-
-    const { uniqueLocations, isLoading } = useNodeLocations(minerIds);
 
     const fallbackLocations = ["Loading locations..."];
 
