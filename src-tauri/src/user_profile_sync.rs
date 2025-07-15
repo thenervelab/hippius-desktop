@@ -34,6 +34,7 @@ pub struct UserProfileFile {
   pub block_number: i64,
   pub profile_cid: String,
   pub source: String,
+  pub miner_ids: Option<String>,
 }
 
 /// Decode BoundedVec<u8> into a readable string
@@ -231,7 +232,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
             SELECT owner, cid, file_hash, file_name,
                    file_size_in_bytes, is_assigned, last_charged_at,
                    main_req_hash, selected_validator,
-                   total_replicas, block_number, profile_cid, source
+                   total_replicas, block_number, profile_cid, source, miner_ids
               FROM user_profiles
              WHERE owner = ?
             "#
@@ -256,6 +257,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                         block_number: row.get("block_number"),
                         profile_cid: row.get("profile_cid"),
                         source: row.get("source"),
+                        miner_ids: row.get("miner_ids"),
                     });
                 }
                 Ok(files)
