@@ -3,55 +3,56 @@ name: Tauri Desktop App Build
 on:
   push:
     branches: [main]
-    tags: ['v*']  # Also build when pushing tags starting with 'v'
+
+permissions:
+  contents: write
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, ubuntu-22.04, windows-latest]  # Using Ubuntu 22.04 for better package availability
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
 
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Install Rust
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # Cache Rust dependencies
+      - name: Add macOS targets for universal binary
+        if: matrix.platform == 'macos-latest'
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
-          
-      # Install system dependencies for Linux - fixed package names
+
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      
-      # Setup Node.js
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
-      
-      # Install PNPM - fixed to install pnpm separately before using it
+
       - name: Install PNPM
         uses: pnpm/action-setup@v2
         with:
-          version: 9.12.3  # Specify the exact version from your package.json
-          run_install: false  # Don't run install at this step
-      
-      # Verify PNPM installation
+          version: 9.12.3
+          run_install: false
+
       - name: Verify PNPM installation
         run: pnpm --version
-          
-      # Install frontend dependencies with caching
+
       - name: Get pnpm store directory
         shell: bash
         run: |
@@ -65,37 +66,34 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
 
-      # Install dependencies
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Build the Next.js frontend
       - name: Build frontend
         run: pnpm build
         env:
-          # Add any environment variables needed for the build here
           NODE_ENV: production
 
-      # Build the Tauri app for the current platform
-      - name: Build Tauri app
+      - name: Build Tauri app (universal target for macOS)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Only use release configurations when building from a tag
-          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || '' }}
-          releaseBody: "See the assets to download this version and install."
-          releaseDraft: ${{ startsWith(github.ref, 'refs/tags/') }}
+          args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin' || '' }}
+          tagName: latest
+          releaseName: "Latest Build"
+          releaseBody: "This is the latest build from the main branch."
+          releaseDraft: false
           prerelease: false
-          
-      # Upload build artifacts for all builds
+          overwrite: true
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}-build
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/app/*.app
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/msi/*.msi
