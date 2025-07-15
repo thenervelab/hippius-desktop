@@ -63,7 +63,7 @@ const BlockTimestamp: React.FC<BlockTimestampProps> = ({ blockNumber }) => {
     const { date, time } = parseDateAndTime(timestamp.toISOString());
 
     return (
-        <div className="text-left text-base font-medium text-grey-20 self-start">
+        <div className="text-left text-base font-medium text-grey-60 self-start">
             <div>{date}{" "}{time}</div>
         </div>
     );
