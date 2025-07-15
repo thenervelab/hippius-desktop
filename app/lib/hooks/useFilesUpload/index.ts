@@ -1,7 +1,7 @@
 // src/lib/hooks/useFilesUpload.ts
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useUserCredits } from "../use-user-credits";
+import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { useUserIpfsFiles } from "../use-user-ipfs-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom } from "jotai";
@@ -16,7 +16,9 @@ export type UploadFilesHandlers = {
 export function useFilesUpload(handlers: UploadFilesHandlers) {
     const { onSuccess, onError } = handlers;
     const setProgress = useSetAtom(uploadProgressAtom);
-    const { refetch: checkCredits } = useUserCredits();
+    const {
+        data: credits,
+    } = useUserCredits();
     const { refetch: refetchUserFiles } = useUserIpfsFiles();
     const { mnemonic, polkadotAddress } = useWalletAuth();
 
@@ -46,7 +48,6 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
         try {
             // check credits as before
-            const credits = (await checkCredits()).data;
             if (!credits || credits <= BigInt(0)) {
                 throw new Error("Insufficient Credits. Please add credits.");
             }

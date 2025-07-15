@@ -9,7 +9,7 @@ import {
   insufficientCreditsDialogOpenAtom
 } from "@/components/page-sections/files/ipfs/atoms/query-atoms";
 import { useAtomValue, useSetAtom } from "jotai";
-import { useUserCredits } from "@/lib/hooks/use-user-credits";
+import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { generateId } from "@/lib/utils/generateId";
@@ -27,7 +27,9 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
   const [ipfsFilesToAdd, setIpfsFilesToAdd] = useState<Entry[]>([]);
   const [processedFiles, setProcessedFiles] = useState<Set<string>>(new Set());
   const [files, setFiles] = useState<File[] | null>(null);
-  const { refetch: getUserCredits } = useUserCredits();
+  const {
+    refetch: getUserCredits,
+  } = useUserCredits();
 
   const { refetch: refetchUserFiles } = useUserIpfsFiles();
   const { mutateAsync: submitFiles, isPending: submittingFiles } = useAtomValue(

@@ -11,7 +11,7 @@ import {
   uploadProgressAtom,
   insufficientCreditsDialogOpenAtom
 } from "@/components/page-sections/files/ipfs/atoms/query-atoms";
-import { useUserCredits } from "@/lib/hooks/use-user-credits";
+import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { generateId } from "@/lib/utils/generateId";
@@ -29,7 +29,9 @@ const AddCidFlow: FC<{
   const [ipfsFilesToAdd, setIpfsFilesToAdd] = useState<Entry[]>([
     { id: generateId(), cid: "", name: "" },
   ]);
-  const { refetch: getUserCredits } = useUserCredits();
+  const {
+    refetch: getUserCredits,
+  } = useUserCredits();
   const { refetch: refetchUserFiles } = useUserIpfsFiles();
 
 

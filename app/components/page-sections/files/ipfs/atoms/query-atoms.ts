@@ -2,7 +2,7 @@ import { atomWithMutation } from "jotai-tanstack-query";
 import axios from "axios";
 import { ApiPromise } from "@polkadot/api";
 import { atom } from "jotai";
-import { useUserCredits } from "@/lib/hooks/use-user-credits";
+import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 
 export type UploadFilesToIpfsAtomHandlers = {
   onUploadProgress?: (value: number) => void;

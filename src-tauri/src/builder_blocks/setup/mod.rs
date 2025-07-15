@@ -30,7 +30,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         let _tray = TrayIconBuilder::new()
             .tooltip("Hippius Cloud")
             .icon(Image::from_path(&icon_path)?)
-            .icon_as_template(true)
+            .icon_as_template(false)
             .menu(&menu)
             .show_menu_on_left_click(false)
             .on_tray_icon_event(|tray, event| match event {

@@ -1,7 +1,7 @@
 import React from "react";
 import { useAtom } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "./atoms/query-atoms";
-import { Icons, Button, AbstractIconWrapper } from "@/components/ui";
+import { Icons, CardButton, AbstractIconWrapper } from "@/components/ui";
 
 const InsufficientCreditsDialog: React.FC = () => {
     const [isOpen, setIsOpen] = useAtom(insufficientCreditsDialogOpenAtom);
@@ -33,16 +33,16 @@ const InsufficientCreditsDialog: React.FC = () => {
                     </p>
 
                     <div className="flex flex-col w-full gap-y-2">
-                        <Button
+                        <CardButton
                             className="w-full"
                             asLink
                             href="/dashboard/billing/plans"
                             onClick={() => setIsOpen(false)}
                         >
                             Buy Credits
-                        </Button>
+                        </CardButton>
 
-                        <Button
+                        <CardButton
                             variant="secondary"
                             className="w-full"
                             asLink
@@ -50,7 +50,7 @@ const InsufficientCreditsDialog: React.FC = () => {
                             onClick={() => setIsOpen(false)}
                         >
                             Subscribe
-                        </Button>
+                        </CardButton>
                     </div>
                 </div>
             </div>
