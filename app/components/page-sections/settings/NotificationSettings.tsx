@@ -7,9 +7,9 @@ import { toast } from "sonner";
 import { InView } from "react-intersection-observer";
 import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
 import { useSetAtom } from "jotai";
-import { 
+import {
   refreshEnabledTypesAtom,
-  refreshNotificationsAtom 
+  refreshNotificationsAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 
 const NotificationSettings: React.FC = () => {
@@ -32,7 +32,7 @@ const NotificationSettings: React.FC = () => {
   const handleCheckboxChange = (id: string) => {
     setCheckedItems((prev) => ({
       ...prev,
-      [id]: !prev[id]
+      [id]: !prev[id],
     }));
   };
 
@@ -59,7 +59,7 @@ const NotificationSettings: React.FC = () => {
       await refreshEnabledTypes();
       // Then refresh the notifications list to apply filtering
       await refreshNotifications();
-      
+
       toast.success("Notification preferences saved successfully");
     } else {
       toast.error("Failed to save notification preferences");
@@ -140,7 +140,7 @@ const NotificationSettings: React.FC = () => {
               >
                 <div className="flex items-center gap-2">
                   <span className="flex items-center text-lg leading-6 font-medium">
-                    Save Changes
+                    Save
                   </span>
                 </div>
               </CardButton>
