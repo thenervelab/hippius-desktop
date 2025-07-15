@@ -270,7 +270,7 @@ const FilesTable: FC<FilesTableProps> = ({
           const value = cell.getValue();
           if (cell.row.original.tempData) return "...";
           if (value === undefined) return "Unknown";
-          return formatBytesFromBigInt(BigInt(value));
+          return <div className="text-grey-20 text-base font-medium">{formatBytesFromBigInt(BigInt(value))}</div>;
         },
       }),
 
@@ -291,7 +291,7 @@ const FilesTable: FC<FilesTableProps> = ({
         id: "location",
         enableSorting: false,
         cell: ({ row: { original } }) => (
-          <div>{original.source}</div>
+          <div className="text-grey-70 text-base font-medium">{original.source}</div>
         ),
       }),
       columnHelper.display({
