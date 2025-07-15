@@ -14,7 +14,7 @@ export type FormattedUserIpfsFile = {
     size?: number;
     createdAt: number;
     cid: string;
-    minerIds: string[];
+    minerIds: string | string[];
     isAssigned: boolean;
     lastChargedAt: number;
     tempData?: {
@@ -42,6 +42,7 @@ type UserProfileFile = {
     selectedValidator?: string;
     isAssigned: boolean;
     source: string;
+    minerIds: string;
 };
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
@@ -92,7 +93,7 @@ export const useUserIpfsFiles = () => {
                     createdAt: file.lastChargedAt,
                     cid: hexToCid(file.fileHash) ?? "",
                     source: file.source || "Unknown",
-                    minerIds: file.selectedValidator ? [file.selectedValidator] : [],
+                    minerIds: typeof file.minerIds === "string" ? JSON.parse(file.minerIds) : file.minerIds,
                     isAssigned: file.isAssigned,
                     lastChargedAt: file.lastChargedAt,
                     fileHash: file.fileHash,

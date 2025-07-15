@@ -9,6 +9,7 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getFileIcon, isDirectory } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
+import { HIPPIUS_EXPLORER_CONFIG } from "@/app/lib/config";
 
 interface DetailRowProps {
     label: string;
@@ -41,14 +42,12 @@ interface NodeItemProps {
 
 const NodeItem: React.FC<NodeItemProps> = ({ nodeId }) => (
     <div className="inline-flex items-center gap-1 hover:bg-grey-90 border border-grey-80 rounded px-2 py-1 text-xs text-grey-10 mr-2 mb-2">
-        {/* {nodeId}
-        <CardButton variant="ghost" size="sm" className="h-5 w-5 p-0 text-grey-70">
-            <Copy className="size-3" />
-        </CardButton> */}
         <TableModule.CopyableCell
             title="Copy Node ID"
             toastMessage="Node ID Copied Successfully!"
             copyAbleText={nodeId}
+            link={`${HIPPIUS_EXPLORER_CONFIG.baseUrl}/nodes/${nodeId}`}
+            linkClass="group-hover:underline group-hover:text-primary-50 hover:underline"
             forSmallScreen
             className="max-sm:[200px] max-w-[400px] h-full"
         />
@@ -68,13 +67,12 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
     const isDir = isDirectory(file.name);
     const { icon: Icon, color } = getFileIcon(fileType ?? undefined, isDir);
 
-
     // Format file size
     const fileSize = file.size ? formatBytesFromBigInt(BigInt(file.size)) : "Unknown";
 
-    // Static data for now - will be replaced with real data later
+    let minerIds = Array.isArray(file.minerIds) ? file.minerIds : typeof file.minerIds === "string" ? [file.minerIds] : [];
+
     const locations = ["Warsaw, PL", "Moscow, PL", "Peckham, GB", "Abuja, NG"];
-    const nodes = ["56pv_v2ioT", "56pv_v2joT", "56pv_v2koT", "56pv_v2loT", "56pv_v2moT"];
 
     const handleViewOnExplorer = async () => {
         try {
@@ -148,9 +146,13 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
 
                 <DetailRow label="Nodes" lastChild>
                     <div className="flex flex-wrap">
-                        {nodes.map((node, idx) => (
-                            <NodeItem key={idx} nodeId={node} />
-                        ))}
+                        {minerIds.length > 0 ? (
+                            minerIds.map((nodeId, idx) => (
+                                <NodeItem key={idx} nodeId={nodeId} />
+                            ))
+                        ) : (
+                            <span className="text-grey-50">No node information available</span>
+                        )}
                     </div>
                     <div
                         className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"

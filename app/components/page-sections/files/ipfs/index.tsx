@@ -51,8 +51,8 @@ const Ipfs: FC = () => {
   const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
   const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
 
-  // New state for files with timestamps
   const [filesWithTimestamps, setFilesWithTimestamps] = useState<Array<FormattedUserIpfsFile & { timestamp?: Date | null }>>([]);
+  const [isProcessingTimestamps, setIsProcessingTimestamps] = useState(false);
 
   // Filter out deleted files
   const allFilteredData = useMemo(() => {
@@ -89,13 +89,20 @@ const Ipfs: FC = () => {
   useEffect(() => {
     const enrichFiles = async () => {
       if (allFilteredData.length && api) {
-        const enriched = await enrichFilesWithTimestamps(api, allFilteredData);
-        // Ensure the enriched array is typed correctly
-        setFilesWithTimestamps(
-          enriched as Array<FormattedUserIpfsFile & { timestamp?: Date | null }>
-        );
+        setIsProcessingTimestamps(true);
+        try {
+          const enriched = await enrichFilesWithTimestamps(api, allFilteredData);
+          setFilesWithTimestamps(
+            enriched as Array<FormattedUserIpfsFile & { timestamp?: Date | null }>
+          );
+        } catch (error) {
+          console.error("Error enriching files with timestamps:", error);
+        } finally {
+          setIsProcessingTimestamps(false);
+        }
       } else {
         setFilesWithTimestamps([]);
+        setIsProcessingTimestamps(false);
       }
     };
 
@@ -188,11 +195,11 @@ const Ipfs: FC = () => {
   }, [error]);
 
   const renderContent = () => {
-    if (isLoading || isFetching) {
+    if (isLoading || isFetching || isProcessingTimestamps) {
       return <WaitAMoment />;
     }
 
-    if (error || (!filteredData.length && !searchTerm && activeFilters.length === 0)) {
+    if ((!filteredData.length && !searchTerm && activeFilters.length === 0) || error) {
       return <IPFSNoEntriesFound />;
     }
 
