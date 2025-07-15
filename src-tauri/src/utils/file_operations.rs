@@ -73,7 +73,7 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 }
 
 /// Deletes all user_profiles records with the given file name and unpins the file.
-/// Returns the number of deleted records or an error.
+/// Also deletes from sync_folder_files. Returns the total number of deleted records or an error.
 pub async fn delete_and_unpin_user_file_records_by_name(
     file_name: &str,
     seed_phrase: &str,
@@ -88,14 +88,19 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         ));
     }
     if let Some(pool) = DB_POOL.get() {
-        // Now, delete the records
-        let result = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
+        // Delete from user_profiles
+        let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
             .bind(file_name)
             .execute(pool)
             .await
-            .map_err(|e| format!("DB error (delete): {e}"))?;
-
-        Ok(result.rows_affected())
+            .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
+        // Delete from sync_folder_files
+        let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
+            .bind(file_name)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
+        Ok(result1.rows_affected() + result2.rows_affected())
     } else {
         Err("DB_POOL not initialized".to_string())
     }

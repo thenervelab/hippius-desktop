@@ -34,6 +34,7 @@ pub async fn encrypt_and_upload_file(
     let k = DEFAULT_K;
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE; // 1MB
+    let account_id_clone = account_id.clone();
     
     // Extract file name from file_path
     let file_name = Path::new(&file_path)
@@ -68,7 +69,7 @@ pub async fn encrypt_and_upload_file(
         let original_file_hash = format!("{:x}", hasher.finalize());
 
         // Encrypt using centralized function
-        let to_process = encrypt_file_for_account(&account_id, &file_data)?;
+        let to_process = encrypt_file_for_account(&account_id_clone, &file_data)?;
         // Split into chunks
         let mut chunks = vec![];
         for i in (0..to_process.len()).step_by(chunk_size) {
@@ -165,6 +166,7 @@ pub async fn encrypt_and_upload_file(
         Ok(res) => println!("[encrypt_and_upload_file] : {}", res),
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
     }
+
     Ok(metadata_cid)
 }
 

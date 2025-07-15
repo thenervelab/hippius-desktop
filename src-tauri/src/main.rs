@@ -9,7 +9,6 @@ mod substrate_client;
 mod user_profile_sync;
 mod user_storage_requests_sync;
 mod utils;
-mod ipfs;
 
 use crate::folder_sync::{get_sync_status, start_folder_sync_tauri};
 use crate::user_profile_sync::get_user_synced_files;
@@ -53,11 +52,7 @@ fn main() {
             get_user_synced_files,
             start_user_storage_requests_sync_tauri,
             get_user_storage_requests,
-            get_sync_status,
-            ipfs::get_ipfs_node_info,
-            ipfs::get_ipfs_bandwidth,
-            ipfs::get_ipfs_peers
-
+            get_sync_status
         ]);
 
     let builder = setup(builder);

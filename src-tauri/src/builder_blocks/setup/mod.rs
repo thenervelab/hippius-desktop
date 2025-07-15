@@ -30,7 +30,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         let _tray = TrayIconBuilder::new()
             .tooltip("Hippius Cloud")
             .icon(Image::from_path(&icon_path)?)
-            .icon_as_template(false)
+            .icon_as_template(true)
             .menu(&menu)
             .show_menu_on_left_click(false)
             .on_tray_icon_event(|tray, event| match event {
@@ -92,6 +92,31 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
             sqlx::query(
                 "CREATE TABLE IF NOT EXISTS user_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner TEXT NOT NULL,
+                    cid TEXT NOT NULL,
+                    file_hash TEXT,
+                    file_name TEXT,
+                    file_size_in_bytes INTEGER,
+                    is_assigned BOOLEAN,
+                    last_charged_at INTEGER,
+                    main_req_hash TEXT,
+                    selected_validator TEXT,
+                    total_replicas INTEGER,
+                    block_number INTEGER NOT NULL,
+                    processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    profile_cid TEXT,
+                    source TEXT,
+                    miner_ids TEXT
+                )"
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            // Add sync_folder_files table with the same fields as user_profiles
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS sync_folder_files (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner TEXT NOT NULL,
                     cid TEXT NOT NULL,

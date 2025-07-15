@@ -226,8 +226,8 @@ pub async fn start_user_profile_sync_tauri(account_id: String) {
 #[tauri::command]
 pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>, String> {
     if let Some(pool) = DB_POOL.get() {
-        // Use dynamic query instead of compile-time checked macro
-        let query = sqlx::query(
+        // Fetch all user_profiles records
+        let user_profile_rows = sqlx::query(
             r#"
             SELECT owner, cid, file_hash, file_name,
                    file_size_in_bytes, is_assigned, last_charged_at,
@@ -237,17 +237,39 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
              WHERE owner = ?
             "#
         )
-        .bind(owner);
-        
-        match query.fetch_all(pool).await {
-            Ok(rows) => {
+        .bind(&owner)
+        .fetch_all(pool)
+        .await;
+
+        // Fetch all sync_folder_files records
+        let sync_folder_rows = sqlx::query(
+            r#"
+            SELECT owner, cid, file_hash, file_name,
+                   file_size_in_bytes, is_assigned, last_charged_at,
+                   main_req_hash, selected_validator,
+                   total_replicas, block_number, profile_cid, source, miner_ids
+              FROM sync_folder_files
+             WHERE owner = ?
+            "#
+        )
+        .bind(&owner)
+        .fetch_all(pool)
+        .await;
+
+        match (user_profile_rows, sync_folder_rows) {
+            (Ok(user_rows), Ok(sync_rows)) => {
                 let mut files = Vec::new();
-                for row in rows {
+                let mut file_names = std::collections::HashSet::new();
+
+                // Add all user_profiles records
+                for row in user_rows {
+                    let file_name: String = row.get("file_name");
+                    file_names.insert(file_name.clone());
                     files.push(UserProfileFile {
                         owner: row.get("owner"),
                         cid: row.get("cid"),
                         file_hash: row.get("file_hash"),
-                        file_name: row.get("file_name"),
+                        file_name,
                         file_size_in_bytes: row.get("file_size_in_bytes"),
                         is_assigned: row.get("is_assigned"),
                         last_charged_at: row.get("last_charged_at"),
@@ -260,9 +282,32 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                         miner_ids: row.get("miner_ids"),
                     });
                 }
+
+                // Add sync_folder_files records not already in user_profiles
+                for row in sync_rows {
+                    let file_name: String = row.get("file_name");
+                    if !file_names.contains(&file_name) {
+                        files.push(UserProfileFile {
+                            owner: row.get("owner"),
+                            cid: row.get("cid"),
+                            file_hash: row.get("file_hash"),
+                            file_name,
+                            file_size_in_bytes: row.get("file_size_in_bytes"),
+                            is_assigned: row.get("is_assigned"),
+                            last_charged_at: row.get("last_charged_at"),
+                            main_req_hash: row.get("main_req_hash"),
+                            selected_validator: row.get("selected_validator"),
+                            total_replicas: row.get("total_replicas"),
+                            block_number: row.get("block_number"),
+                            profile_cid: row.get("profile_cid"),
+                            source: row.get("source"),
+                            miner_ids: row.get("miner_ids"),
+                        });
+                    }
+                }
                 Ok(files)
             },
-            Err(e) => Err(format!("Database error: {}", e)),
+            (Err(e), _) | (_, Err(e)) => Err(format!("Database error: {}", e)),
         }
     } else {
         Err("DB not initialized".to_string())
