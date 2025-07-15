@@ -17,8 +17,8 @@ pub fn start_user_profile_sync(account_id: &str) {
     tokio::spawn(async move {
         let client = Client::new();
         loop {
-            // sync profile after every 40 secs
-            time::sleep(Duration::from_secs(40)).await;
+            // sync profile after every 1 minute
+            time::sleep(Duration::from_secs(60)).await;
 
             let api = match get_substrate_client().await {
                 Ok(api) => api,
