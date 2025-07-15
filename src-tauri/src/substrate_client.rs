@@ -1,9 +1,9 @@
-use subxt::{OnlineClient, PolkadotConfig};
+use crate::constants::substrate::WSS_ENDPOINT;
 use once_cell::sync::OnceCell;
 use std::sync::Arc;
 use std::time::Duration;
+use subxt::{OnlineClient, PolkadotConfig};
 use tokio::time::sleep;
-use crate::constants::substrate::WSS_ENDPOINT;
 
 static SUBSTRATE_CLIENT: OnceCell<Arc<OnlineClient<PolkadotConfig>>> = OnceCell::new();
 

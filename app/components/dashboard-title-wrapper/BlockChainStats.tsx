@@ -8,29 +8,80 @@ import { RevealTextLine } from "../ui";
 import { InView } from "react-intersection-observer";
 import { IPFS_NODE_CONFIG } from "@/app/lib/config";
 import NotificationMenu from "./notifications-menu";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { invoke } from "@tauri-apps/api/core";
 
 const BlockchainStats: React.FC = () => {
   const { isConnected } = usePolkadotApi();
   const [peerCount, setPeerCount] = useState<number | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const MAX_RETRIES = 3;
 
   useEffect(() => {
-    const fetchPeers = () => {
-      fetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/swarm/peers`, {
-        method: "POST",
-      })
-        .then((res) => res.json())
-        .then((response) => {
-          setPeerCount(response?.Peers.length);
-        })
-        .catch(() => setPeerCount(null));
+    let mounted = true;
+
+    const fetchPeers = async () => {
+      try {
+        const response = await tauriFetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/swarm/peers`, {
+          method: "POST",
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (mounted) {
+            setPeerCount(data.Peers?.length || 0);
+            setIsRetrying(false);
+            setRetryCount(0);
+          }
+        } else {
+          throw new Error(`HTTP error ${response.status}`);
+        }
+      } catch (error) {
+        console.error("Failed to fetch IPFS peers:", error);
+
+        try {
+          const peersData = await invoke<{ Peers: unknown[] }>("get_ipfs_peers");
+          if (mounted) {
+            setPeerCount(peersData.Peers?.length || 0);
+            setIsRetrying(false);
+            setRetryCount(0);
+          }
+        } catch (invokeError) {
+          console.error("Tauri invoke also failed:", invokeError);
+
+          if (retryCount < MAX_RETRIES) {
+            setIsRetrying(true);
+            setRetryCount(prev => prev + 1);
+          } else if (mounted) {
+            setPeerCount(null);
+            setIsRetrying(false);
+          }
+        }
+      }
     };
 
+    // Initial fetch
     fetchPeers();
 
     const intervalId = setInterval(fetchPeers, 1000);
 
-    return () => clearInterval(intervalId);
-  }, []);
+    let retryId: NodeJS.Timeout | null = null;
+    if (isRetrying) {
+      retryId = setTimeout(() => {
+        if (mounted) {
+          fetchPeers();
+        }
+      }, 2000 * retryCount);
+    }
+
+    // Clean up
+    return () => {
+      mounted = false;
+      clearInterval(intervalId);
+      if (retryId) clearTimeout(retryId);
+    };
+  }, [isRetrying, retryCount]);
 
   return (
     <InView triggerOnce>

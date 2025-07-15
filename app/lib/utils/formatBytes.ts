@@ -24,3 +24,28 @@ export const formatBytesFromBigInt = (bytes: bigint, decimals = 2): string => {
 
   return parseFloat((bytesNum / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
 };
+
+// Unit conversion constants for FileSizeSelector
+export const BYTE_UNITS = {
+  KB: 1024,
+  MB: 1024 * 1024,
+  GB: 1024 * 1024 * 1024,
+  TB: 1024 * 1024 * 1024 * 1024,
+} as const;
+
+export type ByteUnit = keyof typeof BYTE_UNITS;
+
+// Convert bytes to a specific unit
+export function bytesToUnit(bytes: number, unit: ByteUnit): number {
+  return bytes / BYTE_UNITS[unit];
+}
+
+// Convert value in a specific unit to bytes
+export function unitToBytes(value: number, unit: ByteUnit): number {
+  return Math.round(value * BYTE_UNITS[unit]);
+}
+
+// Get max value for a unit given a byte limit
+export function getMaxForUnit(maxBytes: number, unit: ByteUnit): number {
+  return maxBytes / BYTE_UNITS[unit];
+}

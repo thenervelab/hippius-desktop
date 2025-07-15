@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import DetailList from "./DetailList";
 
@@ -18,18 +19,68 @@ type IpfsInfo = {
   Addresses?: string[];
   AgentVersion?: string;
   ProtocolVersion?: string;
-  // [key: string]: any;
 };
 
 function useIpfsInfo() {
   const [ipfsInfo, setIpfsInfo] = useState<IpfsInfo | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const MAX_RETRIES = 3;
+
+  const fetchIpfsInfo = async () => {
+    try {
+      const response = await tauriFetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/id`, {
+        method: "POST",
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setIpfsInfo(data);
+        setIsRetrying(false);
+      } else {
+        console.error(`Error fetching IPFS info: HTTP ${response.status}`);
+        throw new Error(`HTTP error ${response.status}`);
+      }
+    } catch (error) {
+      console.error("Failed to fetch IPFS info:", error);
+      try {
+        const ipfsData = await invoke<IpfsInfo>("get_ipfs_node_info");
+        setIpfsInfo(ipfsData);
+        setIsRetrying(false);
+      } catch (invokeError) {
+        console.error("Tauri invoke also failed:", invokeError);
+
+        // Implement retry logic
+        if (retryCount < MAX_RETRIES) {
+          setIsRetrying(true);
+          setRetryCount((prev) => prev + 1);
+        } else {
+          setIpfsInfo({
+            ID: "Not available",
+            AgentVersion: "Connection failed",
+            ProtocolVersion: "Connection failed",
+            Addresses: [],
+          });
+          setIsRetrying(false);
+        }
+      }
+    }
+  };
 
   useEffect(() => {
-    fetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/id`, { method: "POST" })
-      .then((res) => res.json())
-      .then(setIpfsInfo)
-      .catch(() => setIpfsInfo(null));
+    fetchIpfsInfo();
   }, []);
+
+  useEffect(() => {
+    if (isRetrying) {
+      const timer = setTimeout(() => {
+        console.log(`Retry attempt ${retryCount} for IPFS info`);
+        fetchIpfsInfo();
+      }, 2000 * retryCount);
+
+      return () => clearTimeout(timer);
+    }
+  }, [isRetrying, retryCount]);
 
   return ipfsInfo;
 }
@@ -89,13 +140,6 @@ const Home: React.FC = () => {
           isLoading={isLoadingFiles}
         />
       </div>
-      {/* IPFS Upload/Download Test */}
-      {/* <section>
-          <h2 className="text-xl font-semibold mb-2">
-            IPFS Encrypted Upload/Download Test
-          </h2>
-          <IpfsTest />
-        </section> */}
     </div>
   );
 };

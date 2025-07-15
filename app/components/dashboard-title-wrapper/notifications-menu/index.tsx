@@ -1,16 +1,18 @@
 "use client";
 
 import { useCreditsNotification } from "@/app/lib/hooks/useCreditsNotification";
+import { useFilesNotification } from "@/app/lib/hooks/useFilesNotification";
 import { useEffect, useState } from "react";
 import { useSetAtom, useAtom } from "jotai";
 import * as Menubar from "@radix-ui/react-menubar";
 
 import {
   refreshUnreadCountAtom,
-  unreadCountAtom
+  unreadCountAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import NotificationIconButton from "./NotificationIconButton";
 import NotificationMenuContent from "./NotificationMenuContent";
+import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
 
 type Props = {
   className?: string;
@@ -18,6 +20,8 @@ type Props = {
 
 export default function NotificationMenu({ className = "delay-500" }: Props) {
   useCreditsNotification();
+  useNotificationPreferences();
+  useFilesNotification();
   const refreshUnreadCount = useSetAtom(refreshUnreadCountAtom);
   const [count] = useAtom(unreadCountAtom);
   const [menuValue, setMenuValue] = useState<string>("");

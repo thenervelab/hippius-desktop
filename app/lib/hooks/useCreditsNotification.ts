@@ -133,7 +133,7 @@ export function useCreditsNotification() {
             } just landed.`,
             notificationDescription: `Fresh ${+amount > 1 ? "credits" : "credit"} are in your wallet. Use them right away to upload or  sync files with zero delay. Hit Jump to 'Files' and make something awesome.`,
             notificationLinkText: "Jump to Files",
-            notificationLink: "/",
+            notificationLink: "/files",
           });
           await refreshUnread();
         }

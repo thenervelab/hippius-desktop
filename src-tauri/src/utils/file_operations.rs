@@ -1,14 +1,14 @@
-use crate::utils::ipfs::pin_json_to_ipfs_local;
-use crate::commands::substrate_tx::FileInputWrapper;
 use crate::commands::substrate_tx::storage_unpin_request_tauri;
-use crate::DB_POOL;
 use crate::commands::substrate_tx::FileHashWrapper;
+use crate::commands::substrate_tx::FileInputWrapper;
+use crate::utils::ipfs::pin_json_to_ipfs_local;
+use crate::DB_POOL;
 
 pub async fn request_file_storage(
     file_name: &str,
     file_cid: &str,
     api_url: &str,
-    seed_phrase: &str
+    seed_phrase: &str,
 ) -> Result<String, String> {
     // 1. Create the JSON
     let json = serde_json::json!([{
@@ -30,8 +30,9 @@ pub async fn request_file_storage(
     let result = crate::commands::substrate_tx::storage_request_tauri(
         vec![file_input],
         None,
-        seed_phrase.to_string()
-    ).await?;
+        seed_phrase.to_string(),
+    )
+    .await?;
 
     Ok(result)
 }
@@ -40,25 +41,30 @@ pub async fn request_file_storage(
 pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
         // Fetch the main_req_hash for the file name
-        let hashes: Vec<(String,)> = sqlx::query_as(
-            "SELECT main_req_hash FROM user_profiles WHERE file_name = ?"
-        )
-        .bind(file_name)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("DB error (fetch): {e}"))?;
+        let hashes: Vec<(String,)> =
+            sqlx::query_as("SELECT main_req_hash FROM user_profiles WHERE file_name = ?")
+                .bind(file_name)
+                .fetch_all(pool)
+                .await
+                .map_err(|e| format!("DB error (fetch): {e}"))?;
 
         if let Some((main_req_hash,)) = hashes.first() {
             // Wrap in FileHashWrapper
-            let file_hash_wrapper = FileHashWrapper { file_hash: main_req_hash.as_bytes().to_vec() };
+            let file_hash_wrapper = FileHashWrapper {
+                file_hash: main_req_hash.as_bytes().to_vec(),
+            };
             // Call the unpin request
-            let result = storage_unpin_request_tauri(file_hash_wrapper, seed_phrase.to_string()).await;
+            let result =
+                storage_unpin_request_tauri(file_hash_wrapper, seed_phrase.to_string()).await;
             match result {
-                Ok(msg) => println!("[unpin_user_file_by_name] Unpin request result: {}", msg),
-                Err(e) => println!("[unpin_user_file_by_name] Unpin request error: {}", e),
+                Ok(msg) => println!("{}", msg),
+                Err(e) => println!("Unpin request error: {}", e),
             }
         } else {
-            println!("[unpin_user_file_by_name] No main_req_hash found for file '{}', nothing to unpin.", file_name);
+            println!(
+                "[unpin_user_file_by_name] No main_req_hash found for file '{}', nothing to unpin.",
+                file_name
+            );
         }
         Ok(())
     } else {
@@ -68,21 +74,26 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 
 /// Deletes all user_profiles records with the given file name and unpins the file.
 /// Returns the number of deleted records or an error.
-pub async fn delete_and_unpin_user_file_records_by_name(file_name: &str, seed_phrase: &str) -> Result<u64, String> {
+pub async fn delete_and_unpin_user_file_records_by_name(
+    file_name: &str,
+    seed_phrase: &str,
+) -> Result<u64, String> {
     // Unpin first
     let unpin_result = unpin_user_file_by_name(file_name, seed_phrase).await;
     if unpin_result.is_err() {
-        return Err(format!("Unpin failed for '{}': {}", file_name, unpin_result.unwrap_err()));
+        return Err(format!(
+            "Unpin failed for '{}': {}",
+            file_name,
+            unpin_result.unwrap_err()
+        ));
     }
     if let Some(pool) = DB_POOL.get() {
         // Now, delete the records
-        let result = sqlx::query(
-            "DELETE FROM user_profiles WHERE file_name = ?"
-        )
-        .bind(file_name)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("DB error (delete): {e}"))?;
+        let result = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
+            .bind(file_name)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("DB error (delete): {e}"))?;
 
         Ok(result.rows_affected())
     } else {

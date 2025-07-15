@@ -298,13 +298,21 @@ export default {
             transform: "translateY(0)",
           },
         },
+        "panel-in": {
+          from: { transform: "translateX(100%)" },
+          to: { transform: "translateX(0)" },
+        },
+        "panel-out": {
+          from: { transform: "translateX(0)" },
+          to: { transform: "translateX(100%)" },
+        },
       },
       backgroundSize: {
         full: "100% 100%",
       },
       animation: {
-        ["fade-out-0.3"]: "fade-out 0.3s ease-in-out forwards",
-        ["fade-in-0.3"]: "fade-in 0.3s ease-in-out forwards",
+        ["fade-out-0.2"]: "fade-out 0.2s ease-in-out forwards",
+        ["fade-in-0.2"]: "fade-in 0.2s ease-in-out forwards",
         ["fade-in-0.5"]: "fade-in 0.5s ease-in-out forwards",
         ["fade-in-from-b-0.5"]: "fade-in-from-b 0.5s ease-in-out forwards",
         ["fade-in-from-b-0.3"]: "fade-in-from-b 0.3s ease-in-out forwards",
@@ -334,6 +342,8 @@ export default {
         ["spin-reverse-fast"]: "spin-reverse 4s linear infinite",
         ["spin-reverse-medium"]: "spin-reverse 6s linear infinite",
         ["spin-reverse-slow"]: "spin-reverse 8s linear infinite",
+        "panel-in": "panel-in 0.2s ease-out",
+        "panel-out": "panel-out 0.2s ease-in",
       },
     },
   },
