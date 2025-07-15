@@ -6,11 +6,14 @@ import DeleteAccountConfirmation from "./DeleteAccountConfirmation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
 import SectionHeader from "./SectionHeader";
+import { useSetAtom } from "jotai";
+import { settingsDialogOpenAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 const AccountActionButtons = () => {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const { resetWallet } = useWalletAuth();
+  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
 
   const handleOpenDeleteDialog = () => setIsDeleteDialogOpen(true);
   const handleCloseDeleteDialog = () => setIsDeleteDialogOpen(false);
@@ -21,8 +24,10 @@ const AccountActionButtons = () => {
       await resetWallet();
 
       toast.success("Your account has been successfully deleted", {
-        duration: 4000
+        duration: 4000,
       });
+
+      setSettingsDialogOpen(false);
     } catch (error) {
       console.log("Failed to delete account:", error);
       toast.error(`Failed to delete account`);

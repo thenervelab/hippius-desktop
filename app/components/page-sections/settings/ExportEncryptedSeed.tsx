@@ -10,7 +10,7 @@ interface ExportEncryptedSeedProps {
 }
 
 const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
-  className
+  className,
 }) => {
   const [isExporting, setIsExporting] = useState(false);
 
@@ -20,7 +20,7 @@ const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
       const success = await exportWalletAsZip();
       if (success) {
         toast.success("Backup file exported successfully", {
-          duration: 3000
+          duration: 3000,
         });
       }
     } catch (error) {
@@ -58,7 +58,8 @@ const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
         </div>
         <div className="relative mx-[22px] pb-[22px]   bg-grey-100 w-auto">
           <CardButton
-            className="w-full"
+            className="w-full h-[60px]"
+            variant="dialog"
             onClick={handleExport}
             disabled={isExporting}
           >
