@@ -18,6 +18,7 @@ use crate::user_storage_requests_sync::start_user_storage_requests_sync_tauri;
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
+    encrypt_and_upload_folder, list_folder_contents, download_and_decrypt_folder,
 };
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
 use commands::substrate_tx::{get_sync_path, storage_request_tauri, storage_unpin_request_tauri};
@@ -44,6 +45,9 @@ fn main() {
             download_and_decrypt_file,
             write_file,
             read_file,
+            encrypt_and_upload_folder,
+            list_folder_contents,
+            download_and_decrypt_folder,
             storage_request_tauri,
             storage_unpin_request_tauri,
             get_sync_path,

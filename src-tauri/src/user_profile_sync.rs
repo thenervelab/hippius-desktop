@@ -42,8 +42,7 @@ fn decode_bounded_vec_to_string(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| hex::encode(bytes))
 }
 
-pub fn start_user_profile_sync(_account_id: &str) {
-    let account_id = "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2";
+pub fn start_user_profile_sync(account_id: &str) {
     // Check if this account is already syncing
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
