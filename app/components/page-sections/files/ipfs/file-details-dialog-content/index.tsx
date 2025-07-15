@@ -10,6 +10,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { getFileIcon, isDirectory } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
 import { HIPPIUS_EXPLORER_CONFIG } from "@/app/lib/config";
+import { useNodeLocations } from "@/app/lib/hooks/api/useNodeLocations";
 
 interface DetailRowProps {
     label: string;
@@ -72,7 +73,15 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
 
     let minerIds = Array.isArray(file.minerIds) ? file.minerIds : typeof file.minerIds === "string" ? [file.minerIds] : [];
 
-    const locations = ["Warsaw, PL", "Moscow, PL", "Peckham, GB", "Abuja, NG"];
+    const { uniqueLocations, isLoading } = useNodeLocations(minerIds);
+
+    const fallbackLocations = ["Loading locations..."];
+
+    const locationsToShow = isLoading
+        ? fallbackLocations
+        : uniqueLocations.length > 0
+            ? uniqueLocations
+            : ["Location data unavailable"];
 
     const handleViewOnExplorer = async () => {
         try {
@@ -108,7 +117,6 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
                 </DetailRow>
 
                 <DetailRow label="CID">
-
                     <TableModule.CopyableCell
                         title="Copy CID"
                         toastMessage="CID Copied Successfully!"
@@ -131,8 +139,12 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
 
                 <DetailRow label="File Location">
                     <div className="flex flex-wrap">
-                        {locations.map((location, idx) => (
-                            <FileLocationItem key={idx} location={location} lastChild={idx === locations.length - 1} />
+                        {locationsToShow.map((location, idx) => (
+                            <FileLocationItem
+                                key={idx}
+                                location={location}
+                                lastChild={idx === locationsToShow.length - 1}
+                            />
                         ))}
                     </div>
                     <div
@@ -163,7 +175,6 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
                     </div>
                 </DetailRow>
             </div>
-
         </div>
     );
 };
