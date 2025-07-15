@@ -1,56 +1,75 @@
 {
-    "$schema": "../gen/schemas/desktop-schema.json",
-    "identifier": "default",
-    "description": "Allow read, write & exists on AppLocalData/wallet.db and enable event communication",
-    "windows": [
-        "main"
-    ],
-    "permissions": [
-        "core:default",
-        "opener:default",
-        "fs:default",
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Allow read, write & exists on AppLocalData/wallet.db and enable event communication",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "fs:default",
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
         {
-            "identifier": "fs:allow-exists",
-            "allow": [{
-                "path": "$APPLOCALDATA/wallet.db"
-            }]
-        },
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
         {
-            "identifier": "fs:allow-write-file",
-            "allow": [{
-                "path": "$APPLOCALDATA/wallet.db"
-            }]
-        },
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
         {
-            "identifier": "fs:allow-read-file",
-            "allow": [{
-                "path": "$APPLOCALDATA/wallet.db"
-            }]
-        },
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-applocaldata-read-recursive",
+      "allow": [
         {
-            "identifier": "fs:allow-applocaldata-read-recursive",
-            "allow": [{
-                "path": "$APPLOCALDATA/wallet.db"
-            }]
-        },
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-applocaldata-write-recursive",
+      "allow": [
         {
-            "identifier": "fs:allow-applocaldata-write-recursive",
-            "allow": [{
-                "path": "$APPLOCALDATA/wallet.db"
-            }]
-        },
+          "path": "$APPLOCALDATA/wallet.db"
+        }
+      ]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
         {
-            "identifier": "fs:allow-mkdir",
-            "allow": [{
-                "path": "$APPLOCALDATA"
-            }]
-        },
-        "core:event:allow-listen",
-        "core:event:allow-unlisten",
-        "core:event:allow-emit",
-        "core:event:allow-emit-to",
-        "dialog:allow-save",
-        "dialog:default",
-        "http:default"
-    ]
+          "path": "$APPLOCALDATA"
+        }
+      ]
+    },
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to",
+    "dialog:allow-save",
+    "dialog:default",
+    "http:default",
+    "core:event:default",
+    "core:menu:allow-set-text",
+    "process:default",
+    "core:menu:allow-insert",
+    "core:menu:allow-remove",
+    "core:menu:allow-new",
+    "core:menu:allow-items",
+    "core:menu:allow-get",
+    "core:tray:default"
+  ]
 }

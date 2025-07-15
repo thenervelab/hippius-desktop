@@ -2,15 +2,15 @@
 
 import DashboardTitleWrapper from "../components/dashboard-title-wrapper";
 import HomePage from "../components/page-sections/home";
-// import { useFilesNotification } from "../lib/hooks/useFilesNotification";
+import { useFilesNotification } from "../lib/hooks/useFilesNotification";
 
 export default function Home() {
-  // const { syncStatus, invokeCount } = useFilesNotification();
+  const { syncStatus, invokeCount } = useFilesNotification();
 
   return (
     <DashboardTitleWrapper mainText="">
       {/* TEMPORARY SYNC STATUS DISPLAY - TO BE REMOVED LATER */}
-      {/* {syncStatus && (
+      {syncStatus && (
         <div className="p-3 border-b border-grey-80">
           <h4 className="font-medium mb-1">Sync Status:</h4>
           <div className="text-sm text-gray-600">
@@ -32,7 +32,7 @@ export default function Home() {
             </div>
           )}
         </div>
-      )} */}
+      )}
       {/* END OF TEMPORARY SECTION */}
       <HomePage />
     </DashboardTitleWrapper>

@@ -6,7 +6,8 @@ import {
   refreshUnreadCountAtom,
   enabledNotificationTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
-
+import { setTraySyncPercent } from "./useTraySync";
+import { stat } from "fs";
 // Define interface for sync status response
 interface SyncStatusResponse {
   synced_files: number;
@@ -37,6 +38,11 @@ export function useFilesNotification() {
 
         const status = await invoke<SyncStatusResponse>("get_sync_status");
         setSyncStatus(status);
+        if (status.in_progress) {
+          await setTraySyncPercent(status.percent); // number 0–100
+        } else if (status.percent === 100) {
+          await setTraySyncPercent(100);
+        }
 
         // Check if sync was previously in progress
         if (status.in_progress) {
@@ -64,6 +70,7 @@ export function useFilesNotification() {
           });
 
           notificationSent.current = true;
+
           await refreshUnread();
         }
 

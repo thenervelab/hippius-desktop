@@ -15,6 +15,7 @@ import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { mnemonicToAccount } from "viem/accounts";
 import { invoke } from "@tauri-apps/api/core";
+import { useTrayInit } from "./hooks/useTraySync";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -116,12 +117,16 @@ export function WalletAuthProvider({
       if (!syncInitialized.current) {
         console.log("[WalletAuth] Starting sync for account:", pair.address);
         try {
-          await invoke("start_user_profile_sync_tauri", { accountId: pair.address });
+          await invoke("start_user_profile_sync_tauri", {
+            accountId: pair.address,
+          });
           await invoke("start_folder_sync_tauri", {
             accountId: pair.address,
             seedPhrase: inputMnemonic,
           });
-          await invoke("start_user_storage_requests_sync_tauri", { accountId: pair.address });
+          await invoke("start_user_storage_requests_sync_tauri", {
+            accountId: pair.address,
+          });
           syncInitialized.current = true;
           console.log("[WalletAuth] Sync commands started successfully");
         } catch (error) {
@@ -170,6 +175,8 @@ export function WalletAuthProvider({
     await clearWalletDb();
     logout();
   };
+
+  useTrayInit();
 
   return (
     <WalletContext.Provider
