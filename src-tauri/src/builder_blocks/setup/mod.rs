@@ -11,9 +11,8 @@ use std::path::PathBuf;
 
 use crate::{
     commands::node::start_ipfs_daemon,
+    DB_POOL,
 };
-
-static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
@@ -106,7 +105,9 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     total_replicas INTEGER,
                     block_number INTEGER NOT NULL,
                     processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    profile_cid TEXT
+                    profile_cid TEXT,
+                    source TEXT,
+                    miner_ids TEXT
                 )"
             )
             .execute(&pool)
@@ -147,7 +148,6 @@ fn resolve_icon_path(filename: &str, app_handle: &tauri::AppHandle) -> PathBuf {
     if !prod_path.exists() {
         // Log resource directory contents for debugging
         if let Ok(entries) = std::fs::read_dir(&resource_dir) {
-            println!("[Setup] Resource directory contents:");
             for entry in entries {
                 if let Ok(entry) = entry {
                     println!("[Setup] - {}", entry.path().display());
@@ -164,3 +164,7 @@ fn resolve_icon_path(filename: &str, app_handle: &tauri::AppHandle) -> PathBuf {
     
     prod_path
 }
+
+
+// auto sync issue if file is not in db 
+// is assigned should be true only when profile parsing 

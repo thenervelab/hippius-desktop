@@ -12,6 +12,7 @@ import { useIpfsBandwidth } from "@/app/lib/hooks/api/useIpfsBandwidth";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
+import DirectStorageRequestDemo from "@/components/DemoIpfsUpload";
 
 type IpfsInfo = {
   ID?: string;
@@ -89,13 +90,14 @@ const Home: React.FC = () => {
           isLoading={isLoadingFiles}
         />
       </div>
-      {/* IPFS Upload/Download Test */}
-      {/* <section>
-          <h2 className="text-xl font-semibold mb-2">
-            IPFS Encrypted Upload/Download Test
-          </h2>
-          <IpfsTest />
-        </section> */}
+
+
+      <section>
+        <h2 className="text-xl font-semibold mb-2">
+          IPFS Encrypted Upload/Download Test
+        </h2>
+        <DirectStorageRequestDemo accountId={polkadotAddress ?? ""} seedPhrase={mnemonic ?? ""} />
+      </section>
     </div>
   );
 };

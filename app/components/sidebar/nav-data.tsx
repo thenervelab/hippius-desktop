@@ -23,7 +23,7 @@ export const navItems: NavItemData[] = [
     label: "Files",
     path: "/files",
     icon: <Icons.DocumentText />,
-    comingSoon: true,
+    // comingSoon: true,
   },
   {
     label: "Wallet",

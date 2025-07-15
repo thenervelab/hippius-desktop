@@ -14,6 +14,7 @@ import { getWalletRecord, clearWalletDb } from "./helpers/walletDb";
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { mnemonicToAccount } from "viem/accounts";
+import { invoke } from "@tauri-apps/api/core";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -48,6 +49,7 @@ export function WalletAuthProvider({
   const [address, setAddress] = useState<string | null>(null);
 
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
+  const syncInitialized = useRef(false);
 
   const logout = useCallback(() => {
     setMnemonic(null);
@@ -55,6 +57,7 @@ export function WalletAuthProvider({
     setWalletManager(null);
     setIsAuthenticated(false);
     setAddress(null);
+    syncInitialized.current = false; // Reset sync flag for next login
   }, []);
 
   // Memoize resetLogoutTimer and depend on logout
@@ -108,6 +111,24 @@ export function WalletAuthProvider({
       setAddress(ethAddress);
       setWalletManager({ polkadotPair: pair });
       setIsAuthenticated(true);
+
+      // Start sync commands only once when authentication succeeds
+      if (!syncInitialized.current) {
+        console.log("[WalletAuth] Starting sync for account:", pair.address);
+        try {
+          await invoke("start_user_profile_sync_tauri", { accountId: pair.address });
+          await invoke("start_folder_sync_tauri", {
+            accountId: pair.address,
+            seedPhrase: inputMnemonic,
+          });
+          await invoke("start_user_storage_requests_sync_tauri", { accountId: pair.address });
+          syncInitialized.current = true;
+          console.log("[WalletAuth] Sync commands started successfully");
+        } catch (error) {
+          console.error("[WalletAuth] Failed to start sync commands:", error);
+        }
+      }
+
       return true;
     } catch {
       setMnemonic(null);

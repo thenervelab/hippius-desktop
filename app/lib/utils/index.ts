@@ -4,6 +4,7 @@ export * from "./paginationUtils";
 export * from "./getPaginationPageList";
 export * from "./formatBytes";
 export * from "./lerp";
+export * from "./inlerp";
 export * from "./getPercentageColor";
 export * from "./parseGeolocaiton";
 export * from "./getLocationText";

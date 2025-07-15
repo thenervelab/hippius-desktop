@@ -32,6 +32,9 @@
       "@/lib/*": [
         "./app/lib/*"
       ],
+      "@/lib/hooks/*": [
+        "./app/lib/hooks/*"
+      ],
       "@/data/*": [
         "./app/data/*"
       ],

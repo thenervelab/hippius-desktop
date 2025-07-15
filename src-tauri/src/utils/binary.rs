@@ -7,14 +7,15 @@ use sha2::{Digest, Sha256};
 use sodiumoxide::crypto::secretbox;
 use std::collections::HashMap;
 use std::fs;
+// use std::io::Read;
+use crate::constants::ipfs::KUBO_VERSION;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::Duration as StdDuration;
+use tauri::Emitter;
 use tokio::sync::Mutex;
 use tokio::task;
-use crate::constants::ipfs::KUBO_VERSION;
-use tauri::Emitter;
-use std::process::Command;
 
 static DOWNLOAD_STATE: OnceCell<Mutex<Option<PathBuf>>> = OnceCell::new();
 
@@ -58,8 +59,11 @@ pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String
             Ok(_) => {
                 println!("Valid IPFS binary found at {:?}", binary_path);
                 // Emit DownloadingBinary event even when binary exists (for frontend consistency)
-                app.emit(crate::constants::ipfs::APP_SETUP_EVENT, crate::constants::ipfs::AppSetupPhase::DownloadingBinary)
-                    .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
+                app.emit(
+                    crate::constants::ipfs::APP_SETUP_EVENT,
+                    crate::constants::ipfs::AppSetupPhase::DownloadingBinary,
+                )
+                .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
                 return Ok(binary_path);
             }
             Err(e) => {
@@ -86,8 +90,11 @@ pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String
 
     if should_download {
         // Emit DownloadingBinary event
-        app.emit(crate::constants::ipfs::APP_SETUP_EVENT, crate::constants::ipfs::AppSetupPhase::DownloadingBinary)
-            .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
+        app.emit(
+            crate::constants::ipfs::APP_SETUP_EVENT,
+            crate::constants::ipfs::AppSetupPhase::DownloadingBinary,
+        )
+        .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
 
         println!("Starting IPFS binary download");
         // We're the downloading thread
@@ -100,9 +107,12 @@ pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String
         *download_state = None;
 
         return Ok(result);
-    }else {
+    } else {
         // Emit DownloadingBinary event
-        app.emit(crate::constants::ipfs::APP_SETUP_EVENT, crate::constants::ipfs::AppSetupPhase::DownloadingBinary)
+        app.emit(
+            crate::constants::ipfs::APP_SETUP_EVENT,
+            crate::constants::ipfs::AppSetupPhase::DownloadingBinary,
+        )
         .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
     }
 
@@ -242,24 +252,15 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
         .find(|path| path.exists())
         .ok_or_else(|| format!("IPFS binary not found after extraction in {:?}", temp_dir))?;
 
-    println!("Found binary at {:?}", source_binary);
-
     // Remove existing binary if it exists
     if binary_path.exists() {
-        println!("Removing existing binary");
         fs::remove_file(binary_path)
             .map_err(|e| format!("Failed to remove existing binary: {}", e))?;
     }
 
-    println!(
-        "Moving binary from {:?} to {:?}",
-        source_binary, binary_path
-    );
-
     // Copy instead of rename in case of cross-filesystem issues
     fs::copy(&source_binary, binary_path).map_err(|e| format!("Failed to copy binary: {}", e))?;
 
-    println!("Cleaning up temporary directory");
     fs::remove_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to remove temporary directory: {}", e))?;
 
