@@ -20,6 +20,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::async_runtime::block_on;
 use tokio::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub static SYNC_STATUS: once_cell::sync::Lazy<Arc<Mutex<SyncStatus>>> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
@@ -37,6 +38,10 @@ pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<String>>>> =
 // Track recently uploaded files to prevent immediate re-processing
 pub static RECENTLY_UPLOADED: Lazy<Arc<Mutex<HashSet<String>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
+
+// Debounce state for batching create events
+static CREATE_BATCH: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static CREATE_BATCH_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 pub struct UploadJob {
@@ -170,6 +175,15 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                     recently_uploaded.remove(&file_path_str_clone);
                 });
 
+                if result.is_ok() {
+                    let mut status = SYNC_STATUS.lock().unwrap();
+                    status.synced_files += 1;
+                    println!("[DEBUG] Synced files: {} / {}", status.synced_files, status.total_files);
+                    if status.synced_files == status.total_files {
+                        status.in_progress = false;
+                    }
+                }
+
                 tokio::time::sleep(Duration::from_secs(6)).await;
             }
         });
@@ -192,7 +206,8 @@ fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
 
 fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
     match event.kind {
-        EventKind::Create(kind) => {
+        EventKind::Create(CreateKind::File) | EventKind::Create(CreateKind::Folder) => {
+            // Add all paths to the batch
             for path in event.paths {
                 // Check if file was recently uploaded
                 let file_path_str = path.to_string_lossy().to_string();
@@ -202,23 +217,48 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                         continue;
                     }
                 }
-                match kind {
-                    CreateKind::File => {
-                        let sender = UPLOAD_SENDER.get().unwrap();
-                        sender
-                            .send(UploadJob {
-                                account_id: account_id.to_string(),
-                                seed_phrase: seed_phrase.to_string(),
-                                file_path: file_path_str.clone(),
-                            })
-                            .unwrap();
+                CREATE_BATCH.lock().unwrap().push(path.clone());
+            }
+            // Start debounce timer if not already running
+            if !CREATE_BATCH_TIMER_RUNNING.swap(true, Ordering::SeqCst) {
+                let account_id = account_id.to_string();
+                let seed_phrase = seed_phrase.to_string();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(200));
+                    let mut files = Vec::new();
+                    {
+                        let mut batch = CREATE_BATCH.lock().unwrap();
+                        for path in batch.drain(..) {
+                            if path.is_file() {
+                                files.push(path.clone());
+                            } else if path.is_dir() {
+                                collect_files_recursively(&path, &mut files);
+                            }
+                        }
                     }
-                    CreateKind::Folder => {
-                        // Restore previous logic: upload all files in the folder directly
-                        upload_folder(&path, account_id, seed_phrase);
+                    if !files.is_empty() {
+                        // Set sync status for the batch
+                        {
+                            let mut status = SYNC_STATUS.lock().unwrap();
+                            status.total_files = files.len();
+                            status.synced_files = 0;
+                            status.in_progress = true;
+                        }
+                        // Enqueue each file for upload
+                        if let Some(sender) = UPLOAD_SENDER.get() {
+                            for file_path in files {
+                                sender
+                                    .send(UploadJob {
+                                        account_id: account_id.clone(),
+                                        seed_phrase: seed_phrase.clone(),
+                                        file_path: file_path.to_string_lossy().to_string(),
+                                    })
+                                    .unwrap();
+                            }
+                        }
                     }
-                    _ => {}
-                }
+                    CREATE_BATCH_TIMER_RUNNING.store(false, Ordering::SeqCst);
+                });
             }
         }
         EventKind::Modify(ModifyKind::Data(_)) => {
@@ -266,14 +306,6 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
     // Acquire the lock before uploading
     let _guard = UPLOAD_LOCK.lock().unwrap();
 
-    // Set sync status for single file
-    {
-        let mut status = SYNC_STATUS.lock().unwrap();
-        status.total_files = 1;
-        status.synced_files = 0;
-        status.in_progress = true;
-    }
-
     let file_path = path.to_string_lossy().to_string();
 
     // Call the async upload command in a blocking way
@@ -288,11 +320,6 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
             println!();
             println!("Uploaded file: {}", res);
             println!();
-            {
-                let mut status = SYNC_STATUS.lock().unwrap();
-                status.synced_files = 1;
-                status.in_progress = false;
-            }
 
             // Remove from uploading set
             let mut uploading_files = UPLOADING_FILES.lock().unwrap();
@@ -310,15 +337,16 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
                 recently_uploaded.remove(&file_path_str_clone);
             });
 
+            // Increment synced_files after successful upload
+            {
+                let mut status = SYNC_STATUS.lock().unwrap();
+                status.synced_files += 1;
+            }
+
             return true;
         }
         Err(e) => {
             eprintln!("Upload failed: {}", e);
-            {
-                let mut status = SYNC_STATUS.lock().unwrap();
-                status.synced_files = 1;
-                status.in_progress = false;
-            }
 
             // Remove from uploading set
             let mut uploading_files = UPLOADING_FILES.lock().unwrap();
@@ -334,19 +362,18 @@ fn upload_folder(folder_path: &Path, account_id: &str, seed_phrase: &str) {
     }
     let walker = fs::read_dir(folder_path);
     if let Ok(entries) = walker {
-        for entry in entries.flatten() {
+        let files: Vec<_> = entries.flatten().filter(|e| e.path().is_file()).collect();
+        for entry in files.into_iter() {
             let path = entry.path();
-            if path.is_file() {
-                // Enqueue each file for upload
-                if let Some(sender) = UPLOAD_SENDER.get() {
-                    sender
-                        .send(UploadJob {
-                            account_id: account_id.to_string(),
-                            seed_phrase: seed_phrase.to_string(),
-                            file_path: path.to_string_lossy().to_string(),
-                        })
-                        .unwrap();
-                }
+            // Enqueue each file for upload
+            if let Some(sender) = UPLOAD_SENDER.get() {
+                sender
+                    .send(UploadJob {
+                        account_id: account_id.to_string(),
+                        seed_phrase: seed_phrase.to_string(),
+                        file_path: path.to_string_lossy().to_string(),
+                    })
+                    .unwrap();
             }
         }
     }
@@ -506,6 +533,7 @@ pub fn get_sync_status() -> SyncStatusResponse {
     } else {
         0.0
     };
+
     SyncStatusResponse {
         synced_files: status.synced_files,
         total_files: status.total_files,
