@@ -11,7 +11,7 @@ import { getWalletRecord, updateWallet } from "@/app/lib/helpers/walletDb";
 import {
   hashPasscode,
   decryptMnemonic,
-  encryptMnemonic
+  encryptMnemonic,
 } from "@/app/lib/helpers/crypto";
 import { toast } from "sonner";
 import SectionHeader from "./SectionHeader";
@@ -30,7 +30,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
   const [fieldsData, setFieldsData] = useState<PasscodeFields>({
     currentPasscode: "",
     newPasscode: "",
-    confirmPasscode: ""
+    confirmPasscode: "",
   });
   const [isLoading, setIsLoading] = useState(false);
   const [fieldError, setFieldError] = useState<FieldErrorState>({});
@@ -38,7 +38,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
   const [showPasscodes, setShowPasscodes] = useState({
     currentPasscode: false,
     newPasscode: false,
-    confirmPasscode: false
+    confirmPasscode: false,
   });
 
   function validateCurrent(val: string) {
@@ -85,7 +85,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
   const togglePasscodeVisibility = (field: PasscodeField) => {
     setShowPasscodes((prev) => ({
       ...prev,
-      [field]: !prev[field]
+      [field]: !prev[field],
     }));
   };
 
@@ -107,7 +107,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
     setFieldError({
       currentPasscode: errCurrent,
       newPasscode: errNew,
-      confirmPasscode: errConfirm
+      confirmPasscode: errConfirm,
     });
 
     if (errCurrent || errNew || errConfirm) {
@@ -127,7 +127,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
       if (currentPasscodeHash !== record.passcodeHash) {
         setFieldError((prev) => ({
           ...prev,
-          currentPasscode: "Current passcode is incorrect"
+          currentPasscode: "Current passcode is incorrect",
         }));
         setIsLoading(false);
         return;
@@ -144,7 +144,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
         console.error("Decryption failed:", error);
         setFieldError((prev) => ({
           ...prev,
-          currentPasscode: "Current passcode is incorrect"
+          currentPasscode: "Current passcode is incorrect",
         }));
         setIsLoading(false);
         return;
@@ -167,14 +167,14 @@ const ChangePasscode = ({ className }: { className?: string }) => {
       setFieldsData({
         currentPasscode: "",
         newPasscode: "",
-        confirmPasscode: ""
+        confirmPasscode: "",
       });
 
       // Show success dialog
       handleOpenDialog();
 
       toast.success("Passcode updated successfully", {
-        duration: 3000
+        duration: 3000,
       });
     } catch (error) {
       console.error("Failed to update passcode:", error);
@@ -256,12 +256,17 @@ const ChangePasscode = ({ className }: { className?: string }) => {
             ))}
             <div className="col-span-2 mt-3">
               <CardButton
-                className="w-20 h-10"
+                className="max-w-[160px] h-[60px]"
+                variant="dialog"
                 disabled={!canSave || isLoading}
                 loading={isLoading}
                 onClick={handleChangePasscode}
               >
-                {isLoading ? "Saving..." : "Save"}
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center text-lg leading-6 font-medium">
+                    {isLoading ? "Saving..." : "Save"}
+                  </span>
+                </div>
               </CardButton>
             </div>
           </div>
