@@ -8,7 +8,7 @@ import * as Menubar from "@radix-ui/react-menubar";
 
 import {
   refreshUnreadCountAtom,
-  unreadCountAtom,
+  unreadCountAtom
 } from "@/components/page-sections/notifications/notificationStore";
 import NotificationIconButton from "./NotificationIconButton";
 import NotificationMenuContent from "./NotificationMenuContent";
@@ -20,7 +20,7 @@ type Props = {
 
 export default function NotificationMenu({ className = "delay-500" }: Props) {
   useCreditsNotification();
-  useFilesNotification();
+  // useFilesNotification();
   useNotificationPreferences();
   const refreshUnreadCount = useSetAtom(refreshUnreadCountAtom);
   const [count] = useAtom(unreadCountAtom);

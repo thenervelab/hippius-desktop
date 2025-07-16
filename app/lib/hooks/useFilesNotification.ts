@@ -4,10 +4,10 @@ import { addNotification } from "@/app/lib/helpers/notificationsDb";
 import { useSetAtom, useAtom } from "jotai";
 import {
   refreshUnreadCountAtom,
-  enabledNotificationTypesAtom,
+  enabledNotificationTypesAtom
 } from "@/components/page-sections/notifications/notificationStore";
 import { setTraySyncPercent } from "./useTraySync";
-import { stat } from "fs";
+
 // Define interface for sync status response
 interface SyncStatusResponse {
   synced_files: number;
@@ -38,10 +38,20 @@ export function useFilesNotification() {
 
         const status = await invoke<SyncStatusResponse>("get_sync_status");
         setSyncStatus(status);
+        console.log(status.in_progress, status.percent, "status");
+
         if (status.in_progress) {
-          await setTraySyncPercent(status.percent); // number 0–100
+          console.log("in percentage");
+
+          await setTraySyncPercent(status.percent); // 0–100
         } else if (status.percent === 100) {
-          await setTraySyncPercent(100);
+          console.log("in percentage");
+
+          await setTraySyncPercent(100); // Completed
+        } else {
+          console.log("in null");
+
+          await setTraySyncPercent(null); // Hide item
         }
 
         // Check if sync was previously in progress
@@ -66,7 +76,7 @@ export function useFilesNotification() {
             notificationTitleText: "File Sync Complete!",
             notificationDescription: `All your files have been successfully synchronized. Your files are now up to date.`,
             notificationLinkText: "View Files",
-            notificationLink: "/files",
+            notificationLink: "/files"
           });
 
           notificationSent.current = true;
@@ -87,7 +97,7 @@ export function useFilesNotification() {
     getSyncStatus();
 
     // Set up interval to periodically refresh the status
-    const intervalId = setInterval(getSyncStatus, 1000);
+    const intervalId = setInterval(getSyncStatus, 2000);
 
     // Clean up interval on component unmount
     return () => clearInterval(intervalId);

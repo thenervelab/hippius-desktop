@@ -21,6 +21,7 @@ use std::time::Duration;
 use tauri::async_runtime::block_on;
 use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{AppHandle, Wry};
 
 pub static SYNC_STATUS: once_cell::sync::Lazy<Arc<Mutex<SyncStatus>>> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
@@ -540,4 +541,8 @@ pub fn get_sync_status() -> SyncStatusResponse {
         in_progress: status.in_progress,
         percent,
     }
+}
+#[tauri::command]
+pub fn app_close(app: AppHandle<Wry>) {
+    app.exit(0);      
 }
