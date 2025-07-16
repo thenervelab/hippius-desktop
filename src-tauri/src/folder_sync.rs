@@ -103,6 +103,17 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                     let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     recently_uploaded.insert(file_path_str.clone());
                 }
+
+                // Update sync status after successful upload
+                if result.is_ok() {
+                    let mut status = SYNC_STATUS.lock().unwrap();
+                    status.synced_files += 1;
+                    println!("[DEBUG] Synced files: {} / {}", status.synced_files, status.total_files);
+                    if status.synced_files == status.total_files {
+                        status.in_progress = false;
+                    }
+                }
+
                 // Remove from recently uploaded after 2 seconds
                 let file_path_str_clone = file_path_str.clone();
                 tokio::spawn(async move {
@@ -242,6 +253,7 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
         }
     });
 }
+
 
 // Helper to recursively collect files
 fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -498,12 +510,6 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
                 insert_file_if_not_exists(pool, path, account_id);
             }
 
-            // Increment synced_files after successful upload
-            {
-                let mut status = SYNC_STATUS.lock().unwrap();
-                status.synced_files += 1;
-            }
-
             return true;
         }
         Err(e) => {
@@ -744,6 +750,7 @@ pub fn get_sync_status() -> SyncStatusResponse {
         percent,
     }
 }
+
 #[tauri::command]
 pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);      

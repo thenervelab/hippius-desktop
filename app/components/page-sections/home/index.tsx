@@ -108,16 +108,6 @@ const Home: React.FC = () => {
   const transformedFilesData = transformFilesToStorageData(filesData || []);
   console.log(transformedFilesData, "transformedFilesData");
 
-  useEffect(() => {
-    if (polkadotAddress) {
-      invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
-      invoke("start_folder_sync_tauri", {
-        accountId: polkadotAddress,
-        seedPhrase: mnemonic,
-      });
-    }
-  }, [polkadotAddress, mnemonic]);
-
   return (
     <div className="flex flex-col mt-6">
       <section className="mb-6">
