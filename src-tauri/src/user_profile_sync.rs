@@ -79,15 +79,34 @@ pub fn start_user_sync(account_id: &str) {
     let account_id = account_id.to_string();
     tokio::spawn(async move {
         let client = Client::new();
+        let mut retry_count = 0;
+        let max_retries = 5;
+        
         loop {
             println!("[UserSync] Periodic check: scanning for unsynced data...");
 
-            let api = match get_substrate_client().await {
-                Ok(api) => api,
-                Err(e) => {
-                    eprintln!("[UserSync] Failed to get substrate client: {e}");
-                    time::sleep(Duration::from_secs(120)).await;
-                    continue;
+            // Get substrate client with retry mechanism
+            let api = loop {
+                match get_substrate_client().await {
+                    Ok(api) => {
+                        println!("[UserSync] Successfully connected to substrate node");
+                        retry_count = 0; // Reset retry count on successful connection
+                        break api;
+                    }
+                    Err(e) => {
+                        retry_count += 1;
+                        let wait_time = std::cmp::min(30 * retry_count, 300); // Max 5 minutes
+                        eprintln!("[UserSync] Failed to get substrate client (attempt {}/{}): {e}", retry_count, max_retries);
+                        
+                        if retry_count >= max_retries {
+                            eprintln!("[UserSync] Max retries reached, waiting 5 minutes before trying again");
+                            time::sleep(Duration::from_secs(300)).await;
+                            retry_count = 0; // Reset for next cycle
+                        } else {
+                            eprintln!("[UserSync] Retrying in {} seconds...", wait_time);
+                            time::sleep(Duration::from_secs(wait_time as u64)).await;
+                        }
+                    }
                 }
             };
 
@@ -100,12 +119,18 @@ pub fn start_user_sync(account_id: &str) {
                 }
             };
 
-            let storage = match api.storage().at_latest().await {
-                Ok(storage) => storage,
-                Err(e) => {
-                    eprintln!("[UserSync] Failed to get latest storage: {e}");
-                    time::sleep(Duration::from_secs(120)).await;
-                    continue;
+            // Get storage with retry mechanism
+            let storage = loop {
+                match api.storage().at_latest().await {
+                    Ok(storage) => {
+                        println!("[UserSync] Successfully got latest storage");
+                        break storage;
+                    }
+                    Err(e) => {
+                        eprintln!("[UserSync] Failed to get latest storage: {e}");
+                        eprintln!("[UserSync] This might be a connection issue, retrying in 30 seconds...");
+                        time::sleep(Duration::from_secs(30)).await;
+                    }
                 }
             };
 
@@ -234,7 +259,7 @@ pub fn start_user_sync(account_id: &str) {
                                     match crate::ipfs::get_ipfs_file_size(&decoded_hash).await {
                                         Ok(size) => {
                                             println!("[UserSync] IPFS file size for {}: {} bytes", decoded_hash, size);
-                                            file_size_in_bytes = size;
+                                            file_size_in_bytes = size as i64; // Safe conversion since u64 to i64 for reasonable file sizes
                                         },
                                         Err(e) => eprintln!("[UserSync] Failed to fetch IPFS file size for {}: {}", decoded_hash, e),
                                     }
@@ -261,7 +286,7 @@ pub fn start_user_sync(account_id: &str) {
                                         cid: file_hash.clone(),
                                         file_hash: file_hash.clone(),
                                         file_name,
-                                        file_size_in_bytes: file_size_in_bytes.try_into().unwrap(),
+                                        file_size_in_bytes,
                                         is_assigned: storage_request.is_assigned,
                                         last_charged_at: storage_request.last_charged_at as i64,
                                         main_req_hash: file_hash,
