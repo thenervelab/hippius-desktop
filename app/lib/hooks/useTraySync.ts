@@ -30,7 +30,7 @@ export function useTrayInit() {
 
       await TrayIcon.new({
         id: TRAY_ID,
-        icon: "icons/icon.png",
+        icon: "icons/trayIcon.png",
         iconAsTemplate: false,
         tooltip: "Hippius Cloud",
         menu,

@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import DetailList from "./DetailList";
 
 import CreditUsageTrends from "./credit-usage-trends";
@@ -27,28 +26,31 @@ function useIpfsInfo() {
   const [retryCount, setRetryCount] = useState(0);
   const MAX_RETRIES = 3;
 
-  const fetchIpfsInfo = async () => {
+  const fetchIpfsInfo = useCallback(async () => {
     try {
-      const response = await tauriFetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/id`, {
-        method: "POST",
-      });
+      const response = await tauriFetch(
+        `${IPFS_NODE_CONFIG.baseURL}/api/v0/id`,
+        {
+          method: "POST",
+        }
+      );
 
       if (response.ok) {
         const data = await response.json();
         setIpfsInfo(data);
         setIsRetrying(false);
       } else {
-        console.error(`Error fetching IPFS info: HTTP ${response.status}`);
+        console.warn(`Error fetching IPFS info: HTTP ${response.status}`);
         throw new Error(`HTTP error ${response.status}`);
       }
     } catch (error) {
-      console.error("Failed to fetch IPFS info:", error);
+      console.warn("Failed to fetch IPFS info:", error);
       try {
         const ipfsData = await invoke<IpfsInfo>("get_ipfs_node_info");
         setIpfsInfo(ipfsData);
         setIsRetrying(false);
       } catch (invokeError) {
-        console.error("Tauri invoke also failed:", invokeError);
+        console.warn("Tauri invoke also failed:", invokeError);
 
         // Implement retry logic
         if (retryCount < MAX_RETRIES) {
@@ -65,11 +67,11 @@ function useIpfsInfo() {
         }
       }
     }
-  };
+  }, [retryCount, MAX_RETRIES]);
 
   useEffect(() => {
     fetchIpfsInfo();
-  }, []);
+  }, [fetchIpfsInfo]);
 
   useEffect(() => {
     if (isRetrying) {
@@ -80,13 +82,12 @@ function useIpfsInfo() {
 
       return () => clearTimeout(timer);
     }
-  }, [isRetrying, retryCount]);
+  }, [isRetrying, retryCount, fetchIpfsInfo]);
 
   return ipfsInfo;
 }
 
 const Home: React.FC = () => {
-  const { polkadotAddress, mnemonic } = useWalletAuth();
   const ipfsInfo = useIpfsInfo();
   const { download, upload } = useIpfsBandwidth(1000);
 

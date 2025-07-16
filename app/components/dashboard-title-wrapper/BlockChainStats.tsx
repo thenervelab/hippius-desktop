@@ -23,9 +23,12 @@ const BlockchainStats: React.FC = () => {
 
     const fetchPeers = async () => {
       try {
-        const response = await tauriFetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/swarm/peers`, {
-          method: "POST",
-        });
+        const response = await tauriFetch(
+          `${IPFS_NODE_CONFIG.baseURL}/api/v0/swarm/peers`,
+          {
+            method: "POST",
+          }
+        );
 
         if (response.ok) {
           const data = await response.json();
@@ -38,10 +41,12 @@ const BlockchainStats: React.FC = () => {
           throw new Error(`HTTP error ${response.status}`);
         }
       } catch (error) {
-        console.error("Failed to fetch IPFS peers:", error);
+        console.warn("Failed to fetch IPFS peers:", error);
 
         try {
-          const peersData = await invoke<{ Peers: unknown[] }>("get_ipfs_peers");
+          const peersData = await invoke<{ Peers: unknown[] }>(
+            "get_ipfs_peers"
+          );
           if (mounted) {
             setPeerCount(peersData.Peers?.length || 0);
             setIsRetrying(false);
@@ -52,7 +57,7 @@ const BlockchainStats: React.FC = () => {
 
           if (retryCount < MAX_RETRIES) {
             setIsRetrying(true);
-            setRetryCount(prev => prev + 1);
+            setRetryCount((prev) => prev + 1);
           } else if (mounted) {
             setPeerCount(null);
             setIsRetrying(false);
