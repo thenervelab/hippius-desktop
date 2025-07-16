@@ -330,20 +330,81 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
             }
         }
         EventKind::Modify(ModifyKind::Name(_)) => {
-            for path in event.paths {
-                if !path.exists() {
-                    let file_name = path.file_name().and_then(|s| s.to_str());
-                    if let Some(file_name) = file_name {
-                        println!("[Watcher] File deleted (via rename/move) from sync folder: {}", file_name);
-                        let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
-                        if result.is_ok() {
-                            if let Some(pool) = crate::DB_POOL.get() {
-                                let _ = tauri::async_runtime::block_on(async {
-                                    sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
-                                        .bind(file_name)
-                                        .execute(pool)
-                                        .await
-                                });
+            if event.paths.len() == 2 {
+                let old_path = &event.paths[0];
+                let new_path = &event.paths[1];
+        
+                // Handle deletion for old_path
+                if let Some(file_name) = old_path.file_name().and_then(|s| s.to_str()) {
+                    println!("[Watcher] File renamed, deleting old file records: {}", file_name);
+                    let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
+                    if result.is_ok() {
+                        if let Some(pool) = crate::DB_POOL.get() {
+                            let _ = tauri::async_runtime::block_on(async {
+                                sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ?")
+                                    .bind(account_id)
+                                    .bind(file_name)
+                                    .execute(pool)
+                                    .await
+                            });
+                            println!("[Watcher] Successfully deleted old file records for '{}'", file_name);
+                        }
+                    } else {
+                        eprintln!("[Watcher] Failed to delete/unpin old file records for '{}'", file_name);
+                    }
+                }
+        
+                // Handle creation for new_path
+                if new_path.is_file() {
+                    let file_path_str = new_path.to_string_lossy().to_string();
+                    // Check if file was recently uploaded to avoid immediate re-processing
+                    {
+                        let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+                        if recently_uploaded.contains(&file_path_str) {
+                            println!("[Watcher] File {} was recently uploaded, skipping.", file_path_str);
+                            return;
+                        }
+                    }
+                    // Check if file is already being uploaded
+                    {
+                        let uploading_files = UPLOADING_FILES.lock().unwrap();
+                        if uploading_files.contains(&file_path_str) {
+                            println!("[Watcher] File {} is already being uploaded, skipping.", file_path_str);
+                            return;
+                        }
+                    }
+                    // Enqueue the new file for upload
+                    if let Some(sender) = UPLOAD_SENDER.get() {
+                        sender
+                            .send(UploadJob {
+                                account_id: account_id.to_string(),
+                                seed_phrase: seed_phrase.to_string(),
+                                file_path: file_path_str.clone(),
+                            })
+                            .unwrap();
+                        println!("[Watcher] Enqueued new file for upload: {}", file_path_str);
+                    }
+                }
+            } else {
+                // Fallback for single-path rename events (e.g., file moved out of sync folder)
+                for path in event.paths {
+                    if !path.exists() {
+                        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                            println!("[Watcher] File deleted (via rename/move) from sync folder: {}", file_name);
+                            let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
+                            if result.is_ok() {
+                                if let Some(pool) = crate::DB_POOL.get() {
+                                    let _ = tauri::async_runtime::block_on(async {
+                                        sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ?")
+                                            .bind(account_id)
+                                            .bind(file_name)
+                                            .execute(pool)
+                                            .await
+                                    });
+                                    println!("[Watcher] Successfully deleted file records for '{}'", file_name);
+                                }
+                            } else {
+                                eprintln!("[Watcher] Failed to delete/unpin file records for '{}'", file_name);
                             }
                         }
                     }
