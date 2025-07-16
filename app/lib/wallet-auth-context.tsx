@@ -13,7 +13,6 @@ import { Keyring } from "@polkadot/keyring";
 import { getWalletRecord, clearWalletDb } from "./helpers/walletDb";
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
-import { mnemonicToAccount } from "viem/accounts";
 import { invoke } from "@tauri-apps/api/core";
 
 interface WalletContextType {
@@ -28,7 +27,6 @@ interface WalletContextType {
   unlockWithPasscode: (passcode: string) => Promise<boolean>;
   logout: () => void;
   resetWallet: () => void;
-  address: string | null;
 }
 const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 
@@ -46,7 +44,6 @@ export function WalletAuthProvider({
   const [walletManager, setWalletManager] = useState<{
     polkadotPair: any;
   } | null>(null);
-  const [address, setAddress] = useState<string | null>(null);
 
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
   const syncInitialized = useRef(false);
@@ -56,7 +53,6 @@ export function WalletAuthProvider({
     setPolkadotAddress(null);
     setWalletManager(null);
     setIsAuthenticated(false);
-    setAddress(null);
     syncInitialized.current = false; // Reset sync flag for next login
   }, []);
 
@@ -101,14 +97,10 @@ export function WalletAuthProvider({
       const keyring = new Keyring({ type: "sr25519" });
       const pair = keyring.addFromMnemonic(inputMnemonic);
 
-      // Create Ethereum account
-      const ethAccount = mnemonicToAccount(inputMnemonic);
-      const ethAddress = ethAccount.address;
-
       console.log("[WalletAuth] Signature verified");
       setMnemonic(inputMnemonic);
       setPolkadotAddress(pair.address);
-      setAddress(ethAddress);
+
       setWalletManager({ polkadotPair: pair });
       setIsAuthenticated(true);
 
@@ -116,12 +108,16 @@ export function WalletAuthProvider({
       if (!syncInitialized.current) {
         console.log("[WalletAuth] Starting sync for account:", pair.address);
         try {
-          await invoke("start_user_profile_sync_tauri", { accountId: pair.address });
+          await invoke("start_user_profile_sync_tauri", {
+            accountId: pair.address,
+          });
           await invoke("start_folder_sync_tauri", {
             accountId: pair.address,
             seedPhrase: inputMnemonic,
           });
-          await invoke("start_user_storage_requests_sync_tauri", { accountId: pair.address });
+          await invoke("start_user_storage_requests_sync_tauri", {
+            accountId: pair.address,
+          });
           syncInitialized.current = true;
           console.log("[WalletAuth] Sync commands started successfully");
         } catch (error) {
@@ -134,7 +130,7 @@ export function WalletAuthProvider({
       setMnemonic(null);
       setPolkadotAddress(null);
       setWalletManager(null);
-      setAddress(null);
+
       setIsAuthenticated(false);
       return false;
     }
@@ -160,7 +156,7 @@ export function WalletAuthProvider({
       setWalletManager(null);
       setIsAuthenticated(false);
       setIsLoading(false);
-      setAddress(null);
+
       return false;
     }
   };
@@ -183,7 +179,6 @@ export function WalletAuthProvider({
         unlockWithPasscode,
         logout,
         resetWallet,
-        address,
       }}
     >
       {children}
