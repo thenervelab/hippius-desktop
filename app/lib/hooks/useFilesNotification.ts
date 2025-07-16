@@ -8,6 +8,7 @@ import {
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { setTraySyncPercent } from "./useTraySync";
+// import { toast } from "sonner";
 
 // Define interface for sync status response
 interface SyncStatusResponse {
@@ -40,6 +41,9 @@ export function useFilesNotification() {
 
         const status = await invoke<SyncStatusResponse>("get_sync_status");
         setSyncStatus(status);
+        // toast.success(
+        //   `Sync Staus: ${status.percent}% : ${status.in_progress ? "In Progress" : "Completed"}`
+        // );
         if (status.in_progress) {
           console.log("in percentage");
 
