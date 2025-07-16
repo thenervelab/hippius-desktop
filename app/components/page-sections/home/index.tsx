@@ -110,11 +110,13 @@ const Home: React.FC = () => {
 
   useEffect(() => {
     if (polkadotAddress) {
+      console.log("we are stuck here")
       invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
       invoke("start_folder_sync_tauri", {
         accountId: polkadotAddress,
         seedPhrase: mnemonic,
       });
+      console.log("Sync started for account:", polkadotAddress);
     }
   }, [polkadotAddress, mnemonic]);
 

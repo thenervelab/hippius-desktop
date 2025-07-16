@@ -436,7 +436,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
             if let Some(pool) = crate::DB_POOL.get() {
                 insert_file_if_not_exists(pool, path, account_id);
             }
-            
+
             // Increment synced_files after successful upload
             {
                 let mut status = SYNC_STATUS.lock().unwrap();
@@ -628,43 +628,37 @@ fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
     }
 }
 
-fn insert_file_if_not_exists(
-    pool: &sqlx::SqlitePool,
-    file_path: &Path,
-    owner: &str,
-) {
-    let file_name = file_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    let source = crate::constants::substrate::SYNC_PATH;
-
-    // Check if exists
-    let exists: Option<i64> = tauri::async_runtime::block_on(async {
-        sqlx::query_scalar(
-            "SELECT 1 FROM sync_folder_files WHERE file_name = ? AND owner = ? LIMIT 1"
-        )
-        .bind(file_name)
+pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str) {
+    let file_name = file_path.file_name().unwrap().to_string_lossy();
+    let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ?")
+        .bind(&file_name)
         .bind(owner)
         .fetch_optional(pool)
         .await
-        .ok()
-        .flatten()
-    });
-
+        .unwrap();
     if exists.is_none() {
-        // Insert with only required columns, rest as empty/zero
-        tauri::async_runtime::block_on(async {
-            sqlx::query(
-                "INSERT INTO sync_folder_files (owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids)
-                 VALUES (?, '', '', ?, 0, 0, 0, '', '', 0, 0, '', ?, '')"
-            )
-            .bind(owner)
-            .bind(file_name)
-            .bind(source)
-            .execute(pool)
-            .await
-            .ok();
-        });
-        // Log the new file addition
-        println!("[Startup/Watcher] New file added to sync_folder_files: {}", file_name);
+        sqlx::query(
+            "INSERT INTO sync_folder_files (
+                file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(&file_name)
+        .bind(owner) // owner
+        .bind("") // cid
+        .bind("") // file_hash
+        .bind(0) // file_size_in_bytes
+        .bind(false) // is_assigned
+        .bind(0) // last_charged_at
+        .bind("") // main_req_hash
+        .bind("") // selected_validator
+        .bind(0) // total_replicas
+        .bind(0) // block_number
+        .bind("") // profile_cid
+        .bind("") // source
+        .bind("") // miner_ids
+        .execute(pool)
+        .await
+        .unwrap();
     }
 }
 

@@ -16,6 +16,7 @@ use crate::user_profile_sync::get_user_synced_files;
 use crate::user_profile_sync::start_user_profile_sync_tauri;
 use crate::user_storage_requests_sync::get_user_storage_requests;
 use crate::user_storage_requests_sync::start_user_storage_requests_sync_tauri;
+use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
@@ -54,9 +55,9 @@ fn main() {
             start_user_storage_requests_sync_tauri,
             get_user_storage_requests,
             get_sync_status,
-            ipfs::get_ipfs_node_info,
-            ipfs::get_ipfs_bandwidth,
-            ipfs::get_ipfs_peers
+            get_ipfs_node_info,
+            get_ipfs_bandwidth,
+            get_ipfs_peers
         ]);
 
     let builder = setup(builder);

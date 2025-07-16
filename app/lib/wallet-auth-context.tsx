@@ -116,6 +116,7 @@ export function WalletAuthProvider({
       if (!syncInitialized.current) {
         console.log("[WalletAuth] Starting sync for account:", pair.address);
         try {
+          console.log("WalletAuth: we are stuck here")
           await invoke("start_user_profile_sync_tauri", { accountId: pair.address });
           await invoke("start_folder_sync_tauri", {
             accountId: pair.address,
