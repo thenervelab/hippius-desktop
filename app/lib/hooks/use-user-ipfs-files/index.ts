@@ -85,6 +85,7 @@ export const useUserIpfsFiles = () => {
                 });
 
                 console.log("Fetched files from DB:", dbFiles);
+                console.log(dbFiles[0].minerIds)
 
                 // Format the data to match what the UI expects
                 const formattedFiles = dbFiles.map((file): FormattedUserIpfsFile => ({
@@ -93,12 +94,13 @@ export const useUserIpfsFiles = () => {
                     createdAt: file.lastChargedAt,
                     cid: hexToCid(file.fileHash) ?? "",
                     source: file.source || "Unknown",
-                    minerIds: typeof file.minerIds === "string" ? JSON.parse(file.minerIds) : file.minerIds,
+                    minerIds: file.minerIds,
                     isAssigned: file.isAssigned,
                     lastChargedAt: file.lastChargedAt,
                     fileHash: file.fileHash,
                     fileDetails: []
                 }));
+
 
                 formattedFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
 
