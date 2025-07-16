@@ -137,14 +137,16 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
             if !dir_files.contains(db_file) {
                 println!("[Startup] File deleted from sync folder: {}", db_file);
                 // Call delete_and_unpin and delete from sync_folder_files
-                let _ = block_on(delete_and_unpin_user_file_records_by_name(db_file, &seed_phrase));
-                let _ = block_on(async {
-                    sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ?")
-                        .bind(&account_id)
-                        .bind(db_file)
-                        .execute(pool)
-                        .await
-                });
+                let result = block_on(delete_and_unpin_user_file_records_by_name(db_file, &seed_phrase));
+                if result.is_ok() {
+                    let _ = block_on(async {
+                        sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ?")
+                            .bind(&account_id)
+                            .bind(db_file)
+                            .execute(pool)
+                            .await
+                    });
+                }
             }
         }
         // Handle new files (in folder, not in DB)
@@ -162,8 +164,6 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                             file_path: file_path.to_string_lossy().to_string(),
                         }).ok();
                     }
-                    // Insert into DB if not exists
-                    insert_file_if_not_exists(pool, file_path, &account_id);
                     new_files_to_upload.push(file_path.clone());
                 }
             }
@@ -258,7 +258,6 @@ fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
-    println!("[Watcher] Event received: {:?}", event);
     match event.kind {
         EventKind::Create(CreateKind::File) | EventKind::Create(CreateKind::Folder) => {
             // Add all paths to the batch
@@ -291,11 +290,6 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                         }
                     }
 
-                    if let Some(pool) = crate::DB_POOL.get() {
-                        for file_path in &files {
-                            insert_file_if_not_exists(pool, file_path, &account_id);
-                        }
-                    }
                     if !files.is_empty() {
                         // Set sync status for the batch
                         {
@@ -341,15 +335,17 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                     let file_name = path.file_name().and_then(|s| s.to_str());
                     if let Some(file_name) = file_name {
                         println!("[Watcher] File deleted (via rename/move) from sync folder: {}", file_name);
-                        if let Some(pool) = crate::DB_POOL.get() {
-                            let _ = tauri::async_runtime::block_on(async {
-                                sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
-                                    .bind(file_name)
-                                    .execute(pool)
-                                    .await
-                            });
+                        let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
+                        if result.is_ok() {
+                            if let Some(pool) = crate::DB_POOL.get() {
+                                let _ = tauri::async_runtime::block_on(async {
+                                    sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
+                                        .bind(file_name)
+                                        .execute(pool)
+                                        .await
+                                });
+                            }
                         }
-                        let _ = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
                     }
                 }
             }
@@ -360,15 +356,17 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                 if let Some(file_name) = file_name {
                     println!("[Watcher] File deleted from sync folder: {}", file_name);
                     // Delete from sync_folder_files and call delete_and_unpin
-                    if let Some(pool) = crate::DB_POOL.get() {
-                        let _ = tauri::async_runtime::block_on(async {
-                            sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
-                                .bind(file_name)
-                                .execute(pool)
-                                .await
-                        });
+                    let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
+                    if result.is_ok() {
+                        if let Some(pool) = crate::DB_POOL.get() {
+                            let _ = tauri::async_runtime::block_on(async {
+                                sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
+                                    .bind(file_name)
+                                    .execute(pool)
+                                    .await
+                            });
+                        }
                     }
-                    let _ = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
                 }
             }
         }
@@ -433,7 +431,12 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
                 let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                 recently_uploaded.remove(&file_path_str_clone);
             });
-
+            
+            // Insert into DB if not exists
+            if let Some(pool) = crate::DB_POOL.get() {
+                insert_file_if_not_exists(pool, path, account_id);
+            }
+            
             // Increment synced_files after successful upload
             {
                 let mut status = SYNC_STATUS.lock().unwrap();
