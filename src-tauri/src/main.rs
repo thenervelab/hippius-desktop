@@ -11,7 +11,7 @@ mod user_storage_requests_sync;
 mod utils;
 mod ipfs;
 
-use crate::folder_sync::{get_sync_status, start_folder_sync_tauri};
+use crate::folder_sync::{get_sync_status, start_folder_sync_tauri,app_close};
 use crate::user_profile_sync::get_user_synced_files;
 use crate::user_profile_sync::start_user_profile_sync_tauri;
 use crate::user_storage_requests_sync::get_user_storage_requests;
@@ -57,7 +57,8 @@ fn main() {
             get_sync_status,
             get_ipfs_node_info,
             get_ipfs_bandwidth,
-            get_ipfs_peers
+            get_ipfs_peers,
+            app_close
         ]);
 
     let builder = setup(builder);

@@ -37,8 +37,8 @@ export default async function RootLayout({
           <Providers>
             <WalletAuthProvider>
               <NextTopLoader color="#3167DD" showSpinner={false} />
-                <SplashWrapper skipSplash={false}>
-                  <div className="flex min-h-screen h-screen">{children}</div>
+              <SplashWrapper skipSplash={false}>
+                <div className="flex min-h-screen h-screen">{children}</div>
               </SplashWrapper>
               <Toaster />
             </WalletAuthProvider>

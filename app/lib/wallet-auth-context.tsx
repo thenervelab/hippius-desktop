@@ -14,6 +14,7 @@ import { getWalletRecord, clearWalletDb } from "./helpers/walletDb";
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
+import { useTrayInit } from "./hooks/useTraySync";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -166,6 +167,7 @@ export function WalletAuthProvider({
     await clearWalletDb();
     logout();
   };
+  useTrayInit();
 
   return (
     <WalletContext.Provider

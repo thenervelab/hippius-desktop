@@ -39,7 +39,7 @@ pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<String>>>> =
 // Track recently uploaded files to prevent immediate re-processing
 pub static RECENTLY_UPLOADED: Lazy<Arc<Mutex<HashSet<String>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
-
+use tauri::{AppHandle, Wry};
 // Debounce state for batching create events
 static CREATE_BATCH: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
 static CREATE_BATCH_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -743,4 +743,8 @@ pub fn get_sync_status() -> SyncStatusResponse {
         in_progress: status.in_progress,
         percent,
     }
+}
+#[tauri::command]
+pub fn app_close(app: AppHandle<Wry>) {
+    app.exit(0);      
 }
