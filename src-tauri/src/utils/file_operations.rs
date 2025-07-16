@@ -3,6 +3,11 @@ use crate::commands::substrate_tx::FileHashWrapper;
 use crate::commands::substrate_tx::FileInputWrapper;
 use crate::utils::ipfs::pin_json_to_ipfs_local;
 use crate::DB_POOL;
+use std::fs;
+use std::path::{Path, PathBuf};
+use crate::constants::substrate::SYNC_PATH;
+use crate::folder_sync::insert_file_if_not_exists;
+
 
 pub async fn request_file_storage(
     file_name: &str,
@@ -103,5 +108,28 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         Ok(result1.rows_affected() + result2.rows_affected())
     } else {
         Err("DB_POOL not initialized".to_string())
+    }
+}
+
+pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str) {
+    // Define your sync folder path
+    let sync_folder = PathBuf::from(SYNC_PATH); // Make sure SYNC_PATH is accessible here
+    let file_name = match original_path.file_name() {
+        Some(name) => name,
+        None => return,
+    };
+    let sync_file_path = sync_folder.join(file_name);
+
+    // Copy if not already exists
+    if !sync_file_path.exists() {
+        if let Err(e) = fs::copy(original_path, &sync_file_path) {
+            eprintln!("Failed to copy file to sync folder: {}", e);
+            return;
+        }
+    }
+
+    // Add to DB (make sure insert_file_if_not_exists is async)
+    if let Some(pool) = crate::DB_POOL.get() {
+        insert_file_if_not_exists(pool, &sync_file_path, account_id).await;
     }
 }

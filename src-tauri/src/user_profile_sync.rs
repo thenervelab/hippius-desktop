@@ -225,6 +225,8 @@ pub async fn start_user_profile_sync_tauri(account_id: String) {
 
 #[tauri::command]
 pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>, String> {
+    use crate::constants::substrate::SYNC_PATH;
+    use sqlx::Row;
     if let Some(pool) = DB_POOL.get() {
         // Fetch all user_profiles records
         let user_profile_rows = sqlx::query(
@@ -241,35 +243,25 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
         .fetch_all(pool)
         .await;
 
-        // Fetch all sync_folder_files records
-        let sync_folder_rows = sqlx::query(
-            r#"
-            SELECT owner, cid, file_hash, file_name,
-                   file_size_in_bytes, is_assigned, last_charged_at,
-                   main_req_hash, selected_validator,
-                   total_replicas, block_number, profile_cid, source, miner_ids
-              FROM sync_folder_files
-             WHERE owner = ?
-            "#
+        // Fetch all file_names from sync_folder_files for this owner
+        let sync_file_names: Result<Vec<String>, _> = sqlx::query(
+            "SELECT file_name FROM sync_folder_files WHERE owner = ?"
         )
         .bind(&owner)
         .fetch_all(pool)
-        .await;
+        .await
+        .map(|rows| rows.into_iter().map(|row| row.get::<String, _>("file_name")).collect());
 
-        match (user_profile_rows, sync_folder_rows) {
-            (Ok(user_rows), Ok(sync_rows)) => {
+        match (user_profile_rows, sync_file_names) {
+            (Ok(user_rows), Ok(sync_names)) => {
+                let sync_names_set: std::collections::HashSet<_> = sync_names.into_iter().collect();
                 let mut files = Vec::new();
-                let mut file_names = std::collections::HashSet::new();
-
-                // Add all user_profiles records
                 for row in user_rows {
-                    let file_name: String = row.get("file_name");
-                    file_names.insert(file_name.clone());
-                    files.push(UserProfileFile {
+                    let mut file = UserProfileFile {
                         owner: row.get("owner"),
                         cid: row.get("cid"),
                         file_hash: row.get("file_hash"),
-                        file_name,
+                        file_name: row.get("file_name"),
                         file_size_in_bytes: row.get("file_size_in_bytes"),
                         is_assigned: row.get("is_assigned"),
                         last_charged_at: row.get("last_charged_at"),
@@ -280,30 +272,11 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                         profile_cid: row.get("profile_cid"),
                         source: row.get("source"),
                         miner_ids: row.get("miner_ids"),
-                    });
-                }
-
-                // Add sync_folder_files records not already in user_profiles
-                for row in sync_rows {
-                    let file_name: String = row.get("file_name");
-                    if !file_names.contains(&file_name) {
-                        files.push(UserProfileFile {
-                            owner: row.get("owner"),
-                            cid: row.get("cid"),
-                            file_hash: row.get("file_hash"),
-                            file_name,
-                            file_size_in_bytes: row.get("file_size_in_bytes"),
-                            is_assigned: row.get("is_assigned"),
-                            last_charged_at: row.get("last_charged_at"),
-                            main_req_hash: row.get("main_req_hash"),
-                            selected_validator: row.get("selected_validator"),
-                            total_replicas: row.get("total_replicas"),
-                            block_number: row.get("block_number"),
-                            profile_cid: row.get("profile_cid"),
-                            source: row.get("source"),
-                            miner_ids: row.get("miner_ids"),
-                        });
+                    };
+                    if sync_names_set.contains(&file.file_name) {
+                        file.source = SYNC_PATH.to_string();
                     }
+                    files.push(file);
                 }
                 Ok(files)
             },

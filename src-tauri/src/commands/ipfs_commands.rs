@@ -5,7 +5,7 @@ use crate::utils::{
     ipfs::{
         download_from_ipfs,upload_to_ipfs
     },
-    file_operations::request_file_storage
+    file_operations::{request_file_storage, copy_to_sync_and_add_to_db}
 };
 use uuid::Uuid;
 use std::fs;
@@ -29,7 +29,7 @@ pub async fn encrypt_and_upload_file(
     seed_phrase: String
 ) -> Result<String, String> {
     use std::path::Path;
-    
+    println!("file path is {:?}", file_path.clone());    
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
     let m = DEFAULT_M;
@@ -163,7 +163,10 @@ pub async fn encrypt_and_upload_file(
     // Call request_file_storage and log its returned CID
     let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
-        Ok(res) => println!("[encrypt_and_upload_file] : {}", res),
+        Ok(res) => {
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id).await;
+            println!("[encrypt_and_upload_file] : {}", res);
+        },
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
     }
 
