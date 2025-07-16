@@ -229,7 +229,6 @@ pub fn start_user_sync(account_id: &str) {
                                 let file_hash = bounded_vec_to_string(&storage_request.file_hash.0);
                                 let decoded_hash = decode_file_hash(&storage_request.file_hash.0)
                                     .unwrap_or_else(|_| "Invalid file hash".to_string());
-                                println!("[UserSync] Decoded file hash: {}", decoded_hash);
                                 let mut file_size_in_bytes = 0;
                                 if decoded_hash != "Invalid file hash" {
                                     match crate::ipfs::get_ipfs_file_size(&decoded_hash).await {
