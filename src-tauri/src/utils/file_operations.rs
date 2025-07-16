@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use crate::constants::substrate::SYNC_PATH;
 use crate::folder_sync::insert_file_if_not_exists;
 
-
 pub async fn request_file_storage(
     file_name: &str,
     file_cid: &str,
@@ -83,15 +82,6 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     file_name: &str,
     seed_phrase: &str,
 ) -> Result<u64, String> {
-    // Unpin first
-    let unpin_result = unpin_user_file_by_name(file_name, seed_phrase).await;
-    if unpin_result.is_err() {
-        return Err(format!(
-            "Unpin failed for '{}': {}",
-            file_name,
-            unpin_result.unwrap_err()
-        ));
-    }
     if let Some(pool) = DB_POOL.get() {
         // Delete from user_profiles
         let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
@@ -99,13 +89,23 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
+
         // Delete from sync_folder_files
         let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
             .bind(file_name)
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
-        Ok(result1.rows_affected() + result2.rows_affected())
+
+        // Calculate total rows affected
+        let total_deleted = result1.rows_affected() + result2.rows_affected();
+
+        // Call unpin_user_file_by_name after successful deletes
+        unpin_user_file_by_name(file_name, seed_phrase)
+            .await
+            .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
+
+        Ok(total_deleted)
     } else {
         Err("DB_POOL not initialized".to_string())
     }

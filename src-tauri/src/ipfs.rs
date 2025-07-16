@@ -103,3 +103,28 @@ pub async fn get_ipfs_peers() -> Result<serde_json::Value, String> {
     
     Ok(data)
 }
+
+
+pub async fn get_ipfs_file_size(cid: &str) -> Result<u64, String> {
+    let api_url = std::env::var("IPFS_NODE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:5001".to_string());
+    let url = format!("{}/api/v0/ls?arg={}", api_url, cid);
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Request error: {}", e))?;
+
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse IPFS ls response: {}", e))?;
+
+    let size = parsed["Objects"]
+        .as_array()
+        .and_then(|objs| objs.first())
+        .and_then(|obj| obj["Links"].as_array())
+        .and_then(|links| links.first())
+        .and_then(|link| link["Size"].as_u64())
+        .ok_or_else(|| "File size not found".to_string())?;
+
+    Ok(size)
+}
