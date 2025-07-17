@@ -21,8 +21,12 @@ pub fn upload_to_ipfs(
         .mime_str("application/octet-stream")?;
     let form = multipart::Form::new().part("file", part);
 
+    // Use cid-version=1
     let res = client
-        .post(&format!("{}/api/v0/add", api_url))
+        .post(&format!(
+            "{}/api/v0/add?cid-version=1&raw-leaves=true",
+            api_url
+        ))
         .multipart(form)
         .send()?
         .error_for_status()?;
@@ -56,6 +60,7 @@ pub fn upload_to_ipfs(
 
     Ok(cid)
 }
+
 
 pub fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let client = Client::new();

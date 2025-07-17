@@ -1,41 +1,44 @@
 {
-    "$schema": "https://schema.tauri.app/config/2",
-    "productName": "Hippius",
-    "version": "0.1.0",
-    "identifier": "hippius.com",
-    "build": {
-        "beforeDevCommand": "pnpm dev",
-        "devUrl": "http://localhost:3000",
-        "beforeBuildCommand": "pnpm build",
-        "frontendDist": "../out"
-    },
-    "plugins": {
-        "fs": {
-            "requireLiteralLeadingDot": false
-        }
-    },
-    "app": {
-        "windows": [{
-            "dragDropEnabled": false,
-            "title": "Hippius",
-            "width": 1320,
-            "height": 1000
-        }],
-        "security": {
-            "csp": null,
-            "capabilities": ["default"]
-        }
-    },
-    "bundle": {
-        "active": true,
-        "targets": "all",
-        "icon": [
-            "icons/32x32.png",
-            "icons/128x128.png",
-            "icons/128x128@2x.png",
-            "icons/icon.icns",
-            "icons/icon.ico"
-        ],
-        "resources": ["icons", "icons/icon.png"]
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hippius",
+  "version": "0.1.0",
+  "identifier": "hippius.com",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../out"
+  },
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
     }
+  },
+  "app": {
+    "windows": [
+      {
+        "dragDropEnabled": false,
+        "title": "Hippius",
+        "width": 1320,
+        "height": 1000
+      }
+    ],
+
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": ["icons", "icons/icon.png", "icons/trayIcon.png"]
+  }
 }
