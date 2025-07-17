@@ -165,7 +165,7 @@ pub async fn encrypt_and_upload_file(
     let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id).await;
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid).await;
             println!("[encrypt_and_upload_file] : {}", res);
         },
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),

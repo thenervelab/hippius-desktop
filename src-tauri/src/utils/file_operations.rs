@@ -7,6 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use crate::constants::substrate::SYNC_PATH;
 use crate::folder_sync::insert_file_if_not_exists;
+use hex;
+use crate::ipfs::get_ipfs_file_size;
 
 pub async fn request_file_storage(
     file_name: &str,
@@ -123,14 +125,53 @@ pub async fn delete_and_unpin_file_by_name(
     delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase).await
 }
 
-pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str) {
+pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str) {
     // Define your sync folder path
-    let sync_folder = PathBuf::from(SYNC_PATH); // Make sure SYNC_PATH is accessible here
+    let sync_folder = PathBuf::from(SYNC_PATH);
     let file_name = match original_path.file_name() {
-        Some(name) => name,
+        Some(name) => name.to_string_lossy().to_string(),
         None => return,
     };
-    let sync_file_path = sync_folder.join(file_name);
+    let sync_file_path = sync_folder.join(&file_name);
+    let cid_vec = metadata_cid.as_bytes().to_vec();
+    let file_hash = hex::encode(cid_vec); // This is a String
+
+    // Get file size from IPFS
+    let file_size_in_bytes = match get_ipfs_file_size(metadata_cid).await {
+        Ok(size) => size as i64,
+        Err(e) => {
+            eprintln!("Failed to get IPFS file size for {}: {}", metadata_cid, e);
+            0
+        }
+    };
+
+    if let Some(pool) = crate::DB_POOL.get() {
+        // Check if file already exists in user_profiles for this account
+        let exists: Option<(String,)> = sqlx::query_as(
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+        )
+        .bind(account_id)
+        .bind(&file_name)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+        if exists.is_none() {
+            // Insert minimal record into user_profiles with is_assigned = false and file_hash set
+            let _ = sqlx::query(
+                "INSERT INTO user_profiles (
+                    owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids
+                ) VALUES (?, '', ?, ?, ?, ?, 0, '', '', 0, 0, '', '', '')"
+            )
+            .bind(account_id)
+            .bind(&file_hash)
+            .bind(&file_name)
+            .bind(file_size_in_bytes)
+            .bind(false)
+            .execute(pool)
+            .await;
+        }
+    }
 
     // Copy if not already exists
     if !sync_file_path.exists() {
@@ -140,7 +181,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str) 
         }
     }
 
-    // Add to DB (make sure insert_file_if_not_exists is async)
+    // Add to sync_folder_files DB (make sure insert_file_if_not_exists is async)
     if let Some(pool) = crate::DB_POOL.get() {
         insert_file_if_not_exists(pool, &sync_file_path, account_id).await;
     }

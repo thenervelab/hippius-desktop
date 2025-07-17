@@ -417,7 +417,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                         miner_ids: row.get("miner_ids"),
                     };
                     if sync_names_set.contains(&file.file_name) {
-                        file.source = SYNC_PATH.to_string();
+                        file.source = format!("{}/{}", SYNC_PATH, file.file_name);
                     }
                     files.push(file);
                 }
