@@ -92,12 +92,11 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
 
   const handleOpenConsoleBillingPage = () => openLinkByKey("BILLING");
 
-  console.log("Chart Data:", chartData);
   return (
     <div className="w-full  relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
       <div
         className={cn(
-          "border relative border-grey-80 overflow-hidden rounded-xl  h-full ",
+          "border relative border-grey-80 overflow-hidden rounded-lg  h-full ",
           "grid",
           "grid-cols-[auto_minmax(0,1fr)]",
           className
@@ -110,9 +109,9 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
             </AbstractIconWrapper>
             <div className="flex flex-col ml-4">
               <span className="text-base font-medium mb-3 text-grey-60">
-                Total Balance
+                Total Credits
               </span>
-              <div className="text-2xl mb-1 font-medium text-grey-10">
+              <div className="text-[32px] leading-[40px] mb-1 font-medium text-grey-10">
                 {credits !== undefined
                   ? `${formatCreditBalance(credits)}`
                   : error
@@ -129,7 +128,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
                   <>
                     <Warning className="size-4" />
                     <Typography.P size="xs" className="text-error-80">
-                      Account balance not retrieved.
+                      Credits not retrieved.
                     </Typography.P>
                     <button
                       className="size-4"
@@ -165,7 +164,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
           </div>
           <div className="flex flex-col">
             <CardButton
-              className="w-full mt-4 "
+              className="w-full mt-4 h-[50px]"
               variant="secondary"
               onClick={handleOpenConsoleBillingPage}
             >
@@ -175,7 +174,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
               </div>
             </CardButton>
             <CardButton
-              className="w-full mt-3"
+              className="w-full mt-3 h-[50px]"
               onClick={handleOpenConsoleBillingPage}
             >
               <div className="flex items-center gap-2 ">
