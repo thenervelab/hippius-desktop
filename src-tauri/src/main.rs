@@ -20,7 +20,7 @@ use commands::ipfs_commands::{
 use commands::accounts::{create_encryption_key, get_encryption_keys };
 use utils::file_operations::delete_and_unpin_file_by_name;
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
-use commands::substrate_tx::get_sync_path;
+use commands::substrate_tx::{get_sync_path, transfer_balance_tauri};
 use dirs;
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
@@ -55,6 +55,7 @@ fn main() {
             delete_and_unpin_file_by_name,
             create_encryption_key,
             get_encryption_keys,
+            transfer_balance_tauri,
         ]);
 
     let builder = setup(builder);
