@@ -290,9 +290,30 @@ const FilesTable: FC<FilesTableProps> = ({
         header: "LOCATION",
         id: "location",
         enableSorting: false,
-        cell: ({ row: { original } }) => (
-          <div className="text-grey-70 text-base font-medium">{original.source}</div>
-        ),
+        cell: ({ row: { original } }) => {
+          const getParentDirectory = (path: string): string => {
+            if (!path) return "Unknown";
+
+            const parts = path.split(/[/\\]/).filter(p => p.trim());
+
+            if (parts.length >= 2) {
+              return parts[parts.length - 2];
+            }
+
+            return "Hippius";
+          };
+
+          const parentDir = getParentDirectory(original.source ?? "");
+
+          return (
+            <div className="flex flex-col">
+              <div className="text-grey-20 text-base font-medium">{parentDir}</div>
+              {original.source !== "Hippius" && (<div className="text-grey-70 text-xs truncate max-w-[250px]" title={original.source}>
+                {original.source}
+              </div>)}
+            </div>
+          );
+        },
       }),
       columnHelper.display({
         id: "actions",
@@ -582,6 +603,8 @@ const FilesTable: FC<FilesTableProps> = ({
             setSelectedFile(null);
           }}
           file={selectedFile}
+          allFiles={files}
+          onNavigate={setSelectedFile}
         />
       )}
       {selectedFileType === "image" && (
@@ -590,6 +613,8 @@ const FilesTable: FC<FilesTableProps> = ({
             setSelectedFile(null);
           }}
           file={selectedFile}
+          allFiles={files}
+          onNavigate={setSelectedFile}
         />
       )}
       {selectedFileType === "pdfDocument" && (
@@ -598,6 +623,8 @@ const FilesTable: FC<FilesTableProps> = ({
             setSelectedFile(null);
           }}
           file={selectedFile}
+          allFiles={files}
+          onNavigate={setSelectedFile}
         />
       )}
 

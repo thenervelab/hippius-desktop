@@ -1,13 +1,14 @@
-import React, { ReactNode } from "react";
+import React, { ReactNode, useState, useEffect } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
-import { Video } from "lucide-react";
+import { Video, ChevronLeft, ChevronRight } from "lucide-react";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
+import { getNextViewableFile, getPrevViewableFile } from "@/app/lib/utils/mediaNavigation";
 
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
@@ -28,8 +29,56 @@ export const VideoDialogTrigger: React.FC<{
 
 const VideoDialog: React.FC<{
   file: null | FormattedUserIpfsFile;
+  allFiles: FormattedUserIpfsFile[];
   onCloseClicked: () => void;
-}> = ({ file, onCloseClicked }) => {
+  onNavigate: (file: FormattedUserIpfsFile) => void;
+}> = ({ file, allFiles, onCloseClicked, onNavigate }) => {
+  const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
+
+  // Calculate next and previous files whenever the current file changes
+  useEffect(() => {
+    if (!file) return;
+
+    const next = getNextViewableFile(file, allFiles);
+    const prev = getPrevViewableFile(file, allFiles);
+
+    setNextFile(next);
+    setPrevFile(prev);
+  }, [file, allFiles]);
+
+  const handleNext = () => {
+    if (nextFile) {
+      onNavigate(nextFile);
+    }
+  };
+
+  const handlePrev = () => {
+    if (prevFile) {
+      onNavigate(prevFile);
+    }
+  };
+
+  // Handle keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!file) return;
+
+      if (e.key === "ArrowRight" && nextFile) {
+        handleNext();
+      } else if (e.key === "ArrowLeft" && prevFile) {
+        handlePrev();
+      } else if (e.key === "Escape") {
+        onCloseClicked();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [file, nextFile, prevFile]);
+
   return (
     <Dialog.Root
       open={!!file}
@@ -44,9 +93,7 @@ const VideoDialog: React.FC<{
           <Dialog.Content className="h-full max-w-screen-1.5xl max-h-[90vh] text-grey-10 w-full flex flex-col">
             {(() => {
               if (file) {
-                const videoUrl = `https://get.hippius.network/ipfs/${decodeHexCid(
-                  file.cid
-                )}`;
+                const videoUrl = `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`;
                 const { fileFormat } = getFilePartsFromFileName(file.name);
 
                 return (
@@ -77,13 +124,9 @@ const VideoDialog: React.FC<{
                           </button>
                           <button
                             onClick={() => {
-                              navigator.clipboard
-                                .writeText(videoUrl)
-                                .then(() => {
-                                  toast.success(
-                                    "Copied to clipboard successfully!"
-                                  );
-                                });
+                              navigator.clipboard.writeText(videoUrl).then(() => {
+                                toast.success("Copied to clipboard successfully!");
+                              });
                             }}
                             className="size-9 border hover:opacity-40 duration-300 border-grey-8 flex items-center justify-center rounded"
                           >
@@ -98,7 +141,30 @@ const VideoDialog: React.FC<{
                         </div>
                       </div>
                     </div>
-                    <div className="border-4 animate-scale-in-95-0.4 shadow-dialog bg-white bottom-0 grow flex w-full flex-col top-8 border-grey-80 bg-background-1 rounded-[8px] overflow-hidden relative data-[state=open]:animate-scale-in-95-0.4">
+
+                    {/* Left navigation button */}
+                    {prevFile && (
+                      <button
+                        onClick={handlePrev}
+                        className="absolute left-5 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        aria-label="Previous video"
+                      >
+                        <ChevronLeft className="size-7 text-grey-30" />
+                      </button>
+                    )}
+
+                    {/* Right navigation button */}
+                    {nextFile && (
+                      <button
+                        onClick={handleNext}
+                        className="absolute right-5 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        aria-label="Next video"
+                      >
+                        <ChevronRight className="size-7 text-grey-30" />
+                      </button>
+                    )}
+
+                    <div className="border-4 animate-scale-in-95-0.4 shadow-dialog bg-white bottom-0 grow flex w-full h-full flex-col top-8 border-grey-80 bg-background-1 rounded-[8px] overflow-hidden relative data-[state=open]:animate-scale-in-95-0.4">
                       <VideoPlayer
                         videoUrl={videoUrl}
                         fileFormat={fileFormat}

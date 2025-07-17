@@ -1,11 +1,12 @@
-import React, { ReactNode } from "react";
+import React, { ReactNode, useState, useEffect } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import { Image as LucideImage } from "lucide-react";
+import { ChevronLeft, ChevronRight, Image as LucideImage } from "lucide-react";
+import { getNextViewableFile, getPrevViewableFile } from "@/app/lib/utils/mediaNavigation";
 
 export const PdfDialogTrigger: React.FC<{
   children: ReactNode;
@@ -26,8 +27,56 @@ export const PdfDialogTrigger: React.FC<{
 
 const PdfDialog: React.FC<{
   file: null | FormattedUserIpfsFile;
+  allFiles: FormattedUserIpfsFile[];
   onCloseClicked: () => void;
-}> = ({ file, onCloseClicked }) => {
+  onNavigate: (file: FormattedUserIpfsFile) => void;
+}> = ({ file, allFiles, onCloseClicked, onNavigate }) => {
+  const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
+
+  // Calculate next and previous files whenever the current file changes
+  useEffect(() => {
+    if (!file) return;
+
+    const next = getNextViewableFile(file, allFiles);
+    const prev = getPrevViewableFile(file, allFiles);
+
+    setNextFile(next);
+    setPrevFile(prev);
+  }, [file, allFiles]);
+
+  const handleNext = () => {
+    if (nextFile) {
+      onNavigate(nextFile);
+    }
+  };
+
+  const handlePrev = () => {
+    if (prevFile) {
+      onNavigate(prevFile);
+    }
+  };
+
+  // Handle keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!file) return;
+
+      if (e.key === "ArrowRight" && nextFile) {
+        handleNext();
+      } else if (e.key === "ArrowLeft" && prevFile) {
+        handlePrev();
+      } else if (e.key === "Escape") {
+        onCloseClicked();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [file, nextFile, prevFile]);
+
   return (
     <Dialog.Root
       open={!!file}
@@ -42,9 +91,7 @@ const PdfDialog: React.FC<{
           <Dialog.Content className="h-full max-w-screen-1.5xlˆ text-grey-10 w-full flex flex-col items-center">
             {(() => {
               if (file) {
-                const pdfUrl = `https://get.hippius.network/ipfs/${decodeHexCid(
-                  file.cid
-                )}`;
+                const pdfUrl = `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`;
 
                 return (
                   <>
@@ -75,9 +122,7 @@ const PdfDialog: React.FC<{
                           <button
                             onClick={() => {
                               navigator.clipboard.writeText(pdfUrl).then(() => {
-                                toast.success(
-                                  "Copied to clipboard successfully!"
-                                );
+                                toast.success("Copied to clipboard successfully!");
                               });
                             }}
                             className="size-9 border hover:opacity-40 duration-300 border-grey-8 flex items-center justify-center rounded"
@@ -93,6 +138,29 @@ const PdfDialog: React.FC<{
                         </div>
                       </div>
                     </div>
+
+                    {/* Left navigation button */}
+                    {prevFile && (
+                      <button
+                        onClick={handlePrev}
+                        className="absolute left-5 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        aria-label="Previous PDF"
+                      >
+                        <ChevronLeft className="size-7 text-grey-30" />
+                      </button>
+                    )}
+
+                    {/* Right navigation button */}
+                    {nextFile && (
+                      <button
+                        onClick={handleNext}
+                        className="absolute right-5 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        aria-label="Next PDF"
+                      >
+                        <ChevronRight className="size-7 text-grey-30" />
+                      </button>
+                    )}
+
                     <div
                       onClick={onCloseClicked}
                       className="w-full h-full flex items-center justify-center"

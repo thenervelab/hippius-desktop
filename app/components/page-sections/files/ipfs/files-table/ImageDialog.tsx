@@ -1,14 +1,23 @@
 /* eslint-disable @next/next/no-img-element */
-import React, { ReactNode, useState } from "react";
+import React, { ReactNode, useState, useEffect } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import { Loader2, Image as LucideImage } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  Image as LucideImage,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
+import {
+  getNextViewableFile,
+  getPrevViewableFile,
+} from "@/app/lib/utils/mediaNavigation";
 
 export const ImageDialogTrigger: React.FC<{
   children: ReactNode;
@@ -29,9 +38,58 @@ export const ImageDialogTrigger: React.FC<{
 
 const ImageDialog: React.FC<{
   file: null | FormattedUserIpfsFile;
+  allFiles: FormattedUserIpfsFile[];
   onCloseClicked: () => void;
-}> = ({ file, onCloseClicked }) => {
+  onNavigate: (file: FormattedUserIpfsFile) => void;
+}> = ({ file, allFiles, onCloseClicked, onNavigate }) => {
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
+
+  // Calculate next and previous files whenever the current file changes
+  useEffect(() => {
+    if (!file) return;
+
+    const next = getNextViewableFile(file, allFiles);
+    const prev = getPrevViewableFile(file, allFiles);
+
+    setNextFile(next);
+    setPrevFile(prev);
+    setImageLoaded(false);
+  }, [file, allFiles]);
+
+  const handleNext = () => {
+    if (nextFile) {
+      onNavigate(nextFile);
+    }
+  };
+
+  const handlePrev = () => {
+    if (prevFile) {
+      onNavigate(prevFile);
+    }
+  };
+
+  // Handle keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!file) return;
+
+      if (e.key === "ArrowRight" && nextFile) {
+        handleNext();
+      } else if (e.key === "ArrowLeft" && prevFile) {
+        handlePrev();
+      } else if (e.key === "Escape") {
+        onCloseClicked();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [file, nextFile, prevFile]);
+
   return (
     <Dialog.Root
       open={!!file}
@@ -99,6 +157,29 @@ const ImageDialog: React.FC<{
                         </div>
                       </div>
                     </div>
+
+                    {/* Left navigation button */}
+                    {prevFile && (
+                      <button
+                        onClick={handlePrev}
+                        className="absolute left-5 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        aria-label="Previous image"
+                      >
+                        <ChevronLeft className="size-7 text-grey-30" />
+                      </button>
+                    )}
+
+                    {/* Right navigation button */}
+                    {nextFile && (
+                      <button
+                        onClick={handleNext}
+                        className="absolute right-5 top-1/2 -translate-y-1/2 z-10 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        aria-label="Next image"
+                      >
+                        <ChevronRight className="size-7 text-grey-30" />
+                      </button>
+                    )}
+
                     <div
                       onClick={onCloseClicked}
                       className="w-full h-full flex items-center justify-center"
