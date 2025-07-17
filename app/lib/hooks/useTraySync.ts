@@ -3,6 +3,7 @@ import { TrayIcon } from "@tauri-apps/api/tray";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { resolveResource } from "@tauri-apps/api/path";
 
 const TRAY_ID = "hippius-tray";
 const QUIT_ID = "quit";
@@ -18,6 +19,7 @@ export function useTrayInit() {
     if (menuPromise) return;
 
     menuPromise = (async () => {
+      const iconPath = await resolveResource("icons/trayIcon.png");
       const quit = await MenuItem.new({
         id: QUIT_ID,
         text: "Quit Hippius",
@@ -30,7 +32,7 @@ export function useTrayInit() {
 
       await TrayIcon.new({
         id: TRAY_ID,
-        icon: "icons/trayIcon.png",
+        icon: iconPath,
         iconAsTemplate: false,
         tooltip: "Hippius Cloud",
         menu,

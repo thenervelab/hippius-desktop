@@ -39,6 +39,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["icons", "icons/icon.png"]
+    "resources": ["icons", "icons/icon.png", "icons/trayIcon.png"]
   }
 }

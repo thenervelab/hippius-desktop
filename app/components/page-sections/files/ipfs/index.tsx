@@ -6,6 +6,7 @@ import { RefreshButton, Icons, SearchInput, WaitAMoment } from "@/components/ui"
 import AddButton from "./AddFileButton";
 import FilesTable from "./files-table";
 import CardView from "./card-view";
+
 import { cn } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import FileDetailsDialog, { FileDetail } from "./files-table/UnpinFilesDialog";

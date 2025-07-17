@@ -116,9 +116,6 @@ export function WalletAuthProvider({
             accountId: pair.address,
             seedPhrase: inputMnemonic,
           });
-          await invoke("start_user_storage_requests_sync_tauri", {
-            accountId: pair.address,
-          });
           syncInitialized.current = true;
           console.log("[WalletAuth] Sync commands started successfully");
         } catch (error) {

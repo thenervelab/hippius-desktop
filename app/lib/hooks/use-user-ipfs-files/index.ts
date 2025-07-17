@@ -85,6 +85,7 @@ export const useUserIpfsFiles = () => {
                 });
 
                 console.log("Fetched files from DB:", dbFiles);
+                console.log("Number of files fetched:", dbFiles.length);
                 console.log(dbFiles[0].minerIds)
 
                 // Format the data to match what the UI expects
