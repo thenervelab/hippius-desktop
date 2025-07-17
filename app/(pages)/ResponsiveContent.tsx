@@ -14,11 +14,11 @@ export default function ResponsiveContent({
   const [collapsed] = useAtom(sidebarCollapsedAtom);
 
   return (
-    <div className="flex flex-col flex-grow">
+    <div className="grid w-full">
       <main
         className={cn(
-          "flex-grow p-4 transition-all duration-300 ease-in-out",
-          collapsed ? "ml-[60px]" : "ml-[161px]"
+          " p-4 transition-all duration-300 ease-in-out",
+          collapsed ? "ml-[60px]" : "ml-[181px]"
         )}
       >
         <div className=" bg-white z-10 justify-between flex ">
@@ -28,7 +28,7 @@ export default function ResponsiveContent({
             <ProfileCard />
           </div>
         </div>
-        {children}
+        <div className="w-full">{children}</div>
       </main>
     </div>
   );

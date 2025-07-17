@@ -135,3 +135,51 @@ pub async fn storage_unpin_request_tauri(
 pub fn get_sync_path() -> String {
     crate::constants::substrate::SYNC_PATH.to_string()
 }
+
+#[tauri::command]
+pub async fn transfer_balance_tauri(
+    sender_seed: String,
+    recipient_address: String,
+    amount: String, // as string for frontend compatibility
+) -> Result<String, String> {
+    use subxt::tx::PairSigner;
+    use sp_core::{Pair, sr25519, crypto::Ss58Codec};
+    use crate::substrate_client::get_substrate_client;
+
+    // Parse the string to u128
+    let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {}", e))?;
+
+    // Create signer from sender's seed
+    let pair = sr25519::Pair::from_string(&sender_seed, None)
+        .map_err(|e| format!("Failed to create signer pair: {e:?}"))?;
+    let signer = PairSigner::new(pair);
+
+    // Parse recipient address
+    let recipient = sp_core::crypto::AccountId32::from_ss58check(&recipient_address)
+        .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
+
+    // Get API client
+    let api = get_substrate_client()
+        .await
+        .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
+
+    // Use the generated call for transfer_keep_alive
+    let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
+
+    println!("[Substrate] Submitting balance transfer transaction...");
+    let tx_hash = api
+        .tx()
+        .sign_and_submit_then_watch_default(&tx, &signer)
+        .await
+        .map_err(|e| format!("Failed to submit transaction: {}", e))?
+        .wait_for_finalized_success()
+        .await
+        .map_err(|e| format!("Transaction failed: {}", e))?
+        .extrinsic_hash();
+
+    println!("[Substrate] Transfer submitted with hash: {:?}", tx_hash);
+
+    Ok(format!(
+        "✅ Transfer submitted successfully!\n📦 Finalized in block: {tx_hash}"
+    ))
+}

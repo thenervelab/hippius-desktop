@@ -97,7 +97,9 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
     <div className="w-full  relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
       <div
         className={cn(
-          "border relative border-grey-80 overflow-hidden rounded-xl w-full h-full flex",
+          "border relative border-grey-80 overflow-hidden rounded-xl  h-full ",
+          "grid",
+          "grid-cols-[auto_minmax(0,1fr)]",
           className
         )}
       >
@@ -185,7 +187,11 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
             </CardButton>
           </div>
         </div>
-        <BalanceTrends chartData={chartData} isLoading={isChartDataLoading} />
+        <BalanceTrends
+          className="min-w-0"
+          chartData={chartData}
+          isLoading={isChartDataLoading}
+        />
       </div>
     </div>
   );

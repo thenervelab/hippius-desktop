@@ -45,17 +45,9 @@ export function useFilesNotification() {
         //   `Sync Staus: ${status.percent}% : ${status.in_progress ? "In Progress" : "Completed"}`
         // );
         if (status.in_progress) {
-          console.log("in percentage");
-
           await setTraySyncPercent(status.percent); // 0–100
         } else if (status.percent === 100) {
-          console.log("in percentage");
-
           await setTraySyncPercent(100); // Completed
-        } else {
-          console.log("in null");
-
-          await setTraySyncPercent(null); // Hide item
         }
         // Check if sync was previously in progress
         if (status.in_progress) {

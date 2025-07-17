@@ -22,7 +22,7 @@ const FooterNavItem: React.FC<FooterNavItemProps> = ({
     <div
       className={cn(
         " transition-all  duration-300  relative group cursor-pointer",
-        "hover:bg-gray-100 hover:text-red-600 text-error-80",
+        "hover:bg-gray-100 hover:text-red-500 text-error-60",
         className
       )}
       onClick={() => logout()}

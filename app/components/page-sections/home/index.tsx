@@ -13,6 +13,8 @@ import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
 
+import Ipfs from "../files/ipfs";
+
 type IpfsInfo = {
   ID?: string;
   Addresses?: string[];
@@ -121,7 +123,7 @@ const Home: React.FC = () => {
       {/* Stats Cards */}
       <DetailList ipfsInfo={ipfsInfo} upload={upload} download={download} />
 
-      <div className="flex gap-4 mt-6 w-full h-full">
+      <div className="gap-4 mt-6 w-full h-full grid grid-cols-1 md:grid-cols-2">
         <CreditUsageTrends
           chartData={transformedCreditsData}
           isLoading={isLoadingCredits}
@@ -130,6 +132,9 @@ const Home: React.FC = () => {
           chartData={transformedFilesData}
           isLoading={isLoadingFiles}
         />
+      </div>
+      <div>
+        <Ipfs isRecentFiles />
       </div>
     </div>
   );

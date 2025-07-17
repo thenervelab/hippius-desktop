@@ -64,8 +64,7 @@ pub fn decode_file_hash(file_hash_bytes: &[u8]) -> Result<String, String> {
 }
 
 /// Combined sync function for user profiles and storage requests
-pub fn start_user_sync(_account_id: &str) {
-    let account_id = "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2";
+pub fn start_user_sync(account_id: &str) {
     // Check if this account is already syncing
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
@@ -370,8 +369,7 @@ pub fn start_user_sync(_account_id: &str) {
 }
 
 #[tauri::command]
-pub async fn get_user_synced_files(_owner: String) -> Result<Vec<UserProfileFile>, String> {
-    let owner = "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2";
+pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>, String> {
     if let Some(pool) = DB_POOL.get() {
         // Fetch all user_profiles records for the owner
         let user_profile_rows = sqlx::query(
@@ -419,7 +417,7 @@ pub async fn get_user_synced_files(_owner: String) -> Result<Vec<UserProfileFile
                         miner_ids: row.get("miner_ids"),
                     };
                     if sync_names_set.contains(&file.file_name) {
-                        file.source = SYNC_PATH.to_string();
+                        file.source = format!("{}/{}", SYNC_PATH, file.file_name);
                     }
                     files.push(file);
                 }

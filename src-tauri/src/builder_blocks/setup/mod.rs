@@ -86,6 +86,17 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             .await
             .unwrap();
 
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS encryption_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key_name TEXT NOT NULL UNIQUE,
+                    key BLOB NOT NULL
+                )"
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
             println!("[Setup] Database initialized successfully");
 
             // Start IPFS daemon
