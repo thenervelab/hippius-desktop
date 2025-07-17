@@ -13,6 +13,8 @@ import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
 
+import Ipfs from "../files/ipfs";
+
 type IpfsInfo = {
   ID?: string;
   Addresses?: string[];
@@ -130,6 +132,9 @@ const Home: React.FC = () => {
           chartData={transformedFilesData}
           isLoading={isLoadingFiles}
         />
+      </div>
+      <div>
+        <Ipfs isRecentFiles />
       </div>
     </div>
   );
