@@ -2,7 +2,7 @@
 
 import { FC } from "react";
 import { cn } from "@/lib/utils";
-import { AddCircle, Refresh, WalletAdd } from "@/components/ui/icons";
+import { Refresh, WalletAdd } from "@/components/ui/icons";
 import * as Typography from "@/components/ui/typography";
 import { AbstractIconWrapper, CardButton, Icons } from "../../ui";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
@@ -79,7 +79,7 @@ const HippiusBalance: FC<WalletBalanceWidgetWithGraphProps> = ({
               onClick={handleOpenConsoleBillingPage}
             >
               <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
-                <AddCircle className="size-4" />
+                <Icons.ArrowRight className="size-4 -rotate-90" />
                 Send Balance
               </div>
             </CardButton>
@@ -88,7 +88,8 @@ const HippiusBalance: FC<WalletBalanceWidgetWithGraphProps> = ({
               onClick={handleOpenConsoleBillingPage}
             >
               <div className="flex items-center gap-2 ">
-                <Icons.Tag2 className="size-4" />
+                <Icons.ArrowRight className="size-4 rotate-90" />
+
                 <span className="flex items-center text-lg font-medium">
                   Recieve Balance
                 </span>
