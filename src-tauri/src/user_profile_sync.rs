@@ -128,6 +128,9 @@ pub fn start_user_sync(_account_id: &str) {
                     }
                     Err(e) => {
                         eprintln!("[UserSync] Failed to get latest storage: {e}");
+                        if e.to_string().contains("background task closed") || e.to_string().contains("Operation timed out") {
+                            crate::substrate_client::clear_substrate_client();
+                        }
                         eprintln!("[UserSync] This might be a connection issue, retrying in 30 seconds...");
                         time::sleep(Duration::from_secs(30)).await;
                     }
