@@ -7,7 +7,7 @@ import AddButton from "./AddFileButton";
 import FilesTable from "./files-table";
 import CardView from "./card-view";
 
-import { cn } from "@/lib/utils";
+import { cn, formatBytesFromBigInt } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import FileDetailsDialog, { FileDetail } from "./files-table/UnpinFilesDialog";
 import InsufficientCreditsDialog from "./InsufficientCreditsDialog";
@@ -20,6 +20,7 @@ import { FileTypes } from "@/lib/types/fileTypes";
 import { filterFiles, generateActiveFilters, ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { enrichFilesWithTimestamps } from "@/lib/utils/blockTimestampUtils";
+import StorageStateList from "./storage-stats";
 
 
 const Ipfs: FC = () => {
@@ -36,6 +37,7 @@ const Ipfs: FC = () => {
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [shouldResetPagination, setShouldResetPagination] = useState(false);
 
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -128,6 +130,14 @@ const Ipfs: FC = () => {
     setActiveFilters(newActiveFilters);
   }, [selectedFileTypes, selectedDate, selectedFileSize]);
 
+  useEffect(() => {
+    setShouldResetPagination(true);
+  }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+
+  const handlePaginationReset = useCallback(() => {
+    setShouldResetPagination(false);
+  }, []);
+
   // Handle removing a filter
   const handleRemoveFilter = (filter: ActiveFilter) => {
     switch (filter.type) {
@@ -161,6 +171,12 @@ const Ipfs: FC = () => {
     setIsFilterOpen(false);
   }, []);
 
+  // Format storage size with proper units
+  const formattedStorageSize = useMemo(() => {
+    if (!data?.totalStorageSize) return "0 B";
+    return formatBytesFromBigInt(data.totalStorageSize);
+  }, [data?.totalStorageSize]);
+
   // Handle resetting filters
   const handleResetFilters = useCallback(() => {
     setSelectedFileTypes([]);
@@ -172,6 +188,7 @@ const Ipfs: FC = () => {
   // Handle search input change
   const handleSearchChange = useCallback((value: string) => {
     setSearchTerm(value);
+    // Signal pagination reset but don't directly change it
   }, []);
 
   // Load the table once on mount and set up interval refresh
@@ -221,6 +238,8 @@ const Ipfs: FC = () => {
         <FilesTable
           showUnpinnedDialog={false}
           files={filteredData}
+          resetPagination={shouldResetPagination}
+          onPaginationReset={handlePaginationReset}
         />
       );
     } else {
@@ -228,6 +247,8 @@ const Ipfs: FC = () => {
         <CardView
           showUnpinnedDialog={false}
           files={filteredData}
+          resetPagination={shouldResetPagination}
+          onPaginationReset={handlePaginationReset}
         />
       );
     }
@@ -235,7 +256,13 @@ const Ipfs: FC = () => {
 
   return (
     <div className="w-full relative mt-6">
-      <div className="flex items-center w-full justify-end gap-6 flex-wrap">
+      <div className="flex items-center w-full justify-between gap-6 flex-wrap">
+        <div className="flex items-center gap-4">
+          <StorageStateList
+            storageUsed={formattedStorageSize}
+            numberOfFiles={data?.length || 0}
+          />
+        </div>
         <div className="flex items-center gap-x-4">
           <RefreshButton
             refetching={isRefetching || isFetching}

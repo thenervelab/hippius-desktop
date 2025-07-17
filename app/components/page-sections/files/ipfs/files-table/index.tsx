@@ -58,11 +58,15 @@ const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
 interface FilesTableProps {
   showUnpinnedDialog?: boolean;
   files: FormattedUserIpfsFile[];
+  resetPagination?: boolean;
+  onPaginationReset?: () => void;
 }
 
 const FilesTable: FC<FilesTableProps> = ({
   showUnpinnedDialog = true,
   files,
+  resetPagination,
+  onPaginationReset,
 }) => {
   const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
@@ -169,8 +173,22 @@ const FilesTable: FC<FilesTableProps> = ({
   }, [handleFiles]);
 
   const filteredData = useMemo(() => files, [files]);
-  const { paginatedData: data, setCurrentPage, currentPage, totalPages } =
-    usePagination(filteredData, 10);
+  const {
+    paginatedData: data,
+    setCurrentPage,
+    currentPage,
+    totalPages
+  } = usePagination(filteredData, 10);
+
+  useEffect(() => {
+    if (resetPagination) {
+      setCurrentPage(1);
+      if (onPaginationReset) {
+        onPaginationReset();
+      }
+    }
+  }, [resetPagination, setCurrentPage, onPaginationReset]);
+
 
   const unpinnedDetails = useMemo(() => {
     if (!showUnpinnedDialog) return [];
@@ -270,7 +288,7 @@ const FilesTable: FC<FilesTableProps> = ({
           const value = cell.getValue();
           if (cell.row.original.tempData) return "...";
           if (value === undefined) return "Unknown";
-          return <div className="text-grey-20 text-base font-medium">{formatBytesFromBigInt(BigInt(value))}</div>;
+          return <div className="text-grey-20 text-base font-medium">{cell.row.original.isAssigned ? formatBytesFromBigInt(BigInt(value)) : "Unknown"}</div>;
         },
       }),
 
@@ -297,7 +315,7 @@ const FilesTable: FC<FilesTableProps> = ({
             const parts = path.split(/[/\\]/).filter(p => p.trim());
 
             if (parts.length >= 2) {
-              return parts[parts.length - 2];
+              return parts[parts.length - 1];
             }
 
             return "Hippius";
