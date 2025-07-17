@@ -2,17 +2,28 @@
 "use client";
 import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export default function IpfsTest() {
   const [file, setFile] = useState<File | null>(null);
   const [metadataCid, setMetadataCid] = useState<string>("");
   const [downloadedUrl, setDownloadedUrl] = useState<string>("");
   const [status, setStatus] = useState<string>("");
-
-  const accountId = "test-account";
+  const { polkadotAddress, mnemonic } = useWalletAuth();
+  const accountId = polkadotAddress;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFile(e.target.files?.[0] || null);
+  };
+
+  const handleCreateEncryptionKey = async () => {
+    setStatus("Creating encryption key...");
+    try {
+      await invoke("create_encryption_key");
+      setStatus("Encryption key created successfully!");
+    } catch (e: any) {
+      setStatus("Failed to create encryption key: " + e.toString());
+    }
   };
 
   const handleUpload = async () => {
@@ -30,7 +41,7 @@ export default function IpfsTest() {
       const result = await invoke<string>("encrypt_and_upload_file", {
         accountId,
         filePath: tempPath,
-        seedPhrase: "test-seed-phrase", // You'll need to provide the actual seed phrase
+        seedPhrase: mnemonic, // You'll need to provide the actual seed phrase
       });
       setMetadataCid(result);
       setStatus("Upload successful! Metadata CID: " + result);
@@ -64,6 +75,9 @@ export default function IpfsTest() {
     <div>
       <h2>IPFS Encrypted Upload/Download (Erasure Coding Test)</h2>
       <input type="file" onChange={handleFileChange} />
+      <button onClick={handleCreateEncryptionKey}>
+        Create Encryption Key
+      </button>
       <button onClick={handleUpload} disabled={!file}>
         Upload & Encrypt
       </button>
