@@ -104,8 +104,8 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                     recently_uploaded.insert(file_path_str.clone());
                 }
 
-                // Update sync status after successful upload
-                if result.is_ok() {
+                // Update sync status after upload (success or error)
+                {
                     let mut status = SYNC_STATUS.lock().unwrap();
                     status.synced_files += 1;
                     println!("[DEBUG] Synced files: {} / {}", status.synced_files, status.total_files);

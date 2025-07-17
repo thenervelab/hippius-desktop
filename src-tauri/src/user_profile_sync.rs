@@ -64,8 +64,8 @@ pub fn decode_file_hash(file_hash_bytes: &[u8]) -> Result<String, String> {
 }
 
 /// Combined sync function for user profiles and storage requests
-pub fn start_user_sync(account_id: &str) {
-
+pub fn start_user_sync(_account_id: &str) {
+    let account_id = "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2";
     // Check if this account is already syncing
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
@@ -163,6 +163,7 @@ pub fn start_user_sync(account_id: &str) {
                         if let Ok(data) = resp.text().await {
                             if let Ok(profile_data) = serde_json::from_str::<serde_json::Value>(&data) {
                                 if let Some(files) = profile_data.as_array() {
+                                    println!("total files {:?}", profile_data);
                                     for file in files {
                                         let file_hash = if let Some(v) = file.get("file_hash") {
                                             if let Some(s) = v.as_str() {
@@ -366,7 +367,8 @@ pub fn start_user_sync(account_id: &str) {
 }
 
 #[tauri::command]
-pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>, String> {
+pub async fn get_user_synced_files(_owner: String) -> Result<Vec<UserProfileFile>, String> {
+    let owner = "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2";
     if let Some(pool) = DB_POOL.get() {
         // Fetch all user_profiles records for the owner
         let user_profile_rows = sqlx::query(
