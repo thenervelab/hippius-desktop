@@ -10,7 +10,7 @@ import { useAtom, useSetAtom } from "jotai";
 import {
   settingsDialogOpenAtom,
   sidebarCollapsedAtom,
-  activeSettingsTabAtom
+  activeSettingsTabAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
 import { InView } from "react-intersection-observer";
 import FooterNavItem from "./footer-nav-items";
@@ -20,7 +20,9 @@ import SettingsDialogContent from "../page-sections/settings/SettingsDialogConte
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useAtom(sidebarCollapsedAtom);
-  const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(settingsDialogOpenAtom);
+  const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(
+    settingsDialogOpenAtom
+  );
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
 
   const toggleSidebar = () => {
@@ -28,7 +30,7 @@ const Sidebar: React.FC = () => {
   };
 
   const openSettingsWithDefaultTab = () => {
-    setActiveSettingsTab("Change Passcode"); 
+    setActiveSettingsTab("Change Passcode");
     setSettingsDialogOpen(true);
   };
 
@@ -48,7 +50,7 @@ const Sidebar: React.FC = () => {
             ref={ref}
             className={cn(
               "fixed top-0 left-0 bottom-0 bg-white flex flex-col ml-4 my-4 border border-grey-80 rounded transition-all duration-300 ease-in-out overflow-hidden",
-              collapsed ? "w-[48px]" : "w-[145px]"
+              collapsed ? "w-[48px]" : "w-[165px]"
             )}
           >
             <div className="flex flex-col items-start w-full">
@@ -78,7 +80,7 @@ const Sidebar: React.FC = () => {
               >
                 <Icons.SideBarLeft
                   className={cn(
-                    "size-4 transition-transform duration-300",
+                    "size-4 transition-transform duration-300 text-grey-40",
                     collapsed && "transform rotate-180"
                   )}
                 />
@@ -140,7 +142,7 @@ const Sidebar: React.FC = () => {
             <RevealTextLine
               reveal={inView}
               className={cn(
-                "flex w-full text-xs font-digital text-grey-70 transition-all duration-300",
+                "flex w-full text-xs font-digital text-grey-40 transition-all duration-300",
                 collapsed ? "justify-center p-2" : "px-4 py-2"
               )}
             >
