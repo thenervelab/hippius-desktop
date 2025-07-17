@@ -21,6 +21,7 @@ export default {
         tooltip: "0px 12px 36px 0px rgba(0, 0, 0, 0.14)",
         "banner-scroll": "-4px 0px 0px 0px rgba(31, 81, 190, 0.8) inset",
         menu: "0px 12px 36px 0px #00000024",
+        drop: "0px 12px 25px 0px #00000014",
         "input-shadow": "0px 0px 0px 4px rgba(10, 10, 10, 0.05)",
         "inner-button":
           "0px 4px 4px 0px #0441951A,0px 2px 9px 0px #3D8CFA99 inset",
