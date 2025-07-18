@@ -9,7 +9,7 @@ import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import Warning from "../../ui/icons/Warning";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 
-import SendBalanceDialog from "./SendBalanceDialog";
+import SendBalanceDialog, { TRANSACTION_FEE } from "./SendBalanceDialog";
 import ReceiveBalanceDialog from "./ReceiveBalanceDialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
@@ -19,7 +19,7 @@ interface WalletBalanceWidgetWithGraphProps {
 }
 
 const HippiusBalance: FC<WalletBalanceWidgetWithGraphProps> = ({
-  className,
+  className
 }) => {
   const { data: balanceInfo, isLoading, error, refetch } = useHippiusBalance();
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
@@ -27,13 +27,26 @@ const HippiusBalance: FC<WalletBalanceWidgetWithGraphProps> = ({
   const { mnemonic, polkadotAddress } = useWalletAuth();
 
   const handleSendBalance = () => {
-    // Check if balance is zero or not available yet
-    if (
-      !balanceInfo?.data?.free ||
-      +formatCreditBalance(balanceInfo?.data?.free) <= 0
-    ) {
+    // Check if balance is available
+    if (!balanceInfo?.data?.free) {
+      toast.error("Balance information not available. Please try again later.");
+      return;
+    }
+
+    const currentBalance = +formatCreditBalance(balanceInfo.data.free);
+
+    // Check if balance is zero
+    if (currentBalance <= 0) {
       toast.error(
         "Your balance is zero. Please add funds to your account first."
+      );
+      return;
+    }
+
+    // Check if balance is too low to cover transaction fee
+    if (currentBalance <= parseFloat(TRANSACTION_FEE)) {
+      toast.error(
+        `Your balance (${currentBalance} hALPHA) is too low to cover the transaction fee (${TRANSACTION_FEE} hALPHA). Please add funds to your account first.`
       );
       return;
     }

@@ -38,7 +38,7 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
         <div className="px-4">
           {/* Desktop Header */}
           <div className="hidden md:flex flex-col items-center justify-center pb-4 pt-4 gap-2">
-            <div className="flex items-center mb-2">
+            <div className="flex items-center mb-2 p-2">
               <AbstractIconWrapper className="size-8 sm:size-10">
                 <Icons.RecieveSquare className="absolute size-4 sm:size-6 text-primary-50" />
               </AbstractIconWrapper>
