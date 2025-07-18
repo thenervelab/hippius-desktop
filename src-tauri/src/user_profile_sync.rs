@@ -9,7 +9,7 @@ use hex;
 use serde::Serialize;
 use sqlx::FromRow;
 use std::path::Path;
-use std::collections::{HashSet, HashMap};
+use std::collections::HashSet;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use crate::utils::sync::get_private_sync_path;
@@ -46,26 +46,47 @@ fn bounded_vec_to_string(bytes: &[u8]) -> String {
 }
 
 pub fn decode_file_hash(file_hash_bytes: &[u8]) -> Result<String, String> {
-    // Convert the byte slice to a hex string
     let hex_str = String::from_utf8_lossy(file_hash_bytes).to_string();
-
-    // Remove "0x" prefix if present
     let clean_hex = hex_str.trim_start_matches("0x");
-
-    // Decode the hex string into bytes
     let decoded_bytes = hex::decode(clean_hex)
         .map_err(|e| format!("Hex decode error: {}", e))?;
-
-    // Convert bytes to UTF-8 string
     let decoded_str = str::from_utf8(&decoded_bytes)
         .map_err(|e| format!("UTF-8 conversion error: {}", e))?;
-
     Ok(decoded_str.to_string())
+}
+
+/// Download content from IPFS with timeout and size limit
+pub async fn download_content_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client for CID {}: {}", cid, e))?;
+
+    let res = tokio::time::timeout(
+        Duration::from_secs(30),
+        client.post(&format!("{}/api/v0/cat?arg={}", api_url, cid)).send()
+    )
+    .await
+    .map_err(|_| format!("Timeout downloading IPFS content for CID: {}", cid))
+    .and_then(|res| res.map_err(|e| format!("HTTP error for CID {}: {}", cid, e)))?
+    .error_for_status()
+    .map_err(|e| format!("HTTP status error for CID {}: {}", cid, e))?;
+
+    let bytes = res.bytes()
+        .await
+        .map_err(|e| format!("Error reading IPFS response for CID {}: {}", cid, e))?;
+    
+    // Check size limit (1MB)
+    let max_size = 1024 * 1024;
+    if bytes.len() > max_size {
+        return Err(format!("IPFS response for CID {} exceeds size limit of {} bytes", cid, max_size));
+    }
+
+    Ok(bytes.to_vec())
 }
 
 /// Combined sync function for user profiles and storage requests
 pub fn start_user_sync(account_id: &str) {
-    // Check if this account is already syncing
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(account_id) {
@@ -77,10 +98,16 @@ pub fn start_user_sync(account_id: &str) {
 
     let account_id = account_id.to_string();
     tokio::spawn(async move {
-        let client = Client::new();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|e| {
+                eprintln!("[UserSync] Failed to build HTTP client: {}", e);
+                Client::new()
+            });
         let mut retry_count = 0;
         let max_retries = 5;
-        
+
         loop {
             println!("[UserSync] Periodic check: scanning for unsynced data...");
 
@@ -89,18 +116,17 @@ pub fn start_user_sync(account_id: &str) {
                 match get_substrate_client().await {
                     Ok(api) => {
                         println!("[UserSync] Successfully connected to substrate node");
-                        retry_count = 0; // Reset retry count on successful connection
+                        retry_count = 0;
                         break api;
                     }
                     Err(e) => {
                         retry_count += 1;
-                        let wait_time = std::cmp::min(30 * retry_count, 300); // Max 5 minutes
+                        let wait_time = std::cmp::min(30 * retry_count, 300);
                         eprintln!("[UserSync] Failed to get substrate client (attempt {}/{}): {e}", retry_count, max_retries);
-                        
                         if retry_count >= max_retries {
                             eprintln!("[UserSync] Max retries reached, waiting 5 minutes before trying again");
                             time::sleep(Duration::from_secs(300)).await;
-                            retry_count = 0; // Reset for next cycle
+                            retry_count = 0;
                         } else {
                             eprintln!("[UserSync] Retrying in {} seconds...", wait_time);
                             time::sleep(Duration::from_secs(wait_time as u64)).await;
@@ -127,18 +153,14 @@ pub fn start_user_sync(account_id: &str) {
                     }
                     Err(e) => {
                         eprintln!("[UserSync] Failed to get latest storage: {e}");
-                        if e.to_string().contains("background task closed") || e.to_string().contains("Operation timed out") {
-                            crate::substrate_client::clear_substrate_client();
-                        }
-                        eprintln!("[UserSync] This might be a connection issue, retrying in 30 seconds...");
+                        eprintln!("[UserSync] Retrying in 30 seconds...");
                         time::sleep(Duration::from_secs(30)).await;
                     }
                 }
             };
 
-            // Collect all records to insert, ensuring no duplicates
             let mut records_to_insert: Vec<UserProfileFile> = Vec::new();
-            let mut seen_files: HashSet<(String, String)> = HashSet::new(); // Track (file_hash, file_name)
+            let mut seen_files: HashSet<(String, String)> = HashSet::new();
 
             // Step 1: Fetch and parse user profile data
             let profile_res = storage
@@ -185,12 +207,7 @@ pub fn start_user_sync(account_id: &str) {
                                         let main_req_hash = file.get("main_req_hash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                                         let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                                         let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
-                                        let file_in_sync_folder = Path::new(&get_private_sync_path().await).join(&file_name);
-                                        let source_value = if file_in_sync_folder.exists() {
-                                            format!("{}/{}", &get_private_sync_path().await, file_name)                                            
-                                        } else {
-                                            "Hippius".to_string()
-                                        };
+                                        let source_value = "Hippius".to_string();
 
                                         let miner_ids_json = if let Some(miner_ids) = file.get("miner_ids").and_then(|v| v.as_array()) {
                                             let ids: Vec<String> = miner_ids.iter().filter_map(|id| id.as_str().map(|s| s.to_string())).collect();
@@ -252,19 +269,63 @@ pub fn start_user_sync(account_id: &str) {
                     Ok(StorageKeyValuePair { value, .. }) => {
                         if let Some(storage_request) = value {
                             if storage_request.owner == account {
-                                let file_hash = bounded_vec_to_string(&storage_request.file_hash.0);
+                                let file_hash_raw = bounded_vec_to_string(&storage_request.file_hash.0);
                                 let decoded_hash = decode_file_hash(&storage_request.file_hash.0)
                                     .unwrap_or_else(|_| "Invalid file hash".to_string());
+                                let mut file_hash = file_hash_raw.clone();
                                 let mut file_size_in_bytes = 0;
+
                                 if decoded_hash != "Invalid file hash" {
-                                    match crate::ipfs::get_ipfs_file_size(&decoded_hash).await {
-                                        Ok(size) => {
-                                            println!("[UserSync] IPFS file size for {}: {} bytes", decoded_hash, size);
-                                            file_size_in_bytes = size as i64; // Safe conversion since u64 to i64 for reasonable file sizes
-                                        },
-                                        Err(e) => eprintln!("[UserSync] Failed to fetch IPFS file size for {}: {}", decoded_hash, e),
+                                    let api_url = "http://127.0.0.1:5001";
+                                    println!("[UserSync] Attempting to download IPFS content for CID: {}", decoded_hash);
+                                    match crate::utils::ipfs::download_content_from_ipfs(&api_url, &decoded_hash).await {
+                                        Ok(json_bytes) => {
+                                            let json_str = match String::from_utf8(json_bytes) {
+                                                Ok(s) => s,
+                                                Err(e) => {
+                                                    eprintln!("[UserSync] Failed to convert IPFS bytes to string for {}: {}", decoded_hash, e);
+                                                    continue;
+                                                }
+                                            };
+                                            let json_value: serde_json::Value = match serde_json::from_str(&json_str) {
+                                                Ok(v) => v,
+                                                Err(e) => {
+                                                    eprintln!("[UserSync] Failed to parse JSON from IPFS for {}: {}", decoded_hash, e);
+                                                    continue;
+                                                }
+                                            };
+                                            let cid = match json_value.get(0)
+                                                .and_then(|v| v.get("cid"))
+                                                .and_then(|v| v.as_str()) {
+                                                Some(cid) => cid,
+                                                None => {
+                                                    eprintln!("[UserSync] CID not found in JSON for decoded hash: {}", decoded_hash);
+                                                    continue;
+                                                }
+                                            };
+                                            match tokio::time::timeout(
+                                                Duration::from_secs(30),
+                                                crate::ipfs::get_ipfs_file_size(cid)
+                                            ).await {
+                                                Ok(Ok(size)) => {
+                                                    println!("[UserSync] IPFS file size for {}: {} bytes", cid, size);
+                                                    file_hash = hex::encode(cid.as_bytes());
+                                                    file_size_in_bytes = size as i64;
+                                                }
+                                                Ok(Err(e)) => {
+                                                    eprintln!("[UserSync] Failed to fetch IPFS file size for {}: {}", cid, e);
+                                                }
+                                                Err(_) => {
+                                                    eprintln!("[UserSync] Timeout fetching IPFS file size for {}", cid);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("[UserSync] Failed to download from IPFS for {}: {}", decoded_hash, e);
+                                        }
                                     }
                                 }
+
                                 let file_name = bounded_vec_to_string(&storage_request.file_name.0);
                                 let owner_ss58 = format!("{}", storage_request.owner);
                                 let validator_ss58 = format!("{}", storage_request.selected_validator);
@@ -281,16 +342,16 @@ pub fn start_user_sync(account_id: &str) {
 
                                 let file_key = (file_hash.clone(), file_name.clone());
                                 if seen_files.insert(file_key) {
-                                    println!("[UserSync] Adding storage request file: {}", file_hash.clone());
+                                    println!("[UserSync] Adding storage request file: {}, size {:?}", file_hash, file_size_in_bytes);
                                     records_to_insert.push(UserProfileFile {
                                         owner: owner_ss58,
                                         cid: file_hash.clone(),
-                                        file_hash: file_hash.clone(),
+                                        file_hash,
                                         file_name,
                                         file_size_in_bytes,
                                         is_assigned: storage_request.is_assigned,
                                         last_charged_at: storage_request.last_charged_at as i64,
-                                        main_req_hash: file_hash,
+                                        main_req_hash: file_hash_raw,
                                         selected_validator: validator_ss58,
                                         total_replicas: storage_request.total_replicas as i64,
                                         block_number,
@@ -303,14 +364,13 @@ pub fn start_user_sync(account_id: &str) {
                         }
                     }
                     Err(e) => {
-                        eprintln!("[UserSync] Error decoding storage request entry: {e}");
+                        eprintln!("[UserSync] Error decoding storage request entry: {:#?}", e);
                     }
                 }
             }
 
             // Step 3: Clear the entire user_profiles table and insert records
             if let Some(pool) = DB_POOL.get() {
-                // Clear all records from user_profiles
                 match sqlx::query("DELETE FROM user_profiles")
                     .execute(pool)
                     .await
@@ -324,7 +384,6 @@ pub fn start_user_sync(account_id: &str) {
                 }
 
                 println!("[UserSync] Total records inserted: {}", records_to_insert.len());
-                // Insert all collected records
                 for record in records_to_insert {
                     let insert_result = sqlx::query(
                         "INSERT INTO user_profiles (
@@ -357,10 +416,8 @@ pub fn start_user_sync(account_id: &str) {
                         );
                     }
                 }
-
             }
 
-            // Wait 2 minutes before the next sync
             time::sleep(Duration::from_secs(120)).await;
         }
     });
@@ -369,7 +426,6 @@ pub fn start_user_sync(account_id: &str) {
 #[tauri::command]
 pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>, String> {
     if let Some(pool) = DB_POOL.get() {
-        // Fetch all user_profiles records for the owner
         let user_profile_rows = sqlx::query(
             r#"
             SELECT owner, cid, file_hash, file_name,
@@ -384,7 +440,6 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
         .fetch_all(pool)
         .await;
 
-        // Fetch all file_names from sync_folder_files for this owner
         let sync_file_names = sqlx::query(
             "SELECT file_name FROM sync_folder_files WHERE owner = ?"
         )
@@ -428,7 +483,6 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
         Err("DB not initialized".to_string())
     }
 }
-
 
 #[tauri::command]
 pub async fn start_user_profile_sync_tauri(account_id: String) {

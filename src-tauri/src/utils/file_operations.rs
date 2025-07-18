@@ -16,6 +16,7 @@ pub async fn request_file_storage(
     api_url: &str,
     seed_phrase: &str,
 ) -> Result<String, String> {
+    println!("orignal file hash is :{}", file_cid);
     // 1. Create the JSON
     let json = serde_json::json!([{
         "filename": file_name,
@@ -144,7 +145,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             0
         }
     };
-
+    println!("copy sync folder file size in bytes is : {}", file_size_in_bytes);
     if let Some(pool) = crate::DB_POOL.get() {
         // Check if file already exists in user_profiles for this account
         let exists: Option<(String,)> = sqlx::query_as(
@@ -161,13 +162,14 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids
-                ) VALUES (?, '', ?, ?, ?, ?, 0, '', '', 0, 0, '', '', '')"
+                ) VALUES (?, '', ?, ?, ?, ?, 0, '', '', 0, 0, '', ?, '')"
             )
             .bind(account_id)
             .bind(&file_hash)
             .bind(&file_name)
             .bind(file_size_in_bytes)
             .bind(false)
+            .bind(file_size_in_bytes)
             .execute(pool)
             .await;
         }
