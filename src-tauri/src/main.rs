@@ -16,6 +16,7 @@ use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
+    upload_file_public, download_file_public,
 };
 use commands::accounts::{create_encryption_key, get_encryption_keys };
 use utils::file_operations::delete_and_unpin_file_by_name;
@@ -41,6 +42,8 @@ fn main() {
             get_current_setup_phase,
             encrypt_and_upload_file,
             download_and_decrypt_file,
+            upload_file_public,
+            download_file_public,
             write_file,
             read_file,
             get_sync_path,

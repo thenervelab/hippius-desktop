@@ -112,7 +112,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
 
         // Remove from sync folder as well
         // We don't have account_id here, so pass empty string or refactor if needed
-        crate::utils::file_operations::remove_file_from_sync_and_db(file_name, "").await;
+        crate::utils::file_operations::remove_file_from_sync_and_db(file_name);
 
         // Calculate total rows affected
         let total_deleted = result1.rows_affected() + result2.rows_affected();
@@ -201,7 +201,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
     }
 }
 
-pub async fn remove_file_from_sync_and_db(file_name: &str, account_id: &str) {
+pub async fn remove_file_from_sync_and_db(file_name: &str) {
     use std::fs;
     // Remove from sync folder
     let sync_folder = PathBuf::from(get_private_sync_path().await);
@@ -213,9 +213,8 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, account_id: &str) {
     }
     // Remove from DB
     if let Some(pool) = crate::DB_POOL.get() {
-        if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND owner = ?")
+        if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
             .bind(file_name)
-            .bind(account_id)
             .execute(pool)
             .await {
             eprintln!("Failed to remove file from sync_folder_files DB: {}", e);

@@ -298,3 +298,74 @@ pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
 pub fn read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn upload_file_public(
+    account_id: String,
+    file_path: String,
+    seed_phrase: String
+) -> Result<String, String> {
+    use std::path::Path;
+    println!("[upload_file_public] file path is {:?}", file_path.clone());    
+    let api_url = "http://127.0.0.1:5001";
+    
+    // Extract file name from file_path
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
+
+    // Check if file already exists in DB for this account
+    if let Some(pool) = DB_POOL.get() {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+        )
+        .bind(&account_id)
+        .bind(&file_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error: {e}"))?;
+        if row.is_some() {
+            return Err(format!("File '{}' already exists for this user.", file_name));
+        }
+    }
+
+    // Upload file directly to IPFS
+    let file_cid = upload_to_ipfs(api_url, &file_path)
+        .map_err(|e| format!("Upload error: {}", e))?;
+
+    println!("[upload_file_public] File CID: {}", file_cid);
+
+    // Call request_file_storage and log its returned CID
+    let storage_result = request_file_storage(&file_name, &file_cid, api_url, &seed_phrase).await;
+    match &storage_result {
+        Ok(res) => {
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id, &file_cid, &res).await;
+            println!("[upload_file_public] Storage request result: {}", res);
+        },
+        Err(e) => println!("[upload_file_public] Storage request error: {}", e),
+    }
+
+    Ok(file_cid)
+}
+
+#[tauri::command]
+pub async fn download_file_public(
+    file_cid: String,
+    output_file: String,
+) -> Result<(), String> {
+    let api_url = "http://127.0.0.1:5001";
+    
+    println!("[download_file_public] Downloading file with CID: {} to: {}", file_cid, output_file);
+    
+    // Download file directly from IPFS
+    let file_data = download_from_ipfs(&api_url, &file_cid)
+        .map_err(|e| format!("Failed to download file from IPFS: {}", e))?;
+    
+    // Save to output file
+    std::fs::write(&output_file, file_data)
+        .map_err(|e| format!("Failed to write file to {}: {}", output_file, e))?;
+    
+    println!("[download_file_public] Successfully downloaded file to: {}", output_file);
+    Ok(())
+}
