@@ -57,6 +57,14 @@ const Login = () => {
             </Link>
           </div>
         </RevealTextLine>
+        <RevealTextLine rotate reveal={true} className="delay-500">
+          <div className="w-full items-start justify-start flex mt-2 text-grey-50 gap-1">
+            Do you have a backup?{" "}
+            <Link href="/restore-backup">
+              <b className="text-grey-10">Restore Backup</b>
+            </Link>
+          </div>
+        </RevealTextLine>
         <RevealTextLine rotate reveal={true} className="delay-300">
           <p className="text-xs mt-2 text-grey-60 font-medium w-full">
             By continuing, you agree to our{" "}
