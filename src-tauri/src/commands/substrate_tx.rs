@@ -6,6 +6,10 @@ use serde::Deserialize;
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
 use sp_core::crypto::Ss58Codec;
+use crate::DB_POOL;
+use chrono::Utc;
+use serde::Serialize;
+use sqlx::Row;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -48,6 +52,18 @@ impl From<FileInputWrapper> for FileInput {
             file_name: wrapper.file_name,
         }
     }
+}
+
+#[derive(Deserialize, Debug)]
+pub struct SetSyncPathParams {
+    pub path: String,
+    pub is_public: bool,
+}
+
+#[derive(Serialize, Debug)]
+pub struct SyncPathResult {
+    pub path: String,
+    pub is_public: bool,
 }
 
 pub static SUBSTRATE_TX_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -132,9 +148,29 @@ pub async fn storage_unpin_request_tauri(
 }
 
 #[tauri::command]
-pub fn get_sync_path() -> String {
-    crate::constants::substrate::SYNC_PATH.to_string()
+pub async fn set_sync_path(params: SetSyncPathParams) -> Result<String, String> {
+    let path_type = if params.is_public { "public" } else { "private" };
+    let timestamp = Utc::now().timestamp();
+    if let Some(pool) = DB_POOL.get() {
+        // Upsert logic: update if exists, else insert
+        let res = sqlx::query(
+            "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
+            ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp"
+        )
+        .bind(&params.path)
+        .bind(path_type)
+        .bind(timestamp)
+        .execute(pool)
+        .await;
+        match res {
+            Ok(_) => Ok(format!("Sync path for '{}' set successfully.", path_type)),
+            Err(e) => Err(format!("Failed to set sync path: {}", e)),
+        }
+    } else {
+        Err("DB_POOL not initialized".to_string())
+    }
 }
+
 
 #[tauri::command]
 pub async fn transfer_balance_tauri(
@@ -182,4 +218,35 @@ pub async fn transfer_balance_tauri(
     Ok(format!(
         "✅ Transfer submitted successfully!\n📦 Finalized in block: {tx_hash}"
     ))
+}
+
+// Add this internal function
+pub async fn get_sync_path_internal(is_public: bool) -> Result<SyncPathResult, String> {
+    let path_type = if is_public { "public" } else { "private" };
+    if let Some(pool) = DB_POOL.get() {
+        let rec = sqlx::query("SELECT path FROM sync_paths WHERE type = ?")
+            .bind(path_type)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("DB error: {}", e))?;
+        let path = if let Some(row) = rec {
+            row.get::<String, _>("path")
+        } else {
+            // fallback to constant
+            if is_public {
+                crate::constants::substrate::SYNC_PATH.to_string()
+            } else {
+                crate::constants::substrate::SYNC_PATH_PRIVATE.to_string()
+            }
+        };
+        Ok(SyncPathResult { path, is_public })
+    } else {
+        Err("DB_POOL not initialized".to_string())
+    }
+}
+
+// Tauri command just calls the internal function
+#[tauri::command]
+pub async fn get_sync_path(is_public: bool) -> Result<SyncPathResult, String> {
+    get_sync_path_internal(is_public).await
 }

@@ -12,7 +12,7 @@ use std::path::Path;
 use std::collections::{HashSet, HashMap};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
-use crate::constants::substrate::SYNC_PATH;
+use crate::utils::sync::get_private_sync_path;
 use subxt::storage::StorageKeyValuePair;
 use serde_json;
 use sqlx::Row;
@@ -165,7 +165,6 @@ pub fn start_user_sync(account_id: &str) {
                         if let Ok(data) = resp.text().await {
                             if let Ok(profile_data) = serde_json::from_str::<serde_json::Value>(&data) {
                                 if let Some(files) = profile_data.as_array() {
-                                    println!("total files {:?}", profile_data);
                                     for file in files {
                                         let file_hash = if let Some(v) = file.get("file_hash") {
                                             if let Some(s) = v.as_str() {
@@ -186,10 +185,9 @@ pub fn start_user_sync(account_id: &str) {
                                         let main_req_hash = file.get("main_req_hash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                                         let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                                         let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
-                                        let sync_folder_path = SYNC_PATH;
-                                        let file_in_sync_folder = Path::new(sync_folder_path).join(&file_name);
+                                        let file_in_sync_folder = Path::new(&get_private_sync_path().await).join(&file_name);
                                         let source_value = if file_in_sync_folder.exists() {
-                                            sync_folder_path.to_string()
+                                            format!("{}/{}", &get_private_sync_path().await, file_name)                                            
                                         } else {
                                             "Hippius".to_string()
                                         };
@@ -417,7 +415,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                         miner_ids: row.get("miner_ids"),
                     };
                     if sync_names_set.contains(&file.file_name) {
-                        file.source = format!("{}/{}", SYNC_PATH, file.file_name);
+                        file.source = format!("{}/{}", &get_private_sync_path().await, file.file_name);
                     }
                     files.push(file);
                 }

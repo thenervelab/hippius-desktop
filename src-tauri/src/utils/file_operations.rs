@@ -2,10 +2,10 @@ use crate::commands::substrate_tx::storage_unpin_request_tauri;
 use crate::commands::substrate_tx::FileHashWrapper;
 use crate::commands::substrate_tx::FileInputWrapper;
 use crate::utils::ipfs::pin_json_to_ipfs_local;
+use crate::utils::sync::get_private_sync_path;
 use crate::DB_POOL;
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::constants::substrate::SYNC_PATH;
 use crate::folder_sync::insert_file_if_not_exists;
 use hex;
 use crate::ipfs::get_ipfs_file_size;
@@ -127,7 +127,7 @@ pub async fn delete_and_unpin_file_by_name(
 
 pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str) {
     // Define your sync folder path
-    let sync_folder = PathBuf::from(SYNC_PATH);
+    let sync_folder = PathBuf::from(get_private_sync_path().await);
     let file_name = match original_path.file_name() {
         Some(name) => name.to_string_lossy().to_string(),
         None => return,
@@ -189,9 +189,8 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
 
 pub async fn remove_file_from_sync_and_db(file_name: &str, account_id: &str) {
     use std::fs;
-    use std::path::PathBuf;
     // Remove from sync folder
-    let sync_folder = PathBuf::from(SYNC_PATH);
+    let sync_folder = PathBuf::from(get_private_sync_path().await);
     let sync_file_path = sync_folder.join(file_name);
     if sync_file_path.exists() {
         if let Err(e) = fs::remove_file(&sync_file_path) {
