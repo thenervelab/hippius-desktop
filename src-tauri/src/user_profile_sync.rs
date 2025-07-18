@@ -38,6 +38,7 @@ pub struct UserProfileFile {
     pub profile_cid: String,
     pub source: String,
     pub miner_ids: Option<String>,
+    pub created_at: i64,
 }
 
 /// Decode BoundedVec<u8> into a readable string
@@ -188,6 +189,7 @@ pub fn start_user_sync(account_id: &str) {
                             if let Ok(profile_data) = serde_json::from_str::<serde_json::Value>(&data) {
                                 if let Some(files) = profile_data.as_array() {
                                     for file in files {
+                                        println!("files : {:?}", files);
                                         let file_hash = if let Some(v) = file.get("file_hash") {
                                             if let Some(s) = v.as_str() {
                                                 s.to_string()
@@ -219,6 +221,7 @@ pub fn start_user_sync(account_id: &str) {
                                             .unwrap_or_default();
                                         let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                                         let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
+                                        let created_at = file.get("created_at").and_then(|v| v.as_i64()).unwrap_or(0);
                                         let source_value = "Hippius".to_string();
 
                                         let miner_ids_json = if let Some(miner_ids) = file.get("miner_ids").and_then(|v| v.as_array()) {
@@ -246,6 +249,7 @@ pub fn start_user_sync(account_id: &str) {
                                                 profile_cid: profile_cid.clone(),
                                                 source: source_value,
                                                 miner_ids: Some(miner_ids_json),
+                                                created_at,
                                             });
                                         }
                                     }
@@ -281,6 +285,7 @@ pub fn start_user_sync(account_id: &str) {
                     Ok(StorageKeyValuePair { value, .. }) => {
                         if let Some(storage_request) = value {
                             if storage_request.owner == account {
+                                println!("storage_request {:?}", storage_request);
                                 let file_hash_raw = bounded_vec_to_string(&storage_request.file_hash.0);
                                 let decoded_hash = decode_file_hash(&storage_request.file_hash.0)
                                     .unwrap_or_else(|_| "Invalid file hash".to_string());
@@ -370,6 +375,7 @@ pub fn start_user_sync(account_id: &str) {
                                         profile_cid: "".to_string(),
                                         source: "Hippius".to_string(),
                                         miner_ids: Some(miner_ids_json),
+                                        created_at: storage_request.created_at as i64, // Placeholder, will be updated later
                                     });
                                 }
                             }
@@ -401,8 +407,8 @@ pub fn start_user_sync(account_id: &str) {
                         "INSERT INTO user_profiles (
                             owner, cid, file_hash, file_name, file_size_in_bytes,
                             is_assigned, last_charged_at, main_req_hash,
-                            selected_validator, total_replicas, block_number, profile_cid, source, miner_ids
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                            selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     )
                     .bind(&record.owner)
                     .bind(&record.cid)
@@ -418,6 +424,7 @@ pub fn start_user_sync(account_id: &str) {
                     .bind(&record.profile_cid)
                     .bind(&record.source)
                     .bind(&record.miner_ids)
+                    .bind(record.created_at)
                     .execute(pool)
                     .await;
 
@@ -443,7 +450,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
             SELECT owner, cid, file_hash, file_name,
                    file_size_in_bytes, is_assigned, last_charged_at,
                    main_req_hash, selected_validator,
-                   total_replicas, block_number, profile_cid, source, miner_ids
+                   total_replicas, block_number, profile_cid, source, miner_ids, created_at
               FROM user_profiles
              WHERE owner = ?
             "#
@@ -480,6 +487,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                         profile_cid: row.get("profile_cid"),
                         source: row.get("source"),
                         miner_ids: row.get("miner_ids"),
+                        created_at: row.get("created_at"),
                     };
                     if sync_names_set.contains(&file.file_name) {
                         file.source = format!("{}/{}", &get_private_sync_path().await, file.file_name);

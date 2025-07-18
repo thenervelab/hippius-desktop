@@ -54,7 +54,8 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     profile_cid TEXT,
                     source TEXT,
-                    miner_ids TEXT
+                    miner_ids TEXT,
+                    created_at INTEGER
                 )"
             )
             .execute(&pool)
@@ -71,18 +72,61 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             match source_column_exists {
                 Ok(Some(count)) if count == 0 => {
                     println!("[Setup] Adding 'source' column to user_profiles table");
-                    sqlx::query("ALTER TABLE user_profiles ADD COLUMN source TEXT")
+                    match sqlx::query("ALTER TABLE user_profiles ADD COLUMN source TEXT")
                         .execute(&pool)
-                        .await
-                        .unwrap_or_else(|e| {
-                            eprintln!("[Setup] Failed to add source column: {}", e);
-                        });
+                        .await {
+                        Ok(_) => println!("[Setup] Successfully added 'source' column"),
+                        Err(e) => eprintln!("[Setup] Failed to add source column: {}", e),
+                    }
                 }
                 Ok(Some(_)) => {
                     println!("[Setup] 'source' column already exists in user_profiles table");
                 }
+                Ok(None) => {
+                    println!("[Setup] No result when checking for source column, assuming it doesn't exist");
+                    match sqlx::query("ALTER TABLE user_profiles ADD COLUMN source TEXT")
+                        .execute(&pool)
+                        .await {
+                        Ok(_) => println!("[Setup] Successfully added 'source' column"),
+                        Err(e) => eprintln!("[Setup] Failed to add source column: {}", e),
+                    }
+                }
                 Err(e) => {
                     eprintln!("[Setup] Error checking for source column: {}", e);
+                }
+            }
+
+            // Check if created_at column exists in user_profiles table, add if not
+            let created_at_column_exists: Result<Option<i32>, _> = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pragma_table_info('user_profiles') WHERE name = 'created_at'"
+            )
+            .fetch_optional(&pool)
+            .await;
+
+            match created_at_column_exists {
+                Ok(Some(count)) if count == 0 => {
+                    println!("[Setup] Adding 'created_at' column to user_profiles table");
+                    match sqlx::query("ALTER TABLE user_profiles ADD COLUMN created_at INTEGER")
+                        .execute(&pool)
+                        .await {
+                        Ok(_) => println!("[Setup] Successfully added 'created_at' column"),
+                        Err(e) => eprintln!("[Setup] Failed to add created_at column: {}", e),
+                    }
+                }
+                Ok(Some(_)) => {
+                    println!("[Setup] 'created_at' column already exists in user_profiles table");
+                }
+                Ok(None) => {
+                    println!("[Setup] No result when checking for created_at column, assuming it doesn't exist");
+                    match sqlx::query("ALTER TABLE user_profiles ADD COLUMN created_at INTEGER")
+                        .execute(&pool)
+                        .await {
+                        Ok(_) => println!("[Setup] Successfully added 'created_at' column"),
+                        Err(e) => eprintln!("[Setup] Failed to add created_at column: {}", e),
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[Setup] Error checking for created_at column: {}", e);
                 }
             }
 
