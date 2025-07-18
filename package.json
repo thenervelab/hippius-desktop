@@ -69,6 +69,7 @@
         "react-dom": "^19.1.0",
         "react-icons": "^5.5.0",
         "react-intersection-observer": "^9.16.0",
+        "react-qr-code": "^2.0.18",
         "react-scroll-parallax": "^3.4.5",
         "react-timeago": "^8.2.0",
         "resend": "^4.5.1",

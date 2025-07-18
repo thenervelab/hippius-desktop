@@ -92,80 +92,81 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
 
   const handleOpenConsoleBillingPage = () => openLinkByKey("BILLING");
 
-  console.log("Chart Data:", chartData);
   return (
     <div className="w-full  relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
       <div
         className={cn(
-          "border relative border-grey-80 overflow-hidden rounded-xl  h-full ",
-          "grid",
-          "grid-cols-[auto_minmax(0,1fr)]",
+          " relative gap-4 overflow-hidden   h-[310px] grid grid-cols-[auto_minmax(0,1fr)]",
           className
         )}
       >
-        <div className="w-full pl-4 py-4 relative min-w-[280px] max-w-[300px]">
-          <div className="flex items-start">
-            <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
-              <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
-            </AbstractIconWrapper>
-            <div className="flex flex-col ml-4">
-              <span className="text-base font-medium mb-3 text-grey-60">
-                Total Balance
+        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between relative min-w-[298px] max-w-[300px] ">
+          <div className="flex flex-col w-full items-start">
+            <div className="flex gap-4 items-center">
+              <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
+                <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
+              </AbstractIconWrapper>
+              <span className="text-base font-medium  text-grey-60">
+                Total Credits
               </span>
-              <div className="text-2xl mb-1 font-medium text-grey-10">
-                {credits !== undefined
-                  ? `${formatCreditBalance(credits)}`
-                  : error
-                    ? "ERROR"
-                    : "- - - -"}
-                <span className="text-xs font-medium -translate-y-1 ml-1">
-                  Credits
-                </span>
-              </div>
-              <div className="flex items-center  gap-x-2">
-                {isLoading ? (
-                  <Typography.P size="xs">Loading...</Typography.P>
-                ) : error ? (
-                  <>
-                    <Warning className="size-4" />
-                    <Typography.P size="xs" className="text-error-80">
-                      Account balance not retrieved.
-                    </Typography.P>
-                    <button
-                      className="size-4"
-                      onClick={() => {
-                        refetch();
-                      }}
-                    >
-                      <Refresh />
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      className="size-4 hover:-rotate-45 duration-300 hover:text-primary-50"
-                      onClick={() => {
-                        refetch();
-                      }}
-                    >
-                      <Refresh />
-                    </button>
-                    <Typography.P
-                      style={{
-                        fontSize: "12px",
-                      }}
-                      className="text-grey-60"
-                    >
-                      Last updated <TimeAgo date={dataUpdatedAt} />
-                    </Typography.P>
-                  </>
-                )}
+            </div>
+            <div className="flex justify-between  items-end mt-4 w-full">
+              <div className="flex flex-col  ">
+                <div className="text-2xl   font-medium text-grey-10">
+                  {credits !== undefined
+                    ? `${formatCreditBalance(credits)}`
+                    : error
+                      ? "ERROR"
+                      : "- - - -"}
+                  <span className="text-xs font-medium -translate-y-1 ml-1">
+                    Credits
+                  </span>
+                </div>
+                <div className="flex items-center  gap-x-2 mt-2">
+                  {isLoading ? (
+                    <Typography.P size="xs">Loading...</Typography.P>
+                  ) : error ? (
+                    <>
+                      <Warning className="size-4" />
+                      <Typography.P size="xs" className="text-error-80">
+                        Credits not retrieved.
+                      </Typography.P>
+                      <button
+                        className="size-4"
+                        onClick={() => {
+                          refetch();
+                        }}
+                      >
+                        <Refresh />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        className="size-4 hover:-rotate-45 duration-300 hover:text-primary-50"
+                        onClick={() => {
+                          refetch();
+                        }}
+                      >
+                        <Refresh />
+                      </button>
+                      <Typography.P
+                        style={{
+                          fontSize: "12px",
+                        }}
+                        className="text-grey-60"
+                      >
+                        Last updated <TimeAgo date={dataUpdatedAt} />
+                      </Typography.P>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
           </div>
           <div className="flex flex-col">
             <CardButton
-              className="w-full mt-4 "
+              className="w-full mt-4 h-[50px]"
               variant="secondary"
               onClick={handleOpenConsoleBillingPage}
             >
@@ -175,7 +176,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
               </div>
             </CardButton>
             <CardButton
-              className="w-full mt-3"
+              className="w-full mt-3 h-[50px]"
               onClick={handleOpenConsoleBillingPage}
             >
               <div className="flex items-center gap-2 ">

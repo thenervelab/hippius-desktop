@@ -14,6 +14,7 @@ interface CopyCellProps {
   copyIconClassName?: string;
   checkIconClassName?: string;
   buttonClass?: string;
+  isJustifyCenter?: boolean;
 }
 
 const CopyText: React.FC<CopyCellProps> = ({
@@ -25,6 +26,7 @@ const CopyText: React.FC<CopyCellProps> = ({
   copyIconClassName,
   checkIconClassName,
   buttonClass,
+  isJustifyCenter = false,
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -40,8 +42,9 @@ const CopyText: React.FC<CopyCellProps> = ({
   return (
     <div
       className={cn(
-        "flex items-center truncate w-full justify-between",
-        className
+        "flex items-center truncate w-full",
+        className,
+        isJustifyCenter ? "justify-center" : "justify-between"
       )}
     >
       {children}
