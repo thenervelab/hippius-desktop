@@ -9,6 +9,7 @@ import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 interface ContextMenuProps {
     x: number;
@@ -30,6 +31,7 @@ export default function FileContextMenu({
     onShowFileDetails
 }: ContextMenuProps) {
     const [mounted, setMounted] = useState(false);
+    const { polkadotAddress } = useWalletAuth();
 
     useEffect(() => {
         setMounted(true);
@@ -101,7 +103,7 @@ export default function FileContextMenu({
                     <button
                         className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
                         onClick={() => {
-                            downloadIpfsFile(file);
+                            downloadIpfsFile(file, polkadotAddress ?? "");
                             onClose();
                         }}
                     >

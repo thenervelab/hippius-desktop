@@ -25,6 +25,7 @@ import SidebarDialog from "@/app/components/ui/sidebar-dialog";
 import FileDetailsDialogContent from "../file-details-dialog-content";
 import { Icons } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 // Custom event names for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -44,6 +45,8 @@ const CardView: FC<CardViewProps> = ({
     onPaginationReset
 }) => {
     const router = useRouter();
+
+    const { polkadotAddress } = useWalletAuth();
 
     const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
     const [openDeleteModal, setOpenDeleteModal] = useState(false);
@@ -357,7 +360,7 @@ const CardView: FC<CardViewProps> = ({
                                                             icon: <Download className="size-4" />,
                                                             itemTitle: "Download",
                                                             onItemClick: async () => {
-                                                                downloadIpfsFile(file);
+                                                                downloadIpfsFile(file, polkadotAddress ?? "");
                                                             },
                                                         },
                                                         ...(((fileType === "video" || fileType === "image" || fileType === "pdfDocument")) ?

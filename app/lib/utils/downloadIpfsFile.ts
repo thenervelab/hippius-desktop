@@ -4,12 +4,9 @@ import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
 
-export const downloadIpfsFile = async (file: FormattedUserIpfsFile) => {
-    const { cid, name, size, source } = file;
-    const polkadotAddress = "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2"
-
+export const downloadIpfsFile = async (file: FormattedUserIpfsFile, polkadotAddress: string) => {
+    const { source } = file;
 
     // Check if the file is from Hippius or another source
     if (source !== "Hippius") {
@@ -22,7 +19,7 @@ export const downloadIpfsFile = async (file: FormattedUserIpfsFile) => {
 };
 
 const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
-    const { cid, name, size } = file;
+    const { cid, name } = file;
 
     const toastId = toast.loading(`Preparing download: ${name}`);
 
@@ -51,8 +48,6 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
 
         const response = await fetch(url);
         if (!response.ok) throw new Error(response.statusText);
-
-        const totalBytes = parseInt(response.headers.get('Content-Length') || '0') || size || 0;
 
         // Use arrayBuffer for more reliable binary data handling
         const arrayBuffer = await response.arrayBuffer();
@@ -109,9 +104,4 @@ const downloadEncryptedIpfsFile = async (file: FormattedUserIpfsFile, polkadotAd
         console.error("Encrypted download failed:", err);
         toast.error(`Download failed: ${err instanceof Error ? err.message : 'Unknown error'}`, { id: toastId });
     }
-};
-
-export const streamIpfsFile = async (file: FormattedUserIpfsFile) => {
-    // For desktop app, just use the regular download function
-    return downloadIpfsFile(file);
 };

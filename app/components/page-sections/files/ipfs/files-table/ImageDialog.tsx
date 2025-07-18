@@ -15,6 +15,7 @@ import {
   getNextViewableFile,
   getPrevViewableFile,
 } from "@/app/lib/utils/mediaNavigation";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export const ImageDialogTrigger: React.FC<{
   children: ReactNode;
@@ -39,6 +40,7 @@ const ImageDialog: React.FC<{
   onCloseClicked: () => void;
   onNavigate: (file: FormattedUserIpfsFile) => void;
 }> = ({ file, allFiles, onCloseClicked, onNavigate }) => {
+  const { polkadotAddress } = useWalletAuth();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
@@ -124,7 +126,7 @@ const ImageDialog: React.FC<{
                         <div className="flex gap-x-4 items-center">
                           <button
                             onClick={() => {
-                              downloadIpfsFile(file);
+                              downloadIpfsFile(file, polkadotAddress ?? "");
                             }}
                             className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-white whitespace-nowrap rounded border border-grey-80 p-2"
                           >

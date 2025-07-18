@@ -49,6 +49,7 @@ import FileDetailsDialogContent from "../file-details-dialog-content";
 import BlockTimestamp from "@/app/components/ui/block-timestamp";
 import { Icons } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -73,6 +74,8 @@ const FilesTable: FC<FilesTableProps> = ({
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
     cid: fileToDelete?.cid || "",
   });
+  const { polkadotAddress } = useWalletAuth();
+
 
   // Add state for file details dialog
   const [fileDetailsFile, setFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
@@ -315,7 +318,7 @@ const FilesTable: FC<FilesTableProps> = ({
             const parts = path.split(/[/\\]/).filter(p => p.trim());
 
             if (parts.length >= 2) {
-              return parts[parts.length - 1];
+              return parts[parts.length - 2];
             }
 
             return "Hippius";
@@ -353,7 +356,7 @@ const FilesTable: FC<FilesTableProps> = ({
                     icon: <Download className="size-4" />,
                     itemTitle: "Download",
                     onItemClick: async () => {
-                      downloadIpfsFile(cell.row.original);
+                      downloadIpfsFile(cell.row.original, polkadotAddress ?? "");
                     },
                   },
                   ...(((fileType === "video" || fileType === "image" || fileType === "pdfDocument")) ?

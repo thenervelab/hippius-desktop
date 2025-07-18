@@ -14,6 +14,8 @@ import AddButton from "./AddFileButton";
 import FilesTable from "./files-table";
 import CardView from "./card-view";
 import Link from "next/link";
+import SyncFolderSelector from "./SyncFolderSelector";
+import { getSyncPath, setSyncPath } from "@/lib/utils/syncPathUtils";
 
 import { cn, formatBytesFromBigInt } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
@@ -33,6 +35,7 @@ import {
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { enrichFilesWithTimestamps } from "@/lib/utils/blockTimestampUtils";
 import StorageStateList from "./storage-stats";
+import { toast } from "sonner";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { api } = usePolkadotApi();
@@ -69,6 +72,10 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     Array<FormattedUserIpfsFile & { timestamp?: Date | null }>
   >([]);
   const [isProcessingTimestamps, setIsProcessingTimestamps] = useState(false);
+
+  // State to track if private sync folder is configured
+  const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<boolean | null>(null);
+  const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
 
   // Filter out deleted files
   const allFilteredData = useMemo(() => {
@@ -218,6 +225,42 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     // Signal pagination reset but don't directly change it
   }, []);
 
+  // Check if private sync folder is configured on component mount
+  useEffect(() => {
+    const checkSyncPath = async () => {
+      try {
+        setIsCheckingSyncPath(true);
+        const privateSyncPath = await getSyncPath();
+        console.log("privateSyncPath", privateSyncPath)
+        setIsSyncPathConfigured(!!privateSyncPath);
+      } catch (error) {
+        console.error("Failed to check sync path:", error);
+        // If there's an error, we'll assume it's not configured
+        setIsSyncPathConfigured(false);
+      } finally {
+        setIsCheckingSyncPath(false);
+      }
+    };
+
+    checkSyncPath();
+  }, []);
+
+  // Handle folder selection from SyncFolderSelector
+  const handleFolderSelected = useCallback(async (path: string) => {
+    try {
+      await setSyncPath(path);
+      toast.success(`Sync folder set successfully`);
+      setIsSyncPathConfigured(true);
+
+      // Refresh files to get any new files from the configured path
+      refetchUserFiles();
+      return true;
+    } catch (error) {
+      console.error("Failed to set sync folder:", error);
+      toast.error(`Failed to set sync folder: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [refetchUserFiles]);
+
   // Load the table once on mount and set up interval refresh
   useEffect(() => {
     // Initial fetch
@@ -292,132 +335,144 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     }
   };
 
-  return (
-    <div className="w-full relative mt-6">
-      {/* Recent Files header and View All Files link */}
+  // FIXED: Don't return early - instead render conditionally based on state
+  // This ensures all hooks are called in the same order on every render
 
-      <div
-        className="flex items-center justify-between w-full gap-6 flex-wrap"
-      >
-        {isRecentFiles ? (
-          <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
-        ) : <div className="flex items-center gap-4">
-          <StorageStateList
-            storageUsed={formattedStorageSize}
-            numberOfFiles={data?.length || 0}
-          />
-        </div>}
-        <div className="flex items-center gap-x-4">
-          <RefreshButton
-            refetching={isRefetching || isFetching}
-            onClick={() => refetchUserFiles()}
-          />
-
-          {!isRecentFiles && (
-            <div className="">
-              <SearchInput
-                className="h-9"
-                value={searchTerm}
-                onChange={handleSearchChange}
+  // Determine what content to render
+  let content;
+  if (isCheckingSyncPath) {
+    content = <WaitAMoment />;
+  } else if (isSyncPathConfigured === false && !isRecentFiles) {
+    content = <SyncFolderSelector onFolderSelected={handleFolderSelected} />;
+  } else {
+    content = (
+      <div className="w-full relative mt-6">
+        {/* Recent Files header and View All Files link */}
+        <div className="flex items-center justify-between w-full gap-6 flex-wrap">
+          {isRecentFiles ? (
+            <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
+          ) : (
+            <div className="flex items-center gap-4">
+              <StorageStateList
+                storageUsed={formattedStorageSize}
+                numberOfFiles={data?.length || 0}
               />
             </div>
           )}
+          <div className="flex items-center gap-x-4">
+            <RefreshButton
+              refetching={isRefetching || isFetching}
+              onClick={() => refetchUserFiles()}
+            />
 
-          <div className="flex gap-2 border border-grey-80 p-1 rounded">
-            <button
-              className={cn(
-                "p-1 rounded",
-                viewMode === "list"
-                  ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
-                  : "bg-grey-100 text-grey-70"
-              )}
-              onClick={() => setViewMode("list")}
-              aria-label="List View"
-            >
-              <Icons.Grid className="size-5" />
-            </button>
-            <button
-              className={cn(
-                "p-1 rounded",
-                viewMode === "card"
-                  ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
-                  : "bg-grey-100 text-grey-70"
-              )}
-              onClick={() => setViewMode("card")}
-              aria-label="Card View"
-            >
-              <Icons.Category className="size-5" />
-            </button>
-          </div>
-          {isRecentFiles && (
-            <Link
-              href="/files"
-              className="px-4 py-2.5 items-center flex bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
-            >
-              View All Files
-              <Icons.ArrowRight className="size-[14px] ml-1" />
-            </Link>
-          )}
-          {!isRecentFiles && (
-            <div className="flex border border-grey-80 p-1 rounded">
+            {!isRecentFiles && (
+              <div className="">
+                <SearchInput
+                  className="h-9"
+                  value={searchTerm}
+                  onChange={handleSearchChange}
+                />
+              </div>
+            )}
+
+            <div className="flex gap-2 border border-grey-80 p-1 rounded">
               <button
-                className="flex justify-center items-center p-1 cursor-pointer bg-white text-grey-70 rounded"
-                onClick={() => setIsFilterOpen(true)}
-                aria-label="Filter"
-              >
-                <Icons.Filter className="size-5" />
-                {activeFilters.length > 0 && (
-                  <span className="ml-1 p-1 bg-primary-100 text-primary-30 border border-primary-80 text-xs rounded min-w-4 h-4 flex items-center justify-center">
-                    {activeFilters.length}
-                  </span>
+                className={cn(
+                  "p-1 rounded",
+                  viewMode === "list"
+                    ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                    : "bg-grey-100 text-grey-70"
                 )}
+                onClick={() => setViewMode("list")}
+                aria-label="List View"
+              >
+                <Icons.Grid className="size-5" />
+              </button>
+              <button
+                className={cn(
+                  "p-1 rounded",
+                  viewMode === "card"
+                    ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                    : "bg-grey-100 text-grey-70"
+                )}
+                onClick={() => setViewMode("card")}
+                aria-label="Card View"
+              >
+                <Icons.Category className="size-5" />
               </button>
             </div>
-          )}
+            {isRecentFiles && (
+              <Link
+                href="/files"
+                className="px-4 py-2.5 items-center flex bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+              >
+                View All Files
+                <Icons.ArrowRight className="size-[14px] ml-1" />
+              </Link>
+            )}
+            {!isRecentFiles && (
+              <div className="flex border border-grey-80 p-1 rounded">
+                <button
+                  className="flex justify-center items-center p-1 cursor-pointer bg-white text-grey-70 rounded"
+                  onClick={() => setIsFilterOpen(true)}
+                  aria-label="Filter"
+                >
+                  <Icons.Filter className="size-5" />
+                  {activeFilters.length > 0 && (
+                    <span className="ml-1 p-1 bg-primary-100 text-primary-30 border border-primary-80 text-xs rounded min-w-4 h-4 flex items-center justify-center">
+                      {activeFilters.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
 
-          <AddButton ref={addButtonRef} className="h-9" />
+            <AddButton ref={addButtonRef} className="h-9" />
+          </div>
         </div>
+
+        {/* Active Filters Display */}
+        {activeFilters.length > 0 && !isRecentFiles && (
+          <FilterChips
+            filters={activeFilters}
+            onRemoveFilter={handleRemoveFilter}
+            onOpenFilterDialog={() => setIsFilterOpen(true)}
+            className="mt-4 mb-2"
+          />
+        )}
+
+        <div className="w-full mt-4">{renderContent()}</div>
+
+        {unpinnedFiles && unpinnedFiles.length > 0 && (
+          <FileDetailsDialog
+            open={!isLoading && isUnpinnedOpen}
+            unpinnedFiles={unpinnedFiles}
+          />
+        )}
+
+        <InsufficientCreditsDialog />
+        <UploadStatusWidget />
+
+        {/* Filter Sidebar Dialog */}
+        <SidebarDialog
+          heading="Filter"
+          open={isFilterOpen}
+          onOpenChange={setIsFilterOpen}
+        >
+          <FilterDialogContent
+            selectedFileTypes={selectedFileTypes}
+            selectedDate={selectedDate}
+            selectedFileSize={selectedFileSize}
+            selectedSizeUnit={selectedSizeUnit}
+            onApplyFilters={handleApplyFilters}
+            onResetFilters={handleResetFilters}
+          />
+        </SidebarDialog>
       </div>
+    );
+  }
 
-      {/* Active Filters Display */}
-      {activeFilters.length > 0 && !isRecentFiles && (
-        <FilterChips
-          filters={activeFilters}
-          onRemoveFilter={handleRemoveFilter}
-          onOpenFilterDialog={() => setIsFilterOpen(true)}
-          className="mt-4 mb-2"
-        />
-      )}
-
-      <div className="w-full mt-4">{renderContent()}</div>
-
-      {unpinnedFiles && unpinnedFiles.length > 0 && (
-        <FileDetailsDialog
-          open={!isLoading && isUnpinnedOpen}
-          unpinnedFiles={unpinnedFiles}
-        />
-      )}
-
-      <InsufficientCreditsDialog />
-      <UploadStatusWidget />
-
-      {/* Filter Sidebar Dialog */}
-      <SidebarDialog
-        heading="Filter"
-        open={isFilterOpen}
-        onOpenChange={setIsFilterOpen}
-      >
-        <FilterDialogContent
-          selectedFileTypes={selectedFileTypes}
-          selectedDate={selectedDate}
-          selectedFileSize={selectedFileSize}
-          selectedSizeUnit={selectedSizeUnit}
-          onApplyFilters={handleApplyFilters}
-          onResetFilters={handleResetFilters}
-        />
-      </SidebarDialog>
-    </div>
-  );
+  return content;
 };
 
 export default Ipfs;

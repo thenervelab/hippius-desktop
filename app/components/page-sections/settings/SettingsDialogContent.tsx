@@ -5,6 +5,7 @@ import ChangePasscode from "./ChangePasscode";
 import ExportEncryptedSeed from "./ExportEncryptedSeed";
 import { InView } from "react-intersection-observer";
 import AccountActionButtons from "./AccountActionButtons";
+import UpdateSyncFolder from "./UpdateSyncFolder";
 import SubAccounts from "./sub-accounts";
 import NotificationSettings from "./NotificationSettings";
 import { useAtom } from "jotai";
@@ -39,6 +40,10 @@ const SettingsDialogContent: React.FC = () => {
     {
       tabName: "Remove Account",
       icon: <Icons.Trash className="size-4" />
+    },
+    {
+      tabName: "File Settings",
+      icon: <Icons.File2 className="size-4" />
     }
   ];
 
@@ -111,6 +116,16 @@ const SettingsDialogContent: React.FC = () => {
                 className="delay-300 w-full"
               >
                 <AccountActionButtons />
+              </RevealTextLine>
+            )}
+
+            {activeTab === "File Settings" && (
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 w-full flex"
+              >
+                <UpdateSyncFolder />
               </RevealTextLine>
             )}
           </div>

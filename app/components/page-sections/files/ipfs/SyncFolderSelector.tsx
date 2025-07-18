@@ -1,243 +1,182 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Icons } from "@/components/ui";
-import { invoke } from "@tauri-apps/api/core";
+import { CardButton, Icons } from "@/components/ui";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
+import { desktopDir, documentDir, downloadDir } from "@tauri-apps/api/path";
+import SectionHeader from "../../settings/SectionHeader";
 
 interface SyncFolderSelectorProps {
     onFolderSelected: (path: string) => void;
+    initialPath?: string;
 }
 
-const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({ onFolderSelected }) => {
-    const [selectedOption, setSelectedOption] = useState<string | null>(null);
-    const [customFolder, setCustomFolder] = useState<string | null>(null);
-    const [isSubmitting, setIsSubmitting] = useState(false);
-
-    // Get suggested folder paths from system
-    const [suggestedFolders, setSuggestedFolders] = useState({
-        desktop: "/User/username/Desktop",
-        documents: "/User/username/Documents",
-        downloads: "/User/username/Downloads"
+const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
+    onFolderSelected,
+    initialPath,
+}) => {
+    const [suggested, setSuggested] = useState({
+        desktop: "",
+        documents: "",
+        downloads: "",
     });
+    const [selected, setSelected] = useState<string | null>(null);
+    const [custom, setCustom] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
 
-    // Fetch actual user folder paths when component mounts
-    React.useEffect(() => {
-        const getSystemPaths = async () => {
-            try {
-                const paths = await invoke<{
-                    desktop: string;
-                    documents: string;
-                    downloads: string;
-                }>("get_system_folders");
-
-                setSuggestedFolders(paths);
-            } catch (error) {
-                console.error("Failed to get system folders:", error);
-            }
-        };
-
-        getSystemPaths();
+    useEffect(() => {
+        Promise.all([desktopDir(), documentDir(), downloadDir()])
+            .then(([d, docs, dl]) => setSuggested({ desktop: d, documents: docs, downloads: dl }))
+            .catch(() => toast.error("Could not retrieve system folder paths"));
     }, []);
 
-    const handleOptionSelect = (option: string) => {
-        setSelectedOption(option);
-        setCustomFolder(null);
-    };
-
-    const handleAddFolder = async () => {
-        try {
-            // Open a folder picker dialog
-            const selectedPath = await open({
-                directory: true,
-                multiple: false,
-                title: "Select Folder to Sync"
-            });
-
-            if (selectedPath && typeof selectedPath === "string") {
-                setCustomFolder(selectedPath);
-                setSelectedOption(null);
-            }
-        } catch (error) {
-            console.error("Failed to select folder:", error);
+    useEffect(() => {
+        if (!initialPath) return;
+        const key = (Object.keys(suggested) as Array<keyof typeof suggested>)
+            .find((k) => suggested[k] === initialPath);
+        if (key) {
+            setSelected(key);
+            setCustom(null);
+        } else {
+            setCustom(initialPath);
+            setSelected(initialPath);
         }
+    }, [initialPath, suggested]);
+
+    const pickOption = (opt: string) => {
+        setSelected((prev) => (prev === opt ? null : opt));
     };
 
-    const handleSyncFolder = async () => {
-        // Get the selected folder path
-        const folderPath = customFolder || (selectedOption ? suggestedFolders[selectedOption as keyof typeof suggestedFolders] : null);
+    const pickCustom = async () => {
+        try {
+            const p = await open({ directory: true, multiple: false, title: "Select Folder to Sync" });
+            if (typeof p === "string") {
+                setCustom(p);
+                setSelected(p);
+            }
+        } catch { }
+    };
 
-        if (!folderPath) {
+    const apply = async () => {
+        if (!selected) {
             toast.error("Please select a folder to sync");
             return;
         }
-
-        setIsSubmitting(true);
+        const isStd = ["desktop", "documents", "downloads"].includes(selected);
+        const path = isStd ? suggested[selected as keyof typeof suggested] : custom!;
+        setLoading(true);
         try {
-            // Here we would normally call the backend to set the sync folder
-            // For now we just wait a bit and then call the onFolderSelected callback
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            // Call the parent component's callback with the selected path
-            onFolderSelected(folderPath);
-            toast.success(`Folder "${folderPath}" selected for syncing`);
-        } catch (error) {
-            console.error("Failed to set sync folder:", error);
+            await onFolderSelected(path);
+        } catch {
             toast.error("Failed to set sync folder");
         } finally {
-            setIsSubmitting(false);
+            setLoading(false);
         }
     };
 
+    const customName = custom?.split(/[\\/]/).pop() ?? "";
+
     return (
-        <div className="max-w-screen-md mx-auto bg-white rounded-lg p-6 shadow-sm border border-grey-80">
-            <div className="flex items-center mb-6">
-                <Icons.FolderOpen className="size-10 text-primary-50 mr-3" />
-                <div>
-                    <h2 className="text-xl font-medium text-grey-10">Welcome to hippius!</h2>
-                    <p className="text-grey-50">Choose local folders to sync. Changes will auto-sync to your cloud workspace in real time.</p>
-                </div>
-            </div>
-
-            <div className="mb-6">
-                <h3 className="text-grey-30 mb-3">Choose folders to sync from your computer to here:</h3>
-
-                <div className="space-y-4">
-                    {/* Desktop Option */}
-                    <div
-                        className={cn(
-                            "flex items-center p-4 border rounded-lg cursor-pointer",
-                            selectedOption === "desktop"
-                                ? "border-primary-50 bg-primary-100"
-                                : "border-grey-80 hover:border-primary-70"
-                        )}
-                        onClick={() => handleOptionSelect("desktop")}
-                    >
-                        <div className="flex-shrink-0 mr-3">
-                            <input
-                                type="checkbox"
-                                checked={selectedOption === "desktop"}
-                                onChange={() => { }}
-                                className="h-5 w-5 accent-primary-50"
-                            />
-                        </div>
-                        <div className="flex-1">
-                            <div className="flex items-center">
-                                <Icons.Folder className="size-5 mr-2 text-primary-50" />
-                                <span className="font-medium text-grey-10">Desktop</span>
-                            </div>
-                            <p className="text-sm text-grey-70 mt-1">{suggestedFolders.desktop}</p>
-                        </div>
-                    </div>
-
-                    {/* Documents Option */}
-                    <div
-                        className={cn(
-                            "flex items-center p-4 border rounded-lg cursor-pointer",
-                            selectedOption === "documents"
-                                ? "border-primary-50 bg-primary-100"
-                                : "border-grey-80 hover:border-primary-70"
-                        )}
-                        onClick={() => handleOptionSelect("documents")}
-                    >
-                        <div className="flex-shrink-0 mr-3">
-                            <input
-                                type="checkbox"
-                                checked={selectedOption === "documents"}
-                                onChange={() => { }}
-                                className="h-5 w-5 accent-primary-50"
-                            />
-                        </div>
-                        <div className="flex-1">
-                            <div className="flex items-center">
-                                <Icons.Document className="size-5 mr-2 text-primary-50" />
-                                <span className="font-medium text-grey-10">Document</span>
-                            </div>
-                            <p className="text-sm text-grey-70 mt-1">{suggestedFolders.documents}</p>
-                        </div>
-                    </div>
-
-                    {/* Download Option */}
-                    <div
-                        className={cn(
-                            "flex items-center p-4 border rounded-lg cursor-pointer",
-                            selectedOption === "downloads"
-                                ? "border-primary-50 bg-primary-100"
-                                : "border-grey-80 hover:border-primary-70"
-                        )}
-                        onClick={() => handleOptionSelect("downloads")}
-                    >
-                        <div className="flex-shrink-0 mr-3">
-                            <input
-                                type="checkbox"
-                                checked={selectedOption === "downloads"}
-                                onChange={() => { }}
-                                className="h-5 w-5 accent-primary-50"
-                            />
-                        </div>
-                        <div className="flex-1">
-                            <div className="flex items-center">
-                                <Icons.DocumentDownload className="size-5 mr-2 text-primary-50" />
-                                <span className="font-medium text-grey-10">Download</span>
-                            </div>
-                            <p className="text-sm text-grey-70 mt-1">{suggestedFolders.downloads}</p>
-                        </div>
-                    </div>
-
-                    {/* Custom folder (if selected) */}
-                    {customFolder && (
-                        <div className="flex items-center p-4 border border-primary-50 bg-primary-100 rounded-lg">
-                            <div className="flex-shrink-0 mr-3">
-                                <input
-                                    type="checkbox"
-                                    checked={true}
-                                    onChange={() => { }}
-                                    className="h-5 w-5 accent-primary-50"
-                                />
-                            </div>
-                            <div className="flex-1">
-                                <div className="flex items-center">
-                                    <Icons.FolderOpen className="size-5 mr-2 text-primary-50" />
-                                    <span className="font-medium text-grey-10">Custom folder</span>
+        <div className="w-full flex flex-col">
+            <div className={cn("w-full flex-1 relative bg-[url('/assets/folder-sync-bg-layer.png')] bg-no-repeat bg-cover", !initialPath && "mt-6")}>
+                <div className="border relative border-grey-80 overflow-hidden rounded-xl w-full h-full">
+                    <div className="w-full flex flex-col p-4">
+                        <SectionHeader
+                            Icon={Icons.File2}
+                            title={initialPath ? "Change your sync folder" : "Welcome to Hippius!"}
+                            subtitle={initialPath ? "Choose a different folder to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced." : "Choose a folder on your device to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."}
+                        />
+                        <div className="mt-4 space-y-4">
+                            {(["desktop", "documents", "downloads"] as const).map((opt) => (
+                                <div
+                                    key={opt}
+                                    className={cn(
+                                        "flex p-4 border rounded-lg cursor-pointer transition-all duration-200 bg-grey-100",
+                                        selected === opt
+                                            ? "border-primary-50 bg-primary-100"
+                                            : "border-grey-80 hover:border-primary-70 hover:bg-grey-95"
+                                    )}
+                                    onClick={() => pickOption(opt)}
+                                >
+                                    <div className="flex-shrink-0 mr-4">
+                                        <div
+                                            className={cn(
+                                                "size-4 rounded border flex items-center justify-center",
+                                                selected === opt ? "bg-primary-50 border-primary-50" : "border-grey-70"
+                                            )}
+                                        >
+                                            {selected === opt && <Icons.Check className="size-3 text-white" />}
+                                        </div>
+                                    </div>
+                                    <div className="flex-1">
+                                        <div className="flex">
+                                            <Icons.Folder className="size-4 mr-[6px] text-grey-40" />
+                                            <span className="font-medium text-base text-grey-40 -mt-0.5">
+                                                {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                                            </span>
+                                            {!initialPath && <div className="ml-4 px-2 py-1 text-[10px] rounded bg-primary-90 text-primary-50 font-medium border border-grey-80">
+                                                Suggested folder
+                                            </div>}
+                                        </div>
+                                        <p className="text-sm text-grey-60 mt-1 ml-6">
+                                            {suggested[opt]}
+                                        </p>
+                                    </div>
                                 </div>
-                                <p className="text-sm text-grey-70 mt-1">{customFolder}</p>
-                            </div>
+                            ))}
+                            {custom && (
+                                <div
+                                    className={cn(
+                                        "flex p-4 border rounded-lg cursor-pointer transition-all duration-200 bg-grey-100",
+                                        selected === custom
+                                            ? "border-primary-50 bg-primary-100"
+                                            : "border-grey-80 hover:border-primary-70 hover:bg-grey-95"
+                                    )}
+                                    onClick={() => pickOption(custom)}
+                                >
+                                    <div className="flex-shrink-0 mr-4">
+                                        <div
+                                            className={cn(
+                                                "size-4 rounded border flex items-center justify-center",
+                                                selected === custom ? "bg-primary-50 border-primary-50" : "border-grey-70"
+                                            )}
+                                        >
+                                            {selected === custom && <Icons.Check className="size-3 text-white" />}
+                                        </div>
+                                    </div>
+                                    <div className="flex-1">
+                                        <div className="flex">
+                                            <Icons.Folder className="size-4 mr-[6px] text-grey-40" />
+                                            <span className="font-medium text-base text-grey-40 -mt-0.5">
+                                                {customName}
+                                            </span>
+                                        </div>
+                                        <p className="text-sm text-grey-60 mt-1 ml-6">{custom}</p>
+                                    </div>
+                                </div>
+                            )}
+                            <button
+                                onClick={pickCustom}
+                                className="mt-4 ml-10 flex items-center text-sm font-medium text-primary-50 hover:text-primary-40"
+                            >
+                                Choose custom folder
+                            </button>
                         </div>
-                    )}
+                    </div>
                 </div>
-
-                {/* Add folder button */}
-                <button
-                    onClick={handleAddFolder}
-                    className="mt-4 text-primary-50 hover:text-primary-70 flex items-center text-sm font-medium"
-                >
-                    <Icons.AddCircle className="size-4 mr-1" />
-                    Add folder
-                </button>
             </div>
-
-            <div className="flex justify-end">
-                <button
-                    onClick={handleSyncFolder}
-                    disabled={isSubmitting || (!selectedOption && !customFolder)}
-                    className={cn(
-                        "px-6 py-2.5 font-medium rounded-md text-white flex items-center",
-                        (!selectedOption && !customFolder) || isSubmitting
-                            ? "bg-grey-80 cursor-not-allowed"
-                            : "bg-primary-50 hover:bg-primary-70"
-                    )}
+            <div className="flex justify-end p-5">
+                <CardButton
+                    className="max-w-[160px] h-[60px]"
+                    variant="dialog"
+                    disabled={loading || !selected}
+                    loading={loading}
+                    onClick={apply}
                 >
-                    {isSubmitting ? (
-                        <>
-                            <Icons.Loader className="size-4 mr-2 animate-spin" />
-                            Setting up...
-                        </>
-                    ) : (
-                        <>
-                            Sync Folder
-                        </>
-                    )}
-                </button>
+                    <span className="text-lg leading-6 font-medium">
+                        {loading ? "Setting up..." : "Sync Folder"}
+                    </span>
+                </CardButton>
             </div>
         </div>
     );

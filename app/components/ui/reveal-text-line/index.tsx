@@ -18,26 +18,26 @@ const RevealTextLine: React.FC<{
   parentClassName,
   onClick,
 }) => {
-  return (
-    <span
-      className={cn("overflow-y-hidden inline-flex", parentClassName)}
-      onClick={onClick}
-    >
+    return (
       <span
-        style={{ transitionDelay: delay ? `${delay}ms` : undefined }}
-        className={cn(
-          cn(
-            "translate-y-full inline-flex opacity-0 duration-500",
-            rotate && "rotate-6 origin-top-left"
-          ),
-          reveal && cn("translate-y-0 opacity-100", rotate && "rotate-0 "),
-          className
-        )}
+        className={cn("overflow-y-hidden inline-flex", parentClassName)}
+        onClick={onClick}
       >
-        {children}
+        <span
+          style={{ transitionDelay: delay ? `${delay}ms` : undefined }}
+          className={cn(
+            cn(
+              "translate-y-full inline-flex opacity-0 duration-500",
+              rotate && "rotate-6 origin-top-left"
+            ),
+            reveal && cn("translate-y-0 opacity-100", rotate && "rotate-0 "),
+            className
+          )}
+        >
+          {children}
+        </span>
       </span>
-    </span>
-  );
-};
+    );
+  };
 
 export default RevealTextLine;
