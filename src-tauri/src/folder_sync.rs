@@ -1,7 +1,7 @@
 use crate::commands::ipfs_commands::encrypt_and_upload_file;
 use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use crate::constants::ipfs::API_URL;
-use crate::constants::substrate::SYNC_PATH;
+use crate::utils::sync::get_private_sync_path;
 use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
 use crate::DB_POOL;
 use notify::{
@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, Sender, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -53,7 +53,8 @@ pub struct UploadJob {
 
 static UPLOAD_SENDER: OnceCell<mpsc::UnboundedSender<UploadJob>> = OnceCell::new();
 
-pub fn start_folder_sync(account_id: String, seed_phrase: String) {
+pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
+    println!("started sycn");
     // Check if this account is already syncing
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
@@ -128,35 +129,33 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
     }
 
     if let Some(pool) = crate::DB_POOL.get() {
-        let sync_path = PathBuf::from(SYNC_PATH);
+        println!("getting sync path ");
+        let sync_path = PathBuf::from(&get_private_sync_path().await);
+        println!("got synced path ");
         let mut files = Vec::new();
         collect_files_recursively(&sync_path, &mut files);
         let dir_files: HashSet<String> = files.iter()
             .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()))
             .collect();
-        let db_files: Vec<String> = tauri::async_runtime::block_on(async {
-            sqlx::query_scalar::<_, String>(
-                "SELECT file_name FROM sync_folder_files WHERE owner = ?"
-            )
-            .bind(&account_id)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default()
-        });
+        let db_files: Vec<String> = sqlx::query_scalar::<_, String>(
+            "SELECT file_name FROM sync_folder_files WHERE owner = ?"
+        )
+        .bind(&account_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
         // Handle deleted files (in DB, not in folder)
         for db_file in &db_files {
             if !dir_files.contains(db_file) {
                 println!("[Startup] File deleted from sync folder: {}", db_file);
                 // Call delete_and_unpin and delete from sync_folder_files
-                let result = block_on(delete_and_unpin_user_file_records_by_name(db_file, &seed_phrase));
+                let result = delete_and_unpin_user_file_records_by_name(db_file, &seed_phrase).await;
                 if result.is_ok() {
-                    let _ = block_on(async {
-                        sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ?")
-                            .bind(&account_id)
-                            .bind(db_file)
-                            .execute(pool)
-                            .await
-                    });
+                    let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ?")
+                        .bind(&account_id)
+                        .bind(db_file)
+                        .execute(pool)
+                        .await;
                 }
             }
         }
@@ -169,11 +168,13 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
                     println!("[Startup] New file detected in sync folder: {}", file_name);
                     // Add to upload queue
                     if let Some(sender) = UPLOAD_SENDER.get() {
-                        sender.send(UploadJob {
-                            account_id: account_id.clone(),
-                            seed_phrase: seed_phrase.clone(),
-                            file_path: file_path.to_string_lossy().to_string(),
-                        }).ok();
+                        sender
+                            .send(UploadJob {
+                                account_id: account_id.clone(),
+                                seed_phrase: seed_phrase.clone(),
+                                file_path: file_path.to_string_lossy().to_string(),
+                            })
+                            .unwrap();
                     }
                     new_files_to_upload.push(file_path.clone());
                 }
@@ -188,39 +189,26 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
         }
     }
 
-    let sync_path = PathBuf::from(SYNC_PATH);
+    let sync_path = PathBuf::from(&get_private_sync_path().await);
     let watcher_account_id = account_id.clone();
     let watcher_seed_phrase = seed_phrase.clone();
     // Watcher thread (existing code)
-    thread::spawn(move || {
-        let (tx, rx) = channel();
-
-        let mut watcher: RecommendedWatcher = Watcher::new(tx, notify::Config::default())
-            .expect("[FolderSync] Failed to create watcher");
-
-        watcher
-            .watch(&sync_path, RecursiveMode::Recursive)
-            .expect("[FolderSync] Failed to watch sync directory");
-
-        for res in rx {
-            match res {
-                Ok(event) => handle_event(event, &watcher_account_id, &watcher_seed_phrase),
-                Err(e) => eprintln!("[FolderSync] Watch error: {:?}", e),
-            }
-        }
-    });
+    spawn_watcher_thread(account_id.clone(), seed_phrase.clone());
 
     // Periodic checker thread
-    let sync_path_clone = PathBuf::from(SYNC_PATH);
     let checker_account_id = account_id.clone();
     let _checker_seed_phrase = seed_phrase.clone();
     thread::spawn(move || {
         loop {
             println!("[FolderSync] Periodic check: scanning for unsynced files...");
 
-            // Recursively collect all files in sync_path_clone
+            // Always fetch the latest sync path from the DB
+            let sync_path_str = tauri::async_runtime::block_on(get_private_sync_path());
+            let sync_path = PathBuf::from(&sync_path_str);
+
+            // Recursively collect all files in sync_path
             let mut files_to_check = Vec::new();
-            collect_files_recursively(&sync_path_clone, &mut files_to_check);
+            collect_files_recursively(&sync_path, &mut files_to_check);
 
             for file_path in files_to_check {
                 // Check if file is already being uploaded
@@ -250,6 +238,58 @@ pub fn start_folder_sync(account_id: String, seed_phrase: String) {
             }
 
             std::thread::sleep(Duration::from_secs(120)); // 2 minutes
+        }
+    });
+}
+
+fn spawn_watcher_thread(account_id: String, seed_phrase: String) {
+    thread::spawn(move || {
+        let mut current_path = String::new();
+        let mut watcher: Option<RecommendedWatcher> = None;
+        let (stop_tx, stop_rx): (Sender<()>, Receiver<()>) = channel();
+
+        loop {
+            // Get the latest sync path
+            let sync_path_str = tauri::async_runtime::block_on(get_private_sync_path());
+
+            if sync_path_str != current_path {
+                // Path changed, stop old watcher if exists
+                if let Some(mut w) = watcher.take() {
+                    // Dropping the watcher stops it
+                    drop(w);
+                    println!("[FolderSync] Stopped watching old path: {}", current_path);
+                }
+
+                // Start new watcher
+                let (tx, rx) = channel();
+                let mut new_watcher: RecommendedWatcher =
+                    Watcher::new(tx, notify::Config::default())
+                        .expect("[FolderSync] Failed to create watcher");
+
+                new_watcher
+                    .watch(Path::new(&sync_path_str), RecursiveMode::Recursive)
+                    .expect("[FolderSync] Failed to watch sync directory");
+
+                let watcher_account_id = account_id.clone();
+                let watcher_seed_phrase = seed_phrase.clone();
+
+                // Spawn a thread to handle events for this watcher
+                thread::spawn(move || {
+                    for res in rx {
+                        match res {
+                            Ok(event) => handle_event(event, &watcher_account_id, &watcher_seed_phrase),
+                            Err(e) => eprintln!("[FolderSync] Watch error: {:?}", e),
+                        }
+                    }
+                });
+
+                println!("[FolderSync] Started watching new path: {}", sync_path_str);
+                current_path = sync_path_str;
+                watcher = Some(new_watcher);
+            }
+
+            // Check for path changes every 5 seconds
+            thread::sleep(Duration::from_secs(5));
         }
     });
 }
@@ -730,8 +770,8 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
 }
 
 #[tauri::command]
-pub fn start_folder_sync_tauri(account_id: String, seed_phrase: String) {
-    start_folder_sync(account_id, seed_phrase);
+pub async fn start_folder_sync_tauri(account_id: String, seed_phrase: String) {
+    start_folder_sync(account_id, seed_phrase).await;
 }
 
 #[tauri::command]

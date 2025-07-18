@@ -97,6 +97,18 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             .await
             .unwrap();
 
+            sqlx::query(
+                "CREATE TABLE IF NOT EXISTS sync_paths (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL,
+                    type TEXT NOT NULL UNIQUE, -- 'public' or 'private', only one of each
+                    timestamp INTEGER NOT NULL
+                )"
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
             println!("[Setup] Database initialized successfully");
 
             // Start IPFS daemon
@@ -108,6 +120,3 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         Ok(())
     })
 }
-
-// auto sync issue if file is not in db 
-// is assigned should be true only when profile parsing

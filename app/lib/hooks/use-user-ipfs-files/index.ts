@@ -47,6 +47,27 @@ type UserProfileFile = {
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
 
+const parseMinerIds = (minerIds: string | string[]): string[] => {
+    // If it's already an array, return it
+    if (Array.isArray(minerIds)) {
+        return minerIds;
+    }
+
+    if (typeof minerIds === 'string') {
+        try {
+            if (minerIds.trim().startsWith('[') && minerIds.trim().endsWith(']')) {
+                return JSON.parse(minerIds);
+            }
+        } catch (error) {
+            console.error("Error parsing minerIds JSON:", error);
+        }
+
+        return [minerIds];
+    }
+
+    return [];
+};
+
 export const useUserIpfsFiles = () => {
     const { api, isConnected } = usePolkadotApi();
     const { polkadotAddress } = useWalletAuth();
@@ -54,7 +75,7 @@ export const useUserIpfsFiles = () => {
 
     return useQuery({
         queryKey,
-        refetchInterval: 180000,
+        refetchInterval: 1080000,
         refetchIntervalInBackground: true,
         refetchOnWindowFocus: false,
         staleTime: 30000,
@@ -85,8 +106,6 @@ export const useUserIpfsFiles = () => {
                 });
 
                 console.log("Fetched files from DB:", dbFiles);
-                console.log("Number of files fetched:", dbFiles.length);
-                console.log(dbFiles[0].minerIds)
 
                 // Format the data to match what the UI expects
                 const formattedFiles = dbFiles.map((file): FormattedUserIpfsFile => ({
@@ -95,7 +114,7 @@ export const useUserIpfsFiles = () => {
                     createdAt: file.lastChargedAt,
                     cid: hexToCid(file.fileHash) ?? "",
                     source: file.source || "Unknown",
-                    minerIds: file.minerIds,
+                    minerIds: parseMinerIds(file.minerIds),
                     isAssigned: file.isAssigned,
                     lastChargedAt: file.lastChargedAt,
                     fileHash: file.fileHash,

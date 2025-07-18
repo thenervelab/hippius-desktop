@@ -33,9 +33,16 @@ const TIME_BEFORE_ERR = 30 * 60 * 1000;
 interface CardViewProps {
     showUnpinnedDialog?: boolean;
     files: FormattedUserIpfsFile[];
+    resetPagination?: boolean;
+    onPaginationReset?: () => void;
 }
 
-const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
+const CardView: FC<CardViewProps> = ({
+    showUnpinnedDialog = true,
+    files,
+    resetPagination,
+    onPaginationReset
+}) => {
     const router = useRouter();
 
     const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
@@ -176,6 +183,15 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
         currentPage,
         totalPages,
     } = usePagination(filteredData || [], 12); // Using more items per page for card view
+
+    useEffect(() => {
+        if (resetPagination) {
+            setCurrentPage(1);
+            if (onPaginationReset) {
+                onPaginationReset();
+            }
+        }
+    }, [resetPagination, setCurrentPage, onPaginationReset]);
 
     const handleDelete = () => {
         setOpenDeleteModal(true);
@@ -447,6 +463,8 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                         setSelectedFile(null);
                     }}
                     file={selectedFile}
+                    allFiles={files}
+                    onNavigate={setSelectedFile}
                 />
             )}
             {selectedFileType === "image" && (
@@ -455,6 +473,8 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                         setSelectedFile(null);
                     }}
                     file={selectedFile}
+                    allFiles={files}
+                    onNavigate={setSelectedFile}
                 />
             )}
             {selectedFileType === "pdfDocument" && (
@@ -463,6 +483,8 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                         setSelectedFile(null);
                     }}
                     file={selectedFile}
+                    allFiles={files}
+                    onNavigate={setSelectedFile}
                 />
             )}
 

@@ -20,7 +20,7 @@ use commands::ipfs_commands::{
 use commands::accounts::{create_encryption_key, get_encryption_keys };
 use utils::file_operations::delete_and_unpin_file_by_name;
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
-use commands::substrate_tx::{get_sync_path, transfer_balance_tauri};
+use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_tauri};
 use dirs;
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
@@ -44,6 +44,7 @@ fn main() {
             write_file,
             read_file,
             get_sync_path,
+            set_sync_path,
             start_user_profile_sync_tauri,
             start_folder_sync_tauri,
             get_user_synced_files,
