@@ -31,7 +31,7 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
         className="md:inset-0 md:m-auto
           md:w-[90vw] md:max-w-[428px] h-fit"
       >
-        <Dialog.Title className="sr-only">Receive User Balance</Dialog.Title>
+        <Dialog.Title className="sr-only">Receive Balance</Dialog.Title>
         {/* Top accent bar (only mobile) */}
         <div className="h-4 bg-primary-50 md:hidden block" />
 
@@ -44,14 +44,14 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
               </AbstractIconWrapper>
             </div>
             <span className="text-center text-2xl text-grey-10 font-medium">
-              Receive User Balance
+              Receive Balance
             </span>
           </div>
 
           {/* Mobile Header */}
           <div className="flex py-4 items-center justify-between text-grey-10 relative w-full md:hidden">
             <div className="text-lg font-medium relative">
-              <span className="capitalize">Receive User Balance</span>
+              <span className="capitalize">Receive Balance</span>
             </div>
             <button onClick={onClose}>
               <Icons.CloseCircle className="size-6 relative" />

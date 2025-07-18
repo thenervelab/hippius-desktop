@@ -29,7 +29,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   availableBalance,
   mnemonic,
   refetchBalance,
-  polkadotAddress
+  polkadotAddress,
 }) => {
   const [address, setAddress] = useState("");
   const [amount, setAmount] = useState("");
@@ -128,7 +128,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       await invoke<string>("transfer_balance_tauri", {
         senderSeed: mnemonic,
         recipientAddress: address,
-        amount: planckAmount
+        amount: planckAmount,
       });
 
       toast.success("Transfer successful!", { duration: 3000 });
@@ -145,7 +145,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     } catch (e: any) {
       toast.error("Transfer failed", {
         description: e.toString(),
-        duration: 5000
+        duration: 5000,
       });
     } finally {
       setLoading(false);
@@ -166,7 +166,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     <>
       <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
         <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
-          <Dialog.Title className="sr-only">Send User Balance</Dialog.Title>
+          <Dialog.Title className="sr-only">Send Balance</Dialog.Title>
           {/* Mobile accent line */}
           <div className="h-4 bg-primary-50 md:hidden" />
 
@@ -179,13 +179,13 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                 </AbstractIconWrapper>
               </div>
               <span className="text-center text-2xl text-grey-10 font-medium">
-                Send User Balance
+                Send Balance
               </span>
             </div>
 
             {/* Mobile Header */}
             <div className="flex py-4 items-center justify-between text-grey-10 md:hidden">
-              <span className="text-lg font-medium">Send User Balance</span>
+              <span className="text-lg font-medium">Send Balance</span>
               <button onClick={onClose}>
                 <Icons.CloseCircle className="size-6" />
               </button>
