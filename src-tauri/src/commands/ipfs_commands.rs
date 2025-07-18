@@ -133,7 +133,7 @@ pub async fn encrypt_and_upload_file(
             original_file: OriginalFileInfo {
                 name: file_name.clone(),
                 size: file_data.len(),
-                hash: original_file_hash, // <-- store the hash here!
+                hash: original_file_hash,
                 extension: file_extension,
             },
             erasure_coding: ErasureCodingInfo {
