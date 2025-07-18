@@ -49,6 +49,7 @@ import FileDetailsDialogContent from "../file-details-dialog-content";
 import BlockTimestamp from "@/app/components/ui/block-timestamp";
 import { Icons } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
@@ -58,17 +59,23 @@ const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
 interface FilesTableProps {
   showUnpinnedDialog?: boolean;
   files: FormattedUserIpfsFile[];
+  resetPagination?: boolean;
+  onPaginationReset?: () => void;
 }
 
 const FilesTable: FC<FilesTableProps> = ({
   showUnpinnedDialog = true,
   files,
+  resetPagination,
+  onPaginationReset,
 }) => {
   const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
     cid: fileToDelete?.cid || "",
   });
+  const { polkadotAddress } = useWalletAuth();
+
 
   // Add state for file details dialog
   const [fileDetailsFile, setFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
@@ -169,8 +176,22 @@ const FilesTable: FC<FilesTableProps> = ({
   }, [handleFiles]);
 
   const filteredData = useMemo(() => files, [files]);
-  const { paginatedData: data, setCurrentPage, currentPage, totalPages } =
-    usePagination(filteredData, 10);
+  const {
+    paginatedData: data,
+    setCurrentPage,
+    currentPage,
+    totalPages
+  } = usePagination(filteredData, 10);
+
+  useEffect(() => {
+    if (resetPagination) {
+      setCurrentPage(1);
+      if (onPaginationReset) {
+        onPaginationReset();
+      }
+    }
+  }, [resetPagination, setCurrentPage, onPaginationReset]);
+
 
   const unpinnedDetails = useMemo(() => {
     if (!showUnpinnedDialog) return [];
@@ -270,7 +291,7 @@ const FilesTable: FC<FilesTableProps> = ({
           const value = cell.getValue();
           if (cell.row.original.tempData) return "...";
           if (value === undefined) return "Unknown";
-          return <div className="text-grey-20 text-base font-medium">{formatBytesFromBigInt(BigInt(value))}</div>;
+          return <div className="text-grey-20 text-base font-medium">{cell.row.original.isAssigned ? formatBytesFromBigInt(BigInt(value)) : "Unknown"}</div>;
         },
       }),
 
@@ -290,9 +311,30 @@ const FilesTable: FC<FilesTableProps> = ({
         header: "LOCATION",
         id: "location",
         enableSorting: false,
-        cell: ({ row: { original } }) => (
-          <div className="text-grey-70 text-base font-medium">{original.source}</div>
-        ),
+        cell: ({ row: { original } }) => {
+          const getParentDirectory = (path: string): string => {
+            if (!path) return "Unknown";
+
+            const parts = path.split(/[/\\]/).filter(p => p.trim());
+
+            if (parts.length >= 2) {
+              return parts[parts.length - 2];
+            }
+
+            return "Hippius";
+          };
+
+          const parentDir = getParentDirectory(original.source ?? "");
+
+          return (
+            <div className="flex flex-col">
+              <div className="text-grey-20 text-base font-medium">{parentDir}</div>
+              {original.source !== "Hippius" && (<div className="text-grey-70 text-xs truncate max-w-[250px]" title={original.source}>
+                {original.source}
+              </div>)}
+            </div>
+          );
+        },
       }),
       columnHelper.display({
         id: "actions",
@@ -314,7 +356,7 @@ const FilesTable: FC<FilesTableProps> = ({
                     icon: <Download className="size-4" />,
                     itemTitle: "Download",
                     onItemClick: async () => {
-                      downloadIpfsFile(cell.row.original);
+                      downloadIpfsFile(cell.row.original, polkadotAddress ?? "");
                     },
                   },
                   ...(((fileType === "video" || fileType === "image" || fileType === "pdfDocument")) ?
@@ -582,6 +624,8 @@ const FilesTable: FC<FilesTableProps> = ({
             setSelectedFile(null);
           }}
           file={selectedFile}
+          allFiles={files}
+          onNavigate={setSelectedFile}
         />
       )}
       {selectedFileType === "image" && (
@@ -590,6 +634,8 @@ const FilesTable: FC<FilesTableProps> = ({
             setSelectedFile(null);
           }}
           file={selectedFile}
+          allFiles={files}
+          onNavigate={setSelectedFile}
         />
       )}
       {selectedFileType === "pdfDocument" && (
@@ -598,6 +644,8 @@ const FilesTable: FC<FilesTableProps> = ({
             setSelectedFile(null);
           }}
           file={selectedFile}
+          allFiles={files}
+          onNavigate={setSelectedFile}
         />
       )}
 

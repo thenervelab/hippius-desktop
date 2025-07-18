@@ -1,6 +1,12 @@
 // BalanceTrends.tsx
 import { useMemo, useState } from "react";
-import { Icons, Graphsheet, Select, LineChart } from "@/components/ui";
+import {
+  Icons,
+  Graphsheet,
+  Select,
+  LineChart,
+  AbstractIconWrapper,
+} from "@/components/ui";
 import { Option } from "@/components/ui/select";
 import { Account } from "@/app/lib/types/accounts";
 import {
@@ -14,6 +20,7 @@ import {
 } from "@/app/lib/utils/getXlablesForAccounts";
 import BalanceTrendsTooltip from "./BalanceTrendsTooltip";
 import { COLORS } from "./constants";
+import { WalletAdd } from "@/app/components/ui/icons";
 
 const timeRangeOptions: Option[] = [
   { value: "week", label: "This Week" },
@@ -99,10 +106,29 @@ const BalanceTrends: React.FC<{
   return (
     <InView triggerOnce threshold={0.2}>
       {({ ref }) => (
-        <div ref={ref} className={`py-4 pr-4 pl-8 w-full ${className || ""}`}>
-          <div className="border border-grey-80 rounded-lg h-full relative">
+        <div
+          ref={ref}
+          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${className || ""}`}
+        >
+          <div className="flex justify-between mb-3.5">
+            <div className="flex gap-4 items-center">
+              <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
+                <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
+              </AbstractIconWrapper>
+              <span className="text-base font-medium  text-grey-60">
+                Transactions Overview
+              </span>
+            </div>
+
+            <Select
+              options={timeRangeOptions}
+              value={timeRange}
+              onValueChange={setTimeRange}
+            />
+          </div>
+          <div className="border border-grey-80 rounded-lg h-[225px] relative">
             <div className="absolute left-2  z-50">
-              <div className="flex ml-8 mt-4 text-grey-70 font-medium items-center gap-x-3 text-xs">
+              <div className="flex ml-8 mt-2 text-grey-70 font-medium items-center gap-x-3 text-xs">
                 <div className="flex items-center gap-x-2">
                   <div className="w-6 h-0.5 bg-primary-40" />
                   Balance
@@ -114,13 +140,7 @@ const BalanceTrends: React.FC<{
                 </div>
               </div>
             </div>
-            <div className="absolute right-4 top-2 z-50">
-              <Select
-                options={timeRangeOptions}
-                value={timeRange}
-                onValueChange={setTimeRange}
-              />
-            </div>
+
             <Graphsheet
               className="absolute inset-0"
               majorCell={{
@@ -154,7 +174,7 @@ const BalanceTrends: React.FC<{
                     data={formattedChartData}
                     xScaleType="band"
                     yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
-                    margin={{ top: 34, left: 45, bottom: 30, right: 5 }}
+                    margin={{ top: 20, left: 45, bottom: 30, right: 5 }}
                     showVerticalCrosshair
                     showHorizontalCrosshair
                     xAxisProps={{

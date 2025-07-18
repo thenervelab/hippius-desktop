@@ -1,6 +1,4 @@
 export const API_CONFIG = {
-  IPFS_GATEWAY:
-    process.env.NEXT_PUBLIC_IPFS_GATEWAY || "https://relay-fr.hippius.network",
   auth: {
     mnemonic: "/api/auth/mnemonic/",
     verify: "/api/auth/verify/",

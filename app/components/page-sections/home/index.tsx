@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import DetailList from "./DetailList";
 
 import CreditUsageTrends from "./credit-usage-trends";
@@ -13,6 +12,8 @@ import { useIpfsBandwidth } from "@/app/lib/hooks/api/useIpfsBandwidth";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
+
+import Ipfs from "../files/ipfs";
 
 type IpfsInfo = {
   ID?: string;
@@ -27,28 +28,31 @@ function useIpfsInfo() {
   const [retryCount, setRetryCount] = useState(0);
   const MAX_RETRIES = 3;
 
-  const fetchIpfsInfo = async () => {
+  const fetchIpfsInfo = useCallback(async () => {
     try {
-      const response = await tauriFetch(`${IPFS_NODE_CONFIG.baseURL}/api/v0/id`, {
-        method: "POST",
-      });
+      const response = await tauriFetch(
+        `${IPFS_NODE_CONFIG.baseURL}/api/v0/id`,
+        {
+          method: "POST",
+        }
+      );
 
       if (response.ok) {
         const data = await response.json();
         setIpfsInfo(data);
         setIsRetrying(false);
       } else {
-        console.error(`Error fetching IPFS info: HTTP ${response.status}`);
+        console.warn(`Error fetching IPFS info: HTTP ${response.status}`);
         throw new Error(`HTTP error ${response.status}`);
       }
     } catch (error) {
-      console.error("Failed to fetch IPFS info:", error);
+      console.warn("Failed to fetch IPFS info:", error);
       try {
         const ipfsData = await invoke<IpfsInfo>("get_ipfs_node_info");
         setIpfsInfo(ipfsData);
         setIsRetrying(false);
       } catch (invokeError) {
-        console.error("Tauri invoke also failed:", invokeError);
+        console.warn("Tauri invoke also failed:", invokeError);
 
         // Implement retry logic
         if (retryCount < MAX_RETRIES) {
@@ -65,11 +69,11 @@ function useIpfsInfo() {
         }
       }
     }
-  };
+  }, [retryCount, MAX_RETRIES]);
 
   useEffect(() => {
     fetchIpfsInfo();
-  }, []);
+  }, [fetchIpfsInfo]);
 
   useEffect(() => {
     if (isRetrying) {
@@ -80,13 +84,12 @@ function useIpfsInfo() {
 
       return () => clearTimeout(timer);
     }
-  }, [isRetrying, retryCount]);
+  }, [isRetrying, retryCount, fetchIpfsInfo]);
 
   return ipfsInfo;
 }
 
 const Home: React.FC = () => {
-  const { polkadotAddress, mnemonic } = useWalletAuth();
   const ipfsInfo = useIpfsInfo();
   const { download, upload } = useIpfsBandwidth(1000);
 
@@ -108,16 +111,6 @@ const Home: React.FC = () => {
   const transformedFilesData = transformFilesToStorageData(filesData || []);
   console.log(transformedFilesData, "transformedFilesData");
 
-  useEffect(() => {
-    if (polkadotAddress) {
-      invoke("start_user_profile_sync_tauri", { accountId: polkadotAddress });
-      invoke("start_folder_sync_tauri", {
-        accountId: polkadotAddress,
-        seedPhrase: mnemonic,
-      });
-    }
-  }, [polkadotAddress, mnemonic]);
-
   return (
     <div className="flex flex-col mt-6">
       <section className="mb-6">
@@ -130,7 +123,7 @@ const Home: React.FC = () => {
       {/* Stats Cards */}
       <DetailList ipfsInfo={ipfsInfo} upload={upload} download={download} />
 
-      <div className="flex gap-4 mt-6 w-full h-full">
+      <div className="gap-4 mt-6 w-full h-full grid grid-cols-1 md:grid-cols-2">
         <CreditUsageTrends
           chartData={transformedCreditsData}
           isLoading={isLoadingCredits}
@@ -139,6 +132,9 @@ const Home: React.FC = () => {
           chartData={transformedFilesData}
           isLoading={isLoadingFiles}
         />
+      </div>
+      <div>
+        <Ipfs isRecentFiles />
       </div>
     </div>
   );

@@ -1,14 +1,21 @@
 /* eslint-disable @next/next/no-img-element */
-import React, { ReactNode, useState } from "react";
+import React, { ReactNode, useState, useEffect } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import { Loader2, Image as LucideImage } from "lucide-react";
+import {
+  Loader2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
+import {
+  getNextViewableFile,
+  getPrevViewableFile,
+} from "@/app/lib/utils/mediaNavigation";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export const ImageDialogTrigger: React.FC<{
   children: ReactNode;
@@ -29,9 +36,59 @@ export const ImageDialogTrigger: React.FC<{
 
 const ImageDialog: React.FC<{
   file: null | FormattedUserIpfsFile;
+  allFiles: FormattedUserIpfsFile[];
   onCloseClicked: () => void;
-}> = ({ file, onCloseClicked }) => {
+  onNavigate: (file: FormattedUserIpfsFile) => void;
+}> = ({ file, allFiles, onCloseClicked, onNavigate }) => {
+  const { polkadotAddress } = useWalletAuth();
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
+
+  // Calculate next and previous files whenever the current file changes
+  useEffect(() => {
+    if (!file) return;
+
+    const next = getNextViewableFile(file, allFiles);
+    const prev = getPrevViewableFile(file, allFiles);
+
+    setNextFile(next);
+    setPrevFile(prev);
+    setImageLoaded(false);
+  }, [file, allFiles]);
+
+  const handleNext = () => {
+    if (nextFile) {
+      onNavigate(nextFile);
+    }
+  };
+
+  const handlePrev = () => {
+    if (prevFile) {
+      onNavigate(prevFile);
+    }
+  };
+
+  // Handle keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!file) return;
+
+      if (e.key === "ArrowRight" && nextFile) {
+        handleNext();
+      } else if (e.key === "ArrowLeft" && prevFile) {
+        handlePrev();
+      } else if (e.key === "Escape") {
+        onCloseClicked();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [file, nextFile, prevFile]);
+
   return (
     <Dialog.Root
       open={!!file}
@@ -42,7 +99,7 @@ const ImageDialog: React.FC<{
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="bg-white/90 fixed p-3 sm:p-10 md:p-20 z-[999] top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3 backdrop-blur-xl">
+        <Dialog.Overlay className="bg-black/80 fixed p-3 sm:p-10 md:p-20 z-[999] top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
           <Dialog.Content className="h-full max-w-screen-1.5xl text-grey-10 w-full flex flex-col items-center">
             {(() => {
               if (file) {
@@ -55,12 +112,12 @@ const ImageDialog: React.FC<{
                     <div className="absolute flex justify-center top-4 px-2 sm:px-6 animate-fade-in-0.3 left-0 right-0">
                       <div className="flex justify-between gap-2 sm:gap-6 w-full ">
                         <Dialog.Title className="data-[state=open] font-medium flex items-center gap-x-2 w-full text-xl">
-                          <div className="size-7 bg-primary-80 rounded flex items-center justify-center">
-                            <LucideImage />
+                          <div className="rounded flex items-center justify-center">
+                            <Icons.Image className="size-8 " />
                           </div>
                           <span
                             title={file.name}
-                            className="truncate max-sm:max-w-[180px]"
+                            className="truncate max-sm:max-w-[180px] text-grey-100 text-[22px] font-medium"
                           >
                             {file.name}
                           </span>
@@ -69,12 +126,12 @@ const ImageDialog: React.FC<{
                         <div className="flex gap-x-4 items-center">
                           <button
                             onClick={() => {
-                              downloadIpfsFile(file);
+                              downloadIpfsFile(file, polkadotAddress ?? "");
                             }}
-                            className="flex hover:opacity-40 duration-300 text-sm font-medium gap-x-2 items-center bg-white whitespace-nowrap rounded border border-grey-80 p-2"
+                            className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-white whitespace-nowrap rounded border border-grey-80 p-2"
                           >
                             <Icons.DocumentDownload className="size-4 min-w-4" />
-                            <span className="max-sm:hidden">Download File</span>
+                            <span className="max-sm:hidden text-grey-10 text-sm">Download File</span>
                           </button>
                           <button
                             onClick={() => {
@@ -86,19 +143,42 @@ const ImageDialog: React.FC<{
                                   );
                                 });
                             }}
-                            className="size-9 border hover:opacity-40 duration-300 border-grey-8 flex items-center justify-center rounded"
+                            className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"
                           >
                             <Icons.Link className="size-5 [&>path]:stroke-2" />
                           </button>
                           <button
-                            className="hover:opacity-40 duration-300"
+                            className="duration-300"
                             onClick={onCloseClicked}
                           >
-                            <Icons.CloseCircle className="size-7 [&>path]:stroke-2 text-grey-10" />
+                            <Icons.CloseCircle className="size-7 [&>path]:stroke-2 text-grey-100" />
                           </button>
                         </div>
                       </div>
                     </div>
+
+                    {/* Left navigation button */}
+                    {prevFile && (
+                      <button
+                        onClick={handlePrev}
+                        className="absolute left-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        aria-label="Previous image"
+                      >
+                        <Icons.ArrowLeft2 className="size-6 text-grey-50" />
+                      </button>
+                    )}
+
+                    {/* Right navigation button */}
+                    {nextFile && (
+                      <button
+                        onClick={handleNext}
+                        className="absolute right-5 top-1/2 -translate-y-1/2 z-10 border border-grey-80 bg-white/80 hover:bg-white rounded-full p-3 shadow-lg transition-all duration-300 hover:scale-110"
+                        aria-label="Next image"
+                      >
+                        <Icons.ArrowRight2 className="size-6 text-grey-50" />
+                      </button>
+                    )}
+
                     <div
                       onClick={onCloseClicked}
                       className="w-full h-full flex items-center justify-center"
@@ -120,7 +200,7 @@ const ImageDialog: React.FC<{
                         }}
                         transition={{ duration: 0.3, ease: "easeInOut" }}
                         onClick={(e) => e.stopPropagation()}
-                        className="border-4 min-w-28 min-h-28 relative shadow-dialog bg-white flex max-w-full max-h-full h-fit flex-col border-grey-80 bg-background-1 rounded-[8px] overflow-hidden"
+                        className="min-w-28 min-h-28 relative shadow-dialog flex max-w-full max-h-full h-fit flex-col rounded overflow-hidden"
                       >
                         <img
                           onLoad={() => {
@@ -129,7 +209,7 @@ const ImageDialog: React.FC<{
                           src={imageUrl}
                           alt={file.name}
                           className={cn(
-                            "max-h-[80vh] duration-300 opacity-0 max-w-full relative w-auto h-auto object-contain",
+                            "max-h-[80vh] duration-300 opacity-0 max-w-full relative w-auto h-auto object-contain rounded",
                             imageLoaded && "opacity-100"
                           )}
                         />

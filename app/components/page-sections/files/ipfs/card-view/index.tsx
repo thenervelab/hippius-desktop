@@ -25,6 +25,7 @@ import SidebarDialog from "@/app/components/ui/sidebar-dialog";
 import FileDetailsDialogContent from "../file-details-dialog-content";
 import { Icons } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 // Custom event names for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -33,10 +34,19 @@ const TIME_BEFORE_ERR = 30 * 60 * 1000;
 interface CardViewProps {
     showUnpinnedDialog?: boolean;
     files: FormattedUserIpfsFile[];
+    resetPagination?: boolean;
+    onPaginationReset?: () => void;
 }
 
-const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
+const CardView: FC<CardViewProps> = ({
+    showUnpinnedDialog = true,
+    files,
+    resetPagination,
+    onPaginationReset
+}) => {
     const router = useRouter();
+
+    const { polkadotAddress } = useWalletAuth();
 
     const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
     const [openDeleteModal, setOpenDeleteModal] = useState(false);
@@ -176,6 +186,15 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
         currentPage,
         totalPages,
     } = usePagination(filteredData || [], 12); // Using more items per page for card view
+
+    useEffect(() => {
+        if (resetPagination) {
+            setCurrentPage(1);
+            if (onPaginationReset) {
+                onPaginationReset();
+            }
+        }
+    }, [resetPagination, setCurrentPage, onPaginationReset]);
 
     const handleDelete = () => {
         setOpenDeleteModal(true);
@@ -341,7 +360,7 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                                                             icon: <Download className="size-4" />,
                                                             itemTitle: "Download",
                                                             onItemClick: async () => {
-                                                                downloadIpfsFile(file);
+                                                                downloadIpfsFile(file, polkadotAddress ?? "");
                                                             },
                                                         },
                                                         ...(((fileType === "video" || fileType === "image" || fileType === "pdfDocument")) ?
@@ -447,6 +466,8 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                         setSelectedFile(null);
                     }}
                     file={selectedFile}
+                    allFiles={files}
+                    onNavigate={setSelectedFile}
                 />
             )}
             {selectedFileType === "image" && (
@@ -455,6 +476,8 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                         setSelectedFile(null);
                     }}
                     file={selectedFile}
+                    allFiles={files}
+                    onNavigate={setSelectedFile}
                 />
             )}
             {selectedFileType === "pdfDocument" && (
@@ -463,6 +486,8 @@ const CardView: FC<CardViewProps> = ({ showUnpinnedDialog = true, files }) => {
                         setSelectedFile(null);
                     }}
                     file={selectedFile}
+                    allFiles={files}
+                    onNavigate={setSelectedFile}
                 />
             )}
 

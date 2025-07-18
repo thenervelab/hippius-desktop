@@ -2,7 +2,7 @@ name: Tauri Desktop App Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: write

@@ -9,12 +9,16 @@ import { Clock } from "../../ui/icons";
 import WalletBalanceWidgetWithGraph from "./WalletBalanceWidgetWithGraph";
 import DashboardTitleWrapper from "../../dashboard-title-wrapper";
 import TransactionHistoryTable from "./TransactionHistoryTable";
+import HippiusBalance from "./HippiusBalance";
 
 export default function Wallet() {
   return (
     <>
       <DashboardTitleWrapper mainText="Wallet">
-        <div className="flex flex-col xl:flex-row gap-4 mt-6">
+        <div className="w-full mt-6">
+          <HippiusBalance />
+        </div>
+        <div className="w-full mt-6">
           <WalletBalanceWidgetWithGraph />
         </div>
 

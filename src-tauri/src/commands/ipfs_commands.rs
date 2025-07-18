@@ -1,11 +1,11 @@
 use crate::utils::{
     accounts::{
-        encrypt_file_for_account, decrypt_file_for_account
+        encrypt_file, decrypt_file
     },
     ipfs::{
         download_from_ipfs,upload_to_ipfs
     },
-    file_operations::request_file_storage
+    file_operations::{request_file_storage, copy_to_sync_and_add_to_db}
 };
 use uuid::Uuid;
 use std::fs;
@@ -29,11 +29,12 @@ pub async fn encrypt_and_upload_file(
     seed_phrase: String
 ) -> Result<String, String> {
     use std::path::Path;
-    
+    println!("file path is {:?}", file_path.clone());    
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE; // 1MB
+    let account_id_clone = account_id.clone();
     
     // Extract file name from file_path
     let file_name = Path::new(&file_path)
@@ -68,7 +69,8 @@ pub async fn encrypt_and_upload_file(
         let original_file_hash = format!("{:x}", hasher.finalize());
 
         // Encrypt using centralized function
-        let to_process = encrypt_file_for_account(&account_id, &file_data)?;
+        // let to_process = encrypt_file_for_account(&account_id_clone, &file_data)?;
+        let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data))?;
         // Split into chunks
         let mut chunks = vec![];
         for i in (0..to_process.len()).step_by(chunk_size) {
@@ -131,7 +133,7 @@ pub async fn encrypt_and_upload_file(
             original_file: OriginalFileInfo {
                 name: file_name.clone(),
                 size: file_data.len(),
-                hash: original_file_hash, // <-- store the hash here!
+                hash: original_file_hash,
                 extension: file_extension,
             },
             erasure_coding: ErasureCodingInfo {
@@ -162,9 +164,13 @@ pub async fn encrypt_and_upload_file(
     // Call request_file_storage and log its returned CID
     let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
-        Ok(res) => println!("[encrypt_and_upload_file] : {}", res),
+        Ok(res) => {
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid).await;
+            println!("[encrypt_and_upload_file] : {}", res);
+        },
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
     }
+
     Ok(metadata_cid)
 }
 
@@ -261,7 +267,8 @@ pub async fn download_and_decrypt_file(
             encrypted_data.truncate(encrypted_size);
         }
         // Decrypt using centralized function
-        let decrypted_data = decrypt_file_for_account(&account_id, &encrypted_data)?;
+        // let decrypted_data = decrypt_file_for_account(&account_id, &encrypted_data)?;
+        let decrypted_data = tauri::async_runtime::block_on(decrypt_file(&encrypted_data))?;
         // Hash check
         let mut hasher = Sha256::new();
         hasher.update(&decrypted_data);

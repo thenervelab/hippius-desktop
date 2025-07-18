@@ -1,68 +1,107 @@
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "./decodeHexCid";
 import { toast } from "sonner";
-import { writeFile } from "@tauri-apps/plugin-fs";
-import { save } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
 
-export const downloadIpfsFile = async (file: FormattedUserIpfsFile) => {
-    const { cid, name } = file;
-    const toastId = toast.loading(`Starting download: ${name}`);
+export const downloadIpfsFile = async (file: FormattedUserIpfsFile, polkadotAddress: string) => {
+    const { source } = file;
 
-    try {
-        // Properly decode the CID
-        const decodedCid = decodeHexCid(cid);
-        const url = `https://get.hippius.network/ipfs/${decodedCid}?download=1`;
-
-        console.log(`Downloading from: ${url}`);
-
-        // Call our Tauri command to download the file
-        // This will handle binary data properly in Rust
-        const fileData = await invoke<number[]>("download_file", { url });
-
-        if (!fileData || fileData.length === 0) {
-            throw new Error("Received empty file data");
-        }
-
-        console.log(`Downloaded file size: ${fileData.length} bytes`);
-
-        // Convert the number array to Uint8Array
-        const binaryData = new Uint8Array(fileData);
-
-        // Show save dialog - use the same approach as exportWalletAsZip
-        const filePath = await save({
-            defaultPath: name
-        });
-
-        if (filePath) {
-            // Write the file using Tauri's FS API
-            await writeFile(filePath, binaryData);
-
-            console.log(`File saved to: ${filePath}`);
-            toast.success(`Download complete: ${name} (${formatFileSize(binaryData.length)})`, { id: toastId });
-            return true;
-        } else {
-            toast.error(`Download cancelled`, { id: toastId });
-            return false;
-        }
-    } catch (err) {
-        console.error("Download failed:", err);
-        toast.error(`Download failed: ${err instanceof Error ? err.message : 'Unknown error'}`, { id: toastId });
-        return false;
+    // Check if the file is from Hippius or another source
+    if (source !== "Hippius") {
+        // Encrypted download for files from other sources
+        return downloadEncryptedIpfsFile(file, polkadotAddress ?? "");
+    } else {
+        // Regular IPFS download for Hippius files
+        return downloadRegularIpfsFile(file);
     }
 };
 
-// Helper function to format file size
-function formatFileSize(bytes: number): string {
-    if (bytes === 0) return '0 Bytes';
+const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
+    const { cid, name } = file;
 
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    const toastId = toast.loading(`Preparing download: ${name}`);
 
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
+    try {
+        // Get file extension to apply proper filter
+        const fileExtension = name.split('.').pop() || '';
 
-export const streamIpfsFile = async (file: FormattedUserIpfsFile) => {
-    return downloadIpfsFile(file);
+        // Show save dialog to ask user where to save the file
+        const filePath = await save({
+            filters: [{
+                name: fileExtension ? `${fileExtension.toUpperCase()} File` : 'All Files',
+                extensions: [fileExtension || '*']
+            }],
+            defaultPath: name
+        });
+
+        if (!filePath) {
+            // User cancelled the dialog
+            toast.error("Download cancelled", { id: toastId });
+            return;
+        }
+
+        toast.loading(`Downloading: ${name}`, { id: toastId });
+
+        const url = `https://get.hippius.network/ipfs/${decodeHexCid(cid)}?download=1`;
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(response.statusText);
+
+        // Use arrayBuffer for more reliable binary data handling
+        const arrayBuffer = await response.arrayBuffer();
+
+        // Convert to Uint8Array for writing to file
+        const fileData = new Uint8Array(arrayBuffer);
+
+        // Write the file to the selected location using the correct Tauri API
+        await writeFile(filePath, fileData);
+
+        toast.success(`Download complete: ${name}`, { id: toastId });
+    } catch (err) {
+        console.error("Download failed:", err);
+        toast.error(`Download failed: ${err instanceof Error ? err.message : 'Unknown error'}`, { id: toastId });
+    }
+};
+
+const downloadEncryptedIpfsFile = async (file: FormattedUserIpfsFile, polkadotAddress: string) => {
+    const { name, fileHash } = file;
+
+    const toastId = toast.loading(`Preparing download: ${name}`);
+
+    try {
+
+        if (!polkadotAddress) {
+            throw new Error("Wallet not connected. Please connect your wallet to download encrypted files.");
+        }
+
+        const fileExtension = name.split('.').pop() || '';
+        const savePath = await save({
+            filters: [{
+                name: fileExtension ? `${fileExtension.toUpperCase()} File` : 'All Files',
+                extensions: [fileExtension || '*']
+            }],
+            defaultPath: name
+        });
+
+        if (!savePath) {
+            toast.error("Download cancelled", { id: toastId });
+            return;
+        }
+
+        toast.loading(`Downloading encrypted file: ${name}...`, { id: toastId });
+
+        // Use the metadataCid (which is the fileHash in hex form) to download and decrypt the file
+        await invoke("download_and_decrypt_file", {
+            accountId: polkadotAddress,
+            metadataCid: fileHash,
+            outputFile: savePath
+        });
+
+        toast.success(`Download complete: ${name}`, { id: toastId });
+    } catch (err) {
+        console.error("Encrypted download failed:", err);
+        toast.error(`Download failed: ${err instanceof Error ? err.message : 'Unknown error'}`, { id: toastId });
+    }
 };
