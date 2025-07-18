@@ -61,6 +61,31 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             .await
             .unwrap();
 
+            // Check if source column exists in user_profiles table, add if not
+            let source_column_exists: Result<Option<i32>, _> = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pragma_table_info('user_profiles') WHERE name = 'source'"
+            )
+            .fetch_optional(&pool)
+            .await;
+
+            match source_column_exists {
+                Ok(Some(count)) if count == 0 => {
+                    println!("[Setup] Adding 'source' column to user_profiles table");
+                    sqlx::query("ALTER TABLE user_profiles ADD COLUMN source TEXT")
+                        .execute(&pool)
+                        .await
+                        .unwrap_or_else(|e| {
+                            eprintln!("[Setup] Failed to add source column: {}", e);
+                        });
+                }
+                Ok(Some(_)) => {
+                    println!("[Setup] 'source' column already exists in user_profiles table");
+                }
+                Err(e) => {
+                    eprintln!("[Setup] Error checking for source column: {}", e);
+                }
+            }
+
             // Add sync_folder_files table with the same fields as user_profiles
             sqlx::query(
                 "CREATE TABLE IF NOT EXISTS sync_folder_files (
