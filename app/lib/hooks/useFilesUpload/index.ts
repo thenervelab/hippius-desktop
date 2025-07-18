@@ -101,6 +101,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
             setRequestState("idle");
             setProgress(0);
             onError?.(err);
+            console.log("error", err)
             toast.error(
                 files.length > 1
                     ? `${files.length} files failed to upload!`

@@ -1,6 +1,7 @@
 "use client";
 
 import DashboardTitleWrapper from "../components/dashboard-title-wrapper";
+import DirectStorageRequestDemo from "../components/DemoIpfsUpload";
 import HomePage from "../components/page-sections/home";
 // import IpfsTest from "../components/upload-download"
 // import { useFilesNotification } from "../lib/hooks/useFilesNotification";
@@ -37,6 +38,7 @@ export default function Home() {
       )} */}
       {/* END OF TEMPORARY SECTION */}
       <HomePage />
+      <DirectStorageRequestDemo seedPhrase="endorse spray spice bright vote candy pumpkin sword model elder rice romance" accountId="5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2" />
     </DashboardTitleWrapper>
   );
 }
