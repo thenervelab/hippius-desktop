@@ -33,15 +33,15 @@ pub async fn request_file_storage(
         file_name: file_name.as_bytes().to_vec(),
     };
 
-    // 4. Call storage_request_tauri
-    let result = crate::commands::substrate_tx::storage_request_tauri(
+    // 4. Call storage_request_tauri (still call it for side effects, but ignore its result)
+    let _ = crate::commands::substrate_tx::storage_request_tauri(
         vec![file_input],
         None,
         seed_phrase.to_string(),
     )
     .await?;
 
-    Ok(result)
+    Ok(json_cid)
 }
 
 /// Unpins all user_profiles records with the given file name by calling storage_unpin_request_tauri
@@ -56,9 +56,19 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
                 .map_err(|e| format!("DB error (fetch): {e}"))?;
 
         if let Some((main_req_hash,)) = hashes.first() {
+            // 1. Create the JSON
+            let json = serde_json::json!([{
+                "filename": file_name,
+                "cid": main_req_hash
+            }]);
+            let json_string = serde_json::to_string(&json).unwrap();
+            let api_url = "http://127.0.0.1:5001";
+            // 2. Pin JSON to local IPFS node
+            let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
+
             // Wrap in FileHashWrapper
             let file_hash_wrapper = FileHashWrapper {
-                file_hash: main_req_hash.as_bytes().to_vec(),
+                file_hash: json_cid.as_bytes().to_vec(),
             };
             // Call the unpin request
             let result =
@@ -126,7 +136,7 @@ pub async fn delete_and_unpin_file_by_name(
     delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase).await
 }
 
-pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str) {
+pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str) {
     // Define your sync folder path
     let sync_folder = PathBuf::from(get_private_sync_path().await);
     let file_name = match original_path.file_name() {
@@ -162,13 +172,15 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids
-                ) VALUES (?, '', ?, ?, ?, ?, 0, '', '', 0, 0, '', ?, '')"
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', '', 0, 0, '', ?, '')"
             )
             .bind(account_id)
+            .bind(request_cid) // cid
             .bind(&file_hash)
             .bind(&file_name)
             .bind(file_size_in_bytes)
             .bind(false)
+            .bind(request_cid) // main_req_hash
             .bind(file_size_in_bytes)
             .execute(pool)
             .await;

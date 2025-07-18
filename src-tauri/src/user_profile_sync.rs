@@ -204,7 +204,19 @@ pub fn start_user_sync(account_id: &str) {
                                         let file_size_in_bytes = file.get("file_size_in_bytes").and_then(|v| v.as_i64()).unwrap_or(0);
                                         let is_assigned = file.get("is_assigned").and_then(|v| v.as_bool()).unwrap_or(false);
                                         let last_charged_at = file.get("last_charged_at").and_then(|v| v.as_i64()).unwrap_or(0);
-                                        let main_req_hash = file.get("main_req_hash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                                        let main_req_hash = file.get("main_req_hash")
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| {
+                                                // Try to decode hex to bytes, then bytes to string
+                                                match hex::decode(s) {
+                                                    Ok(bytes) => match String::from_utf8(bytes) {
+                                                        Ok(decoded) => decoded,
+                                                        Err(_) => s.to_string(), // fallback to original if not valid UTF-8
+                                                    },
+                                                    Err(_) => s.to_string(), // fallback to original if not valid hex
+                                                }
+                                            })
+                                            .unwrap_or_default();
                                         let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                                         let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
                                         let source_value = "Hippius".to_string();
@@ -351,7 +363,7 @@ pub fn start_user_sync(account_id: &str) {
                                         file_size_in_bytes,
                                         is_assigned: storage_request.is_assigned,
                                         last_charged_at: storage_request.last_charged_at as i64,
-                                        main_req_hash: file_hash_raw,
+                                        main_req_hash: decoded_hash,
                                         selected_validator: validator_ss58,
                                         total_replicas: storage_request.total_replicas as i64,
                                         block_number,

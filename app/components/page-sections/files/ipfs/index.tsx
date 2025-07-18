@@ -16,7 +16,6 @@ import CardView from "./card-view";
 import Link from "next/link";
 import SyncFolderSelector from "./SyncFolderSelector";
 import { getSyncPath, setSyncPath } from "@/lib/utils/syncPathUtils";
-
 import { cn, formatBytesFromBigInt } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import FileDetailsDialog, { FileDetail } from "./files-table/UnpinFilesDialog";
