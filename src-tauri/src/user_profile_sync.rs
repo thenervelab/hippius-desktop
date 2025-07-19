@@ -189,7 +189,6 @@ pub fn start_user_sync(account_id: &str) {
                             if let Ok(profile_data) = serde_json::from_str::<serde_json::Value>(&data) {
                                 if let Some(files) = profile_data.as_array() {
                                     for file in files {
-                                        println!("files : {:?}", files);
                                         let file_hash = if let Some(v) = file.get("file_hash") {
                                             if let Some(s) = v.as_str() {
                                                 s.to_string()
@@ -233,7 +232,6 @@ pub fn start_user_sync(account_id: &str) {
 
                                         let file_key = (file_hash.clone(), file_name.clone());
                                         if seen_files.insert(file_key) {
-                                            println!("[UserSync] Adding user profile file: {}", file_hash);
                                             records_to_insert.push(UserProfileFile {
                                                 owner: account_id.clone(),
                                                 cid: profile_cid.clone(),
@@ -285,7 +283,6 @@ pub fn start_user_sync(account_id: &str) {
                     Ok(StorageKeyValuePair { value, .. }) => {
                         if let Some(storage_request) = value {
                             if storage_request.owner == account {
-                                println!("storage_request {:?}", storage_request);
                                 let file_hash_raw = bounded_vec_to_string(&storage_request.file_hash.0);
                                 let decoded_hash = decode_file_hash(&storage_request.file_hash.0)
                                     .unwrap_or_else(|_| "Invalid file hash".to_string());

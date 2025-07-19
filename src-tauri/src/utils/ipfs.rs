@@ -8,7 +8,7 @@ use std::io::Read;
 pub fn upload_to_ipfs(
     api_url: &str,
     file_path: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let client = Client::new();
 
     // Read file data
@@ -62,7 +62,7 @@ pub fn upload_to_ipfs(
 }
 
 
-pub fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let client = Client::new();
 
     let res = client

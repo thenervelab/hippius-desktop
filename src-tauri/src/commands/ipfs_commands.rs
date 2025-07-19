@@ -330,9 +330,14 @@ pub async fn upload_file_public(
         }
     }
 
-    // Upload file directly to IPFS
-    let file_cid = upload_to_ipfs(api_url, &file_path)
-        .map_err(|e| format!("Upload error: {}", e))?;
+    let file_path_cloned = file_path.clone();
+    let api_url_cloned = api_url.to_string();
+    let file_cid = tokio::task::spawn_blocking(move || {
+        upload_to_ipfs(&api_url_cloned, &file_path_cloned)
+    })
+    .await
+    .map_err(|e| format!("Task spawn error: {}", e))?
+    .map_err(|e| format!("Upload error: {}", e))?;
 
     println!("[upload_file_public] File CID: {}", file_cid);
 
@@ -358,9 +363,14 @@ pub async fn download_file_public(
     
     println!("[download_file_public] Downloading file with CID: {} to: {}", file_cid, output_file);
     
-    // Download file directly from IPFS
-    let file_data = download_from_ipfs(&api_url, &file_cid)
-        .map_err(|e| format!("Failed to download file from IPFS: {}", e))?;
+    let file_cid_cloned = file_cid.clone();
+    let api_url_cloned = api_url.to_string();
+    let file_data = tokio::task::spawn_blocking(move || {
+        download_from_ipfs(&api_url_cloned, &file_cid_cloned)
+    })
+    .await
+    .map_err(|e| format!("Task spawn error: {}", e))?
+    .map_err(|e| format!("Failed to download file from IPFS: {}", e))?;
     
     // Save to output file
     std::fs::write(&output_file, file_data)

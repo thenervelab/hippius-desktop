@@ -172,7 +172,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', '', 0, 0, '', ?, 0)"
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, 0, '', ?, 0)"
             )
             .bind(account_id)
             .bind(request_cid) // cid
