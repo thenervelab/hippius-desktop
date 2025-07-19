@@ -138,6 +138,20 @@ export default function IpfsTest() {
     <div style={{ maxWidth: 600, margin: "40px auto", fontFamily: "sans-serif" }}>
       <h2>IPFS Upload/Download Demo</h2>
       <input type="file" onChange={handleFileChange} style={{ marginBottom: 16 }} />
+      <button
+        onClick={async () => {
+          setStatus("Creating encryption key...");
+          try {
+            await invoke("create_encryption_key");
+            setStatus("Encryption key created successfully!");
+          } catch (e: any) {
+            setStatus("Failed to create encryption key: " + e.toString());
+          }
+        }}
+        style={{ marginBottom: 16 }}
+      >
+        Create Encryption Key
+      </button>
       <div style={{ display: "flex", gap: 24, marginBottom: 24 }}>
         {/* ENCRYPTED */}
         <div style={{ flex: 1, border: "1px solid #ccc", borderRadius: 8, padding: 16 }}>
