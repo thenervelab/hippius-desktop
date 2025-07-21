@@ -19,11 +19,11 @@ const IconButton: React.FC<IconButtonProps> = ({
   icon: Icon,
   text,
   onClick,
-  innerPadding = "px-1 sm:px-2 py-1",
+  innerPadding = "px-2 py-1",
   outerPadding = "p-1",
   className = "",
   fontSizeClass = "text-base",
-  innerClassName = "",
+  innerClassName = "h-[32px]",
   disabled = false,
   type = "button",
 }) => {

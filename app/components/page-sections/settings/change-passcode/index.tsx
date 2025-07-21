@@ -1,11 +1,11 @@
 import React, { useState } from "react";
-import { Label } from "../../ui/label";
-import { CardButton, Icons, Input } from "../../ui";
+import { Label } from "@/components/ui/label";
+import { CardButton, Icons, Input } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
 import { PASSWORD_FIELDS } from "./PasscodeFieldsContent";
 import { AlertCircle } from "lucide-react";
-import UpdateSuccessDialog from "../../update-success-dialog";
-import { Eye, EyeOff } from "../../ui/icons";
+import UpdateSuccessDialog from "../../../update-success-dialog";
+import { Eye, EyeOff } from "@/components/ui/icons";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getWalletRecord, updateWallet } from "@/app/lib/helpers/walletDb";
 import {
@@ -14,7 +14,7 @@ import {
   encryptMnemonic,
 } from "@/app/lib/helpers/crypto";
 import { toast } from "sonner";
-import SectionHeader from "./SectionHeader";
+import SectionHeader from "../SectionHeader";
 
 type PasscodeFields = {
   currentPasscode: string;

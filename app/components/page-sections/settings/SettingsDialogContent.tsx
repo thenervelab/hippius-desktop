@@ -1,7 +1,7 @@
 import React, { useEffect } from "react";
 import { Icons, RevealTextLine } from "../../ui";
 import TabList, { TabOption } from "../../ui/tabs/tab-list";
-import ChangePasscode from "./ChangePasscode";
+import ChangePasscode from "./change-passcode";
 import ExportEncryptedSeed from "./ExportEncryptedSeed";
 import { InView } from "react-intersection-observer";
 import AccountActionButtons from "./AccountActionButtons";
@@ -12,7 +12,7 @@ import { useAtom } from "jotai";
 import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
-import EncryptionKey from "./EncryptionKey";
+import EncryptionKey from "./encryption-key";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
