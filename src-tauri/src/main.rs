@@ -18,10 +18,10 @@ use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
-    upload_file_public, download_file_public,
+    upload_file_public, download_file_public, public_download_with_eresure, public_upload_with_eresure
 };
 use commands::accounts::{create_encryption_key, get_encryption_keys, import_key};
-// use utils::file_operations::delete_and_unpin_file_by_name;
+use utils::file_operations::delete_and_unpin_file_by_name;
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
 use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_tauri};
 use once_cell::sync::OnceCell;
@@ -58,7 +58,9 @@ fn main() {
             get_ipfs_bandwidth,
             get_ipfs_peers,
             app_close,
-            // delete_and_unpin_file_by_name,
+            delete_and_unpin_file_by_name,
+            public_download_with_eresure,
+            public_upload_with_eresure,
             create_encryption_key,
             get_encryption_keys,
             import_key,

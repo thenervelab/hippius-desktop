@@ -16,6 +16,8 @@ export default function IpfsTest() {
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
   const [encryptionKeys, setEncryptionKeys] = useState<Array<{ id: number, key: string }>>([]);
+  const [publicErsMetadataCid, setPublicErsMetadataCid] = useState<string>("");
+  const [publicErsDownloadedUrl, setPublicErsDownloadedUrl] = useState<string>("");
 
   useEffect(() => {
     fetchEncryptionKeys();
@@ -113,6 +115,49 @@ export default function IpfsTest() {
       setStatus("Public download successful!");
     } catch (e: any) {
       setStatus("Public download failed: " + e.toString());
+    }
+  };
+
+  // PUBLIC ERASURE-CODED
+  const handlePublicErsUpload = async () => {
+    if (!file) return;
+    setStatus("Uploading (public erasure-coded)...");
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const tempPath = `/tmp/${file.name}`;
+      await invoke("write_file", {
+        path: tempPath,
+        data: Array.from(new Uint8Array(arrayBuffer)),
+      });
+      const result = await invoke<string>("public_upload_with_eresure", {
+        accountId,
+        filePath: tempPath,
+        seedPhrase: mnemonic,
+      });
+      setPublicErsMetadataCid(result);
+      setStatus("Public erasure-coded upload successful! Metadata CID: " + result);
+    } catch (e: any) {
+      setStatus("Public erasure-coded upload failed: " + e.toString());
+    }
+  };
+
+  const handlePublicErsDownload = async () => {
+    if (!publicErsMetadataCid || !file) return;
+    setStatus("Downloading (public erasure-coded)...");
+    try {
+      const outputPath = `/tmp/pub_ers_${file.name}`;
+      await invoke("public_download_with_eresure", {
+        accountId,
+        metadataCid: publicErsMetadataCid,
+        outputFile: outputPath,
+      });
+      const data: number[] = await invoke("read_file", { path: outputPath });
+      const blob = new Blob([new Uint8Array(data)]);
+      const url = URL.createObjectURL(blob);
+      setPublicErsDownloadedUrl(url);
+      setStatus("Public erasure-coded download successful!");
+    } catch (e: any) {
+      setStatus("Public erasure-coded download failed: " + e.toString());
     }
   };
 
@@ -257,6 +302,30 @@ export default function IpfsTest() {
             </div>
           )}
         </div>
+      </div>
+      {/* PUBLIC ERASURE-CODED */}
+      <div style={{ border: "1px solid #ccc", borderRadius: 8, padding: 16, marginBottom: 24 }}>
+        <h3 style={{ marginTop: 0 }}>Public Erasure-Coded Upload/Download</h3>
+        <button onClick={handlePublicErsUpload} disabled={!file} style={{ marginBottom: 8 }}>
+          Upload Public (Erasure-Coded)
+        </button>
+        {publicErsMetadataCid && (
+          <>
+            <div>
+              <strong>Metadata CID:</strong> {publicErsMetadataCid}
+            </div>
+            <button onClick={handlePublicErsDownload} style={{ marginTop: 8 }}>
+              Download Public (Erasure-Coded)
+            </button>
+          </>
+        )}
+        {publicErsDownloadedUrl && (
+          <div style={{ marginTop: 8 }}>
+            <a href={publicErsDownloadedUrl} download={file ? `pub_ers_${file.name}` : "file"}>
+              Download Public Erasure-Coded File
+            </a>
+          </div>
+        )}
       </div>
       {/* Transfer section */}
       <div style={{ margin: "16px 0", padding: 16, border: "1px solid #eee", borderRadius: 8 }}>
