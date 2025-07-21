@@ -116,6 +116,10 @@ export function WalletAuthProvider({
             accountId: pair.address,
             seedPhrase: inputMnemonic,
           });
+          await invoke("start_public_folder_sync_tauri", {
+            accountId: pair.address,
+            seedPhrase: inputMnemonic,
+          });
           syncInitialized.current = true;
           console.log("[WalletAuth] Sync commands started successfully");
         } catch (error) {

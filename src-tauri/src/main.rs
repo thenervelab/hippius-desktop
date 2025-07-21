@@ -5,11 +5,13 @@ mod builder_blocks;
 mod commands;
 mod constants;
 mod folder_sync;
+mod public_folder_sync;
 mod substrate_client;
 mod user_profile_sync;
 mod utils;
 mod ipfs;
 use crate::folder_sync::{get_sync_status, start_folder_sync_tauri,app_close};
+use crate::public_folder_sync::start_public_folder_sync_tauri;
 use crate::user_profile_sync::get_user_synced_files;
 use crate::user_profile_sync::start_user_profile_sync_tauri;
 use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
@@ -49,6 +51,7 @@ fn main() {
             set_sync_path,
             start_user_profile_sync_tauri,
             start_folder_sync_tauri,
+            start_public_folder_sync_tauri,
             get_user_synced_files,
             get_sync_status,
             get_ipfs_node_info,
