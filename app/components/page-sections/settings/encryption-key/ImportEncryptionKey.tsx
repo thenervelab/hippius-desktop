@@ -82,13 +82,12 @@ const ImportEncryptionKey: React.FC<ImportEncryptionKeyProps> = ({
       setPasscode("");
       onKeyImported();
     } catch (error: any) {
-      toast.error(`Failed to import key: ${error}`);
-      if (error.includes("Invalid base64")) {
+      if (error.message.includes("Incorrect passcode")) {
+        setError("Incorrect passcode. Please try again.");
+      } else if (error.includes("Invalid base64")) {
         setKeyError("Invalid encryption key. Please try again.");
       } else if (error.includes("Invalid key length")) {
         setKeyError("Invalid encryption key length");
-      } else if (error.includes("Incorrect passcode")) {
-        setError("Incorrect passcode. Please try again.");
       } else {
         setError("Failed to import key. Please try again.");
       }
@@ -139,7 +138,7 @@ const ImportEncryptionKey: React.FC<ImportEncryptionKeyProps> = ({
               htmlFor="import-encryption-key"
               className="text-sm font-medium text-grey-70"
             >
-              Enter Encryption Key to Import
+              Enter encryption key to import
             </Label>
             <div className="relative flex items-start w-full">
               <Icons.Key className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />

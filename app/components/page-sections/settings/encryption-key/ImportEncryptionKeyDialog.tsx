@@ -31,7 +31,7 @@ export default function ImportEncryptionKeyDialog({
   copied,
   onDone,
   customWarnings,
-  inView
+  inView,
 }: Props) {
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
