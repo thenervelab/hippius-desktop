@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState, useMemo } from "react";
 import {
   createColumnHelper,
   getCoreRowModel,
@@ -15,6 +15,7 @@ import {
   Th,
   Td,
   CopyableCell,
+  Pagination,
 } from "@/components/ui/alt-table";
 import { Loader2 } from "lucide-react";
 import { SubAccount } from "@/app/lib/hooks/api/useSubAccounts";
@@ -27,8 +28,23 @@ type Props = {
 };
 
 const columnHelper = createColumnHelper<SubAccount>();
+const ITEMS_PER_PAGE = 10;
 
 const SubAccountTable: React.FC<Props> = ({ subs, loading, onDelete }) => {
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Calculate pagination
+  const totalPages = useMemo(
+    () => Math.ceil(subs.length / ITEMS_PER_PAGE),
+    [subs.length]
+  );
+
+  // Get paginated data
+  const paginatedData = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return subs.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [subs, currentPage]);
+
   const columns = React.useMemo(
     () => [
       // Address with copy button
@@ -80,7 +96,7 @@ const SubAccountTable: React.FC<Props> = ({ subs, loading, onDelete }) => {
   );
 
   const table = useReactTable({
-    data: subs,
+    data: paginatedData,
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
@@ -93,29 +109,44 @@ const SubAccountTable: React.FC<Props> = ({ subs, loading, onDelete }) => {
         </div>
       ) : table.getRowModel().rows.length === 0 ? (
         <div className="p-6 flex justify-center text-gray-500">
-          No sub accounts yet
+          {subs.length === 0
+            ? "No sub accounts yet"
+            : "No sub accounts on this page"}
         </div>
       ) : (
-        <Table>
-          <THead>
-            {table.getHeaderGroups().map((hg) => (
-              <Tr key={hg.id}>
-                {hg.headers.map((header) => (
-                  <Th key={header.id} header={header} />
-                ))}
-              </Tr>
-            ))}
-          </THead>
-          <TBody>
-            {table.getRowModel().rows.map((row) => (
-              <Tr key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <Td key={cell.id} cell={cell} />
-                ))}
-              </Tr>
-            ))}
-          </TBody>
-        </Table>
+        <>
+          <Table>
+            <THead>
+              {table.getHeaderGroups().map((hg) => (
+                <Tr key={hg.id}>
+                  {hg.headers.map((header) => (
+                    <Th key={header.id} header={header} />
+                  ))}
+                </Tr>
+              ))}
+            </THead>
+            <TBody>
+              {table.getRowModel().rows.map((row) => (
+                <Tr key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <Td key={cell.id} cell={cell} />
+                  ))}
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+
+          {/* Only show pagination if there's more than one page */}
+          {totalPages > 1 && (
+            <div className="my-4">
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                setPage={setCurrentPage}
+              />
+            </div>
+          )}
+        </>
       )}
     </TableWrapper>
   );
