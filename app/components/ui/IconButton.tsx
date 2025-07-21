@@ -11,6 +11,8 @@ interface IconButtonProps {
   className?: string;
   fontSizeClass?: string;
   innerClassName?: string;
+  disabled?: boolean;
+  type?: "button" | "submit" | "reset";
 }
 
 const IconButton: React.FC<IconButtonProps> = ({
@@ -22,16 +24,20 @@ const IconButton: React.FC<IconButtonProps> = ({
   className = "",
   fontSizeClass = "text-base",
   innerClassName = "",
+  disabled = false,
+  type = "button",
 }) => {
   return (
     <button
+      type={type}
       onClick={onClick}
       className={cn(
         outerPadding,
-        "bg-primary-50 text-white border border-primary-40 rounded hover:bg-primary-40 transition text-base font-medium",
+        "bg-primary-50 text-white border border-primary-40 rounded hover:bg-primary-40 transition text-base font-medium disabled:opacity-50  disabled:cursor-not-allowed",
         fontSizeClass,
         className
       )}
+      disabled={disabled}
     >
       <div
         className={cn(

@@ -43,6 +43,11 @@ const SettingsDialogContent: React.FC = () => {
       icon: <Icons.Trash className="size-4" />,
     },
     {
+      tabName: "File Settings",
+      icon: <Icons.File2 className="size-4" />,
+    },
+
+    {
       tabName: "Encryption Key",
       icon: <Icons.Key className="size-4" />,
     },
