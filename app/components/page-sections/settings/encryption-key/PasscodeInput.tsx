@@ -30,7 +30,7 @@ const PasscodeInput: React.FC<PasscodeInputProps> = ({
   showPasscode,
   onToggleShowPasscode,
   error,
-  label = "Enter your Passcode to view your key",
+  label = "Enter your passcode to view your key",
   placeholder = "Enter your passcode here",
   id = "passcode",
   inView,
@@ -39,7 +39,7 @@ const PasscodeInput: React.FC<PasscodeInputProps> = ({
   errorClassName = "delay-400 w-full mt-2",
   copied = false,
   copyToClipboard,
-  showCopy = false
+  showCopy = false,
 }) => {
   return (
     <>
