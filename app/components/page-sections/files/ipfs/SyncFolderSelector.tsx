@@ -9,11 +9,13 @@ import SectionHeader from "../../settings/SectionHeader";
 interface SyncFolderSelectorProps {
     onFolderSelected: (path: string) => void;
     initialPath?: string;
+    isFromSettingsPage?: boolean;
 }
 
 const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
     onFolderSelected,
     initialPath,
+    isFromSettingsPage = false,
 }) => {
     const [suggested, setSuggested] = useState({
         desktop: "",
@@ -78,7 +80,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
 
     return (
         <div className="w-full flex flex-col">
-            <div className={cn("w-full flex-1 relative bg-[url('/assets/folder-sync-bg-layer.png')] bg-no-repeat bg-cover", !initialPath && "mt-6")}>
+            <div className={cn("w-full flex-1 relative bg-[url('/assets/folder-sync-bg-layer.png')] bg-no-repeat bg-cover", (!initialPath && !isFromSettingsPage) && "mt-6")}>
                 <div className="border relative border-grey-80 overflow-hidden rounded-xl w-full h-full">
                     <div className="w-full flex flex-col p-4">
                         <SectionHeader

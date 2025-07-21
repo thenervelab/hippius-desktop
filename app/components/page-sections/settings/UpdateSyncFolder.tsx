@@ -42,6 +42,7 @@ const UpdateSyncFolder: React.FC = () => {
                     {showSelector ? (
                         <SyncFolderSelector
                             initialPath={selectedFolderPath}
+                            isFromSettingsPage
                             onFolderSelected={handleFolderSelected}
                         />
                     ) : (
@@ -52,7 +53,7 @@ const UpdateSyncFolder: React.FC = () => {
                                     title="Change your sync folder"
                                     subtitle="Choose a different folder to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
                                 />
-                                <div className="flex p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80">
+                                {selectedFolderName && <div className="flex p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80">
                                     <div className="flex-1">
                                         <div className="flex">
                                             <Icons.Folder className="size-4 mr-[6px] text-grey-40" />
@@ -65,6 +66,7 @@ const UpdateSyncFolder: React.FC = () => {
                                         </p>
                                     </div>
                                 </div>
+                                }
                                 <div className="flex gap-4 mt-8 self-start">
                                     <CardButton
                                         className="max-w-[160px] h-[60px]"
@@ -72,7 +74,7 @@ const UpdateSyncFolder: React.FC = () => {
                                         onClick={() => setShowSelector(true)}
                                     >
                                         <span className="text-lg leading-6 font-medium">
-                                            Change Folder
+                                            {selectedFolderName ? "Change Folder" : "Select Folder"}
                                         </span>
                                     </CardButton>
                                 </div>
