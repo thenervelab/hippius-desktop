@@ -58,6 +58,7 @@ export default function DirectStorageRequestDemo({
         accountId: accountId,
         metadataCid: metadataCid,
         outputFile: outputPath,
+        encryptionKey: null,
       });
 
 

@@ -61,6 +61,7 @@ export default function IpfsTest() {
         accountId,
         metadataCid,
         outputFile: outputPath,
+        encryptionKey: null,
       });
       const data: number[] = await invoke("read_file", { path: outputPath });
       const blob = new Blob([new Uint8Array(data)]);

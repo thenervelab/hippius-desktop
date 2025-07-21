@@ -177,6 +177,7 @@ pub async fn download_and_decrypt_file(
     account_id: String,
     metadata_cid: String,
     output_file: String,
+    encryption_key: Option<Vec<u8>>,
 ) -> Result<(), String> {
     // Define the API URL inside the function
     let api_url = "http://127.0.0.1:5001";
@@ -265,8 +266,7 @@ pub async fn download_and_decrypt_file(
             encrypted_data.truncate(encrypted_size);
         }
         // Decrypt using centralized function
-        // let decrypted_data = decrypt_file_for_account(&account_id, &encrypted_data)?;
-        let decrypted_data = tauri::async_runtime::block_on(decrypt_file(&encrypted_data))?;
+        let decrypted_data = tauri::async_runtime::block_on(decrypt_file(&encrypted_data, encryption_key.clone()))?;
         // Hash check
         let mut hasher = Sha256::new();
         hasher.update(&decrypted_data);
