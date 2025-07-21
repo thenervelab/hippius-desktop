@@ -129,14 +129,29 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     }
 }
 
-// #[tauri::command]
-// pub async fn delete_and_unpin_file_by_name(
-//     file_name: String,
-//     seed_phrase: String,
-// ) -> Result<u64, String> {
-       // // check if file is public or private before calling this sync path fn
-//     delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase).await
-// }
+#[tauri::command]
+pub async fn delete_and_unpin_file_by_name(
+    file_name: String,
+    seed_phrase: String,
+) -> Result<u64, String> {
+    // Check sync_folder_files for the file's type
+    let mut is_public = false;
+    if let Some(pool) = DB_POOL.get() {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT type FROM sync_folder_files WHERE file_name = ? LIMIT 1"
+        )
+        .bind(&file_name)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+        if let Some((file_type,)) = row {
+            if file_type == "public" {
+                is_public = true;
+            }
+        }
+    }
+    delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase, is_public).await
+}
 
 pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str, is_public: bool) {
     // Choose sync folder path based on is_public
