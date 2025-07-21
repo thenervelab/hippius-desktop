@@ -15,6 +15,7 @@ dependencies = [
  "notify",
  "once_cell",
  "parity-scale-codec",
+ "rand 0.8.5",
  "reed-solomon-erasure",
  "reqwest",
  "serde",

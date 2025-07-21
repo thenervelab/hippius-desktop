@@ -1,15 +1,8 @@
 use base64::{engine::general_purpose, Engine as _};
 use once_cell::sync::OnceCell;
-use reqwest::blocking::multipart;
-use reqwest::blocking::Client;
-use serde_json;
 use sha2::{Digest, Sha256};
-// use sodiumoxide::crypto::secretbox;
-// use std::collections::HashMap;
 use std::fs;
-// use std::io::Read;
 use crate::constants::ipfs::KUBO_VERSION;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration as StdDuration;

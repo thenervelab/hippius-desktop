@@ -12,6 +12,7 @@ import { useAtom } from "jotai";
 import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
+import EncryptionKey from "./EncryptionKey";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -27,24 +28,29 @@ const SettingsDialogContent: React.FC = () => {
   const tabs: TabOption[] = [
     {
       tabName: "Change Passcode",
-      icon: <Icons.WalletAdd className="size-4" />
+      icon: <Icons.WalletAdd className="size-4" />,
     },
     {
       tabName: "Sub Accounts",
-      icon: <Icons.KeySquare className="size-4" />
+      icon: <Icons.KeySquare className="size-4" />,
     },
     {
       tabName: "Notifications",
-      icon: <Icons.Notification className="size-4" />
+      icon: <Icons.Notification className="size-4" />,
     },
     {
       tabName: "Remove Account",
-      icon: <Icons.Trash className="size-4" />
+      icon: <Icons.Trash className="size-4" />,
     },
     {
       tabName: "File Settings",
-      icon: <Icons.File2 className="size-4" />
-    }
+      icon: <Icons.File2 className="size-4" />,
+    },
+
+    {
+      tabName: "Encryption Key",
+      icon: <Icons.Key className="size-4" />,
+    },
   ];
 
   return (
@@ -126,6 +132,16 @@ const SettingsDialogContent: React.FC = () => {
                 className="delay-300 w-full flex"
               >
                 <UpdateSyncFolder />
+              </RevealTextLine>
+            )}
+
+            {activeTab === "Encryption Key" && (
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 w-full flex"
+              >
+                <EncryptionKey />
               </RevealTextLine>
             )}
           </div>

@@ -8,11 +8,10 @@ use crate::commands::substrate_tx::custom_runtime;
 use hex;
 use serde::Serialize;
 use sqlx::FromRow;
-use std::path::Path;
 use std::collections::HashSet;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
-use crate::utils::sync::get_private_sync_path;
+use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use subxt::storage::StorageKeyValuePair;
 use serde_json;
 use sqlx::Row;
@@ -108,7 +107,7 @@ pub fn start_user_sync(account_id: &str) {
             });
         let mut retry_count = 0;
         let max_retries = 5;
-
+        
         loop {
             println!("[UserSync] Periodic check: scanning for unsynced data...");
 
@@ -336,8 +335,8 @@ pub fn start_user_sync(account_id: &str) {
                                         }
                                         Err(e) => {
                                             eprintln!("[UserSync] Failed to download from IPFS for {}: {}", decoded_hash, e);
-                                        }
                                     }
+                                }
                                 }
 
                                 let file_name = bounded_vec_to_string(&storage_request.file_name.0);
@@ -456,17 +455,17 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
         .fetch_all(pool)
         .await;
 
-        let sync_file_names = sqlx::query(
-            "SELECT file_name FROM sync_folder_files WHERE owner = ?"
+        let sync_file_infos = sqlx::query(
+            "SELECT file_name, type FROM sync_folder_files WHERE owner = ?"
         )
         .bind(&owner)
         .fetch_all(pool)
         .await
-        .map(|rows| rows.into_iter().map(|row| row.get::<String, _>("file_name")).collect::<HashSet<_>>());
+        .map(|rows| rows.into_iter().map(|row| (row.get::<String, _>("file_name"), row.get::<String, _>("type"))).collect::<Vec<_>>());
 
-        match (user_profile_rows, sync_file_names) {
-            (Ok(user_rows), Ok(sync_names)) => {
-                let sync_names_set: HashSet<_> = sync_names;
+        match (user_profile_rows, sync_file_infos) {
+            (Ok(user_rows), Ok(sync_infos)) => {
+                let sync_map: std::collections::HashMap<_, _> = sync_infos.into_iter().collect();
                 let mut files = Vec::new();
                 for row in user_rows {
                     let mut file = UserProfileFile {
@@ -486,8 +485,12 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                         miner_ids: row.get("miner_ids"),
                         created_at: row.get("created_at"),
                     };
-                    if sync_names_set.contains(&file.file_name) {
-                        file.source = format!("{}/{}", &get_private_sync_path().await, file.file_name);
+                    if let Some(file_type) = sync_map.get(&file.file_name) {
+                        if file_type == "private" {
+                            file.source = format!("{}/{}", &get_private_sync_path().await, file.file_name);
+                        } else {
+                            file.source = format!("{}/{}", &get_public_sync_path().await, file.file_name);
+                        }
                     }
                     files.push(file);
                 }

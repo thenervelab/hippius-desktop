@@ -1,6 +1,5 @@
-use crate::utils::accounts::{create_and_store_encryption_key};
-use crate::DB_POOL;
-use sqlx::Row;
+use crate::utils::accounts::{create_and_store_encryption_key, list_encryption_keys, import_encryption_key};
+use base64;
 
 #[tauri::command]
 pub async fn create_encryption_key() -> Result<(), String> {
@@ -10,22 +9,24 @@ pub async fn create_encryption_key() -> Result<(), String> {
 #[derive(serde::Serialize)]
 pub struct EncryptionKeyInfo {
     pub id: i64,
-    pub key: String, // base64 encoded
+    pub key: String,
 }
 
 #[tauri::command]
 pub async fn get_encryption_keys() -> Result<Vec<EncryptionKeyInfo>, String> {
-    if let Some(pool) = DB_POOL.get() {
-        let rows = sqlx::query("SELECT id, key FROM encryption_keys ORDER BY id DESC")
-            .fetch_all(pool)
-            .await
-            .map_err(|e| format!("DB error (fetch keys): {}", e))?;
-        let keys = rows.into_iter().map(|row| EncryptionKeyInfo {
-            id: row.get("id"),
-            key: base64::encode(row.get::<Vec<u8>, _>("key")),
-        }).collect();
-        Ok(keys)
-    } else {
-        Err("DB_POOL not initialized".to_string())
-    }
+    let keys = list_encryption_keys().await?;
+    Ok(keys.into_iter().map(|(key, id)| EncryptionKeyInfo {
+        id,
+        key,
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn import_key(key_base64: String) -> Result<String, String> {
+    // Decode the base64 key
+    let key_bytes = base64::decode(key_base64)
+        .map_err(|e| format!("Invalid base64 encoding: {}", e))?;
+    
+    // Import the key and get its generated name
+    import_encryption_key(key_bytes).await
 }

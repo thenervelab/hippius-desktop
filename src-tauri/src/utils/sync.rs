@@ -1,4 +1,4 @@
-use crate::commands::substrate_tx::{get_sync_path, SyncPathResult};
+use crate::commands::substrate_tx::SyncPathResult;
 use crate::constants::substrate::{SYNC_PATH, SYNC_PATH_PRIVATE};
 use crate::commands::substrate_tx::get_sync_path_internal;
 
@@ -15,5 +15,3 @@ pub async fn get_private_sync_path() -> String {
         Err(_) => SYNC_PATH_PRIVATE.to_string(),
     }
 }
-
-

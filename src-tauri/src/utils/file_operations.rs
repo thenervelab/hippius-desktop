@@ -2,7 +2,7 @@ use crate::commands::substrate_tx::storage_unpin_request_tauri;
 use crate::commands::substrate_tx::FileHashWrapper;
 use crate::commands::substrate_tx::FileInputWrapper;
 use crate::utils::ipfs::pin_json_to_ipfs_local;
-use crate::utils::sync::get_private_sync_path;
+use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use crate::DB_POOL;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -94,8 +94,14 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 pub async fn delete_and_unpin_user_file_records_by_name(
     file_name: &str,
     seed_phrase: &str,
+    is_public: bool,
 ) -> Result<u64, String> {
     if let Some(pool) = DB_POOL.get() {
+        // Call unpin_user_file_by_name after successful deletes
+        unpin_user_file_by_name(file_name, seed_phrase)
+            .await
+            .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
+
         // Delete from user_profiles
         let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
             .bind(file_name)
@@ -103,24 +109,19 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .await
             .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
 
-        // Delete from sync_folder_files
-        let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
+        // Delete from sync_folder_files (dynamic type)
+        let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
             .bind(file_name)
+            .bind(if is_public { "public" } else { "private" })
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
 
         // Remove from sync folder as well
-        // We don't have account_id here, so pass empty string or refactor if needed
-        crate::utils::file_operations::remove_file_from_sync_and_db(file_name);
+        remove_file_from_sync_and_db(file_name, is_public);
 
         // Calculate total rows affected
         let total_deleted = result1.rows_affected() + result2.rows_affected();
-
-        // Call unpin_user_file_by_name after successful deletes
-        unpin_user_file_by_name(file_name, seed_phrase)
-            .await
-            .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
 
         Ok(total_deleted)
     } else {
@@ -128,17 +129,22 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     }
 }
 
-#[tauri::command]
-pub async fn delete_and_unpin_file_by_name(
-    file_name: String,
-    seed_phrase: String,
-) -> Result<u64, String> {
-    delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase).await
-}
+// #[tauri::command]
+// pub async fn delete_and_unpin_file_by_name(
+//     file_name: String,
+//     seed_phrase: String,
+// ) -> Result<u64, String> {
+       // // check if file is public or private before calling this sync path fn
+//     delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase).await
+// }
 
-pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str) {
-    // Define your sync folder path
-    let sync_folder = PathBuf::from(get_private_sync_path().await);
+pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str, is_public: bool) {
+    // Choose sync folder path based on is_public
+    let sync_folder = if is_public {
+        PathBuf::from(get_public_sync_path().await)
+    } else {
+        PathBuf::from(get_private_sync_path().await)
+    };
     let file_name = match original_path.file_name() {
         Some(name) => name.to_string_lossy().to_string(),
         None => return,
@@ -184,6 +190,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             .bind(file_size_in_bytes)
             .execute(pool)
             .await;
+
         }
     }
 
@@ -197,14 +204,18 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
 
     // Add to sync_folder_files DB (make sure insert_file_if_not_exists is async)
     if let Some(pool) = crate::DB_POOL.get() {
-        insert_file_if_not_exists(pool, &sync_file_path, account_id).await;
+        insert_file_if_not_exists(pool, &sync_file_path, account_id, is_public).await;
     }
 }
 
-pub async fn remove_file_from_sync_and_db(file_name: &str) {
+pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool) {
     use std::fs;
     // Remove from sync folder
-    let sync_folder = PathBuf::from(get_private_sync_path().await);
+    let sync_folder = if is_public {
+        PathBuf::from(get_public_sync_path().await)
+    } else {
+        PathBuf::from(get_private_sync_path().await)
+    };
     let sync_file_path = sync_folder.join(file_name);
     if sync_file_path.exists() {
         if let Err(e) = fs::remove_file(&sync_file_path) {
@@ -213,8 +224,9 @@ pub async fn remove_file_from_sync_and_db(file_name: &str) {
     }
     // Remove from DB
     if let Some(pool) = crate::DB_POOL.get() {
-        if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
+        if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
             .bind(file_name)
+            .bind(if is_public { "public" } else { "private" })
             .execute(pool)
             .await {
             eprintln!("Failed to remove file from sync_folder_files DB: {}", e);
