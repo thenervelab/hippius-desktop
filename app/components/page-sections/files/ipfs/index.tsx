@@ -15,7 +15,7 @@ import FilesTable from "./files-table";
 import CardView from "./card-view";
 import Link from "next/link";
 import SyncFolderSelector from "./SyncFolderSelector";
-import { getSyncPath, setSyncPath } from "@/lib/utils/syncPathUtils";
+import { getPrivateSyncPath, setPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { cn, formatBytesFromBigInt } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import FileDetailsDialog, { FileDetail } from "./files-table/UnpinFilesDialog";
@@ -230,7 +230,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     const checkSyncPath = async () => {
       try {
         setIsCheckingSyncPath(true);
-        const privateSyncPath = await getSyncPath();
+        const privateSyncPath = await getPrivateSyncPath();
         setIsSyncPathConfigured(!!privateSyncPath);
       } catch (error) {
         console.error("Failed to check sync path:", error);
@@ -247,7 +247,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const handleFolderSelected = useCallback(
     async (path: string) => {
       try {
-        await setSyncPath(path);
+        await setPrivateSyncPath(path);
         toast.success(`Sync folder set successfully`);
         setIsSyncPathConfigured(true);
 

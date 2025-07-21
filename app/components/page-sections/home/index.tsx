@@ -14,7 +14,7 @@ import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
 
 import Ipfs from "../files/ipfs";
-import { getSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { getPrivateSyncPath } from "@/app/lib/utils/syncPathUtils";
 import { Icons } from "@/components/ui";
 
 type IpfsInfo = {
@@ -121,7 +121,7 @@ const Home: React.FC = () => {
     const checkSyncPath = async () => {
       try {
         setIsCheckingSyncPath(true);
-        const privateSyncPath = await getSyncPath();
+        const privateSyncPath = await getPrivateSyncPath();
         setIsSyncPathConfigured(!!privateSyncPath);
       } catch (error) {
         console.error("Failed to check sync path:", error);

@@ -66,7 +66,7 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
 };
 
 const downloadEncryptedIpfsFile = async (file: FormattedUserIpfsFile, polkadotAddress: string) => {
-    const { name, fileHash } = file;
+    const { name, cid } = file;
 
     const toastId = toast.loading(`Preparing download: ${name}`);
 
@@ -92,10 +92,16 @@ const downloadEncryptedIpfsFile = async (file: FormattedUserIpfsFile, polkadotAd
 
         toast.loading(`Downloading encrypted file: ${name}...`, { id: toastId });
 
-        // Use the metadataCid (which is the fileHash in hex form) to download and decrypt the file
+        console.log({
+            accountId: polkadotAddress,
+            metadataCid: cid,
+            outputFile: savePath
+        })
+
+        // Use the metadataCid (which is the cid in hex form) to download and decrypt the file
         await invoke("download_and_decrypt_file", {
             accountId: polkadotAddress,
-            metadataCid: fileHash,
+            metadataCid: cid,
             outputFile: savePath
         });
 
