@@ -152,6 +152,27 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 return;
             }
 
+            // Check if any encryption keys exist, create one if none found
+            let key_exists: Option<(i64,)> = sqlx::query_as(
+                "SELECT COUNT(*) as count FROM encryption_keys"
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or(Some((0,)));
+
+            if let Some((count,)) = key_exists {
+                if count == 0 {
+                    println!("[Setup] No encryption keys found, creating initial key...");
+                    if let Err(e) = crate::utils::accounts::create_and_store_encryption_key().await {
+                        eprintln!("[Setup] Failed to create initial encryption key: {}", e);
+                    } else {
+                        println!("[Setup] Initial encryption key created successfully");
+                    }
+                } else {
+                    println!("[Setup] Found {} existing encryption key(s)", count);
+                }
+            }
+
             println!("[Setup] Database initialized successfully");
 
             // Start IPFS daemon

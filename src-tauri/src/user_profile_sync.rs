@@ -108,7 +108,7 @@ pub fn start_user_sync(account_id: &str) {
             });
         let mut retry_count = 0;
         let max_retries = 5;
-
+        
         loop {
             println!("[UserSync] Periodic check: scanning for unsynced data...");
 
@@ -336,8 +336,8 @@ pub fn start_user_sync(account_id: &str) {
                                         }
                                         Err(e) => {
                                             eprintln!("[UserSync] Failed to download from IPFS for {}: {}", decoded_hash, e);
-                                        }
                                     }
+                                }
                                 }
 
                                 let file_name = bounded_vec_to_string(&storage_request.file_name.0);

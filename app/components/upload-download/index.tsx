@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
@@ -15,6 +15,11 @@ export default function IpfsTest() {
   const accountId = polkadotAddress;
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
+  const [encryptionKeys, setEncryptionKeys] = useState<Array<{ id: number, key: string }>>([]);
+
+  useEffect(() => {
+    fetchEncryptionKeys();
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFile(e.target.files?.[0] || null);
@@ -134,6 +139,16 @@ export default function IpfsTest() {
     }
   };
 
+  const fetchEncryptionKeys = async () => {
+    try {
+      const keys = await invoke<Array<{ id: number, key: string }>>("get_encryption_keys");
+      setEncryptionKeys(keys);
+      setStatus("Encryption keys fetched successfully");
+    } catch (e: any) {
+      setStatus("Failed to fetch encryption keys: " + e.toString());
+    }
+  };
+
   return (
     <div style={{ maxWidth: 600, margin: "40px auto", fontFamily: "sans-serif" }}>
       <h2>IPFS Upload/Download Demo</h2>
@@ -144,6 +159,8 @@ export default function IpfsTest() {
           try {
             await invoke("create_encryption_key");
             setStatus("Encryption key created successfully!");
+            // Refresh the key list
+            await fetchEncryptionKeys();
           } catch (e: any) {
             setStatus("Failed to create encryption key: " + e.toString());
           }
@@ -152,6 +169,43 @@ export default function IpfsTest() {
       >
         Create Encryption Key
       </button>
+      <div style={{ marginBottom: 24, padding: 16, border: "1px solid #ccc", borderRadius: 8 }}>
+        <h3 style={{ marginTop: 0 }}>Encryption Keys</h3>
+        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <button
+            onClick={async () => {
+              setStatus("Creating encryption key...");
+              try {
+                await invoke("create_encryption_key");
+                setStatus("Encryption key created successfully!");
+                // Refresh the key list
+                await fetchEncryptionKeys();
+              } catch (e: any) {
+                setStatus("Failed to create encryption key: " + e.toString());
+              }
+            }}
+          >
+            Create New Key
+          </button>
+          <button onClick={fetchEncryptionKeys}>
+            Refresh Keys
+          </button>
+        </div>
+        
+        <div style={{ marginTop: 8 }}>
+          {encryptionKeys.length > 0 ? (
+            <ul style={{ margin: 0, paddingLeft: 20 }}>
+              {encryptionKeys.map(key => (
+                <li key={key.id}>
+                  <span style={{ wordBreak: "break-all" }}>{key.key}</span> (ID: {key.id})
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p style={{ margin: 0, color: "#666" }}>No encryption keys found</p>
+          )}
+        </div>
+      </div>
       <div style={{ display: "flex", gap: 24, marginBottom: 24 }}>
         {/* ENCRYPTED */}
         <div style={{ flex: 1, border: "1px solid #ccc", borderRadius: 8, padding: 16 }}>
