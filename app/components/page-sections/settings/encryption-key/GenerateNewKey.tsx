@@ -114,7 +114,7 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
           onToggleShowPasscode={handleToggleShowPasscode}
           error={error}
           inView={inView}
-          label="Enter your Passcode to generate a new key"
+          label="Enter your passcode to generate a new key"
           placeholder="Enter your passcode here"
         />
 
@@ -157,7 +157,7 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
               id: 3,
               text: (
                 <div>
-                  We <b>cannot</b> help you recover your files if you lose this
+                  We <b>cannot</b> help you decrypt your files if you lose this
                   key
                 </div>
               ),

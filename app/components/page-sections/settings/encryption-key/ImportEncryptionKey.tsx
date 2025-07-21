@@ -84,7 +84,7 @@ const ImportEncryptionKey: React.FC<ImportEncryptionKeyProps> = ({
     } catch (error: any) {
       toast.error(`Failed to import key: ${error}`);
       if (error.includes("Invalid base64")) {
-        setKeyError("Invalid encryption key.Please try again.");
+        setKeyError("Invalid encryption key. Please try again.");
       } else if (error.includes("Invalid key length")) {
         setKeyError("Invalid encryption key length");
       } else if (error.includes("Incorrect passcode")) {
@@ -170,7 +170,7 @@ const ImportEncryptionKey: React.FC<ImportEncryptionKeyProps> = ({
           onToggleShowPasscode={handleToggleShowPasscode}
           error={error}
           inView={inView}
-          label="Enter your Passcode to verify"
+          label="Enter your passcode to verify"
           placeholder="Enter your passcode here"
         />
 
