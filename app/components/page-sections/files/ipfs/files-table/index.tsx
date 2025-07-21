@@ -12,9 +12,7 @@ import {
   useReactTable,
   getSortedRowModel,
 } from "@tanstack/react-table";
-import {
-  FormattedUserIpfsFile,
-} from "@/lib/hooks/use-user-ipfs-files";
+import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import * as TableModule from "@/components/ui/alt-table";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
@@ -61,6 +59,7 @@ interface FilesTableProps {
   files: FormattedUserIpfsFile[];
   resetPagination?: boolean;
   onPaginationReset?: () => void;
+  isRecentFiles?: boolean;
 }
 
 const FilesTable: FC<FilesTableProps> = ({
@@ -68,17 +67,18 @@ const FilesTable: FC<FilesTableProps> = ({
   files,
   resetPagination,
   onPaginationReset,
+  isRecentFiles = false,
 }) => {
-  const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
+  const [fileToDelete, setFileToDelete] =
+    useState<FormattedUserIpfsFile | null>(null);
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
     cid: fileToDelete?.cid || "",
   });
   const { polkadotAddress } = useWalletAuth();
 
-
-  // Add state for file details dialog
-  const [fileDetailsFile, setFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [fileDetailsFile, setFileDetailsFile] =
+    useState<FormattedUserIpfsFile | null>(null);
   const [isFileDetailsOpen, setIsFileDetailsOpen] = useState(false);
 
   const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
@@ -87,7 +87,8 @@ const FilesTable: FC<FilesTableProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
 
-  const [selectedFile, setSelectedFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [selectedFile, setSelectedFile] =
+    useState<FormattedUserIpfsFile | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -136,13 +137,16 @@ const FilesTable: FC<FilesTableProps> = ({
     if (!files.length) return toast.error("No Files Found");
     const ev = new CustomEvent(HIPPIUS_DROP_EVENT, { detail: { files } });
     window.dispatchEvent(ev);
-    toast.success(`${files.length} ${files.length === 1 ? "file" : "files"} ready to upload`);
+    toast.success(
+      `${files.length} ${files.length === 1 ? "file" : "files"} ready to upload`
+    );
   }, []);
 
   // Local container handlers
   const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    if (Array.from(e.dataTransfer.items || []).some(i => i.kind === "file")) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (Array.from(e.dataTransfer.items || []).some((i) => i.kind === "file")) {
       dragCounterRef.current += 1;
       setIsDragging(true);
       if (dragTimeoutRef.current) clearTimeout(dragTimeoutRef.current);
@@ -151,7 +155,8 @@ const FilesTable: FC<FilesTableProps> = ({
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation();
+    e.preventDefault();
+    e.stopPropagation();
     dragCounterRef.current -= 1;
     if (dragCounterRef.current === 0) {
       setIsDragging(false);
@@ -160,27 +165,31 @@ const FilesTable: FC<FilesTableProps> = ({
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (Array.from(e.dataTransfer.items || []).some(i => i.kind === "file")) {
+    if (Array.from(e.dataTransfer.items || []).some((i) => i.kind === "file")) {
       e.preventDefault();
       e.stopPropagation();
       e.dataTransfer.dropEffect = "copy";
     }
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    dragCounterRef.current = 0;
-    setIsDragging(false);
-    if (dragTimeoutRef.current) clearTimeout(dragTimeoutRef.current);
-    if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
-  }, [handleFiles]);
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+      if (dragTimeoutRef.current) clearTimeout(dragTimeoutRef.current);
+      if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+    },
+    [handleFiles]
+  );
 
   const filteredData = useMemo(() => files, [files]);
   const {
     paginatedData: data,
     setCurrentPage,
     currentPage,
-    totalPages
+    totalPages,
   } = usePagination(filteredData, 10);
 
   useEffect(() => {
@@ -192,14 +201,15 @@ const FilesTable: FC<FilesTableProps> = ({
     }
   }, [resetPagination, setCurrentPage, onPaginationReset]);
 
-
   const unpinnedDetails = useMemo(() => {
     if (!showUnpinnedDialog) return [];
-    return files.filter(f => !f.isAssigned).map(f => ({
-      filename: f.name || "Unnamed File",
-      cid: decodeHexCid(f.cid),
-      createdAt: f.createdAt,
-    }));
+    return files
+      .filter((f) => !f.isAssigned)
+      .map((f) => ({
+        filename: f.name || "Unnamed File",
+        cid: decodeHexCid(f.cid),
+        createdAt: f.createdAt,
+      }));
   }, [files, showUnpinnedDialog]);
 
   useEffect(() => {
@@ -291,7 +301,13 @@ const FilesTable: FC<FilesTableProps> = ({
           const value = cell.getValue();
           if (cell.row.original.tempData) return "...";
           if (value === undefined) return "Unknown";
-          return <div className="text-grey-20 text-base font-medium">{cell.row.original.isAssigned ? formatBytesFromBigInt(BigInt(value)) : "Unknown"}</div>;
+          return (
+            <div className="text-grey-20 text-base font-medium">
+              {cell.row.original.isAssigned
+                ? formatBytesFromBigInt(BigInt(value))
+                : "Unknown"}
+            </div>
+          );
         },
       }),
 
@@ -301,10 +317,7 @@ const FilesTable: FC<FilesTableProps> = ({
         id: "date_uploaded",
         cell: (cell) => {
           const createdAt = cell.row.original.createdAt;
-          return (
-            <BlockTimestamp blockNumber={createdAt} />
-
-          );
+          return <BlockTimestamp blockNumber={createdAt} />;
         },
       }),
       columnHelper.display({
@@ -315,7 +328,7 @@ const FilesTable: FC<FilesTableProps> = ({
           const getParentDirectory = (path: string): string => {
             if (!path) return "Unknown";
 
-            const parts = path.split(/[/\\]/).filter(p => p.trim());
+            const parts = path.split(/[/\\]/).filter((p) => p.trim());
 
             if (parts.length >= 2) {
               return parts[parts.length - 2];
@@ -328,10 +341,17 @@ const FilesTable: FC<FilesTableProps> = ({
 
           return (
             <div className="flex flex-col">
-              <div className="text-grey-20 text-base font-medium">{parentDir}</div>
-              {original.source !== "Hippius" && (<div className="text-grey-70 text-xs truncate max-w-[250px]" title={original.source}>
-                {original.source}
-              </div>)}
+              <div className="text-grey-20 text-base font-medium">
+                {parentDir}
+              </div>
+              {original.source !== "Hippius" && (
+                <div
+                  className="text-grey-70 text-xs truncate max-w-[250px]"
+                  title={original.source}
+                >
+                  {original.source}
+                </div>
+              )}
             </div>
           );
         },
@@ -356,23 +376,33 @@ const FilesTable: FC<FilesTableProps> = ({
                     icon: <Download className="size-4" />,
                     itemTitle: "Download",
                     onItemClick: async () => {
-                      downloadIpfsFile(cell.row.original, polkadotAddress ?? "");
+                      downloadIpfsFile(
+                        cell.row.original,
+                        polkadotAddress ?? ""
+                      );
                     },
                   },
-                  ...(((fileType === "video" || fileType === "image" || fileType === "pdfDocument")) ?
-                    [{
-                      icon: <Icons.Eye className="size-4" />,
-                      itemTitle: "View",
-                      onItemClick: () => {
-                        setSelectedFile(cell.row.original);
-                      },
-                    }] : []),
+                  ...(fileType === "video" ||
+                  fileType === "image" ||
+                  fileType === "pdfDocument"
+                    ? [
+                        {
+                          icon: <Icons.Eye className="size-4" />,
+                          itemTitle: "View",
+                          onItemClick: () => {
+                            setSelectedFile(cell.row.original);
+                          },
+                        },
+                      ]
+                    : []),
                   {
                     icon: <Share className="size-4" />,
                     itemTitle: "Go To Explorer",
                     onItemClick: async () => {
                       try {
-                        await openUrl(`http://hipstats.com/cid-tracker/${decodedCid}`);
+                        await openUrl(
+                          `http://hipstats.com/cid-tracker/${decodedCid}`
+                        );
                       } catch (error) {
                         console.error("Failed to open Explorer:", error);
                       }
@@ -383,7 +413,9 @@ const FilesTable: FC<FilesTableProps> = ({
                     itemTitle: "View on IPFS",
                     onItemClick: async () => {
                       try {
-                        await openUrl(`https://get.hippius.network/ipfs/${decodedCid}`);
+                        await openUrl(
+                          `https://get.hippius.network/ipfs/${decodedCid}`
+                        );
                       } catch (error) {
                         console.error("Failed to open Explorer:", error);
                       }
@@ -411,20 +443,24 @@ const FilesTable: FC<FilesTableProps> = ({
                   },
                   ...(cell.row.original.isAssigned
                     ? [
-                      {
-                        icon: <Trash2 className="size-4" />,
-                        itemTitle: "Delete",
-                        onItemClick: () => {
-                          setFileToDelete(cell.row.original);
-                          handleDelete();
+                        {
+                          icon: <Trash2 className="size-4" />,
+                          itemTitle: "Delete",
+                          onItemClick: () => {
+                            setFileToDelete(cell.row.original);
+                            handleDelete();
+                          },
+                          variant: "destructive" as const,
                         },
-                        variant: "destructive" as const,
-                      },
-                    ]
+                      ]
                     : []),
                 ]}
               >
-                <Button variant="ghost" size="md" className="h-8 w-8 p-0 text-grey-70">
+                <Button
+                  variant="ghost"
+                  size="md"
+                  className="h-8 w-8 p-0 text-grey-70"
+                >
                   <MoreVertical className="size-4" />
                 </Button>
               </TableActionMenu>
@@ -467,7 +503,10 @@ const FilesTable: FC<FilesTableProps> = ({
   };
 
   // Handle right-click on table row
-  const handleRowContextMenu = (e: React.MouseEvent, file: FormattedUserIpfsFile) => {
+  const handleRowContextMenu = (
+    e: React.MouseEvent,
+    file: FormattedUserIpfsFile
+  ) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, file });
   };
@@ -507,9 +546,10 @@ const FilesTable: FC<FilesTableProps> = ({
 
         <div
           className={cn(
-            "w-full relative min-h-[700px]",
+            "w-full relative ",
+            isRecentFiles ? "max-h-[150px]" : "min-h-[700px]",
             isDragging &&
-            "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
+              "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
           )}
           onDrop={handleDrop}
           onDragOver={handleDragOver}

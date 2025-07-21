@@ -73,7 +73,9 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const [isProcessingTimestamps, setIsProcessingTimestamps] = useState(false);
 
   // State to track if private sync folder is configured
-  const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<boolean | null>(null);
+  const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<
+    boolean | null
+  >(null);
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
 
   // Filter out deleted files
@@ -230,7 +232,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       try {
         setIsCheckingSyncPath(true);
         const privateSyncPath = await getSyncPath();
-        console.log("privateSyncPath", privateSyncPath)
+        console.log("privateSyncPath", privateSyncPath);
         setIsSyncPathConfigured(!!privateSyncPath);
       } catch (error) {
         console.error("Failed to check sync path:", error);
@@ -245,20 +247,25 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   }, []);
 
   // Handle folder selection from SyncFolderSelector
-  const handleFolderSelected = useCallback(async (path: string) => {
-    try {
-      await setSyncPath(path);
-      toast.success(`Sync folder set successfully`);
-      setIsSyncPathConfigured(true);
+  const handleFolderSelected = useCallback(
+    async (path: string) => {
+      try {
+        await setSyncPath(path);
+        toast.success(`Sync folder set successfully`);
+        setIsSyncPathConfigured(true);
 
-      // Refresh files to get any new files from the configured path
-      refetchUserFiles();
-      return true;
-    } catch (error) {
-      console.error("Failed to set sync folder:", error);
-      toast.error(`Failed to set sync folder: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }, [refetchUserFiles]);
+        // Refresh files to get any new files from the configured path
+        refetchUserFiles();
+        return true;
+      } catch (error) {
+        console.error("Failed to set sync folder:", error);
+        toast.error(
+          `Failed to set sync folder: ${error instanceof Error ? error.message : "Unknown error"}`
+        );
+      }
+    },
+    [refetchUserFiles]
+  );
 
   // Load the table once on mount and set up interval refresh
   useEffect(() => {
@@ -282,7 +289,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   }, [error]);
 
   const displayedData = useMemo(() => {
-    return isRecentFiles ? filteredData.slice(0, 8) : filteredData;
+    return isRecentFiles ? filteredData.slice(0, 2) : filteredData;
   }, [filteredData, isRecentFiles]);
 
   const renderContent = () => {
@@ -294,7 +301,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       (!filteredData.length && !searchTerm && activeFilters.length === 0) ||
       error
     ) {
-      return <IPFSNoEntriesFound />;
+      return <IPFSNoEntriesFound isRecentFiles={isRecentFiles} />;
     }
 
     if (!filteredData.length && (searchTerm || activeFilters.length > 0)) {
@@ -316,6 +323,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     if (viewMode === "list") {
       return (
         <FilesTable
+          isRecentFiles={isRecentFiles}
           showUnpinnedDialog={false}
           files={displayedData}
           resetPagination={shouldResetPagination}
@@ -325,6 +333,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     } else {
       return (
         <CardView
+          isRecentFiles={isRecentFiles}
           showUnpinnedDialog={false}
           files={displayedData}
           resetPagination={shouldResetPagination}
