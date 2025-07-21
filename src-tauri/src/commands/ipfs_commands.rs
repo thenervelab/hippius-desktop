@@ -163,7 +163,7 @@ pub async fn encrypt_and_upload_file(
     let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res).await;
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, false).await;
             println!("[encrypt_and_upload_file] : {}", res);
         },
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
@@ -343,7 +343,7 @@ pub async fn upload_file_public(
     let storage_result = request_file_storage(&file_name, &file_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id, &file_cid, &res).await;
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id, &file_cid, &res, true).await;
             println!("[upload_file_public] Storage request result: {}", res);
         },
         Err(e) => println!("[upload_file_public] Storage request error: {}", e),

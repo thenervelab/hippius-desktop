@@ -148,7 +148,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
             if !dir_files.contains(db_file) {
                 println!("[Startup] File deleted from sync folder: {}", db_file);
                 // Call delete_and_unpin and delete from sync_folder_files
-                let result = delete_and_unpin_user_file_records_by_name(db_file, &seed_phrase).await;
+                let result = delete_and_unpin_user_file_records_by_name(db_file, &seed_phrase, false).await;
                 if result.is_ok() {
                     let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                         .bind(&account_id)
@@ -416,7 +416,7 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                 // Handle deletion for old_path
                 if let Some(file_name) = old_path.file_name().and_then(|s| s.to_str()) {
                     println!("[Watcher] File renamed, deleting old file records: {}", file_name);
-                    let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
+                    let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false));
                     if result.is_ok() {
                         if let Some(pool) = crate::DB_POOL.get() {
                             let _ = tauri::async_runtime::block_on(async {
@@ -470,7 +470,7 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                     if !path.exists() {
                         if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
                             println!("[Watcher] File deleted (via rename/move) from sync folder: {}", file_name);
-                            let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
+                            let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false));
                             if result.is_ok() {
                                 if let Some(pool) = crate::DB_POOL.get() {
                                     let _ = tauri::async_runtime::block_on(async {
@@ -496,7 +496,7 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                 if let Some(file_name) = file_name {
                     println!("[Watcher] File deleted from sync folder: {}", file_name);
                     // Delete from sync_folder_files and call delete_and_unpin
-                    let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase));
+                    let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false));
                     if result.is_ok() {
                         if let Some(pool) = crate::DB_POOL.get() {
                             let _ = tauri::async_runtime::block_on(async {
@@ -574,7 +574,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
             
             // Insert into DB if not exists
             if let Some(pool) = crate::DB_POOL.get() {
-                insert_file_if_not_exists(pool, path, account_id);
+                insert_file_if_not_exists(pool, path, account_id, false);
             }
 
             return true;
@@ -690,6 +690,7 @@ fn replace_file_and_db_records(path: &Path, account_id: &str, seed_phrase: &str)
         let delete_result = block_on(delete_and_unpin_user_file_records_by_name(
             &file_name,
             &seed_phrase,
+            false
         ));
         if delete_result.is_err() {
             eprintln!(
@@ -762,11 +763,13 @@ fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
     }
 }
 
-pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str) {
+pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str, is_public: bool) {
     let file_name = file_path.file_name().unwrap().to_string_lossy();
-    let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'")
+    let file_type = if is_public { "public" } else { "private" };
+    let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?")
         .bind(&file_name)
         .bind(owner)
+        .bind(file_type)
         .fetch_optional(pool)
         .await
         .unwrap();
@@ -790,7 +793,7 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
         .bind("") // profile_cid
         .bind("") // source
         .bind("") // miner_ids
-        .bind("private") // type
+        .bind(file_type) // type
         .bind(false) // is_folder
         .execute(pool)
         .await
