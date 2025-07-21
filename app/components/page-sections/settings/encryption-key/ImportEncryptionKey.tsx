@@ -70,7 +70,6 @@ const ImportEncryptionKey: React.FC<ImportEncryptionKeyProps> = ({
     setKeyError(null);
 
     try {
-      // Verify passcode
       const record = await getWalletRecord();
       if (!record) throw new Error("No wallet record found");
       if (hashPasscode(passcode) !== record.passcodeHash)
@@ -83,11 +82,12 @@ const ImportEncryptionKey: React.FC<ImportEncryptionKeyProps> = ({
       setPasscode("");
       onKeyImported();
     } catch (error: any) {
-      if (error.message?.includes("Invalid base64")) {
-        setKeyError("Invalid encryption key format");
-      } else if (error.message?.includes("Invalid key length")) {
+      toast.error(`Failed to import key: ${error}`);
+      if (error.includes("Invalid base64")) {
+        setKeyError("Invalid encryption key.Please try again.");
+      } else if (error.includes("Invalid key length")) {
         setKeyError("Invalid encryption key length");
-      } else if (error.message?.includes("Incorrect passcode")) {
+      } else if (error.includes("Incorrect passcode")) {
         setError("Incorrect passcode. Please try again.");
       } else {
         setError("Failed to import key. Please try again.");

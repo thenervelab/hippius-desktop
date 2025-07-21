@@ -105,7 +105,7 @@ const ListEncryptionKey: React.FC<ListEncryptionKeyProps> = ({
             <CardButton
               className="w-[207px] "
               variant="secondary"
-              onClick={onImportClick} // Use the onImportClick prop here
+              onClick={onImportClick}
             >
               <div className="flex items-center gap-2 text-base font-medium text-grey-10">
                 <Key className="size-4" />
