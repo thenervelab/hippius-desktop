@@ -24,7 +24,8 @@ use crate::constants::folder_sync::{DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
 pub async fn encrypt_and_upload_file(
     account_id: String,
     file_path: String,
-    seed_phrase: String
+    seed_phrase: String,
+    encryption_key: Option<Vec<u8>>,
 ) -> Result<String, String> {
     use std::path::Path;
     println!("file path is {:?}", file_path.clone());    
@@ -57,6 +58,7 @@ pub async fn encrypt_and_upload_file(
 
     let file_path_cloned = file_path.clone();
     let api_url_cloned = api_url.to_string();
+    let encryption_key_cloned = encryption_key.clone();
     // Run blocking work and return file_name and metadata_cid
     let (file_name, metadata_cid) = tokio::task::spawn_blocking(move || {
         // Read file
@@ -67,8 +69,7 @@ pub async fn encrypt_and_upload_file(
         let original_file_hash = format!("{:x}", hasher.finalize());
 
         // Encrypt using centralized function
-        // let to_process = encrypt_file_for_account(&account_id_clone, &file_data)?;
-        let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data))?;
+        let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data, encryption_key_cloned))?;
         // Split into chunks
         let mut chunks = vec![];
         for i in (0..to_process.len()).step_by(chunk_size) {

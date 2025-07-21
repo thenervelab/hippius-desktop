@@ -86,8 +86,13 @@ async fn get_latest_encryption_key_from_db() -> Result<secretbox::Key, String> {
 }
 
 /// Encrypts file data using the key from the DB, prepending the nonce to the ciphertext.
-pub async fn encrypt_file(file_data: &[u8]) -> Result<Vec<u8>, String> {
-    let key = get_latest_encryption_key_from_db().await?;
+pub async fn encrypt_file(file_data: &[u8], encryption_key: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
+    let key = match encryption_key {
+        Some(key_bytes) => {
+            secretbox::Key::from_slice(&key_bytes).ok_or("Invalid key length".to_string())?
+        },
+        None => get_latest_encryption_key_from_db().await?
+    };
     let nonce = secretbox::gen_nonce();
     let encrypted_data = secretbox::seal(file_data, &nonce, &key);
     let mut result = nonce.0.to_vec();

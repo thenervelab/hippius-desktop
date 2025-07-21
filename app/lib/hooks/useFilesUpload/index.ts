@@ -72,6 +72,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
                     accountId: polkadotAddress,
                     filePath: tempPath,
                     seedPhrase: mnemonic,
+                    encryptionKey: null,  // so it uses lated encryption key by default 
                 });
                 cids.push(cid);
 

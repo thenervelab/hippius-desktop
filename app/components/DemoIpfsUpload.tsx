@@ -36,6 +36,7 @@ export default function DirectStorageRequestDemo({
         accountId: accountId,
         filePath: tempPath,
         seedPhrase: seedPhrase,
+        encryptionKey: null, // so it uses lated encryption key by default 
       });
       setMetadataCid(result);
       setStatus("Upload successful! Metadata CID: " + result);
@@ -58,7 +59,7 @@ export default function DirectStorageRequestDemo({
         accountId: accountId,
         metadataCid: metadataCid,
         outputFile: outputPath,
-        encryptionKey: null,
+        encryptionKey: null, // so it uses lated encryption key by default 
       });
 
 

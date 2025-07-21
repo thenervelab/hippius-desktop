@@ -92,6 +92,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
                     job.account_id.clone(),
                     job.file_path.clone(),
                     job.seed_phrase.clone(),
+                    None
                 )
                 .await;
 
@@ -548,6 +549,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
         account_id.to_string(),
         file_path,
         seed_phrase.to_string(),
+        None,
     ));
 
     match result {

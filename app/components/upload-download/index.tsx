@@ -44,6 +44,7 @@ export default function IpfsTest() {
         accountId,
         filePath: tempPath,
         seedPhrase: mnemonic,
+        encryptionKey: null,  // so it uses lated encryption key by default 
       });
       setMetadataCid(result);
       setStatus("Encrypted upload successful! Metadata CID: " + result);
@@ -61,7 +62,7 @@ export default function IpfsTest() {
         accountId,
         metadataCid,
         outputFile: outputPath,
-        encryptionKey: null,
+        encryptionKey: null,  // so it uses lated encryption key by default 
       });
       const data: number[] = await invoke("read_file", { path: outputPath });
       const blob = new Blob([new Uint8Array(data)]);
