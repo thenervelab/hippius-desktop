@@ -18,7 +18,7 @@ const UpdateSyncFolder: React.FC = () => {
                 setSelectedFolderPath(p);
                 setSelectedFolderName(p.split(/[\\/]/).pop() || "");
             } catch {
-                toast.error("Failed to load sync folder");
+                console.error("Failed to load sync folder");
             }
         })();
     }, []);

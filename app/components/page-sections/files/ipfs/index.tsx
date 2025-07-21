@@ -226,17 +226,14 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     // Signal pagination reset but don't directly change it
   }, []);
 
-  // Check if private sync folder is configured on component mount
   useEffect(() => {
     const checkSyncPath = async () => {
       try {
         setIsCheckingSyncPath(true);
         const privateSyncPath = await getSyncPath();
-        console.log("privateSyncPath", privateSyncPath);
         setIsSyncPathConfigured(!!privateSyncPath);
       } catch (error) {
         console.error("Failed to check sync path:", error);
-        // If there's an error, we'll assume it's not configured
         setIsSyncPathConfigured(false);
       } finally {
         setIsCheckingSyncPath(false);
