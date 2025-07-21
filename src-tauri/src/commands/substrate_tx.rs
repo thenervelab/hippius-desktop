@@ -1,11 +1,9 @@
 use subxt::tx::PairSigner;
 use sp_core::{Pair, sr25519};
 use crate::substrate_client::get_substrate_client;
-// use crate::constants::substrate::SEED_PHRASE;
 use serde::Deserialize;
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
-// use sp_core::crypto::Ss58Codec;
 use crate::DB_POOL;
 use chrono::Utc;
 use serde::Serialize;

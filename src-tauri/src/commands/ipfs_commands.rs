@@ -10,9 +10,7 @@ use crate::utils::{
 use uuid::Uuid;
 use std::fs;
 use reed_solomon_erasure::galois_8::ReedSolomon;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sodiumoxide::crypto::secretbox;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use tempfile::tempdir;

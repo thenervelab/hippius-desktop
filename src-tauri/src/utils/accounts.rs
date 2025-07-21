@@ -1,4 +1,3 @@
-use sha2::{Digest, Sha256};
 use sodiumoxide::crypto::secretbox;
 use crate::DB_POOL;
 use sqlx::Row;

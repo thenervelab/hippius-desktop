@@ -8,7 +8,6 @@ use crate::commands::substrate_tx::custom_runtime;
 use hex;
 use serde::Serialize;
 use sqlx::FromRow;
-use std::path::Path;
 use std::collections::HashSet;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;

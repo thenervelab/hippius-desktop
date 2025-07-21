@@ -2,9 +2,7 @@ use tauri::{
     Builder, Manager, Wry,
 };
 use sqlx::sqlite::SqlitePool;
-use once_cell::sync::OnceCell;
 use dirs;
-use std::path::PathBuf;
 use sqlx::Row;
 use crate::{
     commands::node::start_ipfs_daemon,
@@ -55,6 +53,8 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("profile_cid", "TEXT"),
                 ("source", "TEXT"),
                 ("miner_ids", "TEXT"),
+                ("type", "TEXT"),
+                ("is_folder", "BOOLEAN"),
             ],
         ),
     ];
@@ -150,6 +150,18 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             if let Err(e) = ensure_table_schema(&pool).await {
                 eprintln!("[Setup] Failed to ensure table schema: {}", e);
                 return;
+            }
+
+            // Set type = 'private' and is_folder = false for all existing records where they are NULL
+            if let Err(e) = sqlx::query(
+                "UPDATE sync_folder_files SET type = 'private' WHERE type IS NULL OR type = ''"
+            ).execute(&pool).await {
+                eprintln!("[Setup] Failed to update type column in sync_folder_files: {}", e);
+            }
+            if let Err(e) = sqlx::query(
+                "UPDATE sync_folder_files SET is_folder = 0 WHERE is_folder IS NULL"
+            ).execute(&pool).await {
+                eprintln!("[Setup] Failed to update is_folder column in sync_folder_files: {}", e);
             }
 
             // Check if any encryption keys exist, create one if none found

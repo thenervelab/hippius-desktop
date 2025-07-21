@@ -96,6 +96,11 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     seed_phrase: &str,
 ) -> Result<u64, String> {
     if let Some(pool) = DB_POOL.get() {
+        // Call unpin_user_file_by_name after successful deletes
+        unpin_user_file_by_name(file_name, seed_phrase)
+            .await
+            .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
+
         // Delete from user_profiles
         let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
             .bind(file_name)
@@ -104,23 +109,17 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
 
         // Delete from sync_folder_files
-        let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
+        let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = 'private'")
             .bind(file_name)
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
 
         // Remove from sync folder as well
-        // We don't have account_id here, so pass empty string or refactor if needed
-        crate::utils::file_operations::remove_file_from_sync_and_db(file_name);
+        remove_file_from_sync_and_db(file_name);
 
         // Calculate total rows affected
         let total_deleted = result1.rows_affected() + result2.rows_affected();
-
-        // Call unpin_user_file_by_name after successful deletes
-        unpin_user_file_by_name(file_name, seed_phrase)
-            .await
-            .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
 
         Ok(total_deleted)
     } else {
@@ -128,13 +127,14 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     }
 }
 
-#[tauri::command]
-pub async fn delete_and_unpin_file_by_name(
-    file_name: String,
-    seed_phrase: String,
-) -> Result<u64, String> {
-    delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase).await
-}
+// #[tauri::command]
+// pub async fn delete_and_unpin_file_by_name(
+//     file_name: String,
+//     seed_phrase: String,
+// ) -> Result<u64, String> {
+       // // check if file is public or private before calling this sync path fn
+//     delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase).await
+// }
 
 pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str) {
     // Define your sync folder path
@@ -184,6 +184,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             .bind(file_size_in_bytes)
             .execute(pool)
             .await;
+
         }
     }
 
@@ -213,7 +214,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str) {
     }
     // Remove from DB
     if let Some(pool) = crate::DB_POOL.get() {
-        if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
+        if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = 'private'")
             .bind(file_name)
             .execute(pool)
             .await {

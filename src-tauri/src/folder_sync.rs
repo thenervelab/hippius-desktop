@@ -1,6 +1,5 @@
 use crate::commands::ipfs_commands::encrypt_and_upload_file;
 use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
-use crate::constants::ipfs::API_URL;
 use crate::utils::sync::get_private_sync_path;
 use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
 use crate::DB_POOL;
@@ -138,7 +137,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
             .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()))
             .collect();
         let db_files: Vec<String> = sqlx::query_scalar::<_, String>(
-            "SELECT file_name FROM sync_folder_files WHERE owner = ?"
+            "SELECT file_name FROM sync_folder_files WHERE owner = ? AND type = 'private'"
         )
         .bind(&account_id)
         .fetch_all(pool)
@@ -151,7 +150,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
                 // Call delete_and_unpin and delete from sync_folder_files
                 let result = delete_and_unpin_user_file_records_by_name(db_file, &seed_phrase).await;
                 if result.is_ok() {
-                    let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ?")
+                    let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                         .bind(&account_id)
                         .bind(db_file)
                         .execute(pool)
@@ -313,15 +312,17 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
     match event.kind {
         EventKind::Create(CreateKind::File) | EventKind::Create(CreateKind::Folder) => {
             // Add all paths to the batch
-            for path in event.paths {
-                // Check if file was recently uploaded
+            for path in event.paths.iter() {
                 let file_path_str = path.to_string_lossy().to_string();
+                println!("[Watcher][Create] Detected new path: {}", file_path_str);
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&file_path_str) {
+                        println!("[Watcher][Create] Skipping recently uploaded: {}", file_path_str);
                         continue;
                     }
                 }
+                println!("[Watcher][Create] Adding to batch: {}", file_path_str);
                 CREATE_BATCH.lock().unwrap().push(path.clone());
             }
             // Start debounce timer if not already running
@@ -334,14 +335,39 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                     {
                         let mut batch = CREATE_BATCH.lock().unwrap();
                         for path in batch.drain(..) {
+                            println!("[Watcher][Create] Processing batch path: {}", path.to_string_lossy());
+                            // Wait up to 2 seconds for the file to appear and stabilize
+                            let mut retries = 20;
+                            while retries > 0 && !path.is_file() && !path.is_dir() {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                retries -= 1;
+                            }
+                            // Optionally, wait for file size to stabilize (not growing)
                             if path.is_file() {
-                                files.push(path.clone());
+                                let mut last_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                                let mut stable = false;
+                                for _ in 0..10 {
+                                    std::thread::sleep(std::time::Duration::from_millis(100));
+                                    let new_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                                    if new_size == last_size {
+                                        stable = true;
+                                        break;
+                                    }
+                                    last_size = new_size;
+                                }
+                                if stable {
+                                    files.push(path.clone());
+                                } else {
+                                    println!("[Watcher][Create] File did not stabilize in time: {}", path.to_string_lossy());
+                                }
                             } else if path.is_dir() {
                                 collect_files_recursively(&path, &mut files);
+                            } else {
+                                println!("[Watcher][Create] Path is neither file nor dir after waiting: {}", path.to_string_lossy());
                             }
                         }
                     }
-
+                    println!("[Watcher][Create] Files to upload after debounce: {:?}", files);
                     if !files.is_empty() {
                         // Set sync status for the batch
                         {
@@ -353,6 +379,7 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                         // Enqueue each file for upload
                         if let Some(sender) = UPLOAD_SENDER.get() {
                             for file_path in files {
+                                println!("[Watcher][Create] Enqueuing for upload: {}", file_path.to_string_lossy());
                                 sender
                                     .send(UploadJob {
                                         account_id: account_id.clone(),
@@ -393,7 +420,7 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                     if result.is_ok() {
                         if let Some(pool) = crate::DB_POOL.get() {
                             let _ = tauri::async_runtime::block_on(async {
-                                sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ?")
+                                sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                                     .bind(account_id)
                                     .bind(file_name)
                                     .execute(pool)
@@ -447,7 +474,7 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                             if result.is_ok() {
                                 if let Some(pool) = crate::DB_POOL.get() {
                                     let _ = tauri::async_runtime::block_on(async {
-                                        sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ?")
+                                        sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                                             .bind(account_id)
                                             .bind(file_name)
                                             .execute(pool)
@@ -473,7 +500,7 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                     if result.is_ok() {
                         if let Some(pool) = crate::DB_POOL.get() {
                             let _ = tauri::async_runtime::block_on(async {
-                                sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ?")
+                                sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = 'private'")
                                     .bind(file_name)
                                     .execute(pool)
                                     .await
@@ -721,9 +748,9 @@ fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
                 .execute(pool)
                 .await
         });
-        // Also set is_assigned = 1 in sync_folder_files
+        // Also set is_assigned = 1 in sync_folder_files (private only)
         let _ = tauri::async_runtime::block_on(async {
-            sqlx::query("UPDATE sync_folder_files SET is_assigned = 1 WHERE owner = ? AND file_name = ?")
+            sqlx::query("UPDATE sync_folder_files SET is_assigned = 1 WHERE owner = ? AND file_name = ? AND type = 'private'")
                 .bind(account_id)
                 .bind(file_name)
                 .execute(pool)
@@ -737,7 +764,7 @@ fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
 
 pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str) {
     let file_name = file_path.file_name().unwrap().to_string_lossy();
-    let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ?")
+    let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'")
         .bind(&file_name)
         .bind(owner)
         .fetch_optional(pool)
@@ -746,8 +773,8 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     if exists.is_none() {
         sqlx::query(
             "INSERT INTO sync_folder_files (
-                file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&file_name)
         .bind(owner) // owner
@@ -763,6 +790,8 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
         .bind("") // profile_cid
         .bind("") // source
         .bind("") // miner_ids
+        .bind("private") // type
+        .bind(false) // is_folder
         .execute(pool)
         .await
         .unwrap();

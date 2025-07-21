@@ -19,10 +19,9 @@ use commands::ipfs_commands::{
     upload_file_public, download_file_public,
 };
 use commands::accounts::{create_encryption_key, get_encryption_keys, import_key};
-use utils::file_operations::delete_and_unpin_file_by_name;
+// use utils::file_operations::delete_and_unpin_file_by_name;
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
 use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_tauri};
-use dirs;
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Manager};
@@ -56,7 +55,7 @@ fn main() {
             get_ipfs_bandwidth,
             get_ipfs_peers,
             app_close,
-            delete_and_unpin_file_by_name,
+            // delete_and_unpin_file_by_name,
             create_encryption_key,
             get_encryption_keys,
             import_key,
