@@ -86,7 +86,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
                         <SectionHeader
                             Icon={Icons.File2}
                             title={initialPath ? "Change your sync folder" : "Welcome to Hippius!"}
-                            subtitle={initialPath ? "Choose a different folder to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced." : "Choose a folder on your device to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."}
+                            subtitle={initialPath ? "Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced." : "Choose a folder on your device to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."}
                         />
                         <div className="mt-4 space-y-4">
                             {(["desktop", "documents", "downloads"] as const).map((opt) => (
