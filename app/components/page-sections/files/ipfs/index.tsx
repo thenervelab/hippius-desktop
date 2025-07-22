@@ -377,7 +377,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             <div className="flex items-center gap-4">
               <StorageStateList
                 storageUsed={formattedStorageSize}
-                numberOfFiles={data?.length || 0}
+                numberOfFiles={allFilteredData.length || 0}
               />
             </div>
           )}
