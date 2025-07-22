@@ -30,8 +30,9 @@ interface NotificationDetailViewProps {
 
 const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   selectedNotification,
-  onReadStatusChange
+  onReadStatusChange,
 }) => {
+  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const router = useRouter();
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -57,7 +58,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     timestamp,
     actionText,
     actionLink,
-    unread = false
+    unread = false,
   } = selectedNotification;
 
   const handleMoreClick = (e: React.MouseEvent) => {
@@ -66,7 +67,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     const rect = button.getBoundingClientRect();
     setContextMenu({
       x: rect.left,
-      y: rect.bottom
+      y: rect.bottom,
     });
   };
 
@@ -75,7 +76,6 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
       onReadStatusChange(id, !unread);
     }
   };
-  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
 
   const handleLinkClick = (e: React.MouseEvent) => {
     handleButtonLink(e, actionLink, router, setActiveSubMenuItem);
