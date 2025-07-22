@@ -6,10 +6,10 @@ use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use crate::DB_POOL;
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::folder_sync::insert_file_if_not_exists;
+
 use hex;
 use crate::ipfs::get_ipfs_file_size;
-use crate::sync_shared::RECENTLY_UPLOADED;
+use crate::sync_shared::{RECENTLY_UPLOADED, insert_file_if_not_exists};
 use crate::sync_shared::RECENTLY_UPLOADED_FOLDERS;
 use tokio::time::Duration;
 

@@ -20,10 +20,8 @@ use std::time::Duration;
 use tauri::async_runtime::block_on;
 use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use sqlx::Row;
 use crate::sync_shared::{SYNCING_ACCOUNTS, UPLOAD_SENDER, UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
-    UPLOAD_LOCK, RECENTLY_UPLOADED_FOLDERS, CREATE_BATCH, CREATE_BATCH_TIMER_RUNNING, UploadJob};
-use crate::folder_sync::insert_file_if_not_exists;
+    UPLOAD_LOCK, RECENTLY_UPLOADED_FOLDERS, CREATE_BATCH, CREATE_BATCH_TIMER_RUNNING, UploadJob, insert_file_if_not_exists};
 
 
 pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
@@ -709,19 +707,3 @@ pub async fn start_public_folder_sync_tauri(account_id: String, seed_phrase: Str
     start_public_folder_sync(account_id, seed_phrase).await;
 }
 
-#[tauri::command]
-pub fn get_public_sync_status() -> SyncStatusResponse {
-    let status = SYNC_STATUS.lock().unwrap();
-    let percent = if status.total_files > 0 {
-        (status.synced_files as f32 / status.total_files as f32) * 100.0
-    } else {
-        0.0
-    };
-
-    SyncStatusResponse {
-        synced_files: status.synced_files,
-        total_files: status.total_files,
-        in_progress: status.in_progress,
-        percent,
-    }
-}
