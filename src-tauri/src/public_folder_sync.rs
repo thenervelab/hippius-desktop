@@ -21,51 +21,24 @@ use tauri::async_runtime::block_on;
 use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use sqlx::Row;
+use crate::sync_shared::{SYNCING_ACCOUNTS, UPLOAD_SENDER, UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
+    UPLOAD_LOCK, RECENTLY_UPLOADED_FOLDERS, CREATE_BATCH, CREATE_BATCH_TIMER_RUNNING, UploadJob};
 use crate::folder_sync::insert_file_if_not_exists;
 
-pub static SYNC_STATUS: once_cell::sync::Lazy<Arc<Mutex<SyncStatus>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
-
-pub static UPLOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-// Track files currently being uploaded to prevent duplicates
-pub static UPLOADING_FILES: Lazy<Arc<Mutex<HashSet<String>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
-
-// Track which accounts are already syncing to prevent duplicates
-pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<String>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
-
-// Track recently uploaded files to prevent immediate re-processing
-pub static RECENTLY_UPLOADED: Lazy<Arc<Mutex<HashSet<String>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
-use tauri::{AppHandle, Wry};
-// Debounce state for batching create events
-static CREATE_BATCH: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
-static CREATE_BATCH_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
-
-#[derive(Clone)]
-pub struct UploadJob {
-    pub account_id: String,
-    pub seed_phrase: String,
-    pub file_path: String,
-}
-
-static UPLOAD_SENDER: OnceCell<mpsc::UnboundedSender<UploadJob>> = OnceCell::new();
 
 pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
     println!("started sycn");
-    // Check if this account is already syncing
+    // Check if this account is already syncing publicly
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-        if syncing_accounts.contains(&account_id) {
+        if syncing_accounts.contains(&(account_id.clone(), "public")) {
             println!(
-                "[FolderSync] Account {} is already syncing, skipping.",
+                "[FolderSync] Account {} is already syncing publicly, skipping.",
                 account_id
             );
             return;
         }
-        syncing_accounts.insert(account_id.clone());
+        syncing_accounts.insert((account_id.clone(), "public"));
     }
 
     // Set up the upload queue and worker if not already started
@@ -575,7 +548,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
             
             // Insert into DB if not exists
             if let Some(pool) = crate::DB_POOL.get() {
-                insert_file_if_not_exists(pool, path, account_id, true);
+                insert_file_if_not_exists(pool, path, account_id, true, false);
             }
 
             return true;
@@ -587,29 +560,6 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
             let mut uploading_files = UPLOADING_FILES.lock().unwrap();
             uploading_files.remove(&file_path_str);
             return false;
-        }
-    }
-}
-
-fn upload_folder(folder_path: &Path, account_id: &str, seed_phrase: &str) {
-    if !folder_path.is_dir() {
-        return;
-    }
-    let walker = fs::read_dir(folder_path);
-    if let Ok(entries) = walker {
-        let files: Vec<_> = entries.flatten().filter(|e| e.path().is_file()).collect();
-        for entry in files.into_iter() {
-            let path = entry.path();
-            // Enqueue each file for upload
-            if let Some(sender) = UPLOAD_SENDER.get() {
-                sender
-                    .send(UploadJob {
-                        account_id: account_id.to_string(),
-                        seed_phrase: seed_phrase.to_string(),
-                        file_path: path.to_string_lossy().to_string(),
-                    })
-                    .unwrap();
-            }
         }
     }
 }

@@ -313,7 +313,6 @@ pub fn start_user_sync(account_id: &str) {
 
                                 if decoded_hash != "Invalid file hash" {
                                     let api_url = "http://127.0.0.1:5001";
-                                    println!("[UserSync] Attempting to download IPFS content for CID: {}", decoded_hash);
                                     match crate::utils::ipfs::download_content_from_ipfs(&api_url, &decoded_hash).await {
                                         Ok(json_bytes) => {
                                             let json_str = match String::from_utf8(json_bytes) {
@@ -344,7 +343,6 @@ pub fn start_user_sync(account_id: &str) {
                                                 crate::ipfs::get_ipfs_file_size(cid)
                                             ).await {
                                                 Ok(Ok(size)) => {
-                                                    println!("[UserSync] IPFS file size for {}: {} bytes", cid, size);
                                                     file_hash = hex::encode(cid.as_bytes());
                                                     file_size_in_bytes = size as i64;
                                                 }
@@ -378,7 +376,6 @@ pub fn start_user_sync(account_id: &str) {
 
                                 let file_key = (file_hash.clone(), file_name.clone());
                                 if seen_files.insert(file_key) {
-                                    println!("[UserSync] Adding storage request file: {}, size {:?}", file_hash, file_size_in_bytes);
                                     records_to_insert.push(UserProfileFile {
                                         owner: owner_ss58,
                                         cid: file_hash.clone(),

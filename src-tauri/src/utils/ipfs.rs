@@ -42,17 +42,7 @@ pub fn upload_to_ipfs(
     let pin_url = format!("{}/api/v0/pin/add?arg={}", api_url, cid);
     let pin_res = client.post(&pin_url).send();
     match pin_res {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                println!("[IPFS] Successfully pinned CID: {}", cid);
-            } else {
-                println!(
-                    "[IPFS] Failed to pin CID: {} (status: {})",
-                    cid,
-                    resp.status()
-                );
-            }
-        }
+        Ok(resp) => {},
         Err(e) => {
             println!("[IPFS] Error pinning CID {}: {}", cid, e);
         }

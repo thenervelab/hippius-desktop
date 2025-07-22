@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use crate::folder_sync::insert_file_if_not_exists;
 use hex;
 use crate::ipfs::get_ipfs_file_size;
+use crate::sync_shared::RECENTLY_UPLOADED;
+use crate::sync_shared::RECENTLY_UPLOADED_FOLDERS;
+use tokio::time::Duration;
 
 pub async fn request_file_storage(
     file_name: &str,
@@ -118,7 +121,8 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
 
         // Remove from sync folder as well
-        remove_file_from_sync_and_db(file_name, is_public);
+        // is_folder
+        remove_file_from_sync_and_db(file_name, is_public, false).await;
 
         // Calculate total rows affected
         let total_deleted = result1.rows_affected() + result2.rows_affected();
@@ -153,18 +157,65 @@ pub async fn delete_and_unpin_file_by_name(
     delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase, is_public).await
 }
 
-pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str, is_public: bool) {
+// Helper function for recursive directory copy
+fn copy_dir(src: &Path, dst: &Path) {
+    if let Ok(entries) = std::fs::read_dir(src) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = match path.file_name() {
+                Some(name) => name,
+                None => continue,
+            };
+            let dest_path = dst.join(file_name);
+            if path.is_dir() {
+                if let Err(e) = std::fs::create_dir_all(&dest_path) {
+                    eprintln!("Failed to create subfolder: {}", e);
+                    continue;
+                }
+                copy_dir(&path, &dest_path);
+            } else if path.is_file() {
+                if let Err(e) = std::fs::copy(&path, &dest_path) {
+                    eprintln!("Failed to copy file to sync folder: {}", e);
+                }
+            }
+        }
+    }
+}
+
+pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str, is_public: bool, is_folder: bool) {    
     // Choose sync folder path based on is_public
     let sync_folder = if is_public {
         PathBuf::from(get_public_sync_path().await)
     } else {
         PathBuf::from(get_private_sync_path().await)
     };
-    let file_name = match original_path.file_name() {
-        Some(name) => name.to_string_lossy().to_string(),
-        None => return,
-    };
-    let sync_file_path = sync_folder.join(&file_name);
+    
+    let file_name = original_path.file_name().unwrap().to_string_lossy().to_string();
+    let dest_path = sync_folder.join(&file_name);
+    
+    // Track this file/folder before copying
+    if is_folder {
+        let mut recently_uploaded = RECENTLY_UPLOADED_FOLDERS.lock().unwrap();
+        recently_uploaded.insert(dest_path.to_string_lossy().to_string());
+    } else {
+        let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+        recently_uploaded.insert(dest_path.to_string_lossy().to_string());
+    }
+    
+    // Remove after 2 seconds
+    let dest_path_str = dest_path.to_string_lossy().to_string();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if is_folder {
+            let mut recently_uploaded = RECENTLY_UPLOADED_FOLDERS.lock().unwrap();
+            recently_uploaded.remove(&dest_path_str);
+        } else {
+            let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+            recently_uploaded.remove(&dest_path_str);
+        }
+    });
+    
+    // Rest of existing copy logic...
     let cid_vec = metadata_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec); // This is a String
 
@@ -209,21 +260,33 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
         }
     }
 
-    // Copy if not already exists
-    if !sync_file_path.exists() {
-        if let Err(e) = fs::copy(original_path, &sync_file_path) {
-            eprintln!("Failed to copy file to sync folder: {}", e);
-            return;
-        }
-    }
-
     // Add to sync_folder_files DB (make sure insert_file_if_not_exists is async)
     if let Some(pool) = crate::DB_POOL.get() {
-        insert_file_if_not_exists(pool, &sync_file_path, account_id, is_public).await;
+        insert_file_if_not_exists(pool, &dest_path, account_id, is_public, is_folder).await;
+    }
+    
+    // Copy if not already exists
+    if is_folder {
+        // Recursively copy the folder and its contents
+        if !dest_path.exists() {
+            if let Err(e) = std::fs::create_dir_all(&dest_path) {
+                eprintln!("Failed to create sync folder: {}", e);
+                return;
+            }
+        }
+        // Recursively copy all files and subfolders
+        copy_dir(original_path, &dest_path);
+    } else {
+        if !dest_path.exists() {
+            if let Err(e) = fs::copy(original_path, &dest_path) {
+                eprintln!("Failed to copy file to sync folder: {}", e);
+                return;
+            }
+        }
     }
 }
 
-pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool) {
+pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_folder: bool) {
     use std::fs;
     // Remove from sync folder
     let sync_folder = if is_public {
@@ -233,8 +296,14 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool) {
     };
     let sync_file_path = sync_folder.join(file_name);
     if sync_file_path.exists() {
-        if let Err(e) = fs::remove_file(&sync_file_path) {
-            eprintln!("Failed to remove file from sync folder: {}", e);
+        if is_folder {
+            if let Err(e) = fs::remove_dir_all(&sync_file_path) {
+                eprintln!("Failed to remove folder from sync folder: {}", e);
+            }
+        } else {
+            if let Err(e) = fs::remove_file(&sync_file_path) {
+                eprintln!("Failed to remove file from sync folder: {}", e);
+            }
         }
     }
     // Remove from DB

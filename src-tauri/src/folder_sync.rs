@@ -1,5 +1,4 @@
 use crate::commands::ipfs_commands::encrypt_and_upload_file;
-use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use crate::utils::sync::get_private_sync_path;
 use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
 use crate::DB_POOL;
@@ -7,8 +6,7 @@ use notify::{
     event::CreateKind, event::ModifyKind, Event, EventKind, RecommendedWatcher, RecursiveMode,
     Watcher,
 };
-use once_cell::sync::Lazy;
-use once_cell::sync::OnceCell;
+use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
@@ -21,50 +19,23 @@ use tauri::async_runtime::block_on;
 use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use sqlx::Row;
-
-pub static SYNC_STATUS: once_cell::sync::Lazy<Arc<Mutex<SyncStatus>>> =
-    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
-
-pub static UPLOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-// Track files currently being uploaded to prevent duplicates
-pub static UPLOADING_FILES: Lazy<Arc<Mutex<HashSet<String>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
-
-// Track which accounts are already syncing to prevent duplicates
-pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<String>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
-
-// Track recently uploaded files to prevent immediate re-processing
-pub static RECENTLY_UPLOADED: Lazy<Arc<Mutex<HashSet<String>>>> =
-    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
 use tauri::{AppHandle, Wry};
-// Debounce state for batching create events
-static CREATE_BATCH: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
-static CREATE_BATCH_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
-
-#[derive(Clone)]
-pub struct UploadJob {
-    pub account_id: String,
-    pub seed_phrase: String,
-    pub file_path: String,
-}
-
-static UPLOAD_SENDER: OnceCell<mpsc::UnboundedSender<UploadJob>> = OnceCell::new();
+use crate::sync_shared::{SYNCING_ACCOUNTS, UPLOAD_SENDER, UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
+    UPLOAD_LOCK, RECENTLY_UPLOADED_FOLDERS, CREATE_BATCH, CREATE_BATCH_TIMER_RUNNING, UploadJob};
 
 pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
     println!("started sycn");
-    // Check if this account is already syncing
+    // Check if this account is already syncing privately
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-        if syncing_accounts.contains(&account_id) {
+        if syncing_accounts.contains(&(account_id.clone(), "private")) {
             println!(
-                "[FolderSync] Account {} is already syncing, skipping.",
+                "[FolderSync] Account {} is already syncing privately, skipping.",
                 account_id
             );
             return;
         }
-        syncing_accounts.insert(account_id.clone());
+        syncing_accounts.insert((account_id.clone(), "private"));
     }
 
     // Set up the upload queue and worker if not already started
@@ -575,7 +546,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
             
             // Insert into DB if not exists
             if let Some(pool) = crate::DB_POOL.get() {
-                insert_file_if_not_exists(pool, path, account_id, false);
+                insert_file_if_not_exists(pool, path, account_id, false, false);
             }
 
             return true;
@@ -764,9 +735,51 @@ fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
     }
 }
 
-pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str, is_public: bool) {
+pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str, is_public: bool, is_folder: bool) {
     let file_name = file_path.file_name().unwrap().to_string_lossy();
     let file_type = if is_public { "public" } else { "private" };
+    
+    // If this is a folder, collect and insert all its files first
+    if is_folder && file_path.is_dir() {
+        let mut files = Vec::new();
+        collect_files_recursively(file_path, &mut files);
+        for file in files {
+            let file_name = file.file_name().unwrap().to_string_lossy();
+            let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?")
+                .bind(&file_name)
+                .bind(owner)
+                .bind(file_type)
+                .fetch_optional(pool)
+                .await
+                .unwrap();
+            if exists.is_none() {
+                sqlx::query(
+                    "INSERT INTO sync_folder_files (
+                        file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                )
+                .bind(&file_name)
+                .bind(owner)
+                .bind("")
+                .bind("")
+                .bind(0)
+                .bind(false)
+                .bind(0)
+                .bind("")
+                .bind("")
+                .bind(0)
+                .bind(0)
+                .bind("")
+                .bind("")
+                .bind("")
+                .bind(file_type)
+                .bind(false)
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+        }
+    }
     let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?")
         .bind(&file_name)
         .bind(owner)
@@ -795,7 +808,7 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
         .bind("") // source
         .bind("") // miner_ids
         .bind(file_type) // type
-        .bind(false) // is_folder
+        .bind(is_folder) // is_folder
         .execute(pool)
         .await
         .unwrap();
