@@ -710,7 +710,7 @@ pub async fn encrypt_and_upload_folder(
             hasher.update(&file_data);
             let original_file_hash = format!("{:x}", hasher.finalize());
 
-            // Encrypt
+            // Encrypt (blocking)
             let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data, encryption_key_cloned.clone()))?;
 
             // Erasure coding

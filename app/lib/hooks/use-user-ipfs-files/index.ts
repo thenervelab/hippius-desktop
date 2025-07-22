@@ -24,6 +24,8 @@ export type FormattedUserIpfsFile = {
     fileHash?: string | number[] | Uint8Array;
     fileDetails?: FileDetail[];
     source?: string;
+    isFolder?: boolean;
+    type?: string;
 };
 
 // Add new type to include total storage size and length
@@ -43,6 +45,8 @@ type UserProfileFile = {
     isAssigned: boolean;
     source: string;
     minerIds: string;
+    isFolder: boolean;
+    type: string;
 };
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
@@ -118,7 +122,9 @@ export const useUserIpfsFiles = () => {
                     isAssigned: file.isAssigned,
                     lastChargedAt: file.lastChargedAt,
                     fileHash: file.fileHash,
-                    fileDetails: []
+                    fileDetails: [],
+                    isFolder: file.isFolder,
+                    type: file.type,
                 }));
 
 

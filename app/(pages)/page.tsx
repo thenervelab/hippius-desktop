@@ -2,7 +2,7 @@
 
 import DashboardTitleWrapper from "../components/dashboard-title-wrapper";
 import HomePage from "../components/page-sections/home";
-import IpfsTest from "../components/upload-download";
+// import IpfsTest from "../components/upload-download";
 // import { useFilesNotification } from "../lib/hooks/useFilesNotification";
 
 export default function Home() {
@@ -10,7 +10,7 @@ export default function Home() {
 
   return (
     <DashboardTitleWrapper mainText="">
-      <IpfsTest />
+      {/* <IpfsTest /> */}
       {/* TEMPORARY SYNC STATUS DISPLAY - TO BE REMOVED LATER */}
       {/* {syncStatus && (
         <div className="p-3 border-b border-grey-80">
