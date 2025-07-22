@@ -11,7 +11,7 @@ const NotificationIconButton: React.FC<{
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
-        <div ref={ref}>
+        <div ref={ref} className="flex items-center justify-center h-full">
           <RevealTextLine reveal={inView} className={className}>
             <span className="text-grey-60 bg-grey-90 p-2.5 rounded relative">
               <Icons.Notification className="text-grey-70 size-4" />
