@@ -46,7 +46,10 @@ const SettingsDialogContent: React.FC = () => {
       tabName: "File Settings",
       icon: <Icons.File2 className="size-4" />,
     },
-
+    {
+      tabName: "Encrypted Seed",
+      icon: <Icons.Wallet className="size-4" />,
+    },
     {
       tabName: "Encryption Key",
       icon: <Icons.Key className="size-4" />,
@@ -74,24 +77,13 @@ const SettingsDialogContent: React.FC = () => {
           >
             {activeTab === "Change Passcode" && (
               <>
-                <div className="flex gap-[18px] w-full">
-                  <RevealTextLine
-                    rotate
-                    reveal={inView}
-                    parentClassName="w-[70.4%]"
-                    className="delay-300 w-full"
-                  >
-                    <ChangePasscode />
-                  </RevealTextLine>
-                  <RevealTextLine
-                    rotate
-                    reveal={inView}
-                    parentClassName="w-[29.6%]"
-                    className="delay-300 w-full"
-                  >
-                    <ExportEncryptedSeed />
-                  </RevealTextLine>
-                </div>
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                >
+                  <ChangePasscode />
+                </RevealTextLine>
               </>
             )}
 
@@ -133,6 +125,17 @@ const SettingsDialogContent: React.FC = () => {
               >
                 <UpdateSyncFolder />
               </RevealTextLine>
+            )}
+            {activeTab === "Encrypted Seed" && (
+              <>
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                >
+                  <ExportEncryptedSeed />
+                </RevealTextLine>
+              </>
             )}
 
             {activeTab === "Encryption Key" && (

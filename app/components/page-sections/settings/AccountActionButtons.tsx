@@ -24,7 +24,7 @@ const AccountActionButtons = () => {
       await resetWallet();
 
       toast.success("Your account has been successfully deleted", {
-        duration: 4000,
+        duration: 4000
       });
 
       setSettingsDialogOpen(false);
@@ -43,7 +43,7 @@ const AccountActionButtons = () => {
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="flex gap-12 w-full flex-col border broder-grey-80 rounded-lg p-4"
+          className="flex gap-6 w-full flex-col border broder-grey-80 rounded-lg p-4"
         >
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <SectionHeader
