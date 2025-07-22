@@ -313,7 +313,6 @@ pub fn start_user_sync(account_id: &str) {
 
                                 if decoded_hash != "Invalid file hash" {
                                     let api_url = "http://127.0.0.1:5001";
-                                    println!("[UserSync] Attempting to download IPFS content for CID: {}", decoded_hash);
                                     match crate::utils::ipfs::download_content_from_ipfs(&api_url, &decoded_hash).await {
                                         Ok(json_bytes) => {
                                             let json_str = match String::from_utf8(json_bytes) {
@@ -344,7 +343,6 @@ pub fn start_user_sync(account_id: &str) {
                                                 crate::ipfs::get_ipfs_file_size(cid)
                                             ).await {
                                                 Ok(Ok(size)) => {
-                                                    println!("[UserSync] IPFS file size for {}: {} bytes", cid, size);
                                                     file_hash = hex::encode(cid.as_bytes());
                                                     file_size_in_bytes = size as i64;
                                                 }
@@ -378,7 +376,6 @@ pub fn start_user_sync(account_id: &str) {
 
                                 let file_key = (file_hash.clone(), file_name.clone());
                                 if seen_files.insert(file_key) {
-                                    println!("[UserSync] Adding storage request file: {}, size {:?}", file_hash, file_size_in_bytes);
                                     records_to_insert.push(UserProfileFile {
                                         owner: owner_ss58,
                                         cid: file_hash.clone(),
@@ -498,19 +495,26 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                 let mut files = Vec::new();
                 for row in user_rows {
                     let file_name = row.get::<String, _>("file_name");
-                    let (type_, is_folder) = if let Some((t, f)) = sync_map.get(&file_name) {
-                        (t.clone(), *f)
-                    } else {
-                        ("public".to_string(), false)
-                    };
-                    let mut source = row.get::<String, _>("source");
-                    if let Some((t, _)) = sync_map.get(&file_name) {
-                        if t == "private" {
-                            source = format!("{}/{}", &get_private_sync_path().await, file_name);
+
+                    // Single consistent lookup
+                    let (type_, is_folder, source) = if let Some((t, f)) = sync_map.get(&file_name) {
+                        let base_path = if t == "private" {
+                            get_private_sync_path().await
                         } else {
-                            source = format!("{}/{}", &get_public_sync_path().await, file_name);
-                        }
-                    }
+                            get_public_sync_path().await
+                        };
+                        (t.clone(), *f, format!("{}/{}", base_path, file_name))
+                    } else {
+                        let base_path = get_public_sync_path().await;
+                        ("public".to_string(), false, format!("{}/{}", base_path, file_name))
+                    };
+
+                    // Optional: Debug print to help catch mismatches
+                    println!(
+                        "[UserSync] File: {}, Type: {}, Source: {}",
+                        file_name, type_, source
+                    );
+
                     files.push(UserProfileFileWithType {
                         owner: row.get("owner"),
                         cid: row.get("cid"),
@@ -540,6 +544,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
         Err("DB not initialized".to_string())
     }
 }
+
 
 #[tauri::command]
 pub async fn start_user_profile_sync_tauri(account_id: String) {

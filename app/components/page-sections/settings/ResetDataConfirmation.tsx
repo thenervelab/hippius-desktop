@@ -109,8 +109,8 @@ const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
           {/* Action Buttons */}
           <div className="flex gap-4 mb-6">
             <CardButton
-              className="bg-primary-50 hover:bg-primary-40 transition text-white w-full font-medium"
-              variant="dialog"
+              className="text-base w-full"
+              variant="error"
               onClick={onConfirm}
               disabled={loading}
               loading={loading}
@@ -124,7 +124,7 @@ const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
               onClick={onBack}
               disabled={loading}
             >
-              Go Back
+              Cancel
             </CardButton>
           </div>
         </div>

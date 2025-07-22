@@ -8,9 +8,11 @@ mod folder_sync;
 mod public_folder_sync;
 mod substrate_client;
 mod user_profile_sync;
+mod sync_shared;
 mod utils;
 mod ipfs;
-use crate::folder_sync::{get_sync_status, start_folder_sync_tauri,app_close};
+use crate::sync_shared::{get_sync_status,app_close};
+use crate::folder_sync::{start_folder_sync_tauri};
 use crate::public_folder_sync::start_public_folder_sync_tauri;
 use crate::user_profile_sync::get_user_synced_files;
 use crate::user_profile_sync::start_user_profile_sync_tauri;
@@ -18,7 +20,8 @@ use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
-    upload_file_public, download_file_public, public_download_with_erasure, public_upload_with_erasure , encrypt_and_upload_folder , download_and_decrypt_folder
+    upload_file_public, download_file_public, public_download_with_erasure, public_upload_with_erasure ,
+    encrypt_and_upload_folder , download_and_decrypt_folder, public_download_folder, public_upload_folder,list_folder_contents
 };
 use commands::accounts::{create_encryption_key, get_encryption_keys, import_key};
 use utils::file_operations::delete_and_unpin_file_by_name;
@@ -61,7 +64,10 @@ fn main() {
             delete_and_unpin_file_by_name,
             public_download_with_erasure,
             public_upload_with_erasure,
+            public_upload_folder,
+            public_download_folder,
             encrypt_and_upload_folder,
+            list_folder_contents,
             download_and_decrypt_folder,
             create_encryption_key,
             get_encryption_keys,

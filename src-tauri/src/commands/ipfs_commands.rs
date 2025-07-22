@@ -21,6 +21,7 @@ use tokio::sync::Mutex;
 use crate::constants::folder_sync::{DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
 use crate::folder_sync::collect_files_recursively;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileEntry {
@@ -36,7 +37,6 @@ pub async fn encrypt_and_upload_file(
     seed_phrase: String,
     encryption_key: Option<Vec<u8>>,
 ) -> Result<String, String> {
-    use std::path::Path;
     println!("file path is {:?}", file_path.clone());    
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
@@ -173,7 +173,7 @@ pub async fn encrypt_and_upload_file(
     let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, false).await;
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, false, false).await;
             println!("[encrypt_and_upload_file] : {}", res);
         },
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
@@ -353,7 +353,7 @@ pub async fn upload_file_public(
     let storage_result = request_file_storage(&file_name, &file_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id, &file_cid, &res, true).await;
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id, &file_cid, &res, true, false).await;
             println!("[upload_file_public] Storage request result: {}", res);
         },
         Err(e) => println!("[upload_file_public] Storage request error: {}", e),
@@ -530,7 +530,7 @@ pub async fn public_upload_with_erasure(
     let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, true).await;
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, true, false).await;
             println!("[upload_file_no_encrypt] : {}", res);
         },
         Err(e) => println!("[upload_file_no_encrypt] Storage request error: {}", e),
@@ -835,7 +835,10 @@ pub async fn encrypt_and_upload_folder(
     // Submit storage request
     let storage_result = request_file_storage(&folder_name, &folder_metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
-        Ok(res) => println!("[encrypt_and_upload_folder] Storage request sent: {}", res),
+        Ok(res) => {
+            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id,  &folder_metadata_cid, &res, false, true).await;
+            println!("[encrypt_and_upload_file] : {}", res);
+        },
         Err(e) => println!("[encrypt_and_upload_folder] Storage request error: {}", e),
     }
 
@@ -868,7 +871,7 @@ pub async fn list_folder_contents(
 pub async fn download_and_decrypt_folder(
     account_id: String,
     folder_metadata_cid: String,
-    folder_name: String, // New parameter for folder name
+    folder_name: String,
     output_dir: String,
     encryption_key: Option<Vec<u8>>,
 ) -> Result<(), String> {
@@ -901,6 +904,149 @@ pub async fn download_and_decrypt_folder(
                 .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
         }
         download_and_decrypt_file(account_id.clone(), entry.cid, output_file_path.to_string_lossy().to_string(), encryption_key.clone()).await?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn public_upload_folder(
+    account_id: String,
+    folder_path: String,
+    seed_phrase: String,
+) -> Result<String, String> {
+    let api_url = "http://127.0.0.1:5001";
+    
+    let folder_path = Path::new(&folder_path);
+    if !folder_path.is_dir() {
+        return Err("Provided path is not a directory".to_string());
+    }
+
+    let folder_name = folder_path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid folder path, cannot extract folder name".to_string())?;
+
+    // Check if folder already exists in DB
+    if let Some(pool) = DB_POOL.get() {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+        )
+        .bind(&account_id)
+        .bind(&folder_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error: {e}"))?;
+        if row.is_some() {
+            return Err(format!("Folder '{}' already exists for this user.", folder_name));
+        }
+    }
+
+    // Clone data for thread-safe async block
+    let folder_path_cloned = folder_path.to_path_buf();
+    let api_url_cloned = api_url.to_string();
+    let account_id_cloned = account_id.clone();
+    let (folder_name, folder_metadata_cid) = tokio::task::spawn_blocking(move || {
+        let mut file_entries = Vec::new();
+        let mut files = Vec::new();
+        collect_files_recursively(&folder_path_cloned, &mut files);
+
+        let temp_dir = tempdir().map_err(|e| e.to_string())?;
+
+        for file_path in files {
+            let relative_path = file_path.strip_prefix(&folder_path_cloned)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .to_string();
+
+            let file_data = fs::read(&file_path).map_err(|e| e.to_string())?;
+            let file_size = file_data.len();
+
+            // Hash original file
+            let mut hasher = Sha256::new();
+            hasher.update(&file_data);
+            let original_file_hash = format!("{:x}", hasher.finalize());
+
+            // Upload file directly to IPFS (no encryption)
+            let file_cid = upload_to_ipfs(&api_url_cloned, file_path.to_str().unwrap())
+                .map_err(|e| e.to_string())?;
+
+            file_entries.push(FileEntry {
+                file_name: relative_path,
+                file_size,
+                cid: file_cid,
+            });
+        }
+
+        println!("[public_upload_folder] ✅ Folder processing done");
+
+        let folder_metadata_path = temp_dir.path().join("folder_metadata.json");
+        let folder_metadata = serde_json::to_string_pretty(&file_entries)
+            .map_err(|e| e.to_string())?;
+
+        fs::write(&folder_metadata_path, folder_metadata.as_bytes())
+            .map_err(|e| e.to_string())?;
+
+        let folder_metadata_cid = upload_to_ipfs(
+            &api_url_cloned,
+            folder_metadata_path.to_str().unwrap(),
+        ).map_err(|e| e.to_string())?;
+
+        Ok::<(String, String), String>((folder_name, folder_metadata_cid))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Submit storage request
+    let storage_result = request_file_storage(&folder_name, &folder_metadata_cid, api_url, &seed_phrase).await;
+    match &storage_result {
+        Ok(res) => {
+            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id, &folder_metadata_cid, &res, true, true).await;
+            println!("[public_upload_folder] Storage request result: {}", res);
+        },
+        Err(e) => println!("[public_upload_folder] Storage request error: {}", e),
+    }
+
+    Ok(folder_metadata_cid)
+}
+
+#[tauri::command]
+pub async fn public_download_folder(
+    account_id: String,
+    folder_metadata_cid: String,
+    folder_name: String,
+    output_dir: String,
+) -> Result<(), String> {
+    let api_url = "http://127.0.0.1:5001";
+    let folder_metadata_cid_cloned = folder_metadata_cid.clone();
+
+    // Download folder metadata
+    let metadata_bytes = tokio::task::spawn_blocking(move || {
+        download_from_ipfs(api_url, &folder_metadata_cid_cloned)
+            .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid_cloned, e))
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for CID {}: {}", folder_metadata_cid, e))??;
+
+    // Parse the metadata into Vec<FileEntry>
+    let file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+
+    // Create the output directory with the provided folder name
+    let output_path = std::path::Path::new(&output_dir).join(&folder_name);
+    if !output_path.exists() {
+        fs::create_dir_all(&output_path)
+            .map_err(|e| format!("Failed to create output directory {}: {}", output_path.display(), e))?;
+    }
+
+    // Download each file
+    for entry in file_entries {
+        let output_file_path = output_path.join(&entry.file_name);
+        if let Some(parent) = output_file_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
+        }
+        download_file_public(entry.cid, output_file_path.to_string_lossy().to_string()).await?;
     }
 
     Ok(())
