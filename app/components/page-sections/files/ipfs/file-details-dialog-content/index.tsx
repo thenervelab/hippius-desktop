@@ -79,7 +79,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
     const { icon: Icon, color } = getFileIcon(fileType ?? undefined, isDir);
 
     // Format file size
-    const fileSize = file.size ? formatBytesFromBigInt(BigInt(file.size)) : "Unknown";
+    const fileSize = !file.isAssigned ? "Unknown" : file.size ? formatBytesFromBigInt(BigInt(file.size)) : "Unknown";
 
     const fallbackLocations = ["Loading locations..."];
 
