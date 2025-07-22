@@ -495,19 +495,26 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                 let mut files = Vec::new();
                 for row in user_rows {
                     let file_name = row.get::<String, _>("file_name");
-                    let (type_, is_folder) = if let Some((t, f)) = sync_map.get(&file_name) {
-                        (t.clone(), *f)
-                    } else {
-                        ("public".to_string(), false)
-                    };
-                    let mut source = row.get::<String, _>("source");
-                    if let Some((t, _)) = sync_map.get(&file_name) {
-                        if t == "private" {
-                            source = format!("{}/{}", &get_private_sync_path().await, file_name);
+
+                    // Single consistent lookup
+                    let (type_, is_folder, source) = if let Some((t, f)) = sync_map.get(&file_name) {
+                        let base_path = if t == "private" {
+                            get_private_sync_path().await
                         } else {
-                            source = format!("{}/{}", &get_public_sync_path().await, file_name);
-                        }
-                    }
+                            get_public_sync_path().await
+                        };
+                        (t.clone(), *f, format!("{}/{}", base_path, file_name))
+                    } else {
+                        let base_path = get_public_sync_path().await;
+                        ("public".to_string(), false, format!("{}/{}", base_path, file_name))
+                    };
+
+                    // Optional: Debug print to help catch mismatches
+                    println!(
+                        "[UserSync] File: {}, Type: {}, Source: {}",
+                        file_name, type_, source
+                    );
+
                     files.push(UserProfileFileWithType {
                         owner: row.get("owner"),
                         cid: row.get("cid"),
@@ -537,6 +544,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
         Err("DB not initialized".to_string())
     }
 }
+
 
 #[tauri::command]
 pub async fn start_user_profile_sync_tauri(account_id: String) {
