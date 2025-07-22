@@ -92,6 +92,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
                     job.account_id.clone(),
                     job.file_path.clone(),
                     job.seed_phrase.clone(),
+                    None
                 )
                 .await;
 
@@ -293,9 +294,8 @@ fn spawn_watcher_thread(account_id: String, seed_phrase: String) {
     });
 }
 
-
 // Helper to recursively collect files
-fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
+pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -548,6 +548,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
         account_id.to_string(),
         file_path,
         seed_phrase.to_string(),
+        None,
     ));
 
     match result {

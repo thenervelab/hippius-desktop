@@ -102,7 +102,8 @@ const downloadEncryptedIpfsFile = async (file: FormattedUserIpfsFile, polkadotAd
         await invoke("download_and_decrypt_file", {
             accountId: polkadotAddress,
             metadataCid: cid,
-            outputFile: savePath
+            outputFile: savePath,
+            encryptionKey: null,  // so it uses lated encryption key by default 
         });
 
         toast.success(`Download complete: ${name}`, { id: toastId });

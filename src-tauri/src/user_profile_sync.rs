@@ -40,6 +40,29 @@ pub struct UserProfileFile {
     pub created_at: i64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserProfileFileWithType {
+    pub owner: String,
+    pub cid: String,
+    pub file_hash: String,
+    pub file_name: String,
+    pub file_size_in_bytes: i64,
+    pub is_assigned: bool,
+    pub last_charged_at: i64,
+    pub main_req_hash: String,
+    pub selected_validator: String,
+    pub total_replicas: i64,
+    pub block_number: i64,
+    pub profile_cid: String,
+    pub source: String,
+    pub miner_ids: Option<String>,
+    pub created_at: i64,
+    pub is_folder: bool,
+    #[serde(rename = "type")]
+    pub type_: String,
+}
+
 /// Decode BoundedVec<u8> into a readable string
 fn bounded_vec_to_string(bytes: &[u8]) -> String {
     String::from_utf8(bytes.to_vec()).unwrap_or_else(|_| hex::encode(bytes))
@@ -439,7 +462,7 @@ pub fn start_user_sync(account_id: &str) {
 }
 
 #[tauri::command]
-pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>, String> {
+pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileWithType>, String> {
     if let Some(pool) = DB_POOL.get() {
         let user_profile_rows = sqlx::query(
             r#"
@@ -456,23 +479,43 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
         .await;
 
         let sync_file_infos = sqlx::query(
-            "SELECT file_name, type FROM sync_folder_files WHERE owner = ?"
+            "SELECT file_name, type, is_folder FROM sync_folder_files WHERE owner = ?"
         )
         .bind(&owner)
         .fetch_all(pool)
         .await
-        .map(|rows| rows.into_iter().map(|row| (row.get::<String, _>("file_name"), row.get::<String, _>("type"))).collect::<Vec<_>>());
+        .map(|rows| {
+            rows.into_iter().map(|row| {
+                let file_name = row.get::<String, _>("file_name");
+                let type_ = row.get::<String, _>("type");
+                let is_folder = row.get::<bool, _>("is_folder");
+                (file_name, (type_, is_folder))
+            }).collect::<std::collections::HashMap<_, _>>()
+        });
 
         match (user_profile_rows, sync_file_infos) {
-            (Ok(user_rows), Ok(sync_infos)) => {
-                let sync_map: std::collections::HashMap<_, _> = sync_infos.into_iter().collect();
+            (Ok(user_rows), Ok(sync_map)) => {
                 let mut files = Vec::new();
                 for row in user_rows {
-                    let mut file = UserProfileFile {
+                    let file_name = row.get::<String, _>("file_name");
+                    let (type_, is_folder) = if let Some((t, f)) = sync_map.get(&file_name) {
+                        (t.clone(), *f)
+                    } else {
+                        ("public".to_string(), false)
+                    };
+                    let mut source = row.get::<String, _>("source");
+                    if let Some((t, _)) = sync_map.get(&file_name) {
+                        if t == "private" {
+                            source = format!("{}/{}", &get_private_sync_path().await, file_name);
+                        } else {
+                            source = format!("{}/{}", &get_public_sync_path().await, file_name);
+                        }
+                    }
+                    files.push(UserProfileFileWithType {
                         owner: row.get("owner"),
                         cid: row.get("cid"),
                         file_hash: row.get("file_hash"),
-                        file_name: row.get("file_name"),
+                        file_name,
                         file_size_in_bytes: row.get("file_size_in_bytes"),
                         is_assigned: row.get("is_assigned"),
                         last_charged_at: row.get("last_charged_at"),
@@ -481,18 +524,12 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFile>
                         total_replicas: row.get("total_replicas"),
                         block_number: row.get("block_number"),
                         profile_cid: row.get("profile_cid"),
-                        source: row.get("source"),
+                        source,
                         miner_ids: row.get("miner_ids"),
                         created_at: row.get("created_at"),
-                    };
-                    if let Some(file_type) = sync_map.get(&file.file_name) {
-                        if file_type == "private" {
-                            file.source = format!("{}/{}", &get_private_sync_path().await, file.file_name);
-                        } else {
-                            file.source = format!("{}/{}", &get_public_sync_path().await, file.file_name);
-                        }
-                    }
-                    files.push(file);
+                        is_folder,
+                        type_,
+                    });
                 }
                 println!("[UserSync] Returning {} files for owner: {}", files.len(), owner);
                 Ok(files)
