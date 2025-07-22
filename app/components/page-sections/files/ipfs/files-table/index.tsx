@@ -1,11 +1,4 @@
-import React, {
-  FC,
-  useState,
-  useMemo,
-  useEffect,
-  useCallback,
-  useRef,
-} from "react";
+import React, { FC, useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   createColumnHelper,
   getCoreRowModel,
@@ -22,7 +15,6 @@ import {
   Download,
   LinkIcon,
   MoreVertical,
-  Trash2,
   HardDrive,
   Share,
 } from "lucide-react";
@@ -31,27 +23,22 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePagination } from "@/lib/hooks";
 import NameCell from "./NameCell";
-import FileDetailsDialog, { FileDetail } from "./UnpinFilesDialog";
 import TableActionMenu from "@/components/ui/alt-table/table-action-menu";
-import DeleteConfirmationDialog from "@/components/delete-confirmation-dialog";
-import { useDeleteIpfsFile } from "@/lib/hooks";
-import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
-import VideoDialog, { VideoDialogTrigger } from "./VideoDialog";
-import ImageDialog, { ImageDialogTrigger } from "./ImageDialog";
-import PdfDialog, { PdfDialogTrigger } from "./PdfDialog";
+import { VideoDialogTrigger } from "./VideoDialog";
+import { ImageDialogTrigger } from "./ImageDialog";
+import { PdfDialogTrigger } from "./PdfDialog";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import FileContextMenu from "@/app/components/ui/context-menu";
-import SidebarDialog from "@/app/components/ui/sidebar-dialog";
-import FileDetailsDialogContent from "../file-details-dialog-content";
 import BlockTimestamp from "@/app/components/ui/block-timestamp";
 import { Icons } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { FileViewSharedState } from "../shared/file-view-utils";
+import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
+import FileDetailsDialogContent from "../file-details-dialog-content";
+import SidebarDialog from "@/app/components/ui/sidebar-dialog";
 
-const HIPPIUS_DROP_EVENT = "hippius:file-drop";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
-
 const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
 
 interface FilesTableProps {
@@ -60,43 +47,69 @@ interface FilesTableProps {
   resetPagination?: boolean;
   onPaginationReset?: () => void;
   isRecentFiles?: boolean;
+  searchTerm?: string;
+  activeFilters?: any[];
+  sharedState?: FileViewSharedState;
 }
 
 const FilesTable: FC<FilesTableProps> = ({
-  showUnpinnedDialog = true,
   files,
   resetPagination,
   onPaginationReset,
   isRecentFiles = false,
+  searchTerm = "",
+  activeFilters = [],
+  sharedState
 }) => {
-  const [fileToDelete, setFileToDelete] =
-    useState<FormattedUserIpfsFile | null>(null);
-  const [openDeleteModal, setOpenDeleteModal] = useState(false);
-  const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
-    cid: fileToDelete?.cid || "",
-  });
   const { polkadotAddress } = useWalletAuth();
 
-  const [fileDetailsFile, setFileDetailsFile] =
-    useState<FormattedUserIpfsFile | null>(null);
-  const [isFileDetailsOpen, setIsFileDetailsOpen] = useState(false);
+  // Use either provided shared state or local state
+  const {
+    setFileToDelete,
+    setOpenDeleteModal,
+    setSelectedFile,
+    handleShowFileDetails,
+    handleContextMenu
+  } = sharedState || {};
 
-  const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
-  const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
+  // Add fallback for standalone usage
+  const [localFileDetailsFile, setLocalFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
 
+  // Local handler for file details if no shared state
+  const localHandleShowFileDetails = useCallback((file: FormattedUserIpfsFile) => {
+    if (!handleShowFileDetails) {
+      setLocalFileDetailsFile(file);
+      setLocalIsFileDetailsOpen(true);
+    } else {
+      handleShowFileDetails(file);
+    }
+  }, [handleShowFileDetails]);
+
+  // File drop handling
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
-
-  const [selectedFile, setSelectedFile] =
-    useState<FormattedUserIpfsFile | null>(null);
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    file: FormattedUserIpfsFile;
-  } | null>(null);
-
   const dragCounterRef = useRef(0);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Show empty state if no files and search/filters are active
+  const showEmptyState = files.length === 0 && (searchTerm || (activeFilters && activeFilters.length > 0));
+
+  if (showEmptyState) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
+        <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
+          <Icons.File className="size-7 text-primary-50" />
+        </div>
+        <h3 className="text-lg font-medium text-grey-10 mb-1">
+          No matching files found
+        </h3>
+        <p className="text-grey-50 text-sm max-w-[270px] text-center">
+          Try adjusting the filters or clearing them to see more results.
+        </p>
+      </div>
+    );
+  }
 
   useEffect(() => {
     if (isDragging) {
@@ -107,42 +120,7 @@ const FilesTable: FC<FilesTableProps> = ({
     }
   }, [isDragging]);
 
-  // Global listeners: toggle isDragging on dragover, dragleave, drop
-  useEffect(() => {
-    const onDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes("Files")) {
-        e.preventDefault();
-        setIsDragging(true);
-      }
-    };
-    const onDragLeaveOrDrop = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes("Files")) {
-        e.preventDefault();
-        setIsDragging(false);
-      }
-    };
-
-    window.addEventListener("dragover", onDragOver);
-    window.addEventListener("dragleave", onDragLeaveOrDrop);
-    window.addEventListener("drop", onDragLeaveOrDrop);
-    return () => {
-      window.removeEventListener("dragover", onDragOver);
-      window.removeEventListener("dragleave", onDragLeaveOrDrop);
-      window.removeEventListener("drop", onDragLeaveOrDrop);
-    };
-  }, []);
-
-  // Dispatch files to your upload logic
-  const handleFiles = useCallback((files: FileList) => {
-    if (!files.length) return toast.error("No Files Found");
-    const ev = new CustomEvent(HIPPIUS_DROP_EVENT, { detail: { files } });
-    window.dispatchEvent(ev);
-    toast.success(
-      `${files.length} ${files.length === 1 ? "file" : "files"} ready to upload`
-    );
-  }, []);
-
-  // Local container handlers
+  // Local container handlers for drag and drop
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -172,25 +150,26 @@ const FilesTable: FC<FilesTableProps> = ({
     }
   }, []);
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounterRef.current = 0;
-      setIsDragging(false);
-      if (dragTimeoutRef.current) clearTimeout(dragTimeoutRef.current);
-      if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
-    },
-    [handleFiles]
-  );
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+    if (dragTimeoutRef.current) clearTimeout(dragTimeoutRef.current);
 
-  const filteredData = useMemo(() => files, [files]);
+    // File handling is now done in FilesContent
+    const event = new CustomEvent("hippius:file-drop", {
+      detail: { files: e.dataTransfer.files }
+    });
+    window.dispatchEvent(event);
+  }, []);
+
   const {
     paginatedData: data,
     setCurrentPage,
     currentPage,
     totalPages,
-  } = usePagination(filteredData, 10);
+  } = usePagination(files, 10);
 
   useEffect(() => {
     if (resetPagination) {
@@ -200,28 +179,6 @@ const FilesTable: FC<FilesTableProps> = ({
       }
     }
   }, [resetPagination, setCurrentPage, onPaginationReset]);
-
-  const unpinnedDetails = useMemo(() => {
-    if (!showUnpinnedDialog) return [];
-    return files
-      .filter((f) => !f.isAssigned)
-      .map((f) => ({
-        filename: f.name || "Unnamed File",
-        cid: decodeHexCid(f.cid),
-        createdAt: f.createdAt,
-      }));
-  }, [files, showUnpinnedDialog]);
-
-  useEffect(() => {
-    if (!showUnpinnedDialog) return;
-    if (unpinnedDetails.length) {
-      setUnpinnedFiles(unpinnedDetails);
-      setIsUnpinnedOpen(true);
-    } else {
-      setUnpinnedFiles(null);
-      setIsUnpinnedOpen(false);
-    }
-  }, [unpinnedDetails, showUnpinnedDialog]);
 
   const columns = useMemo(
     () => [
@@ -237,7 +194,7 @@ const FilesTable: FC<FilesTableProps> = ({
             return (
               <VideoDialogTrigger
                 onClick={() => {
-                  setSelectedFile(info.row.original);
+                  setSelectedFile?.(info.row.original);
                 }}
               >
                 <NameCell
@@ -253,7 +210,7 @@ const FilesTable: FC<FilesTableProps> = ({
             return (
               <ImageDialogTrigger
                 onClick={() => {
-                  setSelectedFile(info.row.original);
+                  setSelectedFile?.(info.row.original);
                 }}
               >
                 <NameCell
@@ -269,7 +226,7 @@ const FilesTable: FC<FilesTableProps> = ({
             return (
               <PdfDialogTrigger
                 onClick={() => {
-                  setSelectedFile(info.row.original);
+                  setSelectedFile?.(info.row.original);
                 }}
               >
                 <NameCell
@@ -327,13 +284,10 @@ const FilesTable: FC<FilesTableProps> = ({
         cell: ({ row: { original } }) => {
           const getParentDirectory = (path: string): string => {
             if (!path) return "Unknown";
-
             const parts = path.split(/[/\\]/).filter((p) => p.trim());
-
             if (parts.length >= 2) {
               return parts[parts.length - 2];
             }
-
             return "Hippius";
           };
 
@@ -383,17 +337,17 @@ const FilesTable: FC<FilesTableProps> = ({
                     },
                   },
                   ...(fileType === "video" ||
-                  fileType === "image" ||
-                  fileType === "pdfDocument"
+                    fileType === "image" ||
+                    fileType === "pdfDocument"
                     ? [
-                        {
-                          icon: <Icons.Eye className="size-4" />,
-                          itemTitle: "View",
-                          onItemClick: () => {
-                            setSelectedFile(cell.row.original);
-                          },
+                      {
+                        icon: <Icons.Eye className="size-4" />,
+                        itemTitle: "View",
+                        onItemClick: () => {
+                          setSelectedFile?.(cell.row.original);
                         },
-                      ]
+                      },
+                    ]
                     : []),
                   {
                     icon: <Share className="size-4" />,
@@ -438,21 +392,21 @@ const FilesTable: FC<FilesTableProps> = ({
                     icon: <Icons.InfoCircle className="size-4" />,
                     itemTitle: "File Details",
                     onItemClick: () => {
-                      handleShowFileDetails(cell.row.original);
+                      localHandleShowFileDetails(cell.row.original);
                     },
                   },
                   ...(cell.row.original.isAssigned
                     ? [
-                        {
-                          icon: <Trash2 className="size-4" />,
-                          itemTitle: "Delete",
-                          onItemClick: () => {
-                            setFileToDelete(cell.row.original);
-                            handleDelete();
-                          },
-                          variant: "destructive" as const,
+                      {
+                        icon: <Icons.Trash className="size-4" />,
+                        itemTitle: "Delete",
+                        onItemClick: () => {
+                          setFileToDelete?.(cell.row.original);
+                          setOpenDeleteModal?.(true);
                         },
-                      ]
+                        variant: "destructive" as const,
+                      },
+                    ]
                     : []),
                 ]}
               >
@@ -469,7 +423,7 @@ const FilesTable: FC<FilesTableProps> = ({
         },
       }),
     ],
-    [polkadotAddress]
+    [polkadotAddress, setFileToDelete, setOpenDeleteModal, setSelectedFile, localHandleShowFileDetails]
   );
 
   const table = useReactTable({
@@ -484,240 +438,123 @@ const FilesTable: FC<FilesTableProps> = ({
     },
   });
 
-  const handleDelete = () => {
-    setOpenDeleteModal(true);
-  };
-
-  const selectedFileFormat = selectedFile
-    ? getFilePartsFromFileName(selectedFile.name).fileFormat
-    : null;
-
-  const selectedFileType = selectedFileFormat
-    ? getFileTypeFromExtension(selectedFileFormat)
-    : null;
-
-  // Handler for showing file details
-  const handleShowFileDetails = (file: FormattedUserIpfsFile) => {
-    setFileDetailsFile(file);
-    setIsFileDetailsOpen(true);
-  };
-
-  // Handle right-click on table row
-  const handleRowContextMenu = (
-    e: React.MouseEvent,
-    file: FormattedUserIpfsFile
-  ) => {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY, file });
-  };
-
   return (
-    <>
-      <div className="flex flex-col gap-y-8 relative">
-        <DeleteConfirmationDialog
-          open={openDeleteModal}
-          onClose={() => {
-            setOpenDeleteModal(false);
-            setFileToDelete(null);
-          }}
-          onBack={() => {
-            setOpenDeleteModal(false);
-            setFileToDelete(null);
-          }}
-          onDelete={() => {
-            setOpenDeleteModal(false);
-            toast.success("Deleting file...");
-
-            deleteFile()
-              .then(() => {
-                toast.success("Request submitted. File will be deleted!");
-                setFileToDelete(null);
-              })
-              .catch((error) => {
-                console.error("Delete error:", error);
-                toast.error(error.message || "Failed to delete file");
-              });
-          }}
-          button={isDeleting ? "Deleting..." : "Delete File"}
-          text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""}`}
-          heading="Delete File"
-          disableButton={isDeleting}
-        />
-
-        <div
-          className={cn(
-            "w-full relative ",
-            isRecentFiles ? "max-h-[150px]" : "min-h-[700px]",
-            isDragging &&
-              "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
-          )}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragEnter={handleDragEnter}
-          onDragLeave={handleDragLeave}
-        >
-          {isDragging && (
-            <div className="absolute inset-0 bg-opacity-80 flex flex-col items-center justify-center z-20 pointer-events-none">
-              {/* Animated cloud with upload icon */}
-              <div
-                className={cn(
-                  "relative transition-all duration-500 ease-in-out",
-                  animateCloud ? "scale-110 transform -translate-y-2" : ""
-                )}
-              >
-                <div className="size-15 p-2 rounded-full flex items-center justify-center">
-                  <CloudArrowUpIcon className="size-10 text-[#3167dc] animate-slide-up" />
-                </div>
+    <div className="flex flex-col gap-y-8 relative">
+      <div
+        className={cn(
+          "w-full relative ",
+          isRecentFiles ? "max-h-[150px]" : "min-h-[700px]",
+          isDragging &&
+          "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
+        )}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+      >
+        {isDragging && (
+          <div className="absolute inset-0 bg-opacity-80 flex flex-col items-center justify-center z-20 pointer-events-none">
+            <div
+              className={cn(
+                "relative transition-all duration-500 ease-in-out",
+                animateCloud ? "scale-110 transform -translate-y-2" : ""
+              )}
+            >
+              <div className="size-15 p-2 rounded-full flex items-center justify-center">
+                <CloudArrowUpIcon className="size-10 text-[#3167dc] animate-slide-up" />
               </div>
+            </div>
 
-              {/* Text message */}
-              <div className="mt-2 font-medium text-center bg-primary-50 p-4 rounded-lg shadow-lg">
-                <div className="text-white text-base">
-                  Drop files here to upload them to
-                </div>
-                <div className="flex items-center justify-center">
-                  <HardDrive className="size-6 text-white mr-2" />
-                  <div className="text-white text-lg font-bold">
-                    IPFS Storage
-                  </div>
+            <div className="mt-2 font-medium text-center bg-primary-50 p-4 rounded-lg shadow-lg">
+              <div className="text-white text-base">
+                Drop files here to upload them to
+              </div>
+              <div className="flex items-center justify-center">
+                <HardDrive className="size-6 text-white mr-2" />
+                <div className="text-white text-lg font-bold">
+                  IPFS Storage
                 </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Table wrapper - Remove loading/error handling as it's now in parent */}
-          <TableModule.TableWrapper className="duration-300 delay-300">
-            <TableModule.Table>
-              <TableModule.THead>
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <TableModule.Tr key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => (
-                      <TableModule.Th key={header.id} header={header} />
+        <TableModule.TableWrapper className="duration-300 delay-300">
+          <TableModule.Table>
+            <TableModule.THead>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableModule.Tr key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableModule.Th key={header.id} header={header} />
+                  ))}
+                </TableModule.Tr>
+              ))}
+            </TableModule.THead>
+
+            <TableModule.TBody>
+              {table.getRowModel().rows?.map((row) => {
+                const rowData = row.original;
+                let rowState: "success" | "pending" | "error" = "success";
+
+                if (rowData.tempData) {
+                  rowState = "pending";
+                  if (
+                    Date.now() - rowData.tempData.uploadTime >
+                    TIME_BEFORE_ERR
+                  ) {
+                    rowState = "error";
+                  }
+                }
+                return (
+                  <TableModule.Tr
+                    rowHover
+                    key={`${row.id}-${rowState}`}
+                    transparent
+                    className={cn(
+                      rowState === "pending" && "animate-pulse",
+                      rowState === "error" && "bg-red-200/20"
+                    )}
+                    onContextMenu={(e) => handleContextMenu?.(e, rowData)}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableModule.Td
+                        className={cn(
+                          cell.column.id === "actions" && "w-8",
+                          cell.column.id === "name" && "p-0",
+                          cell.column.id === "cid" && "p-0"
+                        )}
+                        key={cell.id}
+                        cell={cell}
+                      />
                     ))}
                   </TableModule.Tr>
-                ))}
-              </TableModule.THead>
-
-              <TableModule.TBody>
-                {table.getRowModel().rows?.map((row) => {
-                  const rowData = row.original;
-                  let rowState: "success" | "pending" | "error" = "success";
-
-                  if (rowData.tempData) {
-                    rowState = "pending";
-                    if (
-                      Date.now() - rowData.tempData.uploadTime >
-                      TIME_BEFORE_ERR
-                    ) {
-                      rowState = "error";
-                    }
-                  }
-                  return (
-                    <TableModule.Tr
-                      rowHover
-                      key={`${row.id}-${rowState}`}
-                      transparent
-                      className={cn(
-                        rowState === "pending" && "animate-pulse",
-                        rowState === "error" && "bg-red-200/20"
-                      )}
-                      onContextMenu={(e) => handleRowContextMenu(e, rowData)}
-                    >
-                      {row.getVisibleCells().map((cell) => (
-                        <TableModule.Td
-                          className={cn(
-                            cell.column.id === "actions" && "w-8",
-                            cell.column.id === "name" && "p-0",
-                            cell.column.id === "cid" && "p-0"
-                          )}
-                          key={cell.id}
-                          cell={cell}
-                        />
-                      ))}
-                    </TableModule.Tr>
-                  );
-                })}
-              </TableModule.TBody>
-            </TableModule.Table>
-          </TableModule.TableWrapper>
-          <div className="my-8">
-            {totalPages > 1 && (
-              <TableModule.Pagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                setPage={setCurrentPage}
-              />
-            )}
-          </div>
+                );
+              })}
+            </TableModule.TBody>
+          </TableModule.Table>
+        </TableModule.TableWrapper>
+        <div className="my-8">
+          {totalPages > 1 && (
+            <TableModule.Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              setPage={setCurrentPage}
+            />
+          )}
         </div>
-
-        {showUnpinnedDialog && unpinnedFiles && unpinnedFiles.length > 0 && (
-          <FileDetailsDialog
-            open={isUnpinnedOpen}
-            unpinnedFiles={unpinnedFiles}
-          />
-        )}
       </div>
-      {selectedFileType === "video" && (
-        <VideoDialog
-          onCloseClicked={() => {
-            setSelectedFile(null);
-          }}
-          file={selectedFile}
-          allFiles={files}
-          onNavigate={setSelectedFile}
-        />
-      )}
-      {selectedFileType === "image" && (
-        <ImageDialog
-          onCloseClicked={() => {
-            setSelectedFile(null);
-          }}
-          file={selectedFile}
-          allFiles={files}
-          onNavigate={setSelectedFile}
-        />
-      )}
-      {selectedFileType === "pdfDocument" && (
-        <PdfDialog
-          onCloseClicked={() => {
-            setSelectedFile(null);
-          }}
-          file={selectedFile}
-          allFiles={files}
-          onNavigate={setSelectedFile}
-        />
-      )}
 
-      {/* Context Menu */}
-      {contextMenu && (
-        <FileContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          file={contextMenu.file}
-          onClose={() => setContextMenu(null)}
-          onDelete={(file) => {
-            setFileToDelete(file);
-            handleDelete();
-            setContextMenu(null);
-          }}
-          onSelectFile={(file) => {
-            setSelectedFile(file);
-            setContextMenu(null);
-          }}
-          onShowFileDetails={handleShowFileDetails}
-        />
+      {/* Add this for standalone usage */}
+      {!sharedState && localIsFileDetailsOpen && (
+        <SidebarDialog
+          heading="File Details"
+          open={localIsFileDetailsOpen}
+          onOpenChange={setLocalIsFileDetailsOpen}
+        >
+          <FileDetailsDialogContent file={localFileDetailsFile ?? undefined} />
+        </SidebarDialog>
       )}
-
-      {/* File Details Dialog */}
-      <SidebarDialog
-        heading="File Details"
-        open={isFileDetailsOpen}
-        onOpenChange={setIsFileDetailsOpen}
-      >
-        <FileDetailsDialogContent file={fileDetailsFile ?? undefined} />
-      </SidebarDialog>
-    </>
+    </div>
   );
 };
 
