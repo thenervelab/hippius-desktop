@@ -380,7 +380,7 @@ pub async fn download_file_public(
 }
 
 #[tauri::command]
-pub async fn public_upload_with_eresure(
+pub async fn public_upload_with_erasure(
     account_id: String,
     file_path: String,
     seed_phrase: String,
@@ -531,7 +531,7 @@ pub async fn public_upload_with_eresure(
 }
 
 #[tauri::command]
-pub async fn public_download_with_eresure(
+pub async fn public_download_with_erasure(
     account_id: String,
     metadata_cid: String,
     output_file: String,

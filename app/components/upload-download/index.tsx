@@ -129,7 +129,7 @@ export default function IpfsTest() {
         path: tempPath,
         data: Array.from(new Uint8Array(arrayBuffer)),
       });
-      const result = await invoke<string>("public_upload_with_eresure", {
+      const result = await invoke<string>("public_upload_with_erasure", {
         accountId,
         filePath: tempPath,
         seedPhrase: mnemonic,
@@ -146,7 +146,7 @@ export default function IpfsTest() {
     setStatus("Downloading (public erasure-coded)...");
     try {
       const outputPath = `/tmp/pub_ers_${file.name}`;
-      await invoke("public_download_with_eresure", {
+      await invoke("public_download_with_erasure", {
         accountId,
         metadataCid: publicErsMetadataCid,
         outputFile: outputPath,
