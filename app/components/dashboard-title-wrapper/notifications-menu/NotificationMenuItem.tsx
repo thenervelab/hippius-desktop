@@ -2,13 +2,15 @@ import React, { useState } from "react";
 import { IconComponent } from "@/app/lib/types";
 import { AbstractIconWrapper, Icons } from "../../ui";
 import { cn } from "@/app/lib/utils";
-import { openLinkByKey } from "@/app/lib/utils/links";
+import { handleButtonLink } from "@/app/lib/utils/links";
 import { InView } from "react-intersection-observer";
 import RevealTextLine from "../../ui/reveal-text-line";
 import TimeAgo from "react-timeago";
 import { useRouter } from "next/navigation";
 import NotificationType from "../../page-sections/notifications/NotificationType";
 import NotificationContextMenu from "../../page-sections/notifications/NotificationContextMenu";
+import { useSetAtom } from "jotai";
+import { activeSubMenuItemAtom } from "../../sidebar/sideBarAtoms";
 
 interface NotificationItemProps {
   id?: number;
@@ -39,25 +41,17 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   selected = false,
   onClick,
   onReadStatusChange,
-  onClose,
+  onClose
 }) => {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
   } | null>(null);
   const router = useRouter();
+  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
 
   const handleLinkClick = (e: React.MouseEvent) => {
-    if (buttonLink) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (buttonLink.includes("BILLING")) {
-        openLinkByKey(buttonLink);
-      } else {
-        router.push(buttonLink);
-      }
-      onClose?.();
-    }
+    handleButtonLink(e, buttonLink, router, setActiveSubMenuItem);
   };
 
   const handleReadStatusToggle = () => {
@@ -133,7 +127,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
                 <div
                   className={cn("flex size-2 bg-primary-50 rounded-full", {
                     "opacity-0": !unread,
-                    "opacity-100": unread,
+                    "opacity-100": unread
                   })}
                 ></div>
               </div>
