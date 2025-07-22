@@ -509,11 +509,6 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                         ("public".to_string(), false, format!("{}/{}", base_path, file_name))
                     };
 
-                    // Optional: Debug print to help catch mismatches
-                    println!(
-                        "[UserSync] File: {}, Type: {}, Source: {}",
-                        file_name, type_, source
-                    );
 
                     files.push(UserProfileFileWithType {
                         owner: row.get("owner"),
