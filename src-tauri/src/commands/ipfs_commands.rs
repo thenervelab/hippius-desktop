@@ -639,3 +639,259 @@ pub async fn public_download_with_erasure(
     .await
     .map_err(|e| e.to_string())?
 }
+
+
+#[tauri::command]
+pub async fn encrypt_and_upload_folder(
+    account_id: String,
+    folder_path: String,
+    seed_phrase: String
+) -> Result<String, String> {
+    use std::path::Path;
+    let api_url = "http://127.0.0.1:5001";
+    
+    let folder_path = Path::new(&folder_path);
+    if !folder_path.is_dir() {
+        return Err("Provided path is not a directory".to_string());
+    }
+
+    let folder_name = folder_path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid folder path, cannot extract folder name".to_string())?;
+
+    // Check if folder already exists in DB
+    if let Some(pool) = DB_POOL.get() {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+        )
+        .bind(&account_id)
+        .bind(&folder_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error: {e}"))?;
+        if row.is_some() {
+            return Err(format!("Folder '{}' already exists for this user.", folder_name));
+        }
+    }
+
+    // Clone data for thread-safe async block
+    let folder_path_cloned = folder_path.to_path_buf();
+    let api_url_cloned = api_url.to_string();
+    let account_id_cloned = account_id.clone();
+
+    let (folder_name, folder_metadata_cid) = tokio::task::spawn_blocking(move || {
+        let mut file_entries = Vec::new();
+        let mut files = Vec::new();
+        collect_files_recursively(&folder_path_cloned, &mut files)?;
+
+        let temp_dir = tempdir().map_err(|e| e.to_string())?;
+
+        for file_path in files {
+            let relative_path = file_path.strip_prefix(&folder_path_cloned)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .to_string();
+
+            let file_data = fs::read(&file_path).map_err(|e| e.to_string())?;
+            let file_size = file_data.len();
+
+            // Hash original file
+            let mut hasher = Sha256::new();
+            hasher.update(&file_data);
+            let original_file_hash = format!("{:x}", hasher.finalize());
+
+            // Encrypt
+            let to_process = encrypt_file_for_account(&account_id_cloned, &file_data)?;
+
+            // Erasure coding
+            let k = DEFAULT_K;
+            let m = DEFAULT_M;
+            let chunk_size = DEFAULT_CHUNK_SIZE;
+            let mut chunks = vec![];
+
+            for i in (0..to_process.len()).step_by(chunk_size) {
+                let mut chunk = to_process[i..std::cmp::min(i + chunk_size, to_process.len())].to_vec();
+                if chunk.len() < chunk_size {
+                    chunk.resize(chunk_size, 0);
+                }
+                chunks.push(chunk);
+            }
+
+            let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
+            let mut all_chunk_info = vec![];
+            let file_id = Uuid::new_v4().to_string();
+
+            for (orig_idx, chunk) in chunks.iter().enumerate() {
+                let sub_block_size = (chunk.len() + k - 1) / k;
+                let sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
+                    let start = j * sub_block_size;
+                    let end = std::cmp::min(start + sub_block_size, chunk.len());
+                    let mut sub_block = chunk[start..end].to_vec();
+                    if sub_block.len() < sub_block_size {
+                        sub_block.resize(sub_block_size, 0);
+                    }
+                    sub_block
+                }).collect();
+
+                let mut shards: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
+                for _ in k..m {
+                    shards.push(Some(vec![0u8; sub_block_size]));
+                }
+
+                let mut shard_refs: Vec<_> = shards
+                    .iter_mut()
+                    .map(|x| x.as_mut().unwrap().as_mut_slice())
+                    .collect();
+
+                r.encode(&mut shard_refs).map_err(|e| format!("ReedSolomon encode error: {e}"))?;
+
+                for (share_idx, shard) in shard_refs.iter().enumerate() {
+                    let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
+                    let chunk_path = temp_dir.path().join(&chunk_name);
+
+                    let mut f = fs::File::create(&chunk_path).map_err(|e| e.to_string())?;
+                    f.write_all(shard).map_err(|e| e.to_string())?;
+
+                    let cid = upload_to_ipfs(&api_url_cloned, chunk_path.to_str().unwrap())
+                        .map_err(|e| e.to_string())?;
+
+                    all_chunk_info.push(ChunkInfo {
+                        name: chunk_name,
+                        cid,
+                        original_chunk: orig_idx,
+                        share_idx,
+                        size: shard.len(),
+                    });
+                }
+            }
+
+            let file_extension = file_path.extension()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let encrypted_size = to_process.len();
+            let metadata = Metadata {
+                original_file: OriginalFileInfo {
+                    name: relative_path.clone(),
+                    size: file_size,
+                    hash: original_file_hash,
+                    extension: file_extension,
+                },
+                erasure_coding: ErasureCodingInfo {
+                    k,
+                    m,
+                    chunk_size,
+                    encrypted: true,
+                    file_id: file_id.clone(),
+                    encrypted_size,
+                },
+                chunks: all_chunk_info,
+                metadata_cid: None,
+            };
+
+            let metadata_path = temp_dir.path().join(format!("{}_metadata.json", file_id));
+            let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
+            fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
+
+            let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap())
+                .map_err(|e| e.to_string())?;
+
+            file_entries.push(FileEntry {
+                file_name: relative_path,
+                file_size,
+                cid: metadata_cid,
+            });
+        }
+
+        println!("[encrypt_and_upload_folder] ✅ Folder processing done");
+
+        let folder_metadata_path = temp_dir.path().join("folder_metadata.json");
+        let folder_metadata = serde_json::to_string_pretty(&file_entries)
+            .map_err(|e| e.to_string())?;
+
+        fs::write(&folder_metadata_path, folder_metadata.as_bytes())
+            .map_err(|e| e.to_string())?;
+
+        let folder_metadata_cid = upload_to_ipfs(
+            &api_url_cloned,
+            folder_metadata_path.to_str().unwrap(),
+        ).map_err(|e| e.to_string())?;
+
+        Ok::<(String, String), String>((folder_name, folder_metadata_cid))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Submit storage request
+    let storage_result = request_file_storage(&folder_name, &folder_metadata_cid, api_url, &seed_phrase).await;
+    match &storage_result {
+        Ok(res) => println!("[encrypt_and_upload_folder] Storage request sent: {}", res),
+        Err(e) => println!("[encrypt_and_upload_folder] Storage request error: {}", e),
+    }
+
+    Ok(folder_metadata_cid)
+}
+
+#[tauri::command]
+pub async fn list_folder_contents(
+    folder_metadata_cid: String
+) -> Result<Vec<FileEntry>, String> {
+    let api_url = "http://127.0.0.1:5001";
+    let folder_metadata_cid_cloned = folder_metadata_cid.clone(); // Clone for use in closure
+    
+    // Run the blocking download_from_ipfs in a spawn_blocking task
+    let metadata_bytes = tokio::task::spawn_blocking(move || {
+        download_from_ipfs(api_url, &folder_metadata_cid_cloned)
+            .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid_cloned, e))
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for CID {}: {}", folder_metadata_cid, e))??;
+
+    // Parse the metadata into Vec<FileEntry>
+    let file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+    
+    Ok(file_entries)
+}
+
+#[tauri::command]
+pub async fn download_and_decrypt_folder(
+    account_id: String,
+    folder_metadata_cid: String,
+    folder_name: String, // New parameter for folder name
+    output_dir: String
+) -> Result<(), String> {
+    let api_url = "http://127.0.0.1:5001";
+    let folder_metadata_cid_cloned = folder_metadata_cid.clone(); // Clone for use in closure
+
+    // Run the blocking download_from_ipfs in a spawn_blocking task
+    let metadata_bytes = tokio::task::spawn_blocking(move || {
+        download_from_ipfs(api_url, &folder_metadata_cid_cloned)
+            .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid_cloned, e))
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for CID {}: {}", folder_metadata_cid, e))??;
+
+    // Parse the metadata into Vec<FileEntry>
+    let file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+
+    // Create the output directory with the provided folder name
+    let output_path = std::path::Path::new(&output_dir).join(&folder_name);
+    if !output_path.exists() {
+        fs::create_dir_all(&output_path)
+            .map_err(|e| format!("Failed to create output directory {}: {}", output_path.display(), e))?;
+    }
+
+    for entry in file_entries {
+        let output_file_path = output_path.join(&entry.file_name);
+        if let Some(parent) = output_file_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
+        }
+        download_and_decrypt_file(account_id.clone(), entry.cid, output_file_path.to_string_lossy().to_string()).await?;
+    }
+
+    Ok(())
+}
