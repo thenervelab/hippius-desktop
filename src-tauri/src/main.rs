@@ -18,7 +18,7 @@ use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
-    upload_file_public, download_file_public, public_download_with_erasure, public_upload_with_erasure
+    upload_file_public, download_file_public, public_download_with_erasure, public_upload_with_erasure , encrypt_and_upload_folder , download_and_decrypt_folder
 };
 use commands::accounts::{create_encryption_key, get_encryption_keys, import_key};
 use utils::file_operations::delete_and_unpin_file_by_name;
@@ -61,6 +61,8 @@ fn main() {
             delete_and_unpin_file_by_name,
             public_download_with_erasure,
             public_upload_with_erasure,
+            encrypt_and_upload_folder,
+            download_and_decrypt_folder,
             create_encryption_key,
             get_encryption_keys,
             import_key,

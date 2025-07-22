@@ -19,6 +19,15 @@ use crate::commands::types::*;
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
 use crate::constants::folder_sync::{DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
+use crate::folder_sync::collect_files_recursively;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub file_name: String,
+    pub file_size: usize,
+    pub cid: String,
+}
 
 #[tauri::command]
 pub async fn encrypt_and_upload_file(
@@ -640,12 +649,12 @@ pub async fn public_download_with_erasure(
     .map_err(|e| e.to_string())?
 }
 
-
 #[tauri::command]
 pub async fn encrypt_and_upload_folder(
     account_id: String,
     folder_path: String,
-    seed_phrase: String
+    seed_phrase: String,
+    encryption_key: Option<Vec<u8>>,
 ) -> Result<String, String> {
     use std::path::Path;
     let api_url = "http://127.0.0.1:5001";
@@ -679,11 +688,11 @@ pub async fn encrypt_and_upload_folder(
     let folder_path_cloned = folder_path.to_path_buf();
     let api_url_cloned = api_url.to_string();
     let account_id_cloned = account_id.clone();
-
+    let encryption_key_cloned = encryption_key.clone();
     let (folder_name, folder_metadata_cid) = tokio::task::spawn_blocking(move || {
         let mut file_entries = Vec::new();
         let mut files = Vec::new();
-        collect_files_recursively(&folder_path_cloned, &mut files)?;
+        collect_files_recursively(&folder_path_cloned, &mut files);
 
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
 
@@ -702,7 +711,7 @@ pub async fn encrypt_and_upload_folder(
             let original_file_hash = format!("{:x}", hasher.finalize());
 
             // Encrypt
-            let to_process = encrypt_file_for_account(&account_id_cloned, &file_data)?;
+            let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data, encryption_key_cloned.clone()))?;
 
             // Erasure coding
             let k = DEFAULT_K;
@@ -860,7 +869,8 @@ pub async fn download_and_decrypt_folder(
     account_id: String,
     folder_metadata_cid: String,
     folder_name: String, // New parameter for folder name
-    output_dir: String
+    output_dir: String,
+    encryption_key: Option<Vec<u8>>,
 ) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001";
     let folder_metadata_cid_cloned = folder_metadata_cid.clone(); // Clone for use in closure
@@ -890,7 +900,7 @@ pub async fn download_and_decrypt_folder(
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
         }
-        download_and_decrypt_file(account_id.clone(), entry.cid, output_file_path.to_string_lossy().to_string()).await?;
+        download_and_decrypt_file(account_id.clone(), entry.cid, output_file_path.to_string_lossy().to_string(), encryption_key.clone()).await?;
     }
 
     Ok(())

@@ -294,9 +294,8 @@ fn spawn_watcher_thread(account_id: String, seed_phrase: String) {
     });
 }
 
-
 // Helper to recursively collect files
-fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
+pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
