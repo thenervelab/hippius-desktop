@@ -41,7 +41,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   selected = false,
   onClick,
   onReadStatusChange,
-  onClose
+  onClose,
 }) => {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -52,6 +52,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
 
   const handleLinkClick = (e: React.MouseEvent) => {
     handleButtonLink(e, buttonLink, router, setActiveSubMenuItem);
+    onClose?.();
   };
 
   const handleReadStatusToggle = () => {
@@ -127,7 +128,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
                 <div
                   className={cn("flex size-2 bg-primary-50 rounded-full", {
                     "opacity-0": !unread,
-                    "opacity-100": unread
+                    "opacity-100": unread,
                   })}
                 ></div>
               </div>
