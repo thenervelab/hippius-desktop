@@ -56,8 +56,8 @@ const ResetAppData = () => {
 
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <CardButton
-              className="text-base"
-              variant="error"
+              className="text-base h-[60px] "
+              variant="dialog"
               onClick={openDialog}
             >
               <div className="flex items-center gap-2">
