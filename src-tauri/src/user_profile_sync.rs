@@ -460,6 +460,7 @@ pub fn start_user_sync(account_id: &str) {
 
 #[tauri::command]
 pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileWithType>, String> {
+    use std::path::Path;
     if let Some(pool) = DB_POOL.get() {
         let user_profile_rows = sqlx::query(
             r#"
@@ -475,6 +476,11 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
         .fetch_all(pool)
         .await;
 
+        // Get sync folder paths
+        let public_sync_path = get_public_sync_path().await;
+        let private_sync_path = get_private_sync_path().await;
+
+        // Build a map of file_name -> (type, is_folder) from sync_folder_files
         let sync_file_infos = sqlx::query(
             "SELECT file_name, type, is_folder FROM sync_folder_files WHERE owner = ?"
         )
@@ -495,21 +501,31 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                 let mut files = Vec::new();
                 for row in user_rows {
                     let file_name = row.get::<String, _>("file_name");
-
-                    // Single consistent lookup
-                    let (type_, is_folder, source) = if let Some((t, f)) = sync_map.get(&file_name) {
-                        let base_path = if t == "private" {
-                            get_private_sync_path().await
-                        } else {
-                            get_public_sync_path().await
-                        };
-                        (t.clone(), *f, format!("{}/{}", base_path, file_name))
+                    let public_path = format!("{}/{}", public_sync_path, file_name);
+                    let private_path = format!("{}/{}", private_sync_path, file_name);
+                    // Default values
+                    let mut type_ = "public".to_string();
+                    let mut source = row.get::<String, _>("source");
+                    let mut is_folder = false;
+                    // If found in sync_folder_files, use its type and is_folder
+                    if let Some((t, f)) = sync_map.get(&file_name) {
+                        type_ = t.clone();
+                        is_folder = *f;
+                        if type_ == "public" {
+                            source = public_path.clone();
+                        } else if type_ == "private" {
+                            source = private_path.clone();
+                        }
                     } else {
-                        let base_path = get_public_sync_path().await;
-                        ("public".to_string(), false, format!("{}/{}", base_path, file_name))
-                    };
-
-
+                        // Fallback: check filesystem for type/source
+                        if Path::new(&public_path).exists() {
+                            type_ = "public".to_string();
+                            source = public_path.clone();
+                        } else if Path::new(&private_path).exists() {
+                            type_ = "private".to_string();
+                            source = private_path.clone();
+                        }
+                    }
                     files.push(UserProfileFileWithType {
                         owner: row.get("owner"),
                         cid: row.get("cid"),
