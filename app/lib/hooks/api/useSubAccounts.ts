@@ -6,7 +6,7 @@ import { useEffect, useState, useCallback } from "react";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
-export type SubAccount = { address: string; role: string };
+export type SubAccount = { address: string; role: string, seed?: string };
 
 export function useSubAccounts() {
   const { api, isConnected } = usePolkadotApi();
