@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
 
 // Centralized object containing all application links
 export const APP_LINKS: any = {
-  BILLING: "https://console.hippius.com/dashboard/billing",
+  BILLING: "https://console.hippius.com/dashboard/billing"
   // Add more links as needed
 };
 
@@ -28,4 +29,27 @@ export const openLinkByKey = async (
   linkKey: keyof typeof APP_LINKS | string
 ): Promise<void> => {
   await openAppLink(APP_LINKS[linkKey]);
+};
+
+/**
+ * Handles button link clicks with proper routing behavior
+ */
+export const handleButtonLink = (
+  e: React.MouseEvent,
+  buttonLink: string | undefined,
+  router: AppRouterInstance,
+  setActiveSubMenuItem?: (item: string) => void
+) => {
+  if (buttonLink) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (buttonLink.includes("BILLING")) {
+      openLinkByKey(buttonLink);
+    } else {
+      if (buttonLink.includes("/files") && setActiveSubMenuItem) {
+        setActiveSubMenuItem("Private");
+      }
+      router.push(buttonLink);
+    }
+  }
 };

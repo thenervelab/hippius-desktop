@@ -2,13 +2,15 @@ import React, { useState } from "react";
 import { IconComponent } from "@/app/lib/types";
 import { AbstractIconWrapper, Icons } from "../../ui";
 import { cn } from "@/app/lib/utils";
-import { openLinkByKey } from "@/app/lib/utils/links";
+import { handleButtonLink } from "@/app/lib/utils/links";
 import NotificationType from "./NotificationType";
 import { InView } from "react-intersection-observer";
 import RevealTextLine from "../../ui/reveal-text-line";
 import TimeAgo from "react-timeago";
 import NotificationContextMenu from "./NotificationContextMenu";
 import { useRouter } from "next/navigation";
+import { useSetAtom } from "jotai";
+import { activeSubMenuItemAtom } from "../../sidebar/sideBarAtoms";
 
 interface NotificationItemProps {
   id?: number;
@@ -37,24 +39,17 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   unread = false,
   selected = false,
   onClick,
-  onReadStatusChange,
+  onReadStatusChange
 }) => {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
   } | null>(null);
   const router = useRouter();
+  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
 
   const handleLinkClick = (e: React.MouseEvent) => {
-    if (buttonLink) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (buttonLink.includes("BILLING")) {
-        openLinkByKey(buttonLink);
-      } else {
-        router.push(buttonLink);
-      }
-    }
+    handleButtonLink(e, buttonLink, router, setActiveSubMenuItem);
   };
 
   const handleReadStatusToggle = () => {
@@ -131,7 +126,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
                 <div
                   className={cn("flex size-2 bg-primary-50 rounded-full", {
                     "opacity-0": !unread,
-                    "opacity-100": unread,
+                    "opacity-100": unread
                   })}
                 ></div>
               </div>
