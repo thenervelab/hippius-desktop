@@ -23,6 +23,7 @@ use tauri::{AppHandle, Wry};
 use crate::sync_shared::{SYNCING_ACCOUNTS, UPLOAD_SENDER, UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
     UPLOAD_LOCK, RECENTLY_UPLOADED_FOLDERS, CREATE_BATCH, CREATE_BATCH_TIMER_RUNNING, UploadJob};
 
+
 pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
     println!("started sycn");
     // Check if this account is already syncing privately
@@ -100,9 +101,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
     }
 
     if let Some(pool) = crate::DB_POOL.get() {
-        println!("getting sync path ");
         let sync_path = PathBuf::from(&get_private_sync_path().await);
-        println!("got synced path ");
         let mut files = Vec::new();
         collect_files_recursively(&sync_path, &mut files);
         let dir_files: HashSet<String> = files.iter()
@@ -118,7 +117,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
         // Handle deleted files (in DB, not in folder)
         for db_file in &db_files {
             if !dir_files.contains(db_file) {
-                println!("[Startup] File deleted from sync folder: {}", db_file);
+                println!("[Startup] private File deleted from sync folder: {}", db_file);
                 // Call delete_and_unpin and delete from sync_folder_files
                 let result = delete_and_unpin_user_file_records_by_name(db_file, &seed_phrase, false).await;
                 if result.is_ok() {
@@ -203,9 +202,6 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
                         continue;
                     }
                 }
-
-                // Check if file is in profile DB and update source
-                let _ = is_file_in_profile_db(&file_path, &checker_account_id);
             }
 
             std::thread::sleep(Duration::from_secs(120)); // 2 minutes
@@ -350,6 +346,26 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                         // Enqueue each file for upload
                         if let Some(sender) = UPLOAD_SENDER.get() {
                             for file_path in files {
+                                // Check if file is already being uploaded                                
+                                let file_name = file_path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
+                                if let Some(file_name) = file_name {
+                                    // Check DB before enqueue
+                                    let already_in_db = if let Some(pool) = crate::DB_POOL.get() {
+                                        let exists: Option<(String,)> = tauri::async_runtime::block_on(async {
+                                            sqlx::query_as(
+                                                "SELECT file_name FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = ? LIMIT 1"
+                                            )
+                                            .bind(&account_id)
+                                            .bind(&file_name)
+                                            .bind("public")
+                                            .fetch_optional(pool)
+                                            .await
+                                        }).unwrap_or(None);
+                                        exists.is_some()
+                                    } else {
+                                        false
+                                    };
+                                }
                                 println!("[Watcher][Create] Enqueuing for upload: {}", file_path.to_string_lossy());
                                 sender
                                     .send(UploadJob {
@@ -465,7 +481,7 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
             for path in event.paths {
                 let file_name = path.file_name().and_then(|s| s.to_str());
                 if let Some(file_name) = file_name {
-                    println!("[Watcher] File deleted from sync folder: {}", file_name);
+                    println!("[Watcher] private File deleted from sync folder: {}", file_name);
                     // Delete from sync_folder_files and call delete_and_unpin
                     let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false));
                     if result.is_ok() {
@@ -502,7 +518,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
     }
 
     // Check if file is already in the DB
-    if is_file_in_profile_db(path, account_id) {
+    if is_file_in_synced_db(path, account_id) {
         // Remove from uploading set
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         uploading_files.remove(&file_path_str);
@@ -562,28 +578,6 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
     }
 }
 
-fn upload_folder(folder_path: &Path, account_id: &str, seed_phrase: &str) {
-    if !folder_path.is_dir() {
-        return;
-    }
-    let walker = fs::read_dir(folder_path);
-    if let Ok(entries) = walker {
-        let files: Vec<_> = entries.flatten().filter(|e| e.path().is_file()).collect();
-        for entry in files.into_iter() {
-            let path = entry.path();
-            // Enqueue each file for upload
-            if let Some(sender) = UPLOAD_SENDER.get() {
-                sender
-                    .send(UploadJob {
-                        account_id: account_id.to_string(),
-                        seed_phrase: seed_phrase.to_string(),
-                        file_path: path.to_string_lossy().to_string(),
-                    })
-                    .unwrap();
-            }
-        }
-    }
-}
 
 fn replace_file_and_db_records(path: &Path, account_id: &str, seed_phrase: &str) {
     if !path.is_file() {
@@ -686,64 +680,41 @@ fn replace_file_and_db_records(path: &Path, account_id: &str, seed_phrase: &str)
     }
 }
 
-fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
-    // Extract file name as string
+fn is_file_in_synced_db(file_path: &Path, account_id: &str) -> bool {
     let file_name = match file_path.file_name().and_then(OsStr::to_str) {
         Some(name) => name,
         None => return false,
     };
 
-    // Get the DB pool
     let pool = match DB_POOL.get() {
         Some(pool) => pool,
         None => return false,
     };
 
-    // Run the query in a blocking context
-    let found = tauri::async_runtime::block_on(async {
+    tauri::async_runtime::block_on(async {
         sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT 1 FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
+            "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private' LIMIT 1",
         )
         .bind(account_id)
         .bind(file_name)
         .fetch_optional(pool)
         .await
-    });
-
-    if matches!(found, Ok(Some(_))) {
-        // Update the source column to the sync folder path for this file
-        let file_path_str = file_path.to_string_lossy().to_string();
-        let _ = tauri::async_runtime::block_on(async {
-            sqlx::query("UPDATE user_profiles SET source = ? WHERE owner = ? AND file_name = ?")
-                .bind(&file_path_str)
-                .bind(account_id)
-                .bind(file_name)
-                .execute(pool)
-                .await
-        });
-        // Also set is_assigned = 1 in sync_folder_files (private only)
-        let _ = tauri::async_runtime::block_on(async {
-            sqlx::query("UPDATE sync_folder_files SET is_assigned = 1 WHERE owner = ? AND file_name = ? AND type = 'private'")
-                .bind(account_id)
-                .bind(file_name)
-                .execute(pool)
-                .await
-        });
-        true
-    } else {
-        false
-    }
+    }).map(|r| r.is_some()).unwrap_or(false)
 }
 
 pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str, is_public: bool, is_folder: bool) {
     let file_name = file_path.file_name().unwrap().to_string_lossy();
     let file_type = if is_public { "public" } else { "private" };
+    println!("file type {:?}, is_folder : {:?}, filename {:?}", file_type, is_folder, file_name);
     
     // If this is a folder, collect and insert all its files first
     if is_folder && file_path.is_dir() {
+        println!("[DB] Processing folder: {}", file_path.display());
         let mut files = Vec::new();
         collect_files_recursively(file_path, &mut files);
+        println!("[DB] Found {} files in folder", files.len());
         for file in files {
+            println!("[DB] Processing file");
             let file_name = file.file_name().unwrap().to_string_lossy();
             let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?")
                 .bind(&file_name)
@@ -752,7 +723,9 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
                 .fetch_optional(pool)
                 .await
                 .unwrap();
+            println!("file exists: {:?}", exists.is_some());
             if exists.is_none() {
+                println!("file type {:?}, is_folder : {:?}, filename {:?}", file_type, is_folder, file_name);
                 sqlx::query(
                     "INSERT INTO sync_folder_files (
                         file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
@@ -787,6 +760,7 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
         .fetch_optional(pool)
         .await
         .unwrap();
+    println!("folder exists: {:?}", exists.is_some());
     if exists.is_none() {
         sqlx::query(
             "INSERT INTO sync_folder_files (

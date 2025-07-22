@@ -217,7 +217,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
     
     // Rest of existing copy logic...
     let cid_vec = metadata_cid.as_bytes().to_vec();
-    let file_hash = hex::encode(cid_vec); // This is a String
+    let file_hash = hex::encode(cid_vec);
 
     // Get file size from IPFS
     let file_size_in_bytes = match get_ipfs_file_size(metadata_cid).await {
@@ -262,7 +262,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
 
     // Add to sync_folder_files DB (make sure insert_file_if_not_exists is async)
     if let Some(pool) = crate::DB_POOL.get() {
-        insert_file_if_not_exists(pool, &dest_path, account_id, is_public, is_folder).await;
+        insert_file_if_not_exists(pool, &original_path, account_id, is_public, is_folder).await;
     }
     
     // Copy if not already exists

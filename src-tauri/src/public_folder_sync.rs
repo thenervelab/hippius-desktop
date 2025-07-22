@@ -120,7 +120,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
         // Handle deleted files (in DB, not in folder)
         for db_file in &db_files {
             if !dir_files.contains(db_file) {
-                println!("[Startup] File deleted from sync folder: {}", db_file);
+                println!("[Startup] public File deleted from sync folder: {}", db_file);
                 // Call delete_and_unpin and delete from sync_folder_files
                 let result = delete_and_unpin_user_file_records_by_name(db_file, &seed_phrase, true).await;
                 if result.is_ok() {
@@ -205,9 +205,6 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
                         continue;
                     }
                 }
-
-                // Check if file is in profile DB and update source
-                let _ = is_file_in_profile_db(&file_path, &checker_account_id);
             }
 
             std::thread::sleep(Duration::from_secs(120)); // 2 minutes
@@ -353,6 +350,26 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                         // Enqueue each file for upload
                         if let Some(sender) = UPLOAD_SENDER.get() {
                             for file_path in files {
+                                // Check if file is already being uploaded                                
+                                let file_name = file_path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
+                                if let Some(file_name) = file_name {
+                                    // Check DB before enqueue
+                                    let already_in_db = if let Some(pool) = crate::DB_POOL.get() {
+                                        let exists: Option<(String,)> = tauri::async_runtime::block_on(async {
+                                            sqlx::query_as(
+                                                "SELECT file_name FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = ? LIMIT 1"
+                                            )
+                                            .bind(&account_id)
+                                            .bind(&file_name)
+                                            .bind("public")
+                                            .fetch_optional(pool)
+                                            .await
+                                        }).unwrap_or(None);
+                                        exists.is_some()
+                                    } else {
+                                        false
+                                    };
+                                }
                                 println!("[Watcher][Create] Enqueuing for upload: {}", file_path.to_string_lossy());
                                 sender
                                     .send(UploadJob {
@@ -468,7 +485,7 @@ fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
             for path in event.paths {
                 let file_name = path.file_name().and_then(|s| s.to_str());
                 if let Some(file_name) = file_name {
-                    println!("[Watcher] File deleted from sync folder: {}", file_name);
+                    println!("[Watcher] public File deleted from sync folder: {}", file_name);
                     // Delete from sync_folder_files and call delete_and_unpin
                     let result = tauri::async_runtime::block_on(delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false));
                     if result.is_ok() {
@@ -505,7 +522,7 @@ fn upload_file(path: &Path, account_id: &str, seed_phrase: &str) -> bool {
     }
 
     // Check if file is already in the DB
-    if is_file_in_profile_db(path, account_id) {
+    if is_file_in_synced_db(path, account_id) {
         // Remove from uploading set
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         uploading_files.remove(&file_path_str);
@@ -665,53 +682,26 @@ fn replace_file_and_db_records(path: &Path, account_id: &str, seed_phrase: &str)
     }
 }
 
-fn is_file_in_profile_db(file_path: &Path, account_id: &str) -> bool {
-    // Extract file name as string
+fn is_file_in_synced_db(file_path: &Path, account_id: &str) -> bool {
     let file_name = match file_path.file_name().and_then(OsStr::to_str) {
         Some(name) => name,
         None => return false,
     };
 
-    // Get the DB pool
     let pool = match DB_POOL.get() {
         Some(pool) => pool,
         None => return false,
     };
 
-    // Run the query in a blocking context
-    let found = tauri::async_runtime::block_on(async {
+    tauri::async_runtime::block_on(async {
         sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT 1 FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
+            "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public' LIMIT 1",
         )
         .bind(account_id)
         .bind(file_name)
         .fetch_optional(pool)
         .await
-    });
-
-    if matches!(found, Ok(Some(_))) {
-        // Update the source column to the sync folder path for this file
-        let file_path_str = file_path.to_string_lossy().to_string();
-        let _ = tauri::async_runtime::block_on(async {
-            sqlx::query("UPDATE user_profiles SET source = ? WHERE owner = ? AND file_name = ?")
-                .bind(&file_path_str)
-                .bind(account_id)
-                .bind(file_name)
-                .execute(pool)
-                .await
-        });
-        // Also set is_assigned = 1 in sync_folder_files (public only)
-        let _ = tauri::async_runtime::block_on(async {
-            sqlx::query("UPDATE sync_folder_files SET is_assigned = 1 WHERE owner = ? AND file_name = ? AND type = 'public'")
-                .bind(account_id)
-                .bind(file_name)
-                .execute(pool)
-                .await
-        });
-        true
-    } else {
-        false
-    }
+    }).map(|r| r.is_some()).unwrap_or(false)
 }
 
 #[tauri::command]
