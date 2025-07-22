@@ -469,7 +469,7 @@ const FilesTable: FC<FilesTableProps> = ({
         },
       }),
     ],
-    []
+    [polkadotAddress]
   );
 
   const table = useReactTable({
