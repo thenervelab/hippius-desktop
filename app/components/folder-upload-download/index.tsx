@@ -1,5 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 "use client";
 import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -176,11 +174,10 @@ export default function IpfsFolderDemo() {
       <button
         onClick={handleUploadFolder}
         disabled={!folderPath}
-        className={`px-4 py-2 rounded mb-4 ${
-          folderPath
+        className={`px-4 py-2 rounded mb-4 ${folderPath
             ? "bg-green-500 text-white hover:bg-green-600"
             : "bg-gray-300 text-gray-600 cursor-not-allowed"
-        }`}
+          }`}
       >
         {useEncryption ? "Upload & Encrypt Folder" : "Upload Folder (Public)"}
       </button>
