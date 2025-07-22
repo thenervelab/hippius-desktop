@@ -11,9 +11,7 @@ interface ExportEncryptedSeedProps {
   className?: string;
 }
 
-const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
-  className,
-}) => {
+const BackupAppData: React.FC<ExportEncryptedSeedProps> = ({ className }) => {
   const [isExporting, setIsExporting] = useState(false);
 
   const handleExport = async () => {
@@ -21,12 +19,11 @@ const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
     try {
       const success = await exportWalletAsZip();
       if (success) {
-        toast.success("Backup file exported successfully", {
-          duration: 3000,
-        });
+        toast.success("Backup saved.", { duration: 3000 });
       }
     } catch (error) {
       console.error("Export failed:", error);
+      toast.error("Backup failed.");
     } finally {
       setIsExporting(false);
     }
@@ -45,22 +42,22 @@ const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <SectionHeader
               Icon={Icons.Wallet}
-              title="Export your encrypted seed"
-              subtitle="Download an encrypted backup for secure storage and recovery."
+              title="Backup App Data"
+              subtitle="The ZIP includes your encrypted seed, sub‑account seeds, and notification data. Save it somewhere secure."
             />
           </RevealTextLine>
 
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <CardButton
-              className=" h-[60px] w-[247px]"
+              className="h-[60px] w-[247px]"
               variant="dialog"
               onClick={handleExport}
               disabled={isExporting}
             >
               <div className="flex items-center gap-2">
                 <Zip className="size-4" />
-                <span className="flex items-center">
-                  {isExporting ? "Downloading..." : "Download"}
+                <span>
+                  {isExporting ? "Downloading..." : "Download Backup"}
                 </span>
               </div>
             </CardButton>
@@ -71,4 +68,4 @@ const ExportEncryptedSeed: React.FC<ExportEncryptedSeedProps> = ({
   );
 };
 
-export default ExportEncryptedSeed;
+export default BackupAppData;

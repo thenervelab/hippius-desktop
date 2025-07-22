@@ -2,39 +2,40 @@ import React, { useState } from "react";
 import { CardButton, Icons, RevealTextLine } from "../../ui";
 import { Trash } from "../../ui/icons";
 import { InView } from "react-intersection-observer";
-import DeleteAccountConfirmation from "./DeleteAccountConfirmation";
+import ResetDataConfirmation from "./ResetDataConfirmation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
 import SectionHeader from "./SectionHeader";
 import { useSetAtom } from "jotai";
 import { settingsDialogOpenAtom } from "@/app/components/sidebar/sideBarAtoms";
 
-const AccountActionButtons = () => {
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
+const ResetAppData = () => {
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const { resetWallet } = useWalletAuth();
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
 
-  const handleOpenDeleteDialog = () => setIsDeleteDialogOpen(true);
-  const handleCloseDeleteDialog = () => setIsDeleteDialogOpen(false);
+  const openDialog = () => setIsDialogOpen(true);
+  const closeDialog = () => setIsDialogOpen(false);
 
-  const handleDeleteAccount = async () => {
-    setIsDeleting(true);
+  const handleResetLocalData = async () => {
+    setIsResetting(true);
     try {
       await resetWallet();
-
-      toast.success("Your account has been successfully deleted", {
-        duration: 4000
-      });
-
+      toast.success(
+        "Local data cleared. You can restore everything with your backup.",
+        {
+          duration: 4000
+        }
+      );
       setSettingsDialogOpen(false);
     } catch (error) {
-      console.log("Failed to delete account:", error);
-      toast.error(`Failed to delete account`);
-      setIsDeleting(false);
+      console.error("Failed to reset local data:", error);
+      toast.error("Failed to reset local data");
+      setIsResetting(false);
     } finally {
-      handleCloseDeleteDialog();
-      setIsDeleting(false);
+      closeDialog();
+      setIsResetting(false);
     }
   };
 
@@ -43,13 +44,13 @@ const AccountActionButtons = () => {
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="flex gap-6 w-full flex-col border broder-grey-80 rounded-lg p-4"
+          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4"
         >
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <SectionHeader
               Icon={Icons.Trash}
-              title="Remove Your Account"
-              subtitle="Deleting your account will erase all Hippius data stored on this device. Make sure you back up encrypted seed before you proceed."
+              title="Reset App Data"
+              subtitle="This will erase all Hippius data stored on this device. On‑chain data and IPFS files stay intact and can be restored."
             />
           </RevealTextLine>
 
@@ -57,21 +58,21 @@ const AccountActionButtons = () => {
             <CardButton
               className="text-base"
               variant="error"
-              onClick={handleOpenDeleteDialog}
+              onClick={openDialog}
             >
               <div className="flex items-center gap-2">
                 <Trash className="size-4" />
-                <span>Delete Account</span>
+                <span>Reset App Data</span>
               </div>
             </CardButton>
           </RevealTextLine>
 
-          <DeleteAccountConfirmation
-            open={isDeleteDialogOpen}
-            onClose={handleCloseDeleteDialog}
-            onDelete={handleDeleteAccount}
-            onBack={handleCloseDeleteDialog}
-            loading={isDeleting}
+          <ResetDataConfirmation
+            open={isDialogOpen}
+            onClose={closeDialog}
+            onConfirm={handleResetLocalData}
+            onBack={closeDialog}
+            loading={isResetting}
           />
         </div>
       )}
@@ -79,4 +80,4 @@ const AccountActionButtons = () => {
   );
 };
 
-export default AccountActionButtons;
+export default ResetAppData;
