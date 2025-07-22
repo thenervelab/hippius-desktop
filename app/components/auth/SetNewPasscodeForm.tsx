@@ -183,7 +183,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                           type={showPasscode ? "text" : "password"}
                           value={
                             passCode[
-                              item?.name as "newPassCode" | "confirmPassCode"
+                            item?.name as "newPassCode" | "confirmPassCode"
                             ]
                           }
                           onChange={(e) =>

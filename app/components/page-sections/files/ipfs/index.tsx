@@ -2,20 +2,25 @@
 
 import { FC, useEffect, useRef, useMemo, useState, useCallback } from "react";
 import useUserIpfsFiles, {
-  FormattedUserIpfsFile,
+  FormattedUserIpfsFile
 } from "@/lib/hooks/use-user-ipfs-files";
+import { useAtom } from "jotai";
+import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import {
   RefreshButton,
   Icons,
   SearchInput,
-  WaitAMoment,
+  WaitAMoment
 } from "@/components/ui";
 import AddButton from "./AddFileButton";
 import FilesTable from "./files-table";
 import CardView from "./card-view";
 import Link from "next/link";
 import SyncFolderSelector from "./SyncFolderSelector";
-import { getPrivateSyncPath, setPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import {
+  getPrivateSyncPath,
+  setPrivateSyncPath
+} from "@/lib/utils/syncPathUtils";
 import { cn, formatBytesFromBigInt } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import FileDetailsDialog, { FileDetail } from "./files-table/UnpinFilesDialog";
@@ -29,7 +34,7 @@ import { FileTypes } from "@/lib/types/fileTypes";
 import {
   filterFiles,
   generateActiveFilters,
-  ActiveFilter,
+  ActiveFilter
 } from "@/lib/utils/fileFilterUtils";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { enrichFilesWithTimestamps } from "@/lib/utils/blockTimestampUtils";
@@ -38,13 +43,14 @@ import { toast } from "sonner";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { api } = usePolkadotApi();
+  const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
   const {
     data,
     isLoading,
     refetch: refetchUserFiles,
     isRefetching,
     isFetching,
-    error,
+    error
   } = useUserIpfsFiles();
 
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
@@ -78,13 +84,24 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   >(null);
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
 
-  // Filter out deleted files
   const allFilteredData = useMemo(() => {
     if (data?.files) {
-      return data.files.filter((file) => !file.deleted);
+      let filtered = data.files.filter((file) => !file.deleted);
+
+      if (
+        activeSubMenuItem &&
+        (activeSubMenuItem === "Private" || activeSubMenuItem === "Public")
+      ) {
+        filtered = filtered.filter((file) => {
+          const fileType = file.type?.toLowerCase() || "";
+          return fileType === activeSubMenuItem.toLowerCase();
+        });
+      }
+
+      return filtered;
     }
     return [];
-  }, [data?.files]);
+  }, [data?.files, activeSubMenuItem]);
 
   // Extract unpinned file details from data
   const unpinnedFileDetails = useMemo(() => {
@@ -94,7 +111,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     return filteredUnpinnedFiles.map((file) => ({
       filename: file.name || "Unnamed File",
       cid: decodeHexCid(file.cid),
-      createdAt: file.createdAt,
+      createdAt: file.createdAt
     }));
   }, [data?.files]);
 
@@ -143,14 +160,14 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       searchTerm,
       fileTypes: selectedFileTypes,
       dateFilter: selectedDate,
-      fileSize: selectedFileSize,
+      fileSize: selectedFileSize
     });
   }, [
     filesWithTimestamps,
     searchTerm,
     selectedFileTypes,
     selectedDate,
-    selectedFileSize,
+    selectedFileSize
   ]);
 
   useEffect(() => {
@@ -360,7 +377,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             <div className="flex items-center gap-4">
               <StorageStateList
                 storageUsed={formattedStorageSize}
-                numberOfFiles={data?.length || 0}
+                numberOfFiles={allFilteredData.length || 0}
               />
             </div>
           )}

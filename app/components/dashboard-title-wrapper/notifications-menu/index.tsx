@@ -8,7 +8,7 @@ import * as Menubar from "@radix-ui/react-menubar";
 
 import {
   refreshUnreadCountAtom,
-  unreadCountAtom,
+  unreadCountAtom
 } from "@/components/page-sections/notifications/notificationStore";
 import NotificationIconButton from "./NotificationIconButton";
 import NotificationMenuContent from "./NotificationMenuContent";
@@ -32,8 +32,9 @@ export default function NotificationMenu({ className = "delay-500" }: Props) {
 
   return (
     <Menubar.Root
+      className="h-full flex items-center"
       value={menuValue}
-      onValueChange={setMenuValue} // Let Radix handle open/close
+      onValueChange={setMenuValue}
     >
       <Menubar.Menu value="notifications">
         <Menubar.Trigger asChild>
