@@ -41,6 +41,13 @@ import SidebarDialog from "@/app/components/ui/sidebar-dialog";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
 
+// Define type for filter
+interface Filter {
+  type: string;
+  value: string | number;
+  label: string;
+}
+
 interface FilesTableProps {
   showUnpinnedDialog?: boolean;
   files: FormattedUserIpfsFile[];
@@ -48,7 +55,7 @@ interface FilesTableProps {
   onPaginationReset?: () => void;
   isRecentFiles?: boolean;
   searchTerm?: string;
-  activeFilters?: any[];
+  activeFilters?: Filter[];
   sharedState?: FileViewSharedState;
 }
 
@@ -63,6 +70,14 @@ const FilesTable: FC<FilesTableProps> = ({
 }) => {
   const { polkadotAddress } = useWalletAuth();
 
+  const [localFileDetailsFile, setLocalFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
+
+  const [isDragging, setIsDragging] = useState(false);
+  const [animateCloud, setAnimateCloud] = useState(false);
+  const dragCounterRef = useRef(0);
+  const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Use either provided shared state or local state
   const {
     setFileToDelete,
@@ -71,10 +86,6 @@ const FilesTable: FC<FilesTableProps> = ({
     handleShowFileDetails,
     handleContextMenu
   } = sharedState || {};
-
-  // Add fallback for standalone usage
-  const [localFileDetailsFile, setLocalFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
-  const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
 
   // Local handler for file details if no shared state
   const localHandleShowFileDetails = useCallback((file: FormattedUserIpfsFile) => {
@@ -86,30 +97,22 @@ const FilesTable: FC<FilesTableProps> = ({
     }
   }, [handleShowFileDetails]);
 
-  // File drop handling
-  const [isDragging, setIsDragging] = useState(false);
-  const [animateCloud, setAnimateCloud] = useState(false);
-  const dragCounterRef = useRef(0);
-  const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const localHandleContextMenu = useCallback((e: React.MouseEvent, file: FormattedUserIpfsFile) => {
+    if (handleContextMenu) {
+      handleContextMenu(e, file);
+    }
+  }, [handleContextMenu]);
 
   // Show empty state if no files and search/filters are active
   const showEmptyState = files.length === 0 && (searchTerm || (activeFilters && activeFilters.length > 0));
 
-  if (showEmptyState) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
-        <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
-          <Icons.File className="size-7 text-primary-50" />
-        </div>
-        <h3 className="text-lg font-medium text-grey-10 mb-1">
-          No matching files found
-        </h3>
-        <p className="text-grey-50 text-sm max-w-[270px] text-center">
-          Try adjusting the filters or clearing them to see more results.
-        </p>
-      </div>
-    );
-  }
+
+  const {
+    paginatedData: data,
+    setCurrentPage,
+    currentPage,
+    totalPages,
+  } = usePagination(files, 10);
 
   useEffect(() => {
     if (isDragging) {
@@ -163,13 +166,6 @@ const FilesTable: FC<FilesTableProps> = ({
     });
     window.dispatchEvent(event);
   }, []);
-
-  const {
-    paginatedData: data,
-    setCurrentPage,
-    currentPage,
-    totalPages,
-  } = usePagination(files, 10);
 
   useEffect(() => {
     if (resetPagination) {
@@ -426,6 +422,7 @@ const FilesTable: FC<FilesTableProps> = ({
     [polkadotAddress, setFileToDelete, setOpenDeleteModal, setSelectedFile, localHandleShowFileDetails]
   );
 
+  // Always create the table at the top level
   const table = useReactTable({
     columns,
     data: data || [],
@@ -437,6 +434,22 @@ const FilesTable: FC<FilesTableProps> = ({
       size: undefined,
     },
   });
+
+  if (showEmptyState) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
+        <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
+          <Icons.File className="size-7 text-primary-50" />
+        </div>
+        <h3 className="text-lg font-medium text-grey-10 mb-1">
+          No matching files found
+        </h3>
+        <p className="text-grey-50 text-sm max-w-[270px] text-center">
+          Try adjusting the filters or clearing them to see more results.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-y-8 relative">
@@ -514,7 +527,7 @@ const FilesTable: FC<FilesTableProps> = ({
                       rowState === "pending" && "animate-pulse",
                       rowState === "error" && "bg-red-200/20"
                     )}
-                    onContextMenu={(e) => handleContextMenu?.(e, rowData)}
+                    onContextMenu={(e) => localHandleContextMenu(e, rowData)}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <TableModule.Td

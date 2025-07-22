@@ -1,4 +1,4 @@
-import React, { FC, useState, useEffect, useMemo, useCallback, useRef } from "react";
+import React, { FC, useState, useEffect, useCallback, useRef } from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { Button } from "@/components/ui/button";
 import { MoreVertical, LinkIcon, Copy, Download, Share, HardDrive } from "lucide-react";
@@ -23,6 +23,11 @@ import SidebarDialog from "@/app/components/ui/sidebar-dialog";
 
 // Custom event names for file drop communication
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
+interface Filter {
+  type: string;
+  value: string | number;
+  label: string;
+}
 
 interface CardViewProps {
   showUnpinnedDialog?: boolean;
@@ -31,7 +36,7 @@ interface CardViewProps {
   onPaginationReset?: () => void;
   isRecentFiles?: boolean;
   searchTerm?: string;
-  activeFilters?: any[];
+  activeFilters?: Filter[];
   sharedState?: FileViewSharedState;
 }
 
@@ -47,6 +52,14 @@ const CardView: FC<CardViewProps> = ({
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
 
+  const [localFileDetailsFile, setLocalFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
+
+  const [isDragging, setIsDragging] = useState(false);
+  const [animateCloud, setAnimateCloud] = useState(false);
+  const dragCounterRef = useRef<number>(0);
+  const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Use either provided shared state or local state
   const {
     setFileToDelete,
@@ -55,10 +68,6 @@ const CardView: FC<CardViewProps> = ({
     handleShowFileDetails,
     handleContextMenu
   } = sharedState || {};
-
-  // Add fallback for standalone usage
-  const [localFileDetailsFile, setLocalFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
-  const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
 
   // Local handler for file details if no shared state
   const localHandleShowFileDetails = useCallback((file: FormattedUserIpfsFile) => {
@@ -70,30 +79,21 @@ const CardView: FC<CardViewProps> = ({
     }
   }, [handleShowFileDetails]);
 
-  // Drag and drop state
-  const [isDragging, setIsDragging] = useState(false);
-  const [animateCloud, setAnimateCloud] = useState(false);
-  const dragCounterRef = useRef<number>(0);
-  const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const localHandleContextMenu = useCallback((e: React.MouseEvent, file: FormattedUserIpfsFile) => {
+    if (handleContextMenu) {
+      handleContextMenu(e, file);
+    }
+  }, [handleContextMenu]);
 
   // Show empty state if no files and search/filters are active
   const showEmptyState = files.length === 0 && (searchTerm || (activeFilters && activeFilters.length > 0));
 
-  if (showEmptyState) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
-        <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
-          <Icons.File className="size-7 text-primary-50" />
-        </div>
-        <h3 className="text-lg font-medium text-grey-10 mb-1">
-          No matching files found
-        </h3>
-        <p className="text-grey-50 text-sm max-w-[270px] text-center">
-          Try adjusting the filters or clearing them to see more results.
-        </p>
-      </div>
-    );
-  }
+  const {
+    paginatedData: data,
+    setCurrentPage,
+    currentPage,
+    totalPages,
+  } = usePagination(files || [], 12); // Using more items per page for card view
 
   useEffect(() => {
     if (isDragging) {
@@ -175,13 +175,6 @@ const CardView: FC<CardViewProps> = ({
     };
   }, []);
 
-  const {
-    paginatedData: data,
-    setCurrentPage,
-    currentPage,
-    totalPages,
-  } = usePagination(files || [], 12); // Using more items per page for card view
-
   useEffect(() => {
     if (resetPagination) {
       setCurrentPage(1);
@@ -190,6 +183,22 @@ const CardView: FC<CardViewProps> = ({
       }
     }
   }, [resetPagination, setCurrentPage, onPaginationReset]);
+
+  if (showEmptyState) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
+        <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
+          <Icons.File className="size-7 text-primary-50" />
+        </div>
+        <h3 className="text-lg font-medium text-grey-10 mb-1">
+          No matching files found
+        </h3>
+        <p className="text-grey-50 text-sm max-w-[270px] text-center">
+          Try adjusting the filters or clearing them to see more results.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-y-8 relative">
@@ -265,7 +274,7 @@ const CardView: FC<CardViewProps> = ({
                 <div
                   key={index}
                   className="card-container"
-                  onContextMenu={(e) => handleContextMenu?.(e, file)}
+                  onContextMenu={(e) => localHandleContextMenu(e, file)}
                 >
                   <FileCard
                     key={file.cid}

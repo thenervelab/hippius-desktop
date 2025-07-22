@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, RefObject } from "react";
+import { FC } from "react";
 import Link from "next/link";
 import { Icons, RefreshButton, SearchInput } from "@/components/ui";
 import { cn } from "@/lib/utils";
