@@ -136,7 +136,10 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
       <div className="mt-4 flex flex-col gap-y-3">
         <CardButton
           onClick={() => {
-            if (files) upload(files);
+            if (files) {
+              reset();
+              upload(files);
+            }
           }}
           disabled={!files?.length}
           className="w-full"
