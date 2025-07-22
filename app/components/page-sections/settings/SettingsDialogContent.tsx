@@ -43,12 +43,12 @@ const SettingsDialogContent: React.FC = () => {
       icon: <Icons.File2 className="size-4" />
     },
     {
-      tabName: "Backup App Data",
-      icon: <Icons.Wallet className="size-4" />
-    },
-    {
       tabName: "Encryption Key",
       icon: <Icons.Key className="size-4" />
+    },
+    {
+      tabName: "Backup App Data",
+      icon: <Icons.Wallet className="size-4" />
     },
     {
       tabName: "Reset App Data",
