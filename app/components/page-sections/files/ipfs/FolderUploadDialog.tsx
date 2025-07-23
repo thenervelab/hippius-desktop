@@ -11,7 +11,6 @@ import { toast } from "sonner";
 import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
-import { useRouter } from "next/navigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
@@ -29,7 +28,6 @@ export default function FolderUploadDialog({
     onSuccess,
     onRefresh
 }: Props) {
-    const router = useRouter();
     const { polkadotAddress, mnemonic } = useWalletAuth();
     const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
     const useEncryption = activeSubMenuItem === "Private";
