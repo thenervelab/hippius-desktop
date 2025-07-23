@@ -22,6 +22,7 @@ use crate::constants::folder_sync::{DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
 use crate::sync_shared::collect_files_recursively;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use base64::decode;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileEntry {
@@ -187,12 +188,24 @@ pub async fn download_and_decrypt_file(
     account_id: String,
     metadata_cid: String,
     output_file: String,
-    encryption_key: Option<Vec<u8>>,
+    encryption_key: Option<String>,
 ) -> Result<(), String> {
     // Define the API URL inside the function
     let api_url = "http://127.0.0.1:5001";
     
+    let final_encryption_key = if let Some(key_b64) = encryption_key {
+        println!("Received base64 encryption key: {}", key_b64);
+        let decoded_key = decode(&key_b64)
+            .map_err(|e| format!("Failed to decode base64 key: {}", e))?;
+        println!("Decoded key bytes: {:?}", decoded_key);
+        Some(decoded_key)
+    } else {
+        println!("No encryption key provided, will fetch from DB if needed.");
+        None
+    };
+
     tokio::task::spawn_blocking(move || {
+        println!("metadata_cid is {}", metadata_cid);
         // Download metadata
         let metadata_bytes =
             download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
@@ -276,7 +289,11 @@ pub async fn download_and_decrypt_file(
             encrypted_data.truncate(encrypted_size);
         }
         // Decrypt using centralized function
-        let decrypted_data = tauri::async_runtime::block_on(decrypt_file(&encrypted_data, encryption_key.clone()))?;
+        let decrypted_data = tauri::async_runtime::block_on(decrypt_file(
+            &encrypted_data,
+            final_encryption_key.clone(),
+        ))?;
+        println!("Decrypted data: {}", decrypted_data.len());
         // Hash check
         let mut hasher = Sha256::new();
         hasher.update(&decrypted_data);
@@ -873,7 +890,7 @@ pub async fn download_and_decrypt_folder(
     folder_metadata_cid: String,
     folder_name: String,
     output_dir: String,
-    encryption_key: Option<Vec<u8>>,
+    encryption_key: Option<String>,
 ) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001";
     let folder_metadata_cid_cloned = folder_metadata_cid.clone(); // Clone for use in closure

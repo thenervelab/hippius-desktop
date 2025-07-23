@@ -103,6 +103,7 @@ pub async fn encrypt_file(file_data: &[u8], encryption_key: Option<Vec<u8>>) -> 
 /// Decrypts file data using the key from the DB, extracting the nonce.
 pub async fn decrypt_file(encrypted_data: &[u8], encryption_key: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
     if encrypted_data.len() < secretbox::NONCEBYTES {
+        println!("Encrypted data too short");
         return Err("Encrypted data too short".to_string());
     }
     let (nonce_bytes, ciphertext) = encrypted_data.split_at(secretbox::NONCEBYTES);
@@ -126,7 +127,9 @@ pub async fn list_encryption_keys() -> Result<Vec<(String, i64)>, String> {
             
         Ok(rows.iter().map(|row| {
             let key_bytes: Vec<u8> = row.get("key");
-            let key_b64 = base64::encode(key_bytes);
+            println!("key_bytes from db: {:?}", key_bytes);
+            let key_b64 = base64::encode(&key_bytes); // safe text representation
+            println!("key_b64 from db: {}", key_b64);
             (key_b64, row.get::<i64, _>("id"))
         }).collect())
     } else {

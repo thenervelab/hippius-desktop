@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
+import { decode as base64Decode } from "js-base64";
 
 export const downloadIpfsFile = async (
   file: FormattedUserIpfsFile,
@@ -21,6 +22,7 @@ export const downloadIpfsFile = async (
       encryptionKey
     );
   } else {
+    
     // Regular IPFS download for Hippius files
     return downloadRegularIpfsFile(file);
   }
@@ -101,10 +103,12 @@ const downloadEncryptedIpfsFile = async (
     }
 
     if (encryptionKey) {
+      // Fetch saved keys (they're base64 strings)
       const savedKeys = await invoke<Array<{ id: number; key: string }>>(
         "get_encryption_keys"
       );
 
+      // Check if the base64 key exists exactly (compare base64 strings)
       const keyExists = savedKeys.some((k) => k.key === encryptionKey);
 
       if (!keyExists) {
@@ -138,17 +142,11 @@ const downloadEncryptedIpfsFile = async (
 
     toast.loading(`Downloading encrypted file: ${name}...`, { id: toastId });
 
-    // Convert string → byte array
-    const processedEncryptionKey: number[] | null = encryptionKey
-      ? Array.from(new TextEncoder().encode(encryptionKey))
-      : null;
-
-    // Use the metadataCid (which is the cid in hex form) to download and decrypt the file
     await invoke("download_and_decrypt_file", {
       accountId: polkadotAddress,
       metadataCid: cid,
       outputFile: savePath,
-      encryptionKey: processedEncryptionKey
+      encryptionKey: encryptionKey
     });
 
     toast.success(`Download complete: ${name}`, {
@@ -159,7 +157,6 @@ const downloadEncryptedIpfsFile = async (
     toast.dismiss(toastId);
     const errorMsg = String(err);
 
-    // Handle hash mismatch (wrong key)
     if (
       errorMsg.includes("Hash mismatch") ||
       errorMsg.includes("invalid") ||
@@ -173,7 +170,6 @@ const downloadEncryptedIpfsFile = async (
       };
     }
 
-    // Handle decryption failure
     if (errorMsg.includes("Decryption")) {
       const error =
         "Decryption failed. Please enter the correct encryption key.";
@@ -185,7 +181,6 @@ const downloadEncryptedIpfsFile = async (
       };
     }
 
-    // Handle all other errors
     console.error("Encrypted download failed:", err);
     return { success: false, error: "DOWNLOAD_FAILED", message: errorMsg };
   }
