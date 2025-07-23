@@ -1,4 +1,4 @@
-import { CardButton } from "@/components/ui";
+import { CardButton, Input } from "@/components/ui";
 import { P } from "@/components/ui/typography";
 import { useAtomValue, useSetAtom } from "jotai";
 import { Plus, Trash2 } from "lucide-react";
@@ -168,8 +168,10 @@ const AddCidFlow: FC<{
             <div className="flex gap-x-2">
               <div className="flex flex-col gap-y-0.5">
                 <label className="text-sm font-medium">IPFS CID</label>
-                <input
-                  className="flex h-[36px] w-full bg-transparent text-grey-30 placeholder:!text-grey-70 font-medium rounded-[4px] border border-grey-80 px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                <Input
+                  className="flex h-9 w-full bg-transparent text-grey-30 placeholder:!text-grey-70 font-medium rounded-[4px] px-3 py-2 text-sm
+                    border-grey-80 duration-300 outline-none 
+                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-white"
                   placeholder="CID"
                   value={entry.cid}
                   onChange={(e) =>
@@ -179,8 +181,10 @@ const AddCidFlow: FC<{
               </div>
               <div className="flex flex-col gap-y-0.5">
                 <label className="text-sm font-medium">File Name</label>
-                <input
-                  className="flex h-[36px] w-full bg-transparent text-grey-30 placeholder:!text-grey-70 font-medium rounded-[4px] border border-grey-80 px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                <Input
+                  className="flex h-9 w-full bg-transparent text-grey-30 placeholder:!text-grey-70 font-medium rounded-[4px] px-3 py-2 text-sm
+                    border-grey-80 duration-300 outline-none 
+                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-white"
                   placeholder="Name"
                   value={entry.name}
                   onChange={(e) =>

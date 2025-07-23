@@ -13,13 +13,15 @@ type Props = {
   onClose: () => void;
   onDownload: (encryptionKey: string | null) => void;
   keyError: string | null;
+  isFolder?: boolean;
 };
 
 export default function EncryptionKeyDialog({
   open,
   onClose,
   onDownload,
-  keyError
+  keyError,
+  isFolder = false,
 }: Props) {
   const [encryptionKey, setEncryptionKey] = useState("");
   const [internalKeyError, setInternalKeyError] = useState<string | null>(null);
@@ -77,13 +79,13 @@ export default function EncryptionKeyDialog({
           </div>
 
           <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center pt-2">
-            Decrypt File
+            Decrypt {isFolder ? "Folder" : "File"}
           </Dialog.Title>
 
           <div className="space-y-4">
             <div className="text-grey-70 text-sm text-center mb-8">
               <RevealTextLine rotate reveal={true} className="delay-300">
-                Please enter your encryption key to decrypt your file.
+                Please enter your encryption key to decrypt your {isFolder ? "folder" : "file"}.
               </RevealTextLine>
             </div>
 
@@ -110,6 +112,12 @@ export default function EncryptionKeyDialog({
                     ${internalKeyError ? "border-error-50 focus:border-error-50" : ""}`}
                 />
               </div>
+              <p className="text-xs text-grey-70">
+                {encryptionKey.trim()
+                  ? `Using custom encryption key for this ${isFolder ? "folder" : "file"}.`
+                  : "Default encryption key will be used if left empty."}
+              </p>
+
               {internalKeyError && (
                 <div className="flex text-error-70 text-sm font-medium items-center gap-2">
                   <AlertCircle className="size-4 !relative" />

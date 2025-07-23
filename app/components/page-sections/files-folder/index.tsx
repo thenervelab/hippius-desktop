@@ -17,6 +17,7 @@ import { SearchInput } from "@/components/ui";
 import FilterChips from "@/components/page-sections/files/ipfs/filter-chips";
 import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import EncryptionKeyDialog from "@/components/page-sections/files/ipfs/EncryptionKeyDialog";
 
 interface FileEntry {
     file_name: string;
@@ -36,6 +37,10 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
     const [isLoading, setIsLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"list" | "card">("list");
     const [isDownloading, setIsDownloading] = useState(false);
+    const [isEncryptionDialogOpen, setIsEncryptionDialogOpen] = useState(false);
+    const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(null);
+    const [selectedOutputDir, setSelectedOutputDir] = useState<string | null>(null);
+    const isPrivateFolder = activeSubMenuItem === "Private";
 
     // State needed for FilesContent integration
     const [searchTerm, setSearchTerm] = useState("");
@@ -112,12 +117,10 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
         setShouldResetPagination(false);
     }
 
-    const handleDownloadFolder = async () => {
+    const initiateDownloadFolder = async () => {
         if (!folderCid) return;
 
         try {
-            setIsDownloading(true);
-
             // Ask user to select download location
             const outputDir = await open({
                 directory: true,
@@ -125,28 +128,77 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
             }) as string | null;
 
             if (!outputDir) {
-                setIsDownloading(false);
                 return;
             }
 
-            toast.info("Downloading folder...");
+            setSelectedOutputDir(outputDir);
 
+            if (isPrivateFolder) {
+                // For private folders, open the encryption dialog
+                setEncryptionKeyError(null);
+                setIsEncryptionDialogOpen(true);
+            } else {
+                // For public folders, download directly
+                await downloadFolder(outputDir, null);
+            }
+        } catch (error) {
+            console.error("Error selecting download location:", error);
+            toast.error(`Failed to select download location: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
+
+    const downloadFolder = async (outputDir: string, encryptionKey: string | null) => {
+        if (!folderCid || !outputDir) return;
+
+        setIsDownloading(true);
+        const toastId = toast.info("Downloading folder...", { duration: Infinity });
+
+        try {
             // Use the encrypted download method
-            await invoke("download_and_decrypt_folder", {
+            const result = await invoke<{ success: boolean; error?: string; message?: string }>("download_and_decrypt_folder", {
                 accountId: polkadotAddress,
                 folderMetadataCid: folderCid,
                 folderName: folderName,
                 outputDir: outputDir,
-                encryptionKey: null,
+                encryptionKey: encryptionKey,
             });
 
+            toast.dismiss(toastId);
+
+            if (result && !result.success) {
+                if (result.error === "INVALID_KEY" || result.error === "INVALID_KEY_FORMAT") {
+                    setEncryptionKeyError(result.message || "Incorrect encryption key. Please try again.");
+                    setIsEncryptionDialogOpen(true);
+                    return;
+                }
+                throw new Error(result.message || "Unknown error");
+            }
+
             toast.success("Folder downloaded successfully!");
+            setIsEncryptionDialogOpen(false);
         } catch (error) {
             console.error("Error downloading folder:", error);
+            toast.dismiss(toastId);
             toast.error(`Failed to download folder: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
             setIsDownloading(false);
         }
+    };
+
+    const handleEncryptedDownload = async (encryptionKey: string | null) => {
+        if (!selectedOutputDir) return;
+        if (encryptionKey) {
+            const savedKeys = await invoke<Array<{ id: number; key: string }>>(
+                "get_encryption_keys"
+            );
+
+            const keyExists = savedKeys.some((k) => k.key === encryptionKey);
+
+            if (!keyExists) {
+                return setEncryptionKeyError("Incorrect encryption key. Please try again with a correct one.");
+            }
+        }
+        await downloadFolder(selectedOutputDir, encryptionKey);
     };
 
     // Handle applying filters
@@ -265,7 +317,7 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
 
                     {/* Download Folder Button */}
                     <button
-                        onClick={handleDownloadFolder}
+                        onClick={initiateDownloadFolder}
                         disabled={isDownloading}
                         className={cn(
                             "flex items-center justify-center gap-1 h-9 px-4 py-2 rounded bg-primary-50 text-white hover:bg-primary-40 transition-colors",
@@ -328,11 +380,23 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
                             selectedSizeUnit={selectedSizeUnit}
                             handleApplyFilters={handleApplyFilters}
                             handleResetFilters={handleResetFilters}
-                            isPrivateView={activeSubMenuItem === "Private"}
+                            isPrivateView={isPrivateFolder}
                         />
                     )}
                 </>
             )}
+
+            {/* Encryption Key Dialog for folder download */}
+            <EncryptionKeyDialog
+                open={isEncryptionDialogOpen}
+                onClose={() => {
+                    setIsEncryptionDialogOpen(false);
+                    setEncryptionKeyError(null);
+                    setSelectedOutputDir(null);
+                }}
+                onDownload={handleEncryptedDownload}
+                keyError={encryptionKeyError}
+            />
         </div>
     );
 }
