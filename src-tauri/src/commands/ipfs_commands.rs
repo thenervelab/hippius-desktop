@@ -23,12 +23,25 @@ use crate::sync_shared::collect_files_recursively;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use base64::decode;
+use sqlx::Row;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileEntry {
     pub file_name: String,
     pub file_size: usize,
     pub cid: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileDetail {
+    pub file_name: String,
+    pub cid: String,
+    pub source: String,
+    pub file_hash: String,
+    pub miner_ids: String,
+    pub file_size: usize,
+    pub created_at: String,
+    pub last_charged_at: String,
 }
 
 #[tauri::command]
@@ -864,8 +877,9 @@ pub async fn encrypt_and_upload_folder(
 
 #[tauri::command]
 pub async fn list_folder_contents(
-    folder_metadata_cid: String
-) -> Result<Vec<FileEntry>, String> {
+    folder_name: String,
+    folder_metadata_cid: String,
+) -> Result<Vec<FileDetail>, String> {
     let api_url = "http://127.0.0.1:5001";
     let folder_metadata_cid_cloned = folder_metadata_cid.clone(); // Clone for use in closure
     
@@ -881,7 +895,66 @@ pub async fn list_folder_contents(
     let file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
         .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
     
-    Ok(file_entries)
+    // Get database pool
+    let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
+    
+    // For each file from IPFS, look up additional details from the database
+    let mut files_in_folder = Vec::new();
+    
+    for file_entry in file_entries {
+        // Query database for additional file details
+        let db_row = sqlx::query(
+            r#"
+            SELECT 
+                cid, 
+                source, 
+                file_hash, 
+                miner_ids, 
+                created_at, 
+                last_charged_at,
+                file_size_in_bytes
+            FROM user_profiles 
+            WHERE file_name = ?
+            LIMIT 1
+            "#
+        )
+        .bind(&file_entry.file_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB query failed for file {}: {}", file_entry.file_name, e))?;
+
+        let file_detail = if let Some(row) = db_row {
+            // File found in database, use DB data
+            FileDetail {
+                file_name: file_entry.file_name,
+                cid: row.get::<Option<String>, _>("cid").unwrap_or(file_entry.cid),
+                source: row.get::<Option<String>, _>("source").unwrap_or_default(),
+                file_hash: row.get::<Option<String>, _>("file_hash").unwrap_or_default(),
+                miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
+                file_size: row.get::<Option<i64>, _>("file_size_in_bytes")
+                    .map(|size| size as usize)
+                    .unwrap_or(file_entry.file_size),
+                created_at: row.get::<Option<i64>, _>("created_at").unwrap_or(0).to_string(),
+                last_charged_at: row.get::<Option<i64>, _>("last_charged_at").unwrap_or(0).to_string(),
+            }
+        } else {
+            // File not found in database, use IPFS data with defaults
+            FileDetail {
+                file_name: file_entry.file_name,
+                cid: file_entry.cid,
+                source: String::new(),
+                file_hash: String::new(),
+                miner_ids: String::new(),
+                file_size: file_entry.file_size,
+                created_at: 0.to_string(),
+                last_charged_at: 0.to_string(),
+            }
+        };
+        
+        files_in_folder.push(file_detail);
+    }
+
+    Ok(files_in_folder)
 }
 
 #[tauri::command]
