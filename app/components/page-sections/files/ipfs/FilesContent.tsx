@@ -24,7 +24,6 @@ import FileContextMenu from "@/app/components/ui/context-menu";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import EncryptionKeyDialog from "./EncryptionKeyDialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { file } from "jszip";
 
 interface FilesContentProps {
   isRecentFiles?: boolean;
@@ -243,7 +242,9 @@ const FilesContent: FC<FilesContentProps> = ({
             });
         }}
         button={isDeleting ? "Deleting..." : "Delete File"}
-        text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""}`}
+        text={`Are you sure you want to delete\n${
+          fileToDelete?.name ? "\n" + fileToDelete.name : ""
+        }`}
         heading="Delete File"
         disableButton={isDeleting}
       />

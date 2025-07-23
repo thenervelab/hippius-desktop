@@ -56,7 +56,9 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
 
     toast.loading(`Downloading: ${name}`, { id: toastId });
 
-    const url = `https://get.hippius.network/ipfs/${decodeHexCid(cid)}?download=1`;
+    const url = `https://get.hippius.network/ipfs/${decodeHexCid(
+      cid
+    )}?download=1`;
 
     const response = await fetch(url);
     if (!response.ok) throw new Error(response.statusText);
@@ -74,7 +76,9 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
   } catch (err) {
     console.error("Download failed:", err);
     toast.error(
-      `Download failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+      `Download failed: ${
+        err instanceof Error ? err.message : "Unknown error"
+      }`,
       { id: toastId }
     );
   }
@@ -96,6 +100,24 @@ const downloadEncryptedIpfsFile = async (
       );
     }
 
+    if (encryptionKey) {
+      const savedKeys = await invoke<Array<{ id: number; key: string }>>(
+        "get_encryption_keys"
+      );
+
+      const keyExists = savedKeys.some((k) => k.key === encryptionKey);
+
+      if (!keyExists) {
+        toast.dismiss(toastId);
+        return {
+          success: false,
+          error: "INVALID_KEY",
+          message:
+            "Incorrect encryption key. Please try again with a correct one."
+        };
+      }
+    }
+
     const fileExtension = name.split(".").pop() || "";
     const savePath = await save({
       filters: [
@@ -110,13 +132,13 @@ const downloadEncryptedIpfsFile = async (
     });
 
     if (!savePath) {
-      toast.error("Download cancelled", { id: toastId });
+      toast.dismiss(toastId);
       return { success: false, error: "Download cancelled" };
     }
 
     toast.loading(`Downloading encrypted file: ${name}...`, { id: toastId });
 
-    // ───── Convert string → byte array ─────
+    // Convert string → byte array
     const processedEncryptionKey: number[] | null = encryptionKey
       ? Array.from(new TextEncoder().encode(encryptionKey))
       : null;
@@ -134,54 +156,36 @@ const downloadEncryptedIpfsFile = async (
     });
     return { success: true };
   } catch (err) {
+    toast.dismiss(toastId);
     const errorMsg = String(err);
 
-    // Handle key format error
+    // Handle hash mismatch (wrong key)
     if (
+      errorMsg.includes("Hash mismatch") ||
       errorMsg.includes("invalid") ||
       errorMsg.includes("encryptionKey") ||
       errorMsg.includes("Invalid")
     ) {
-      toast.error("Invalid encryption key format", { id: toastId });
-      return;
-      //   return {
-      //     success: false,
-      //     error: "INVALID_KEY_FORMAT",
-      //     message: "Invalid encryption key format. Please try again."
-      //   };
+      return {
+        success: false,
+        error: "INVALID_KEY",
+        message: "Incorrect encryption key. Please try again."
+      };
     }
 
-    // Handle hash mismatch (wrong key)
-    if (errorMsg.includes("Hash mismatch")) {
-      toast.error("Incorrect encryption key. Please try again.", {
-        id: toastId
-      });
-      return;
-      //   return {
-      //     success: false,
-      //     error: "INVALID_KEY",
-      //     message: "Incorrect encryption key. Please try again."
-      //   };
-    }
-    // Handle hash mismatch (wrong key)
+    // Handle decryption failure
     if (errorMsg.includes("Decryption")) {
       const error =
         "Decryption failed. Please enter the correct encryption key.";
-      toast.error(error, {
-        id: toastId
-      });
-      return;
-      //   return {
-      //     success: false,
-      //     error: "INVALID_KEY",
-      //     message: error
-      //   };
+
+      return {
+        success: false,
+        error: "INVALID_KEY",
+        message: error
+      };
     }
 
     // Handle all other errors
-    toast.error(`Download failed: ${errorMsg}`, {
-      id: toastId
-    });
     console.error("Encrypted download failed:", err);
     return { success: false, error: "DOWNLOAD_FAILED", message: errorMsg };
   }
