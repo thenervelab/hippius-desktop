@@ -199,6 +199,7 @@ const FilesTable: FC<FilesTableProps> = ({
                   isAssigned={info.row.original.isAssigned}
                   fileType={fileType}
                   isPreviewable={true}
+                  isFolder={info.row.original.isFolder}
                 />
               </VideoDialogTrigger>
             );
@@ -215,6 +216,7 @@ const FilesTable: FC<FilesTableProps> = ({
                   isAssigned={info.row.original.isAssigned}
                   fileType={fileType}
                   isPreviewable={true}
+                  isFolder={info.row.original.isFolder}
                 />
               </ImageDialogTrigger>
             );
@@ -231,6 +233,7 @@ const FilesTable: FC<FilesTableProps> = ({
                   isAssigned={info.row.original.isAssigned}
                   fileType={fileType}
                   isPreviewable={true}
+                  isFolder={info.row.original.isFolder}
                 />
               </PdfDialogTrigger>
             );
@@ -242,6 +245,7 @@ const FilesTable: FC<FilesTableProps> = ({
               cid={info.row.original.cid}
               isAssigned={info.row.original.isAssigned}
               fileType={fileType || "document"}
+              isFolder={info.row.original.isFolder}
             />
           );
         },

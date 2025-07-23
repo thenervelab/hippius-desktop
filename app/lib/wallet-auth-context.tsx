@@ -109,14 +109,14 @@ export function WalletAuthProvider({
       if (!syncInitialized.current) {
         console.log("[WalletAuth] Starting sync for account:", pair.address);
         try {
-          await invoke("start_user_profile_sync_tauri", {
+          invoke("start_user_profile_sync_tauri", {
             accountId: pair.address,
           });
-          await invoke("start_folder_sync_tauri", {
+          invoke("start_folder_sync_tauri", {
             accountId: pair.address,
             seedPhrase: inputMnemonic,
           });
-          await invoke("start_public_folder_sync_tauri", {
+          invoke("start_public_folder_sync_tauri", {
             accountId: pair.address,
             seedPhrase: inputMnemonic,
           });

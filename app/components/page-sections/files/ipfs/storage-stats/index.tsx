@@ -17,13 +17,13 @@ const StorageStateList: FC<StorageStateListProps> = ({
         icon={<Icons.FolderCloud className="size-4" />}
         value={storageUsed}
         className="border-r border-grey-80 pr-2"
-        label="Total Storage Used:"
+        label="Used Storage:"
       />
       <StorageStateItem
         icon={<Icons.FolderOpen className="size-4" />}
         value={numberOfFiles}
         className="pr-2"
-        label="Number of Files:"
+        label="Files:"
       />
     </div>
   );

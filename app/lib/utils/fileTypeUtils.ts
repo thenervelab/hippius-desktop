@@ -12,6 +12,7 @@ import {
     TerminalWhite,
     EC,
     File,
+    Folder2,
 } from "@/components/ui/icons";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { getFilePartsFromFileName } from './getFilePartsFromFileName';
@@ -41,7 +42,7 @@ export const getFileIcon = (fileType: FileTypes | undefined, isDir: boolean): {
     color: string;
 } => {
     if (isDir) {
-        return { icon: EC, color: "#8e24aa" };
+        return { icon: Folder2, color: "text-primary-40" };
     }
 
     switch (fileType) {

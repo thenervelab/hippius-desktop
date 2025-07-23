@@ -78,6 +78,7 @@ export { default as Unlimited } from "./Unlimited";
 export { default as StopWatch } from "./StopWatch";
 export { default as TickCircle } from "./TickCircle";
 export { default as Directory } from "./Directory";
+export { default as Folder2 } from "./Folder2";
 export { default as SendSquare } from "./SendSquare";
 export { default as SendSquare2 } from "./SendSquare2";
 export { default as Marker } from "./Marker";
