@@ -8,13 +8,7 @@ import AddButton from "./AddFileButton";
 import StorageStateList from "./storage-stats";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
-import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
-import { useAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import FolderUploadDialog from "./FolderUploadDialog";
 
 interface FilesHeaderProps {
     isRecentFiles?: boolean;
@@ -49,49 +43,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
     refetchUserFiles,
     addButtonRef,
 }) => {
-    const { polkadotAddress, mnemonic } = useWalletAuth();
-    const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
-
-    const router = useRouter();
-    const [isUploading, setIsUploading] = useState(false);
-
-    const handleFolderUpload = async () => {
-        try {
-            const selectedFolder = await open({
-                directory: true,
-                multiple: false,
-            }) as string | null;
-
-            if (!selectedFolder || typeof selectedFolder !== "string" || !selectedFolder.trim()) {
-                return;
-            }
-
-            setIsUploading(true);
-            const toastId = toast.info("Uploading folder...", { duration: Infinity });
-
-            const folderPath = selectedFolder.trim();
-            const useEncryption = activeSubMenuItem && activeSubMenuItem === "Private";
-            const command = useEncryption ? "encrypt_and_upload_folder" : "public_upload_folder";
-
-            const manifestCid = await invoke<string>(command, {
-                accountId: polkadotAddress,
-                folderPath,
-                seedPhrase: mnemonic,
-                encryptionKey: null,
-            });
-
-            toast.dismiss(toastId);
-            toast.success(`Folder uploaded successfully!`);
-            refetchUserFiles();
-
-            router.push(`/files?folderCid=${manifestCid}`);
-        } catch (error) {
-            console.error("Error uploading folder:", error);
-            toast.error(`Failed to upload folder: ${error instanceof Error ? error.message : String(error)}`);
-        } finally {
-            setIsUploading(false);
-        }
-    };
+    const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
 
     return (
         <>
@@ -175,18 +127,10 @@ const FilesHeader: FC<FilesHeaderProps> = ({
                     )}
 
                     <button
-                        onClick={handleFolderUpload}
-                        disabled={isUploading}
-                        className={cn(
-                            "flex items-center justify-center gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors",
-                            isUploading && "opacity-70 cursor-not-allowed"
-                        )}
+                        onClick={() => setIsFolderUploadOpen(true)}
+                        className="flex items-center justify-center gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors"
                     >
-                        {isUploading ? (
-                            <Icons.Loader className="size-4 animate-spin" />
-                        ) : (
-                            <Icons.FolderAdd className="size-4" />
-                        )}
+                        <Icons.FolderAdd className="size-4" />
                         <span className="ml-1">Add Folder</span>
                     </button>
 
@@ -203,6 +147,13 @@ const FilesHeader: FC<FilesHeaderProps> = ({
                     className="mt-4 mb-2"
                 />
             )}
+
+            {/* Folder Upload Dialog */}
+            <FolderUploadDialog
+                open={isFolderUploadOpen}
+                onClose={() => setIsFolderUploadOpen(false)}
+                onRefresh={refetchUserFiles}
+            />
         </>
     );
 };

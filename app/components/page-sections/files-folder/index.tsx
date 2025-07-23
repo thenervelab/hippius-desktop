@@ -1,16 +1,20 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
-import FilesTable from "@/components/page-sections/files/ipfs/files-table";
-import CardView from "@/components/page-sections/files/ipfs/card-view";
+import FilesContent from "@/components/page-sections/files/ipfs/FilesContent";
 import { toast } from "sonner";
 import Link from "next/link";
+import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
+import { FileTypes } from "@/lib/types/fileTypes";
+import { filterFiles, generateActiveFilters } from "@/lib/utils/fileFilterUtils";
+import { SearchInput } from "@/components/ui";
+import FilterChips from "@/components/page-sections/files/ipfs/filter-chips";
 
 interface FileEntry {
     file_name: string;
@@ -26,7 +30,39 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
     const [viewMode, setViewMode] = useState<"list" | "card">("list");
     const [isDownloading, setIsDownloading] = useState(false);
 
-    console.log("folderCid", folderCid)
+    // State needed for FilesContent integration
+    const [searchTerm, setSearchTerm] = useState("");
+    const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
+    const [shouldResetPagination, setShouldResetPagination] = useState(false);
+    const [selectedFileTypes, setSelectedFileTypes] = useState<FileTypes[]>([]);
+    const [selectedDate, setSelectedDate] = useState("");
+    const [selectedFileSize, setSelectedFileSize] = useState(0);
+    const [selectedSizeUnit, setSelectedSizeUnit] = useState("GB");
+    const [isFilterOpen, setIsFilterOpen] = useState(false);
+
+    // Apply filters to the files
+    const filteredData = useMemo(() => {
+        return filterFiles(files, {
+            searchTerm,
+            fileTypes: selectedFileTypes,
+            dateFilter: selectedDate,
+            fileSize: selectedFileSize
+        });
+    }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+
+    // Update active filters whenever filter settings change
+    useEffect(() => {
+        const newActiveFilters = generateActiveFilters(
+            selectedFileTypes,
+            selectedDate,
+            selectedFileSize
+        );
+        setActiveFilters(newActiveFilters);
+    }, [selectedFileTypes, selectedDate, selectedFileSize]);
+
+    useEffect(() => {
+        setShouldResetPagination(true);
+    }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
 
     useEffect(() => {
         if (!folderCid) return;
@@ -35,23 +71,12 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
             try {
                 setIsLoading(true);
 
-                // Get folder metadata to extract folder name
-                // const metadata = await invoke("get_folder_metadata", {
-                //     folderMetadataCid: folderCid
-                // });
-
-                // if (metadata && typeof metadata === "object" && "folder_name" in metadata) {
-                //     setFolderName(metadata.folder_name as string);
-                // }
-
-                // console.log("Loaded folder metadata:", metadata);
-
                 // Get folder contents
                 const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
                     folderMetadataCid: folderCid
                 });
 
-                console.log("Loaded folder contents:", fileEntries);
+                console.log("File enteries", fileEntries)
 
                 // Convert FileEntry to FormattedUserIpfsFile format
                 const formattedFiles = fileEntries.map((entry): FormattedUserIpfsFile => ({
@@ -78,6 +103,10 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
         loadFolderContents();
     }, [folderCid]);
 
+    function handlePaginationReset() {
+        setShouldResetPagination(false);
+    }
+
     const handleDownloadFolder = async () => {
         if (!folderCid) return;
 
@@ -103,6 +132,7 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
                 folderMetadataCid: folderCid,
                 folderName: folderName,
                 outputDir: outputDir,
+
                 encryptionKey: null,
             });
 
@@ -114,6 +144,52 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
             setIsDownloading(false);
         }
     };
+
+    // Handle applying filters
+    const handleApplyFilters = useCallback(
+        (fileTypes: FileTypes[], date: string, fileSize: number, sizeUnit: string) => {
+            setSelectedFileTypes(fileTypes);
+            setSelectedDate(date);
+            setSelectedFileSize(fileSize);
+            setSelectedSizeUnit(sizeUnit);
+            setIsFilterOpen(false);
+            setShouldResetPagination(true);
+        },
+        []
+    );
+
+    // Handle resetting filters
+    const handleResetFilters = useCallback(() => {
+        setSelectedFileTypes([]);
+        setSelectedDate("");
+        setSelectedFileSize(0);
+        setSelectedSizeUnit("GB");
+        setShouldResetPagination(true);
+    }, []);
+
+    // Handle search change
+    const handleSearchChange = useCallback((value: string) => {
+        setSearchTerm(value);
+        setShouldResetPagination(true);
+    }, []);
+
+    // Handle removing a filter
+    const handleRemoveFilter = useCallback((filter: ActiveFilter) => {
+        switch (filter.type) {
+            case "fileType":
+                setSelectedFileTypes((prev) =>
+                    prev.filter((type) => type !== filter.value)
+                );
+                break;
+            case "date":
+                setSelectedDate("");
+                break;
+            case "fileSize":
+                setSelectedFileSize(0);
+                break;
+        }
+        setShouldResetPagination(true);
+    }, []);
 
     return (
         <div className="container mx-auto py-8 px-4">
@@ -129,6 +205,17 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
                 </div>
 
                 <div className="flex items-center gap-4">
+                    {/* Search Input */}
+                    <div className="">
+                        <SearchInput
+                            className="h-9"
+                            value={searchTerm}
+                            onChange={handleSearchChange}
+                            placeholder="Search files..."
+                        />
+                    </div>
+
+                    {/* View Mode Toggle */}
                     <div className="flex gap-2 border border-grey-80 p-1 rounded">
                         <button
                             className={cn(
@@ -156,6 +243,23 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
                         </button>
                     </div>
 
+                    {/* Filter Button */}
+                    <div className="flex border border-grey-80 p-1 rounded">
+                        <button
+                            className="flex justify-center items-center p-1 cursor-pointer bg-white text-grey-70 rounded"
+                            onClick={() => setIsFilterOpen(true)}
+                            aria-label="Filter"
+                        >
+                            <Icons.Filter className="size-5" />
+                            {activeFilters.length > 0 && (
+                                <span className="ml-1 p-1 bg-primary-100 text-primary-30 border border-primary-80 text-xs rounded min-w-4 h-4 flex items-center justify-center">
+                                    {activeFilters.length}
+                                </span>
+                            )}
+                        </button>
+                    </div>
+
+                    {/* Download Folder Button */}
                     <button
                         onClick={handleDownloadFolder}
                         disabled={isDownloading}
@@ -174,6 +278,16 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
                 </div>
             </div>
 
+            {/* Active Filters Display */}
+            {activeFilters.length > 0 && (
+                <FilterChips
+                    filters={activeFilters}
+                    onRemoveFilter={handleRemoveFilter}
+                    onOpenFilterDialog={() => setIsFilterOpen(true)}
+                    className="mt-4 mb-2"
+                />
+            )}
+
             {isLoading ? (
                 <div className="flex flex-col items-center justify-center py-16">
                     <Icons.Loader className="size-10 text-primary-50 animate-spin mb-4" />
@@ -188,19 +302,29 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
                             <p className="text-grey-50 text-sm">This folder does not contain any files.</p>
                         </div>
                     ) : (
-                        <div>
-                            {viewMode === "list" ? (
-                                <FilesTable
-                                    files={files}
-                                    isRecentFiles={false}
-                                />
-                            ) : (
-                                <CardView
-                                    files={files}
-                                    isRecentFiles={false}
-                                />
-                            )}
-                        </div>
+                        <FilesContent
+                            isRecentFiles={false}
+                            isLoading={false}
+                            isFetching={false}
+                            isProcessingTimestamps={false}
+                            filteredData={filteredData}
+                            displayedData={filteredData}
+                            searchTerm={searchTerm}
+                            activeFilters={activeFilters}
+                            viewMode={viewMode}
+                            shouldResetPagination={shouldResetPagination}
+                            handlePaginationReset={handlePaginationReset}
+                            unpinnedFiles={null}
+                            isUnpinnedOpen={false}
+                            isFilterOpen={isFilterOpen}
+                            setIsFilterOpen={setIsFilterOpen}
+                            selectedFileTypes={selectedFileTypes}
+                            selectedDate={selectedDate}
+                            selectedFileSize={selectedFileSize}
+                            selectedSizeUnit={selectedSizeUnit}
+                            handleApplyFilters={handleApplyFilters}
+                            handleResetFilters={handleResetFilters}
+                        />
                     )}
                 </>
             )}

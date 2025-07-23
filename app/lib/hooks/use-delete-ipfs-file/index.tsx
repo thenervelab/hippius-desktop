@@ -9,11 +9,12 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
+import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 
 import type { SubmittableResult } from "@polkadot/api";
 import type { DispatchError } from "@polkadot/types/interfaces";
 
-export const useDeleteIpfsFile = ({ cid }: { cid: string }) => {
+export const useDeleteIpfsFile = ({ cid, fileToDelete: file }: { cid: string, fileToDelete: FormattedUserIpfsFile | null }) => {
     const { data: ipfsFiles } = useUserIpfsFiles();
     const { api } = usePolkadotApi();
     const { walletManager, polkadotAddress, mnemonic } = useWalletAuth();
@@ -26,8 +27,14 @@ export const useDeleteIpfsFile = ({ cid }: { cid: string }) => {
             if (!api) throw new Error("Polkadot API not initialised");
             if (!walletManager) throw new Error("Error getting wallet manager");
 
-            const fileToDelete = ipfsFiles.files.find(f => f.cid === cid);
+            let fileToDelete = ipfsFiles.files.find(f => f.cid === cid);
+
+            if (!fileToDelete) {
+                fileToDelete = file ?? undefined
+            }
+
             if (!fileToDelete) throw new Error("Cannot find file");
+
 
             console.log("fileToDelete", fileToDelete);
 

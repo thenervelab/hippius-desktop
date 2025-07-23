@@ -53,6 +53,7 @@ export function useFileViewShared(props: FileViewSharedProps): FileViewSharedSta
     const [openDeleteModal, setOpenDeleteModal] = useState(false);
     const { mutateAsync: deleteFileMutation, isPending: isDeleting } = useDeleteIpfsFile({
         cid: fileToDelete?.cid || "",
+        fileToDelete
     });
 
     const [selectedFile, setSelectedFile] = useState<FormattedUserIpfsFile | null>(null);
