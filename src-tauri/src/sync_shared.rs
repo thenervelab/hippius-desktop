@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::PathBuf;
 use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use tokio::sync::mpsc;
-use crate::folder_sync::collect_files_recursively;
 use std::path::Path;
 use tauri::{AppHandle, Wry};
 use std::fs;
@@ -135,19 +134,6 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     }
 }
 
-pub fn collect_files_and_folders_recursively(dir: &Path, items: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() || path.is_dir() {
-                items.push(path.clone());
-                if path.is_dir() {
-                    collect_files_and_folders_recursively(&path, items);
-                }
-            }
-        }
-    }
-}
 
 #[tauri::command]
 pub fn get_sync_status() -> SyncStatusResponse {
@@ -171,3 +157,17 @@ pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);      
 }
 
+
+// Helper to recursively collect files
+pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                files.push(path);
+            } else if path.is_dir() {
+                collect_files_recursively(&path, files);
+            }
+        }
+    }
+}

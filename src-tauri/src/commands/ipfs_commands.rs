@@ -19,7 +19,7 @@ use crate::commands::types::*;
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
 use crate::constants::folder_sync::{DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
-use crate::folder_sync::collect_files_recursively;
+use crate::sync_shared::collect_files_recursively;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

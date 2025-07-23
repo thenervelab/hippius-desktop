@@ -1,7 +1,14 @@
 import React, { FC, useState, useEffect, useCallback, useRef } from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, LinkIcon, Copy, Download, Share, HardDrive } from "lucide-react";
+import {
+  MoreVertical,
+  LinkIcon,
+  Copy,
+  Download,
+  Share,
+  HardDrive
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import usePagination from "@/lib/hooks/use-pagination";
@@ -38,6 +45,10 @@ interface CardViewProps {
   searchTerm?: string;
   activeFilters?: Filter[];
   sharedState?: FileViewSharedState;
+  handleFileDownload: (
+    file: FormattedUserIpfsFile,
+    polkadotAddress: string
+  ) => void;
 }
 
 const CardView: FC<CardViewProps> = ({
@@ -47,12 +58,14 @@ const CardView: FC<CardViewProps> = ({
   isRecentFiles = false,
   searchTerm = "",
   activeFilters = [],
-  sharedState
+  sharedState,
+  handleFileDownload
 }) => {
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
 
-  const [localFileDetailsFile, setLocalFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [localFileDetailsFile, setLocalFileDetailsFile] =
+    useState<FormattedUserIpfsFile | null>(null);
   const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
 
   const [isDragging, setIsDragging] = useState(false);
@@ -70,29 +83,37 @@ const CardView: FC<CardViewProps> = ({
   } = sharedState || {};
 
   // Local handler for file details if no shared state
-  const localHandleShowFileDetails = useCallback((file: FormattedUserIpfsFile) => {
-    if (!handleShowFileDetails) {
-      setLocalFileDetailsFile(file);
-      setLocalIsFileDetailsOpen(true);
-    } else {
-      handleShowFileDetails(file);
-    }
-  }, [handleShowFileDetails]);
+  const localHandleShowFileDetails = useCallback(
+    (file: FormattedUserIpfsFile) => {
+      if (!handleShowFileDetails) {
+        setLocalFileDetailsFile(file);
+        setLocalIsFileDetailsOpen(true);
+      } else {
+        handleShowFileDetails(file);
+      }
+    },
+    [handleShowFileDetails]
+  );
 
-  const localHandleContextMenu = useCallback((e: React.MouseEvent, file: FormattedUserIpfsFile) => {
-    if (handleContextMenu) {
-      handleContextMenu(e, file);
-    }
-  }, [handleContextMenu]);
+  const localHandleContextMenu = useCallback(
+    (e: React.MouseEvent, file: FormattedUserIpfsFile) => {
+      if (handleContextMenu) {
+        handleContextMenu(e, file);
+      }
+    },
+    [handleContextMenu]
+  );
 
   // Show empty state if no files and search/filters are active
-  const showEmptyState = files.length === 0 && (searchTerm || (activeFilters && activeFilters.length > 0));
+  const showEmptyState =
+    files.length === 0 &&
+    (searchTerm || (activeFilters && activeFilters.length > 0));
 
   const {
     paginatedData: data,
     setCurrentPage,
     currentPage,
-    totalPages,
+    totalPages
   } = usePagination(files || [], 12); // Using more items per page for card view
 
   useEffect(() => {
@@ -207,7 +228,7 @@ const CardView: FC<CardViewProps> = ({
           "w-full relative ",
           isRecentFiles ? "max-h-[150px]" : "min-h-[700px]",
           isDragging &&
-          "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
+            "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
         )}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
@@ -233,9 +254,7 @@ const CardView: FC<CardViewProps> = ({
               </div>
               <div className="flex items-center justify-center">
                 <HardDrive className="size-6 text-white mr-2" />
-                <div className="text-white text-lg font-bold">
-                  IPFS Storage
-                </div>
+                <div className="text-white text-lg font-bold">IPFS Storage</div>
               </div>
             </div>
           </div>
@@ -290,21 +309,21 @@ const CardView: FC<CardViewProps> = ({
                             icon: <Download className="size-4" />,
                             itemTitle: "Download",
                             onItemClick: async () => {
-                              downloadIpfsFile(file, polkadotAddress ?? "");
-                            },
+                              handleFileDownload(file, polkadotAddress ?? "");
+                            }
                           },
                           ...(fileType === "video" ||
-                            fileType === "image" ||
-                            fileType === "pdfDocument"
+                          fileType === "image" ||
+                          fileType === "pdfDocument"
                             ? [
-                              {
-                                icon: <Icons.Eye className="size-4" />,
-                                itemTitle: "View",
-                                onItemClick: () => {
-                                  setSelectedFile?.(file);
-                                },
-                              },
-                            ]
+                                {
+                                  icon: <Icons.Eye className="size-4" />,
+                                  itemTitle: "View",
+                                  onItemClick: () => {
+                                    setSelectedFile?.(file);
+                                  }
+                                }
+                              ]
                             : []),
                           {
                             icon: <Share className="size-4" />,
@@ -320,7 +339,7 @@ const CardView: FC<CardViewProps> = ({
                                   error
                                 );
                               }
-                            },
+                            }
                           },
                           {
                             icon: <LinkIcon className="size-4" />,
@@ -331,12 +350,9 @@ const CardView: FC<CardViewProps> = ({
                                   `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
                                 );
                               } catch (error) {
-                                console.error(
-                                  "Failed to open on IPFS:",
-                                  error
-                                );
+                                console.error("Failed to open on IPFS:", error);
                               }
-                            },
+                            }
                           },
                           {
                             icon: <Copy className="size-4" />,
@@ -351,7 +367,7 @@ const CardView: FC<CardViewProps> = ({
                                     "Copied to clipboard successfully!"
                                   );
                                 });
-                            },
+                            }
                           },
                           {
                             icon: <Icons.InfoCircle className="size-4" />,
@@ -359,21 +375,21 @@ const CardView: FC<CardViewProps> = ({
                             onItemClick: () => {
                               // Use local handler that will work with or without shared state
                               localHandleShowFileDetails(file);
-                            },
+                            }
                           },
                           ...(file.isAssigned
                             ? [
-                              {
-                                icon: <Icons.Trash className="size-4" />,
-                                itemTitle: "Delete",
-                                onItemClick: () => {
-                                  setFileToDelete?.(file);
-                                  setOpenDeleteModal?.(true);
-                                },
-                                variant: "destructive" as const,
-                              },
-                            ]
-                            : []),
+                                {
+                                  icon: <Icons.Trash className="size-4" />,
+                                  itemTitle: "Delete",
+                                  onItemClick: () => {
+                                    setFileToDelete?.(file);
+                                    setOpenDeleteModal?.(true);
+                                  },
+                                  variant: "destructive" as const
+                                }
+                              ]
+                            : [])
                         ]}
                       >
                         <Button

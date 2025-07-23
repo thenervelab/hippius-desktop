@@ -78,36 +78,6 @@ pub fn decode_file_hash(file_hash_bytes: &[u8]) -> Result<String, String> {
     Ok(decoded_str.to_string())
 }
 
-/// Download content from IPFS with timeout and size limit
-pub async fn download_content_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client for CID {}: {}", cid, e))?;
-
-    let res = tokio::time::timeout(
-        Duration::from_secs(30),
-        client.post(&format!("{}/api/v0/cat?arg={}", api_url, cid)).send()
-    )
-    .await
-    .map_err(|_| format!("Timeout downloading IPFS content for CID: {}", cid))
-    .and_then(|res| res.map_err(|e| format!("HTTP error for CID {}: {}", cid, e)))?
-    .error_for_status()
-    .map_err(|e| format!("HTTP status error for CID {}: {}", cid, e))?;
-
-    let bytes = res.bytes()
-        .await
-        .map_err(|e| format!("Error reading IPFS response for CID {}: {}", cid, e))?;
-    
-    // Check size limit (1MB)
-    let max_size = 1024 * 1024;
-    if bytes.len() > max_size {
-        return Err(format!("IPFS response for CID {} exceeds size limit of {} bytes", cid, max_size));
-    }
-
-    Ok(bytes.to_vec())
-}
-
 /// Combined sync function for user profiles and storage requests
 pub fn start_user_sync(account_id: &str) {
     {
@@ -130,37 +100,22 @@ pub fn start_user_sync(account_id: &str) {
             });
         let mut retry_count = 0;
         let max_retries = 5;
-        
+
+        // Initialize api outside the loop to allow refreshing
+        let mut api = match get_substrate_client().await {
+            Ok(api) => {
+                println!("[UserSync] Successfully connected to substrate node");
+                api
+            }
+            Err(e) => {
+                eprintln!("[UserSync] Failed to get initial substrate client: {}", e);
+                time::sleep(Duration::from_secs(120)).await;
+                return; // Exit if initial connection fails
+            }
+        };
+
         loop {
             println!("[UserSync] Periodic check: scanning for unsynced data...");
-
-            // Get substrate client with retry mechanism
-            let api = loop {
-                match get_substrate_client().await {
-                    Ok(api) => {
-                        println!("[UserSync] Successfully connected to substrate node");
-                        retry_count = 0;
-                        break api;
-                    }
-                    Err(e) => {
-                        retry_count += 1;
-                        let wait_time = std::cmp::min(30 * retry_count, 300);
-                        eprintln!("[UserSync] Failed to get substrate client (attempt {}/{}): {e}", retry_count, max_retries);
-                        
-                        // Clear the client cache to force reconnection
-                        crate::substrate_client::clear_substrate_client();
-                        
-                        if retry_count >= max_retries {
-                            eprintln!("[UserSync] Max retries reached, waiting 5 minutes before trying again");
-                            time::sleep(Duration::from_secs(300)).await;
-                            retry_count = 0;
-                        } else {
-                            eprintln!("[UserSync] Retrying in {} seconds...", wait_time);
-                            time::sleep(Duration::from_secs(wait_time as u64)).await;
-                        }
-                    }
-                }
-            };
 
             let account: AccountId32 = match account_id.parse() {
                 Ok(acc) => acc,
@@ -176,13 +131,35 @@ pub fn start_user_sync(account_id: &str) {
                 match api.storage().at_latest().await {
                     Ok(storage) => {
                         println!("[UserSync] Successfully got latest storage");
+                        retry_count = 0;
                         break storage;
                     }
                     Err(e) => {
-                        eprintln!("[UserSync] Failed to get latest storage: {e}");
-                        crate::substrate_client::clear_substrate_client(); // Add this line
-                        eprintln!("[UserSync] Retrying in 30 seconds...");
-                        time::sleep(Duration::from_secs(30)).await;
+                        retry_count += 1;
+                        eprintln!("[UserSync] Failed to get latest storage (attempt {}/{}): {e}", retry_count, max_retries);
+                        crate::substrate_client::clear_substrate_client();
+
+                        // Refresh the client after clearing
+                        match get_substrate_client().await {
+                            Ok(new_api) => {
+                                api = new_api; // Update api with the new client
+                                println!("[UserSync] Successfully reconnected to substrate node");
+                            }
+                            Err(e) => {
+                                eprintln!("[UserSync] Failed to reconnect to substrate client: {}", e);
+                                if retry_count >= max_retries {
+                                    eprintln!("[UserSync] Max retries reached, waiting 5 minutes before trying again");
+                                    time::sleep(Duration::from_secs(300)).await;
+                                    retry_count = 0;
+                                    continue; // Continue to retry after long delay
+                                } else {
+                                    let wait_time = std::cmp::min(30 * retry_count, 300);
+                                    eprintln!("[UserSync] Retrying in {} seconds...", wait_time);
+                                    time::sleep(Duration::from_secs(wait_time as u64)).await;
+                                }
+                                continue; // Continue to retry getting storage
+                            }
+                        }
                     }
                 }
             };
@@ -361,8 +338,8 @@ pub fn start_user_sync(account_id: &str) {
                                         }
                                         Err(e) => {
                                             eprintln!("[UserSync] Failed to download from IPFS for {}: {}", decoded_hash, e);
+                                        }
                                     }
-                                }
                                 }
 
                                 let file_name = bounded_vec_to_string(&storage_request.file_name.0);
@@ -396,7 +373,7 @@ pub fn start_user_sync(account_id: &str) {
                                         profile_cid: "".to_string(),
                                         source: "Hippius".to_string(),
                                         miner_ids: Some(miner_ids_json),
-                                        created_at: storage_request.created_at as i64, // Placeholder, will be updated later
+                                        created_at: storage_request.created_at as i64,
                                     });
                                 }
                             }
@@ -561,6 +538,28 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
     }
 }
 
+#[tauri::command]
+pub async fn get_user_total_file_size(owner: String) -> Result<i64, String> {
+    if let Some(pool) = DB_POOL.get() {
+        let total_size = sqlx::query(
+            r#"
+            SELECT COALESCE(SUM(file_size_in_bytes), 0) as total_size
+            FROM user_profiles
+            WHERE owner = ?
+            "#
+        )
+        .bind(&owner)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Database error: {}", e))?;
+
+        let total_size: i64 = total_size.get("total_size");
+        println!("[UserSync] Total file size for owner {}: {} bytes", owner, total_size);
+        Ok(total_size)
+    } else {
+        Err("DB not initialized".to_string())
+    }
+}
 
 #[tauri::command]
 pub async fn start_user_profile_sync_tauri(account_id: String) {

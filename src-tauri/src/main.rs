@@ -14,7 +14,7 @@ mod ipfs;
 use crate::sync_shared::{get_sync_status,app_close};
 use crate::folder_sync::{start_folder_sync_tauri};
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::user_profile_sync::get_user_synced_files;
+use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size};
 use crate::user_profile_sync::start_user_profile_sync_tauri;
 use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
@@ -73,6 +73,7 @@ fn main() {
             get_encryption_keys,
             import_key,
             transfer_balance_tauri,
+            get_user_total_file_size,
         ]);
 
     let builder = setup(builder);

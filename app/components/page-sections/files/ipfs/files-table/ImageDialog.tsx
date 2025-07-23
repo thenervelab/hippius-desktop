@@ -6,14 +6,12 @@ import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import {
-  Loader2,
-} from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import {
   getNextViewableFile,
-  getPrevViewableFile,
+  getPrevViewableFile
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
@@ -39,7 +37,11 @@ const ImageDialog: React.FC<{
   allFiles: FormattedUserIpfsFile[];
   onCloseClicked: () => void;
   onNavigate: (file: FormattedUserIpfsFile) => void;
-}> = ({ file, allFiles, onCloseClicked, onNavigate }) => {
+  handleFileDownload: (
+    file: FormattedUserIpfsFile,
+    polkadotAddress: string
+  ) => void;
+}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
   const { polkadotAddress } = useWalletAuth();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
@@ -126,12 +128,14 @@ const ImageDialog: React.FC<{
                         <div className="flex gap-x-4 items-center">
                           <button
                             onClick={() => {
-                              downloadIpfsFile(file, polkadotAddress ?? "");
+                              handleFileDownload(file, polkadotAddress ?? "");
                             }}
                             className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-white whitespace-nowrap rounded border border-grey-80 p-2"
                           >
                             <Icons.DocumentDownload className="size-4 min-w-4" />
-                            <span className="max-sm:hidden text-grey-10 text-sm">Download File</span>
+                            <span className="max-sm:hidden text-grey-10 text-sm">
+                              Download File
+                            </span>
                           </button>
                           <button
                             onClick={() => {
@@ -196,7 +200,7 @@ const ImageDialog: React.FC<{
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{
                           opacity: imageLoaded ? 1 : 0,
-                          scale: imageLoaded ? 1 : 1.0,
+                          scale: imageLoaded ? 1 : 1.0
                         }}
                         transition={{ duration: 0.3, ease: "easeInOut" }}
                         onClick={(e) => e.stopPropagation()}
