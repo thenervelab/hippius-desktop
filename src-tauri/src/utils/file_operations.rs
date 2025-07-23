@@ -354,26 +354,26 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
             }
         }
         // Remove the folder from filesystem
-        if sync_file_path.exists() {
+    if sync_file_path.exists() {
             if let Err(e) = fs::remove_dir_all(&sync_file_path) {
                 eprintln!("Failed to remove folder from sync folder: {}", e);
             }
-        }
-    } else {
+            }
+        } else {
         // It's a file
         if sync_file_path.exists() {
             if let Err(e) = fs::remove_file(&sync_file_path) {
                 eprintln!("Failed to remove file from sync folder: {}", e);
-            }
         }
-        // Remove from DB
-        if let Some(pool) = crate::DB_POOL.get() {
-            if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
-                .bind(file_name)
-                .bind(if is_public { "public" } else { "private" })
-                .execute(pool)
-                .await {
-                eprintln!("Failed to remove file from sync_folder_files DB: {}", e);
+    }
+    // Remove from DB
+    if let Some(pool) = crate::DB_POOL.get() {
+        if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
+            .bind(file_name)
+            .bind(if is_public { "public" } else { "private" })
+            .execute(pool)
+            .await {
+            eprintln!("Failed to remove file from sync_folder_files DB: {}", e);
             }
         }
     }

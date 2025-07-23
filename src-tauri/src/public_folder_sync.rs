@@ -357,7 +357,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
                 }
             }
 
-            std::thread::sleep(Duration::from_secs(120)); // 2 minutes
+            std::thread::sleep(Duration::from_secs(30)); // 30 secs
         }
     });
 }

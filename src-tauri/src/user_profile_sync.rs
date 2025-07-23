@@ -146,6 +146,10 @@ pub fn start_user_sync(account_id: &str) {
                         retry_count += 1;
                         let wait_time = std::cmp::min(30 * retry_count, 300);
                         eprintln!("[UserSync] Failed to get substrate client (attempt {}/{}): {e}", retry_count, max_retries);
+                        
+                        // Clear the client cache to force reconnection
+                        crate::substrate_client::clear_substrate_client();
+                        
                         if retry_count >= max_retries {
                             eprintln!("[UserSync] Max retries reached, waiting 5 minutes before trying again");
                             time::sleep(Duration::from_secs(300)).await;
@@ -176,6 +180,7 @@ pub fn start_user_sync(account_id: &str) {
                     }
                     Err(e) => {
                         eprintln!("[UserSync] Failed to get latest storage: {e}");
+                        crate::substrate_client::clear_substrate_client(); // Add this line
                         eprintln!("[UserSync] Retrying in 30 seconds...");
                         time::sleep(Duration::from_secs(30)).await;
                     }
