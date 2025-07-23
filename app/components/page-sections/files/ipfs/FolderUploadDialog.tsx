@@ -75,9 +75,6 @@ export default function FolderUploadDialog({
 
         try {
             const command = useEncryption ? "encrypt_and_upload_folder" : "public_upload_folder";
-
-            console.log("command:", command);
-
             // Pass encryptionKey only if provided, otherwise pass null
             const manifestCid = await invoke<string>(command, {
                 accountId: polkadotAddress,
@@ -99,9 +96,6 @@ export default function FolderUploadDialog({
             if (onSuccess) {
                 onSuccess(manifestCid);
             }
-
-            // Navigate to folder view
-            router.push(`/files?folderCid=${manifestCid}`);
         } catch (error) {
             console.error("Error uploading folder:", error);
             toast.dismiss(toastId);

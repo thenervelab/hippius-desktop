@@ -9,11 +9,13 @@ import { FC } from "react";
 const FilesPage: FC = () => {
     const params = useSearchParams();
     const folderCid = params.get("folderCid");
+    const folderName = params.get("folderName") || "Folder";
+    console.log("Folder Name:", folderName);
 
     if (folderCid) {
         return (
-            <DashboardTitleWrapper mainText="Your Files(Folder)">
-                <FolderView folderCid={folderCid} />
+            <DashboardTitleWrapper mainText={`Your Files - ${folderName}`}>
+                <FolderView folderCid={folderCid} folderName={folderName} />
             </DashboardTitleWrapper>
         );
     }

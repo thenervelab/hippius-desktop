@@ -30,7 +30,7 @@ const NameCell: FC<NameCellProps> = ({
   return (
     <div className={className}>
       {isFolder ? (
-        <Link href={`/files?folderCid=${decodeHexCid(cid)}`}>
+        <Link href={`/files?folderCid=${decodeHexCid(cid)}&folderName=${encodeURIComponent(name)}`}>
           <div className="flex items-center">
             <Icon className={cn("size-5 mr-2", color)} />
             <span className="text-grey-20 hover:text-primary-40 hover:underline transition">

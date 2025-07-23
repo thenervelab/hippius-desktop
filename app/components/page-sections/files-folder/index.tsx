@@ -22,9 +22,13 @@ interface FileEntry {
     cid: string;
 }
 
-export default function FolderView({ folderCid }: { folderCid: string }) {
+interface FolderViewProps {
+    folderCid: string;
+    folderName?: string;
+}
+
+export default function FolderView({ folderCid, folderName = "Folder" }: FolderViewProps) {
     const { polkadotAddress } = useWalletAuth();
-    const folderName = "Folder";
     const [files, setFiles] = useState<FormattedUserIpfsFile[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"list" | "card">("list");
@@ -76,8 +80,6 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
                     folderMetadataCid: folderCid
                 });
 
-                console.log("File enteries", fileEntries)
-
                 // Convert FileEntry to FormattedUserIpfsFile format
                 const formattedFiles = fileEntries.map((entry): FormattedUserIpfsFile => ({
                     cid: entry.cid,
@@ -101,7 +103,7 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
         };
 
         loadFolderContents();
-    }, [folderCid]);
+    }, [folderCid, folderName]);
 
     function handlePaginationReset() {
         setShouldResetPagination(false);
@@ -132,7 +134,6 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
                 folderMetadataCid: folderCid,
                 folderName: folderName,
                 outputDir: outputDir,
-
                 encryptionKey: null,
             });
 
@@ -324,6 +325,7 @@ export default function FolderView({ folderCid }: { folderCid: string }) {
                             selectedSizeUnit={selectedSizeUnit}
                             handleApplyFilters={handleApplyFilters}
                             handleResetFilters={handleResetFilters}
+                            isPrivateView={false}
                         />
                     )}
                 </>
