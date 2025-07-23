@@ -1,34 +1,28 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Icons, RevealTextLine, ImportantWarnings } from "../ui";
+import { Button, Icons, RevealTextLine, ImportantWarnings } from "../../ui";
 import { InView } from "react-intersection-observer";
 import { isMnemonicValid } from "@/app/lib/helpers/validateMnemonic";
 import { ShieldSecurity } from "@/components/ui/icons";
 import { toast } from "sonner";
-import { generateMnemonic } from "@/app/lib/helpers/mnemonic";
 
 interface CreateAccountFormProps {
   setShowPasscodeFields: React.Dispatch<React.SetStateAction<boolean>>;
-  setMnemonic: React.Dispatch<React.SetStateAction<string>>;
   mnemonic: string;
 }
 
 const CreateAccountForm: React.FC<CreateAccountFormProps> = ({
   setShowPasscodeFields,
-  setMnemonic,
-  mnemonic,
+
+  mnemonic
 }) => {
   const [error, setError] = useState<string | null>(null);
   const [SigningUp, setSigningUp] = useState(false);
   const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    generateMnemonic().then(setMnemonic);
-  }, [setMnemonic]);
 
   const copyToClipboard = async () => {
     try {
