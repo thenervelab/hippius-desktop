@@ -201,6 +201,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
             <UploadFilesFlow
               key="upload-file"
               reset={closeDialog}
+              isPrivateView={isPrivateView}
               initialFiles={droppedFiles}
             />
           );

@@ -10,9 +10,14 @@ import { Trash2 } from "lucide-react";
 interface UploadFilesFlowProps {
   reset: () => void;
   initialFiles?: FileList | null;
+  isPrivateView: boolean;
 }
 
-const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
+const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
+  reset,
+  initialFiles,
+  isPrivateView
+}) => {
   const [revealFiles, setRevealFiles] = useState(false);
   const [files, setFiles] = useState<FileList | null>(null);
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
@@ -28,7 +33,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
     },
     onSuccess() {
       reset();
-    },
+    }
   });
 
   useEffect(() => {
@@ -43,13 +48,10 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
     setFiles((prev) => {
       if (!prev) return newFiles;
       const seen = new Set(
-        Array.from(prev).map(
-          (f) => `${f.name}-${f.size}-${f.lastModified}`
-        )
+        Array.from(prev).map((f) => `${f.name}-${f.size}-${f.lastModified}`)
       );
       const unique = Array.from(newFiles).filter(
-        (f) =>
-          !seen.has(`${f.name}-${f.size}-${f.lastModified}`)
+        (f) => !seen.has(`${f.name}-${f.size}-${f.lastModified}`)
       );
       if (!unique.length) return prev;
       const combined = [...Array.from(prev), ...unique];
@@ -138,7 +140,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({ reset, initialFiles }) => {
           onClick={() => {
             if (files) {
               reset();
-              upload(files);
+              upload(files, isPrivateView);
             }
           }}
           disabled={!files?.length}
