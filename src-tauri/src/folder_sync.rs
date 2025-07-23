@@ -18,9 +18,9 @@ use std::thread;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::sync_shared::{SYNCING_ACCOUNTS, UPLOAD_SENDER, UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
+use crate::sync_shared::{SYNCING_ACCOUNTS,  UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
     UPLOAD_LOCK, RECENTLY_UPLOADED_FOLDERS, CREATE_BATCH, CREATE_BATCH_TIMER_RUNNING, UploadJob, insert_file_if_not_exists};
-
+pub static UPLOAD_SENDER: OnceCell<mpsc::UnboundedSender<UploadJob>> = OnceCell::new();
 pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();

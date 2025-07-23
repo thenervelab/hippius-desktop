@@ -1001,6 +1001,7 @@ pub async fn public_upload_folder(
     let storage_result = request_file_storage(&folder_name, &folder_metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
+            println!("is puiblic folder upload");
             copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id, &folder_metadata_cid, &res, true, true).await;
             println!("[public_upload_folder] Storage request result: {}", res);
         },

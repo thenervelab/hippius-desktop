@@ -45,56 +45,84 @@ pub struct UploadJob {
     pub is_folder: bool,  // New field to distinguish folders from files
 }
 
-pub static UPLOAD_SENDER: OnceCell<mpsc::UnboundedSender<UploadJob>> = OnceCell::new();
 
 pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str, is_public: bool, is_folder: bool) {
+    // Convert to absolute path if not already
+    let file_path = if file_path.is_relative() {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(file_path),
+            Err(e) => {
+                eprintln!("Failed to get current directory: {}", e);
+                return;
+            }
+        }
+    } else {
+        file_path.to_path_buf()
+    };
     let file_name = file_path.file_name().unwrap().to_string_lossy();
     let file_type = if is_public { "public" } else { "private" };
-    println!("file type {:?}, is_folder : {:?}, filename {:?}", file_type, is_folder, file_name);
-    
-    // If this is a folder, collect and insert all its files first
-    if is_folder && file_path.is_dir() {
+    println!("file type {:?}, is_folder : {:?}, file_path {:?}", file_type, is_folder, file_path);
+    println!("Path exists: {:?}, is_dir: {:?}", file_path.exists(), file_path.is_dir());
+    // Wait for directory to exist (with timeout)
+    if is_folder {
+        let mut attempts = 0;
+        while !file_path.exists() && attempts < 5 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            attempts += 1;
+        }
+    }
+    println!("Path exists: {:?}, is_dir: {:?}", file_path.exists(), file_path.is_dir());
+    // Rest of your function remains the same...
+    if is_folder {
         println!("[DB] Processing folder: {}", file_path.display());
         let mut files = Vec::new();
-        collect_files_recursively(file_path, &mut files);
-        println!("[DB] Found {} files in folder", files.len());
-        for file in files {
-            println!("[DB] Processing file");
-            let file_name = file.file_name().unwrap().to_string_lossy();
-            let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?")
-                .bind(&file_name)
-                .bind(owner)
-                .bind(file_type)
-                .fetch_optional(pool)
-                .await
-                .unwrap();
-            println!("file exists: {:?}", exists.is_some());
-            if exists.is_none() {
-                println!("file type {:?}, is_folder : {:?}, filename {:?}", file_type, is_folder, file_name);
-                sqlx::query(
-                    "INSERT INTO sync_folder_files (
-                        file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                )
-                .bind(&file_name)
-                .bind(owner)
-                .bind("")
-                .bind("")
-                .bind(0)
-                .bind(false)
-                .bind(0)
-                .bind("")
-                .bind("")
-                .bind(0)
-                .bind(0)
-                .bind("")
-                .bind("")
-                .bind("")
-                .bind(file_type)
-                .bind(false)
-                .execute(pool)
-                .await
-                .unwrap();
+               
+        // Enhanced directory reading with error handling
+        match collect_files_recursively(&file_path, &mut files) {
+            Ok(_) => {
+                println!("[DB] Found {} files in folder", files.len());
+                for file in &files {
+                    println!("[DB] Processing file");
+                    let file_name = file.file_name().unwrap().to_string_lossy();
+                    let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?")
+                        .bind(&file_name)
+                        .bind(owner)
+                        .bind(file_type)
+                        .fetch_optional(pool)
+                        .await
+                        .unwrap();
+                    println!("file exists: {:?}", exists.is_some());
+                    if exists.is_none() {
+                        println!("file type {:?}, is_folder : {:?}, filename {:?}", file_type, is_folder, file_name);
+                        sqlx::query(
+                            "INSERT INTO sync_folder_files (
+                                file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        )
+                        .bind(&file_name)
+                        .bind(owner)
+                        .bind("")
+                        .bind("")
+                        .bind(0)
+                        .bind(false)
+                        .bind(0)
+                        .bind("")
+                        .bind("")
+                        .bind(0)
+                        .bind(0)
+                        .bind("")
+                        .bind("")
+                        .bind("")
+                        .bind(file_type)
+                        .bind(false)
+                        .execute(pool)
+                        .await
+                        .unwrap();
+                    }
+                }
+            },
+            Err(e) => {
+                eprintln!("Failed to read directory: {}", e);
             }
         }
     }
@@ -159,15 +187,15 @@ pub fn app_close(app: AppHandle<Wry>) {
 
 
 // Helper to recursively collect files
-pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                files.push(path);
-            } else if path.is_dir() {
-                collect_files_recursively(&path, files);
-            }
+pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            files.push(path);
+        } else if path.is_dir() {
+            collect_files_recursively(&path, files)?;
         }
     }
+    Ok(())
 }

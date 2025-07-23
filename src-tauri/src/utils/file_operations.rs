@@ -236,7 +236,6 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
         }
     });
     
-    // Rest of existing copy logic...
     let cid_vec = metadata_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec);
 
@@ -282,7 +281,8 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
 
     // Add to sync_folder_files DB
     if let Some(pool) = crate::DB_POOL.get() {
-        insert_file_if_not_exists(pool, &dest_path, account_id, is_public, is_folder).await;
+        println!("is puiblic inside copy fn {:?}",is_public);
+        insert_file_if_not_exists(pool, &original_path, account_id, is_public, is_folder).await;
     }
     
     // Copy if not already exists

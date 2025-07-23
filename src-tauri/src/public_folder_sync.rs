@@ -19,9 +19,10 @@ use std::time::Duration;
 use tauri::async_runtime;
 use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::sync_shared::{SYNCING_ACCOUNTS, UPLOAD_SENDER, UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
+use crate::sync_shared::{SYNCING_ACCOUNTS,  UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
     UPLOAD_LOCK, RECENTLY_UPLOADED_FOLDERS, CREATE_BATCH, CREATE_BATCH_TIMER_RUNNING, UploadJob, insert_file_if_not_exists};
 
+pub static UPLOAD_SENDER: OnceCell<mpsc::UnboundedSender<UploadJob>> = OnceCell::new();
 pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
@@ -218,7 +219,7 @@ fn spawn_watcher_thread(account_id: String, seed_phrase: String) {
                         .expect("[FolderSync] Failed to create watcher");
 
                 new_watcher
-                    .watch(Path::new(&sync_path_str), RecursiveMode::NonRecursive)
+                    .watch(Path::new(&sync_path_str), RecursiveMode::Recursive)
                     .expect("[FolderSync] Failed to watch sync directory");
 
                 let watcher_account_id = account_id.clone();
