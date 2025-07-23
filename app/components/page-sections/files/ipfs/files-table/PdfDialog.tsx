@@ -5,7 +5,10 @@ import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import { getNextViewableFile, getPrevViewableFile } from "@/app/lib/utils/mediaNavigation";
+import {
+  getNextViewableFile,
+  getPrevViewableFile
+} from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export const PdfDialogTrigger: React.FC<{
@@ -30,11 +33,14 @@ const PdfDialog: React.FC<{
   allFiles: FormattedUserIpfsFile[];
   onCloseClicked: () => void;
   onNavigate: (file: FormattedUserIpfsFile) => void;
-}> = ({ file, allFiles, onCloseClicked, onNavigate }) => {
+  handleFileDownload: (
+    file: FormattedUserIpfsFile,
+    polkadotAddress: string
+  ) => void;
+}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
   const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
   const { polkadotAddress } = useWalletAuth();
-
 
   useEffect(() => {
     if (!file) return;
@@ -112,17 +118,21 @@ const PdfDialog: React.FC<{
                         <div className="flex gap-x-4 items-center">
                           <button
                             onClick={() => {
-                              downloadIpfsFile(file, polkadotAddress ?? "");
+                              handleFileDownload(file, polkadotAddress ?? "");
                             }}
                             className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-white whitespace-nowrap rounded border border-grey-80 p-2"
                           >
                             <Icons.DocumentDownload className="size-4 min-w-4" />
-                            <span className="max-sm:hidden text-grey-10 text-sm">Download File</span>
+                            <span className="max-sm:hidden text-grey-10 text-sm">
+                              Download File
+                            </span>
                           </button>
                           <button
                             onClick={() => {
                               navigator.clipboard.writeText(pdfUrl).then(() => {
-                                toast.success("Copied to clipboard successfully!");
+                                toast.success(
+                                  "Copied to clipboard successfully!"
+                                );
                               });
                             }}
                             className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"

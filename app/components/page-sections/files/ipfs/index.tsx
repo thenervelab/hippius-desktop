@@ -296,7 +296,12 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       return filteredData.length;
     }
     return allFilteredData.length;
-  }, [filteredData.length, allFilteredData.length, searchTerm, activeFilters.length]);
+  }, [
+    filteredData.length,
+    allFilteredData.length,
+    searchTerm,
+    activeFilters.length
+  ]);
 
   // Determine what content to render
   let content;
@@ -329,6 +334,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           isLoading={isLoading}
           isFetching={isFetching}
           isProcessingTimestamps={isProcessingTimestamps}
+          isPrivateView={activeSubMenuItem === "Private"}
           filteredData={filteredData}
           displayedData={displayedData}
           searchTerm={searchTerm}

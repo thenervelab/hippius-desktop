@@ -1,9 +1,16 @@
-import React, { FC, useState, useMemo, useEffect, useCallback, useRef } from "react";
+import React, {
+  FC,
+  useState,
+  useMemo,
+  useEffect,
+  useCallback,
+  useRef
+} from "react";
 import {
   createColumnHelper,
   getCoreRowModel,
   useReactTable,
-  getSortedRowModel,
+  getSortedRowModel
 } from "@tanstack/react-table";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import * as TableModule from "@/components/ui/alt-table";
@@ -16,7 +23,7 @@ import {
   LinkIcon,
   MoreVertical,
   HardDrive,
-  Share,
+  Share
 } from "lucide-react";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { toast } from "sonner";
@@ -57,6 +64,10 @@ interface FilesTableProps {
   searchTerm?: string;
   activeFilters?: Filter[];
   sharedState?: FileViewSharedState;
+  handleFileDownload: (
+    file: FormattedUserIpfsFile,
+    polkadotAddress: string
+  ) => void;
 }
 
 const FilesTable: FC<FilesTableProps> = ({
@@ -66,11 +77,13 @@ const FilesTable: FC<FilesTableProps> = ({
   isRecentFiles = false,
   searchTerm = "",
   activeFilters = [],
-  sharedState
+  sharedState,
+  handleFileDownload
 }) => {
   const { polkadotAddress } = useWalletAuth();
 
-  const [localFileDetailsFile, setLocalFileDetailsFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [localFileDetailsFile, setLocalFileDetailsFile] =
+    useState<FormattedUserIpfsFile | null>(null);
   const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
 
   const [isDragging, setIsDragging] = useState(false);
@@ -88,30 +101,37 @@ const FilesTable: FC<FilesTableProps> = ({
   } = sharedState || {};
 
   // Local handler for file details if no shared state
-  const localHandleShowFileDetails = useCallback((file: FormattedUserIpfsFile) => {
-    if (!handleShowFileDetails) {
-      setLocalFileDetailsFile(file);
-      setLocalIsFileDetailsOpen(true);
-    } else {
-      handleShowFileDetails(file);
-    }
-  }, [handleShowFileDetails]);
+  const localHandleShowFileDetails = useCallback(
+    (file: FormattedUserIpfsFile) => {
+      if (!handleShowFileDetails) {
+        setLocalFileDetailsFile(file);
+        setLocalIsFileDetailsOpen(true);
+      } else {
+        handleShowFileDetails(file);
+      }
+    },
+    [handleShowFileDetails]
+  );
 
-  const localHandleContextMenu = useCallback((e: React.MouseEvent, file: FormattedUserIpfsFile) => {
-    if (handleContextMenu) {
-      handleContextMenu(e, file);
-    }
-  }, [handleContextMenu]);
+  const localHandleContextMenu = useCallback(
+    (e: React.MouseEvent, file: FormattedUserIpfsFile) => {
+      if (handleContextMenu) {
+        handleContextMenu(e, file);
+      }
+    },
+    [handleContextMenu]
+  );
 
   // Show empty state if no files and search/filters are active
-  const showEmptyState = files.length === 0 && (searchTerm || (activeFilters && activeFilters.length > 0));
-
+  const showEmptyState =
+    files.length === 0 &&
+    (searchTerm || (activeFilters && activeFilters.length > 0));
 
   const {
     paginatedData: data,
     setCurrentPage,
     currentPage,
-    totalPages,
+    totalPages
   } = usePagination(files, 10);
 
   useEffect(() => {
@@ -248,7 +268,7 @@ const FilesTable: FC<FilesTableProps> = ({
               isFolder={info.row.original.isFolder}
             />
           );
-        },
+        }
       }),
       columnHelper.accessor("size", {
         header: "SIZE",
@@ -265,7 +285,7 @@ const FilesTable: FC<FilesTableProps> = ({
                 : "Unknown"}
             </div>
           );
-        },
+        }
       }),
 
       columnHelper.accessor("createdAt", {
@@ -275,7 +295,7 @@ const FilesTable: FC<FilesTableProps> = ({
         cell: (cell) => {
           const createdAt = cell.row.original.createdAt;
           return <BlockTimestamp blockNumber={createdAt} />;
-        },
+        }
       }),
       columnHelper.display({
         header: "LOCATION",
@@ -308,7 +328,7 @@ const FilesTable: FC<FilesTableProps> = ({
               )}
             </div>
           );
-        },
+        }
       }),
       columnHelper.display({
         id: "actions",
@@ -330,24 +350,24 @@ const FilesTable: FC<FilesTableProps> = ({
                     icon: <Download className="size-4" />,
                     itemTitle: "Download",
                     onItemClick: async () => {
-                      downloadIpfsFile(
+                      handleFileDownload(
                         cell.row.original,
                         polkadotAddress ?? ""
                       );
-                    },
+                    }
                   },
                   ...(fileType === "video" ||
-                    fileType === "image" ||
-                    fileType === "pdfDocument"
+                  fileType === "image" ||
+                  fileType === "pdfDocument"
                     ? [
-                      {
-                        icon: <Icons.Eye className="size-4" />,
-                        itemTitle: "View",
-                        onItemClick: () => {
-                          setSelectedFile?.(cell.row.original);
-                        },
-                      },
-                    ]
+                        {
+                          icon: <Icons.Eye className="size-4" />,
+                          itemTitle: "View",
+                          onItemClick: () => {
+                            setSelectedFile?.(cell.row.original);
+                          }
+                        }
+                      ]
                     : []),
                   {
                     icon: <Share className="size-4" />,
@@ -360,7 +380,7 @@ const FilesTable: FC<FilesTableProps> = ({
                       } catch (error) {
                         console.error("Failed to open Explorer:", error);
                       }
-                    },
+                    }
                   },
                   {
                     icon: <LinkIcon className="size-4" />,
@@ -373,7 +393,7 @@ const FilesTable: FC<FilesTableProps> = ({
                       } catch (error) {
                         console.error("Failed to open Explorer:", error);
                       }
-                    },
+                    }
                   },
                   {
                     icon: <Copy className="size-4" />,
@@ -386,28 +406,28 @@ const FilesTable: FC<FilesTableProps> = ({
                         .then(() => {
                           toast.success("Copied to clipboard successfully!");
                         });
-                    },
+                    }
                   },
                   {
                     icon: <Icons.InfoCircle className="size-4" />,
                     itemTitle: "File Details",
                     onItemClick: () => {
                       localHandleShowFileDetails(cell.row.original);
-                    },
+                    }
                   },
                   ...(cell.row.original.isAssigned
                     ? [
-                      {
-                        icon: <Icons.Trash className="size-4" />,
-                        itemTitle: "Delete",
-                        onItemClick: () => {
-                          setFileToDelete?.(cell.row.original);
-                          setOpenDeleteModal?.(true);
-                        },
-                        variant: "destructive" as const,
-                      },
-                    ]
-                    : []),
+                        {
+                          icon: <Icons.Trash className="size-4" />,
+                          itemTitle: "Delete",
+                          onItemClick: () => {
+                            setFileToDelete?.(cell.row.original);
+                            setOpenDeleteModal?.(true);
+                          },
+                          variant: "destructive" as const
+                        }
+                      ]
+                    : [])
                 ]}
               >
                 <Button
@@ -420,10 +440,16 @@ const FilesTable: FC<FilesTableProps> = ({
               </TableActionMenu>
             </div>
           );
-        },
-      }),
+        }
+      })
     ],
-    [polkadotAddress, setFileToDelete, setOpenDeleteModal, setSelectedFile, localHandleShowFileDetails]
+    [
+      polkadotAddress,
+      setFileToDelete,
+      setOpenDeleteModal,
+      setSelectedFile,
+      localHandleShowFileDetails
+    ]
   );
 
   // Always create the table at the top level
@@ -435,8 +461,8 @@ const FilesTable: FC<FilesTableProps> = ({
     columnResizeMode: "onChange",
     defaultColumn: {
       minSize: 40,
-      size: undefined,
-    },
+      size: undefined
+    }
   });
 
   if (showEmptyState) {
@@ -462,7 +488,7 @@ const FilesTable: FC<FilesTableProps> = ({
           "w-full relative ",
           isRecentFiles ? "max-h-[150px]" : "min-h-[700px]",
           isDragging &&
-          "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
+            "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
         )}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
@@ -488,9 +514,7 @@ const FilesTable: FC<FilesTableProps> = ({
               </div>
               <div className="flex items-center justify-center">
                 <HardDrive className="size-6 text-white mr-2" />
-                <div className="text-white text-lg font-bold">
-                  IPFS Storage
-                </div>
+                <div className="text-white text-lg font-bold">IPFS Storage</div>
               </div>
             </div>
           </div>
