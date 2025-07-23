@@ -35,7 +35,6 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { VideoDialogTrigger } from "./VideoDialog";
 import { ImageDialogTrigger } from "./ImageDialog";
 import { PdfDialogTrigger } from "./PdfDialog";
-import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import BlockTimestamp from "@/app/components/ui/block-timestamp";
 import { Icons } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";

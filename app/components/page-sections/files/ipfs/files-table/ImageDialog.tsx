@@ -5,7 +5,6 @@ import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
-import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";

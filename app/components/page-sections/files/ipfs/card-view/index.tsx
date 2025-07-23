@@ -20,7 +20,6 @@ import FileCard from "./FileCard";
 import TableActionMenu from "@/components/ui/alt-table/table-action-menu";
 import * as TableModule from "@/components/ui/alt-table";
 import { useRouter } from "next/navigation";
-import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "../shared/file-view-utils";
@@ -331,7 +330,9 @@ const CardView: FC<CardViewProps> = ({
                             onItemClick: async () => {
                               try {
                                 await openUrl(
-                                  `http://hipstats.com/cid-tracker/${decodeHexCid(file.cid)}`
+                                  `http://hipstats.com/cid-tracker/${decodeHexCid(
+                                    file.cid
+                                  )}`
                                 );
                               } catch (error) {
                                 console.error(
@@ -347,7 +348,9 @@ const CardView: FC<CardViewProps> = ({
                             onItemClick: async () => {
                               try {
                                 await openUrl(
-                                  `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
+                                  `https://get.hippius.network/ipfs/${decodeHexCid(
+                                    file.cid
+                                  )}`
                                 );
                               } catch (error) {
                                 console.error("Failed to open on IPFS:", error);
@@ -360,7 +363,9 @@ const CardView: FC<CardViewProps> = ({
                             onItemClick: () => {
                               navigator.clipboard
                                 .writeText(
-                                  `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
+                                  `https://get.hippius.network/ipfs/${decodeHexCid(
+                                    file.cid
+                                  )}`
                                 )
                                 .then(() => {
                                   toast.success(

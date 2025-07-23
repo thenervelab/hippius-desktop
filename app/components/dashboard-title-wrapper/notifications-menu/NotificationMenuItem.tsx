@@ -41,7 +41,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   selected = false,
   onClick,
   onReadStatusChange,
-  onClose,
+  onClose
 }) => {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -76,7 +76,11 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
               "flex items-start gap-2 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer w-full",
               selected && "border border-primary-70 bg-primary-100"
             )}
-            onClick={onClick}
+            onClick={() => {
+              setActiveSubMenuItem("");
+
+              onClick?.();
+            }}
             onContextMenu={handleContextMenu}
           >
             <AbstractIconWrapper className="min-w-[32px] size-8 text-primary-40">
@@ -128,7 +132,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
                 <div
                   className={cn("flex size-2 bg-primary-50 rounded-full", {
                     "opacity-0": !unread,
-                    "opacity-100": unread,
+                    "opacity-100": unread
                   })}
                 ></div>
               </div>

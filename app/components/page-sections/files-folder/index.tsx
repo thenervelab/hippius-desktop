@@ -15,6 +15,8 @@ import { FileTypes } from "@/lib/types/fileTypes";
 import { filterFiles, generateActiveFilters } from "@/lib/utils/fileFilterUtils";
 import { SearchInput } from "@/components/ui";
 import FilterChips from "@/components/page-sections/files/ipfs/filter-chips";
+import { useAtom } from "jotai";
+import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 interface FileEntry {
     file_name: string;
@@ -29,6 +31,7 @@ interface FolderViewProps {
 
 export default function FolderView({ folderCid, folderName = "Folder" }: FolderViewProps) {
     const { polkadotAddress } = useWalletAuth();
+    const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
     const [files, setFiles] = useState<FormattedUserIpfsFile[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [viewMode, setViewMode] = useState<"list" | "card">("list");
@@ -325,7 +328,7 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
                             selectedSizeUnit={selectedSizeUnit}
                             handleApplyFilters={handleApplyFilters}
                             handleResetFilters={handleResetFilters}
-                            isPrivateView={false}
+                            isPrivateView={activeSubMenuItem === "Private"}
                         />
                     )}
                 </>

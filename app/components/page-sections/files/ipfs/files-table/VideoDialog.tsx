@@ -4,7 +4,6 @@ import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
-import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import {
@@ -99,7 +98,9 @@ const VideoDialog: React.FC<{
           <Dialog.Content className="h-full max-w-screen-1.5xl max-h-[90vh] text-grey-10 w-full flex flex-col">
             {(() => {
               if (file) {
-                const videoUrl = `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`;
+                const videoUrl = `https://get.hippius.network/ipfs/${decodeHexCid(
+                  file.cid
+                )}`;
                 const { fileFormat } = getFilePartsFromFileName(file.name);
 
                 return (

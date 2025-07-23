@@ -34,7 +34,7 @@ const NavItem: React.FC<NavItemProps> = ({
   inView,
   comingSoon,
   onClick,
-  subMenuItems = [],
+  subMenuItems = []
 }) => {
   const [openValue, setOpenValue] = useState<string | undefined>(undefined);
 
@@ -64,12 +64,12 @@ const NavItem: React.FC<NavItemProps> = ({
           majorCell={{
             lineColor: [31, 80, 189, 1.0],
             lineWidth: 2,
-            cellDim: 40,
+            cellDim: 40
           }}
           minorCell={{
             lineColor: [49, 103, 211, 1.0],
             lineWidth: 1,
-            cellDim: 5,
+            cellDim: 5
           }}
           className={"absolute w-full h-full top-0 bottom-0 left-0 opacity-20"}
         />
@@ -88,7 +88,7 @@ const NavItem: React.FC<NavItemProps> = ({
 
       <span
         className={cn("size-4 flex-shrink-0", {
-          "opacity-40": comingSoon,
+          "opacity-40": comingSoon
         })}
       >
         {icon}
@@ -170,7 +170,7 @@ const NavItem: React.FC<NavItemProps> = ({
                 {
                   "bg-blue-50 text-primary-40": active,
                   "hover:bg-gray-100 hover:text-primary-40 text-grey-40 [&[data-state=open]]:bg-gray-100 [&[data-state=open]]:text-primary-40":
-                    !active,
+                    !active
                 },
                 className
               )}
@@ -206,7 +206,7 @@ const NavItem: React.FC<NavItemProps> = ({
             "hover:bg-gray-100 hover:text-primary-40 text-grey-40":
               !active && label !== "Logout",
             "hover:bg-gray-100 hover:text-red-600 text-error-50":
-              label === "Logout",
+              label === "Logout"
           },
           className
         )}
@@ -227,12 +227,11 @@ const NavItem: React.FC<NavItemProps> = ({
           "hover:bg-gray-100 hover:text-primary-40 text-grey-40":
             !active && label !== "Logout",
           "hover:bg-gray-100 hover:text-red-600 text-error-50":
-            label === "Logout",
+            label === "Logout"
         },
         className
       )}
       onClick={() => {
-        // Only schedule clearing if navigating to a different route
         if (pathname !== href) {
           pendingClearRef.current = href;
         }

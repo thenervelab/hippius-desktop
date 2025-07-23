@@ -4,7 +4,6 @@ import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
-import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import {
   getNextViewableFile,
   getPrevViewableFile
@@ -97,7 +96,9 @@ const PdfDialog: React.FC<{
           <Dialog.Content className="h-full max-w-screen-1.5xlˆ text-grey-10 w-full flex flex-col items-center">
             {(() => {
               if (file) {
-                const pdfUrl = `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`;
+                const pdfUrl = `https://get.hippius.network/ipfs/${decodeHexCid(
+                  file.cid
+                )}`;
 
                 return (
                   <>

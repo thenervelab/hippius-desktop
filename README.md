@@ -9,7 +9,6 @@ Hippius is a desktop application built with Next.js and Tauri for monitoring IPF
 - **State Management**: Jotai
 - **Data Visualization**: Visx, React Circular Progressbar
 - **UI Components**: Radix UI
-- **3D Graphics**: Three.js, React Three Fiber
 
 ## ⚙️ Prerequisites
 
@@ -127,4 +126,3 @@ pnpm test
 - [Tauri](https://tauri.app/)
 - [Polkadot.js](https://polkadot.js.org/)
 - [TailwindCSS](https://tailwindcss.com/)
-- [React Three Fiber](https://github.com/pmndrs/react-three-fiber)
