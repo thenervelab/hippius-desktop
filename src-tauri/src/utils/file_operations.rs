@@ -6,12 +6,13 @@ use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use crate::DB_POOL;
 use std::fs;
 use std::path::{Path, PathBuf};
-
+use crate::folder_sync::collect_files_recursively;
 use hex;
 use crate::ipfs::get_ipfs_file_size;
 use crate::sync_shared::{RECENTLY_UPLOADED, insert_file_if_not_exists};
 use crate::sync_shared::RECENTLY_UPLOADED_FOLDERS;
 use tokio::time::Duration;
+use tokio::time::sleep;
 
 pub async fn request_file_storage(
     file_name: &str,
@@ -121,7 +122,6 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
 
         // Remove from sync folder as well
-        // is_folder
         remove_file_from_sync_and_db(file_name, is_public, false).await;
 
         // Calculate total rows affected
@@ -193,10 +193,20 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
     let file_name = original_path.file_name().unwrap().to_string_lossy().to_string();
     let dest_path = sync_folder.join(&file_name);
     
-    // Track this file/folder before copying
+    // Track this file/folder and its contents (if folder) before copying
+    let mut files_in_folder = Vec::new();
     if is_folder {
-        let mut recently_uploaded = RECENTLY_UPLOADED_FOLDERS.lock().unwrap();
-        recently_uploaded.insert(dest_path.to_string_lossy().to_string());
+        let mut recently_uploaded_folders = RECENTLY_UPLOADED_FOLDERS.lock().unwrap();
+        recently_uploaded_folders.insert(dest_path.to_string_lossy().to_string());
+        
+        // Collect all files in the folder and add to RECENTLY_UPLOADED
+        collect_files_recursively(&original_path, &mut files_in_folder);
+        let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+        for file_path in &files_in_folder {
+            let file_path_str = sync_folder.join(file_path.strip_prefix(original_path).unwrap()).to_string_lossy().to_string();
+            recently_uploaded.insert(file_path_str.clone());
+            println!("[CopyToSync] Added file to recently uploaded: {}", file_path_str);
+        }
     } else {
         let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
         recently_uploaded.insert(dest_path.to_string_lossy().to_string());
@@ -204,14 +214,25 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
     
     // Remove after 2 seconds
     let dest_path_str = dest_path.to_string_lossy().to_string();
+    let files_to_remove = files_in_folder.iter()
+        .map(|file_path| sync_folder.join(file_path.strip_prefix(original_path).unwrap()).to_string_lossy().to_string())
+        .collect::<Vec<String>>();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_secs(30)).await;
         if is_folder {
-            let mut recently_uploaded = RECENTLY_UPLOADED_FOLDERS.lock().unwrap();
-            recently_uploaded.remove(&dest_path_str);
+            let mut recently_uploaded_folders = RECENTLY_UPLOADED_FOLDERS.lock().unwrap();
+            recently_uploaded_folders.remove(&dest_path_str);
+            println!("[CopyToSync] Removed folder from recently uploaded: {}", dest_path_str);
+            
+            let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+            for file_path_str in files_to_remove {
+                recently_uploaded.remove(&file_path_str);
+                println!("[CopyToSync] Removed file from recently uploaded: {}", file_path_str);
+            }
         } else {
             let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
             recently_uploaded.remove(&dest_path_str);
+            println!("[CopyToSync] Removed file from recently uploaded: {}", dest_path_str);
         }
     });
     
@@ -256,13 +277,12 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             .bind(file_size_in_bytes)
             .execute(pool)
             .await;
-
         }
     }
 
-    // Add to sync_folder_files DB (make sure insert_file_if_not_exists is async)
+    // Add to sync_folder_files DB
     if let Some(pool) = crate::DB_POOL.get() {
-        insert_file_if_not_exists(pool, &original_path, account_id, is_public, is_folder).await;
+        insert_file_if_not_exists(pool, &dest_path, account_id, is_public, is_folder).await;
     }
     
     // Copy if not already exists
@@ -288,22 +308,62 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
 
 pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_folder: bool) {
     use std::fs;
-    // Remove from sync folder
+    use std::path::PathBuf;
+
     let sync_folder = if is_public {
         PathBuf::from(get_public_sync_path().await)
     } else {
         PathBuf::from(get_private_sync_path().await)
     };
     let sync_file_path = sync_folder.join(file_name);
+
+    // If it's a folder, recursively delete all files inside from DB and filesystem
+    if sync_file_path.is_dir() || is_folder {
+        // Recursively collect all files inside the folder
+        let mut files = Vec::new();
+        crate::folder_sync::collect_files_recursively(&sync_file_path, &mut files);
+
+        if let Some(pool) = crate::DB_POOL.get() {
+            for file in &files {
+                if let Some(file_name) = file.file_name().and_then(|s| s.to_str()) {
+                    // Remove from DB
+                    if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
+                        .bind(file_name)
+                        .bind(if is_public { "public" } else { "private" })
+                        .execute(pool)
+                        .await {
+                        eprintln!("Failed to remove file '{}' from sync_folder_files DB: {}", file_name, e);
+                    }
+                }
+                // Remove from filesystem
+                if file.exists() {
+                    if let Err(e) = fs::remove_file(file) {
+                        eprintln!("Failed to remove file from sync folder: {}", e);
+                    }
+                }
+            }
+        }
+        // Remove the folder record from DB
+        if let Some(pool) = crate::DB_POOL.get() {
+            if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
+                .bind(file_name)
+                .bind(if is_public { "public" } else { "private" })
+                .execute(pool)
+                .await {
+                eprintln!("Failed to remove folder from sync_folder_files DB: {}", e);
+            }
+        }
+        // Remove the folder from filesystem
     if sync_file_path.exists() {
-        if is_folder {
             if let Err(e) = fs::remove_dir_all(&sync_file_path) {
                 eprintln!("Failed to remove folder from sync folder: {}", e);
             }
+            }
         } else {
+        // It's a file
+        if sync_file_path.exists() {
             if let Err(e) = fs::remove_file(&sync_file_path) {
                 eprintln!("Failed to remove file from sync folder: {}", e);
-            }
         }
     }
     // Remove from DB
@@ -314,6 +374,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
             .execute(pool)
             .await {
             eprintln!("Failed to remove file from sync_folder_files DB: {}", e);
+            }
         }
     }
 }

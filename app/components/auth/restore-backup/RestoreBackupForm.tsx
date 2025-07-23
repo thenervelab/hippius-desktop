@@ -7,7 +7,7 @@ import React, {
   useCallback,
   DragEvent,
   ChangeEvent,
-  useEffect,
+  useEffect
 } from "react";
 import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
@@ -18,11 +18,11 @@ import {
   Button,
   Icons,
   Input,
-  RevealTextLine,
-} from "../ui";
-import { Eye, EyeOff, Key } from "../ui/icons";
+  RevealTextLine
+} from "@/components/ui";
+import { Eye, EyeOff, Key } from "@/components/ui/icons";
 import { InView } from "react-intersection-observer";
-import BoxSimple from "../ui/icons/BoxSimple";
+import BoxSimple from "@/components/ui/icons/BoxSimple";
 import Link from "next/link";
 import { restoreWalletFromZip } from "@/app/lib/helpers/restoreWallet";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -80,7 +80,7 @@ const RestoreBackupForm: React.FC = () => {
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const droppedFile = e.dataTransfer.files[0];
       setFile(droppedFile);
-      setFieldError(prev => ({ ...prev, file: validateFile(droppedFile) }));
+      setFieldError((prev) => ({ ...prev, file: validateFile(droppedFile) }));
       if (fileInput.current) fileInput.current.value = "";
     }
   }, []);
@@ -106,13 +106,13 @@ const RestoreBackupForm: React.FC = () => {
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null;
     setFile(f);
-    setFieldError(prev => ({ ...prev, file: validateFile(f) }));
+    setFieldError((prev) => ({ ...prev, file: validateFile(f) }));
   };
 
   const handlePasscodeChange = (e: ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
     setPasscode(v);
-    setFieldError(prev => ({ ...prev, passcode: validatePasscode(v) }));
+    setFieldError((prev) => ({ ...prev, passcode: validatePasscode(v) }));
   };
 
   const handleRestore = async (e: React.FormEvent) => {
@@ -144,7 +144,10 @@ const RestoreBackupForm: React.FC = () => {
       {({ inView, ref }) => (
         <div ref={ref} className="w-full flex flex-col">
           <div className="text-grey-10 opacity-0 animate-fade-in-0.5 w-full flex flex-col">
-            <form onSubmit={handleRestore} className="flex flex-col xl:gap-5 gap-3">
+            <form
+              onSubmit={handleRestore}
+              className="flex flex-col xl:gap-5 gap-3"
+            >
               {/* Heading */}
               <div className="flex flex-col xl:gap-3 gap-1 mb-1">
                 <div className="text-grey-10 xl:text-[32px] text-2xl font-medium">
@@ -154,7 +157,8 @@ const RestoreBackupForm: React.FC = () => {
                 </div>
                 <div className="text-grey-50 xl:text-base text-xs font-medium">
                   <RevealTextLine rotate reveal={inView} className="delay-300">
-                    Upload your backup file and enter your passcode to restore your Hippius account
+                    Upload your backup file and enter your passcode to restore
+                    your Hippius account
                   </RevealTextLine>
                 </div>
               </div>
@@ -169,7 +173,11 @@ const RestoreBackupForm: React.FC = () => {
                     <div>Upload your file</div>
                   </div>
                 </RevealTextLine>
-                <RevealTextLine rotate reveal={inView} className="delay-500 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-500 w-full"
+                >
                   <div
                     className={cn(
                       "w-full rounded-lg xl:h-[180px] h-[120px] xl:p-3 p-1 transition",
@@ -196,11 +204,15 @@ const RestoreBackupForm: React.FC = () => {
                           {file.name}
                           <div
                             className="absolute right-[-6px] top-[-6px]"
-                            onClick={e => {
+                            onClick={(e) => {
                               e.stopPropagation();
                               setFile(null);
-                              setFieldError(prev => ({ ...prev, file: null }));
-                              if (fileInput.current) fileInput.current.value = "";
+                              setFieldError((prev) => ({
+                                ...prev,
+                                file: null
+                              }));
+                              if (fileInput.current)
+                                fileInput.current.value = "";
                             }}
                           >
                             <Icons.CloseCircle className="size-4 text-grey-50" />
@@ -235,11 +247,18 @@ const RestoreBackupForm: React.FC = () => {
               {/* Passcode */}
               <div className="xl:space-y-2 space-y-1 text-grey-10 w-full flex flex-col">
                 <RevealTextLine rotate reveal={inView} className="delay-300">
-                  <Label htmlFor="passcode" className="text-sm font-medium text-grey-70">
+                  <Label
+                    htmlFor="passcode"
+                    className="text-sm font-medium text-grey-70"
+                  >
                     Passcode
                   </Label>
                 </RevealTextLine>
-                <RevealTextLine rotate reveal={inView} className="delay-500 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-500 w-full"
+                >
                   <div className="relative flex items-start w-full">
                     <Key className="size-6 absolute left-3 top-[28px] -translate-y-1/2 text-grey-60" />
                     <Input
@@ -279,7 +298,11 @@ const RestoreBackupForm: React.FC = () => {
 
               {/* Submit */}
               <div className="flex flex-col w-full">
-                <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                >
                   <Button
                     type="submit"
                     className="w-full h-[60px] text-white font-medium text-lg"

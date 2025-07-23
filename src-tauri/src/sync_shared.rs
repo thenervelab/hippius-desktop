@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use crate::folder_sync::collect_files_recursively;
 use std::path::Path;
 use tauri::{AppHandle, Wry};
+use std::fs;
 
 // Global sync status tracking
 pub static SYNC_STATUS: Lazy<Arc<Mutex<SyncStatus>>> =
@@ -37,11 +38,12 @@ pub static RECENTLY_UPLOADED_FOLDERS: Lazy<Arc<Mutex<HashSet<String>>>> =
 pub static CREATE_BATCH: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static CREATE_BATCH_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct UploadJob {
     pub account_id: String,
     pub seed_phrase: String,
     pub file_path: String,
+    pub is_folder: bool,  // New field to distinguish folders from files
 }
 
 pub static UPLOAD_SENDER: OnceCell<mpsc::UnboundedSender<UploadJob>> = OnceCell::new();
@@ -133,6 +135,20 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     }
 }
 
+pub fn collect_files_and_folders_recursively(dir: &Path, items: &mut Vec<PathBuf>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() || path.is_dir() {
+                items.push(path.clone());
+                if path.is_dir() {
+                    collect_files_and_folders_recursively(&path, items);
+                }
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub fn get_sync_status() -> SyncStatusResponse {
     let status = SYNC_STATUS.lock().unwrap();
@@ -154,3 +170,4 @@ pub fn get_sync_status() -> SyncStatusResponse {
 pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);      
 }
+
