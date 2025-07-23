@@ -6,7 +6,7 @@ use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use crate::DB_POOL;
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::folder_sync::collect_files_recursively;
+use crate::sync_shared::collect_files_recursively;
 use hex;
 use crate::ipfs::get_ipfs_file_size;
 use crate::sync_shared::{RECENTLY_UPLOADED, insert_file_if_not_exists};
@@ -321,7 +321,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
     if sync_file_path.is_dir() || is_folder {
         // Recursively collect all files inside the folder
         let mut files = Vec::new();
-        crate::folder_sync::collect_files_recursively(&sync_file_path, &mut files);
+        collect_files_recursively(&sync_file_path, &mut files);
 
         if let Some(pool) = crate::DB_POOL.get() {
             for file in &files {

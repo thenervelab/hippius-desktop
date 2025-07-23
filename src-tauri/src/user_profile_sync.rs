@@ -78,36 +78,6 @@ pub fn decode_file_hash(file_hash_bytes: &[u8]) -> Result<String, String> {
     Ok(decoded_str.to_string())
 }
 
-/// Download content from IPFS with timeout and size limit
-pub async fn download_content_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client for CID {}: {}", cid, e))?;
-
-    let res = tokio::time::timeout(
-        Duration::from_secs(30),
-        client.post(&format!("{}/api/v0/cat?arg={}", api_url, cid)).send()
-    )
-    .await
-    .map_err(|_| format!("Timeout downloading IPFS content for CID: {}", cid))
-    .and_then(|res| res.map_err(|e| format!("HTTP error for CID {}: {}", cid, e)))?
-    .error_for_status()
-    .map_err(|e| format!("HTTP status error for CID {}: {}", cid, e))?;
-
-    let bytes = res.bytes()
-        .await
-        .map_err(|e| format!("Error reading IPFS response for CID {}: {}", cid, e))?;
-    
-    // Check size limit (1MB)
-    let max_size = 1024 * 1024;
-    if bytes.len() > max_size {
-        return Err(format!("IPFS response for CID {} exceeds size limit of {} bytes", cid, max_size));
-    }
-
-    Ok(bytes.to_vec())
-}
-
 /// Combined sync function for user profiles and storage requests
 pub fn start_user_sync(account_id: &str) {
     {
