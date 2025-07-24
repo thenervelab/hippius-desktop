@@ -188,7 +188,7 @@ pub async fn encrypt_and_upload_file(
     .map_err(|e| e.to_string())??;
 
     // Build files array: metadata entry plus chunk entries
-    let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ec_metadata") { "" } else { ".ec_metadata" });
+    let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".private_ec_metadata") { "" } else { ".private_ec_metadata" });
     let mut files_for_storage = Vec::with_capacity(chunk_pairs.len() + 1);
     files_for_storage.push((meta_filename.clone(), metadata_cid.clone()));
     files_for_storage.extend(chunk_pairs);
@@ -897,7 +897,7 @@ pub async fn encrypt_and_upload_folder(
     let mut files_for_storage = Vec::with_capacity(file_pairs.len() + 1);
     files_for_storage.push((folder_name.clone(), folder_metadata_cid.clone()));
     files_for_storage.extend(file_pairs);
-    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder_ec_metadata") { "" } else { ".folder_ec_metadata" });
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".private_folder_ec_metadata") { "" } else { ".private_folder_ec_metadata" });
     let storage_result = request_erasure_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
@@ -1122,11 +1122,12 @@ pub async fn public_upload_folder(
     .await
     .map_err(|e| e.to_string())??;
 
+    let meta_folder_name = format!("{}{}", folder_name, if folder_name.ends_with(".folder_metadata") { "" } else { ".folder_metadata" });
     // Submit storage request
-    let storage_result = request_file_storage(&folder_name.clone(), &folder_metadata_cid, api_url, &seed_phrase).await;
+    let storage_result = request_file_storage(&meta_folder_name.clone(), &folder_metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id, &folder_metadata_cid, &res, true, true, &folder_name.clone()).await;
+            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id, &folder_metadata_cid, &res, true, true, &meta_folder_name.clone()).await;
             println!("[public_upload_folder] Storage request result: {}", res);
         },
         Err(e) => println!("[public_upload_folder] Storage request error: {}", e),

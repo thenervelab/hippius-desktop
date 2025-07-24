@@ -493,8 +493,14 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                 for row in user_rows {
                     let file_name = row.get::<String, _>("file_name");
                     // Strip metadata suffixes when looking up in sync_folder_files
-                    let lookup_name = if file_name.ends_with(".ec_metadata") {
+                    let lookup_name = if file_name.ends_with(".private_ec_metadata") {
+                        file_name.trim_end_matches(".private_ec_metadata").to_string()
+                    } else if file_name.ends_with(".private_folder_ec_metadata") {
+                        file_name.trim_end_matches(".private_folder_ec_metadata").to_string()
+                    } else if file_name.ends_with(".ec_metadata") {
                         file_name.trim_end_matches(".ec_metadata").to_string()
+                    } else if file_name.ends_with(".folder_metadata") {
+                        file_name.trim_end_matches(".folder_metadata").to_string()
                     } else if file_name.ends_with(".folder_ec_metadata") {
                         file_name.trim_end_matches(".folder_ec_metadata").to_string()
                     } else {
@@ -524,6 +530,21 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                             type_ = "private".to_string();
                             source = private_path.clone();
                         }
+                    }
+
+                    // Infer type and folder status based on metadata filename conventions if still unclear or to override
+                    if file_name.ends_with(".private_folder_ec_metadata") {
+                        type_ = "private".to_string();
+                        is_folder = true;
+                    } else if file_name.ends_with(".private_ec_metadata") {
+                        type_ = "private".to_string();
+                        is_folder = false;
+                    } else if file_name.ends_with(".folder_metadata") || file_name.ends_with(".folder_ec_metadata") {
+                        type_ = "public".to_string();
+                        is_folder = true;
+                    } else if file_name.ends_with(".ec_metadata") {
+                        type_ = "public".to_string();
+                        is_folder = false;
                     }
                     files.push(UserProfileFileWithType {
                         owner: row.get("owner"),
@@ -598,15 +619,30 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
         for row in user_profile_rows {
             let file_name = row.get::<String, _>("file_name");
             let file_size = row.get::<i64, _>("file_size_in_bytes");
-            let source = row.get::<String, _>("source");
-            let public_path = format!("{}/{}", public_sync_path, file_name);
-            let private_path = format!("{}/{}", private_sync_path, file_name);
+
+            // Build lookup name stripped of metadata suffixes
+            let lookup_name = if file_name.ends_with(".private_ec_metadata") {
+                file_name.trim_end_matches(".private_ec_metadata").to_string()
+            } else if file_name.ends_with(".private_folder_ec_metadata") {
+                file_name.trim_end_matches(".private_folder_ec_metadata").to_string()
+            } else if file_name.ends_with(".ec_metadata") {
+                file_name.trim_end_matches(".ec_metadata").to_string()
+            } else if file_name.ends_with(".folder_metadata") {
+                file_name.trim_end_matches(".folder_metadata").to_string()
+            } else if file_name.ends_with(".folder_ec_metadata") {
+                file_name.trim_end_matches(".folder_ec_metadata").to_string()
+            } else {
+                file_name.clone()
+            };
+
+            let public_path = format!("{}/{}", public_sync_path, lookup_name);
+            let private_path = format!("{}/{}", private_sync_path, lookup_name);
 
             // Default to public
             let mut type_ = "public".to_string();
 
             // If found in sync_folder_files, use its type
-            if let Some(t) = sync_file_infos.get(&file_name) {
+            if let Some(t) = sync_file_infos.get(&lookup_name) {
                 type_ = t.clone();
             } else {
                 // Fallback: check filesystem for type
@@ -617,9 +653,16 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
                 }
             }
 
+            // Final inference from filename suffixes
+            if file_name.ends_with(".private_folder_ec_metadata") || file_name.ends_with(".private_ec_metadata") {
+                type_ = "private".to_string();
+            } else if file_name.ends_with(".folder_metadata") || file_name.ends_with(".folder_ec_metadata") || file_name.ends_with(".ec_metadata") {
+                type_ = "public".to_string();
+            }
+
             if type_ == "public" {
                 public_size += file_size;
-            } else if type_ == "private" {
+            } else {
                 private_size += file_size;
             }
         }
