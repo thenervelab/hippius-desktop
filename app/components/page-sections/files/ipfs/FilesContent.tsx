@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useState } from "react";
+import { FC, useState, useRef, useCallback, useEffect, memo, DragEvent } from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { Icons, WaitAMoment } from "@/components/ui";
 import FilesTable from "./files-table";
@@ -24,6 +24,9 @@ import FileContextMenu from "@/app/components/ui/context-menu";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import EncryptionKeyDialog from "./EncryptionKeyDialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { HardDrive } from "lucide-react";
+import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
+import { cn } from "@/lib/utils";
 
 interface FilesContentProps {
     isRecentFiles?: boolean;
@@ -54,6 +57,7 @@ interface FilesContentProps {
     handleResetFilters: () => void;
     error?: unknown;
     isPrivateView: boolean;
+    addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void }>;
 }
 
 const FilesContent: FC<FilesContentProps> = ({
@@ -79,12 +83,18 @@ const FilesContent: FC<FilesContentProps> = ({
     handleApplyFilters,
     handleResetFilters,
     error,
-    isPrivateView
+    isPrivateView,
+    addButtonRef
 }) => {
+    const [isDragging, setIsDragging] = useState(false);
+    const [animateCloud, setAnimateCloud] = useState(false);
+    const dragCounterRef = useRef(0);
+    const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
     // Use shared functionality between FilesTable and CardView
     const sharedState = useFileViewShared({
         files: displayedData,
-        showUnpinnedDialog: false, // We handle this at this level instead
+        showUnpinnedDialog: false,
         isRecentFiles,
         resetPagination: shouldResetPagination,
         onPaginationReset: handlePaginationReset
@@ -116,6 +126,74 @@ const FilesContent: FC<FilesContentProps> = ({
     const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(
         null
     );
+
+    // Drag and drop handlers
+    const handleDragEnter = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (e.dataTransfer.items && Array.from(e.dataTransfer.items).some(item => item.kind === "file")) {
+            dragCounterRef.current++;
+            setIsDragging(true);
+
+            if (dragTimeoutRef.current) {
+                clearTimeout(dragTimeoutRef.current);
+            }
+
+            dragTimeoutRef.current = setTimeout(() => {
+                setAnimateCloud(true);
+            }, 200);
+        }
+    }, []);
+
+    const handleDragLeave = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        dragCounterRef.current--;
+
+        if (dragCounterRef.current === 0) {
+            setIsDragging(false);
+            setAnimateCloud(false);
+        }
+    }, []);
+
+    const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(true);
+    };
+
+    const handleDrop = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        dragCounterRef.current = 0;
+        setIsDragging(false);
+        setAnimateCloud(false);
+
+        if (dragTimeoutRef.current) {
+            clearTimeout(dragTimeoutRef.current);
+        }
+
+        if (addButtonRef?.current && e.dataTransfer.files.length > 0) {
+            addButtonRef.current.openWithFiles(e.dataTransfer.files);
+        } else if (e.dataTransfer.files.length > 0) {
+            const customEvent = new CustomEvent("hippius:file-drop", {
+                detail: { files: e.dataTransfer.files }
+            });
+            window.dispatchEvent(customEvent);
+        }
+    }, [addButtonRef]);
+
+    // Clean up any timers when component unmounts
+    useEffect(() => {
+        return () => {
+            if (dragTimeoutRef.current) {
+                clearTimeout(dragTimeoutRef.current);
+            }
+        };
+    }, []);
 
     const handleFileDownload = (
         file: FormattedUserIpfsFile,
@@ -214,9 +292,45 @@ const FilesContent: FC<FilesContentProps> = ({
 
     return (
         <>
-            <div className="w-full mt-4">{renderContent()}</div>
+            <div
+                className={cn(
+                    "w-full mt-4 relative",
+                    isDragging &&
+                    "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
+                )}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDragEnter={handleDragEnter}
+            >
 
-            {/* Delete Confirmation Dialog */}
+                {isDragging && (
+                    <div className="absolute inset-0 bg-opacity-80 flex flex-col items-center justify-center z-20 pointer-events-none">
+                        <div
+                            className={cn(
+                                "relative transition-all duration-500 ease-in-out",
+                                animateCloud ? "scale-110 transform -translate-y-2" : ""
+                            )}
+                        >
+                            <div className="size-15 p-2 rounded-full flex items-center justify-center">
+                                <CloudArrowUpIcon className="size-10 text-[#3167dc] animate-slide-up" />
+                            </div>
+                        </div>
+
+                        <div className="mt-2 font-medium text-center bg-primary-50 p-4 rounded-lg shadow-lg">
+                            <div className="text-white text-base">
+                                Drop files here to upload them to
+                            </div>
+                            <div className="flex items-center justify-center">
+                                <HardDrive className="size-6 text-white mr-2" />
+                                <div className="text-white text-lg font-bold">IPFS Storage</div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {renderContent()}
+            </div>
+
             <DeleteConfirmationDialog
                 open={openDeleteModal}
                 onClose={() => {
@@ -247,7 +361,6 @@ const FilesContent: FC<FilesContentProps> = ({
                 disableButton={isDeleting}
             />
 
-            {/* Context Menu */}
             {contextMenu && (
                 <FileContextMenu
                     x={contextMenu.x}
@@ -272,7 +385,6 @@ const FilesContent: FC<FilesContentProps> = ({
                 />
             )}
 
-            {/* File-specific dialogs */}
             {selectedFileType === "video" && (
                 <VideoDialog
                     onCloseClicked={() => setSelectedFile(null)}
@@ -301,7 +413,6 @@ const FilesContent: FC<FilesContentProps> = ({
                 />
             )}
 
-            {/* Global dialogs */}
             {unpinnedFiles && unpinnedFiles.length > 0 && (
                 <FileDetailsDialog
                     open={!isLoading && isUnpinnedOpen}
@@ -312,7 +423,6 @@ const FilesContent: FC<FilesContentProps> = ({
             <InsufficientCreditsDialog />
             <UploadStatusWidget />
 
-            {/* File Details Dialog */}
             <SidebarDialog
                 heading="File Details"
                 open={isFileDetailsOpen}
@@ -321,7 +431,6 @@ const FilesContent: FC<FilesContentProps> = ({
                 <SidebarDialogContent file={fileDetailsFile ?? undefined} />
             </SidebarDialog>
 
-            {/* Filter Sidebar Dialog */}
             <SidebarDialog
                 heading="Filter"
                 open={isFilterOpen}
@@ -337,7 +446,6 @@ const FilesContent: FC<FilesContentProps> = ({
                 />
             </SidebarDialog>
 
-            {/* Encryption Key Dialog */}
             <EncryptionKeyDialog
                 open={isEncryptionDialogOpen}
                 onClose={() => {
@@ -351,4 +459,4 @@ const FilesContent: FC<FilesContentProps> = ({
     );
 };
 
-export default FilesContent;
+export default memo(FilesContent);

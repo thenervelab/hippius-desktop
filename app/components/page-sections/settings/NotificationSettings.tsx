@@ -9,7 +9,7 @@ import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPrefe
 import { useSetAtom } from "jotai";
 import {
   refreshEnabledTypesAtom,
-  refreshNotificationsAtom,
+  refreshNotificationsAtom
 } from "@/components/page-sections/notifications/notificationStore";
 
 const NotificationSettings: React.FC = () => {
@@ -32,7 +32,7 @@ const NotificationSettings: React.FC = () => {
   const handleCheckboxChange = (id: string) => {
     setCheckedItems((prev) => ({
       ...prev,
-      [id]: !prev[id],
+      [id]: !prev[id]
     }));
   };
 
@@ -55,9 +55,7 @@ const NotificationSettings: React.FC = () => {
   const handleSaveChanges = async () => {
     const success = await savePreferences(checkedItems);
     if (success) {
-      // First refresh enabled notification types
       await refreshEnabledTypes();
-      // Then refresh the notifications list to apply filtering
       await refreshNotifications();
 
       toast.success("Notification preferences saved successfully");

@@ -5,7 +5,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 
-
 export const downloadIpfsFile = async (
   file: FormattedUserIpfsFile,
   polkadotAddress: string,
@@ -22,7 +21,7 @@ export const downloadIpfsFile = async (
       encryptionKey
     );
   } else {
-    
+
     // Regular IPFS download for Hippius files
     return downloadRegularIpfsFile(file);
   }
@@ -78,8 +77,7 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
   } catch (err) {
     console.error("Download failed:", err);
     toast.error(
-      `Download failed: ${
-        err instanceof Error ? err.message : "Unknown error"
+      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
       }`,
       { id: toastId }
     );
