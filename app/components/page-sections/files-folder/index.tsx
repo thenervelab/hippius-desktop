@@ -6,13 +6,19 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { FormattedUserIpfsFile, parseMinerIds } from "@/lib/hooks/use-user-ipfs-files";
+import {
+    FormattedUserIpfsFile,
+    parseMinerIds
+} from "@/lib/hooks/use-user-ipfs-files";
 import FilesContent from "@/components/page-sections/files/ipfs/FilesContent";
 import { toast } from "sonner";
 import Link from "next/link";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import { FileTypes } from "@/lib/types/fileTypes";
-import { filterFiles, generateActiveFilters } from "@/lib/utils/fileFilterUtils";
+import {
+    filterFiles,
+    generateActiveFilters
+} from "@/lib/utils/fileFilterUtils";
 import { SearchInput } from "@/components/ui";
 import FilterChips from "@/components/page-sections/files/ipfs/filter-chips";
 import { useAtom } from "jotai";
@@ -35,7 +41,10 @@ interface FolderViewProps {
     folderName?: string;
 }
 
-export default function FolderView({ folderCid, folderName = "Folder" }: FolderViewProps) {
+export default function FolderView({
+    folderCid,
+    folderName = "Folder"
+}: FolderViewProps) {
     const { polkadotAddress } = useWalletAuth();
     const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
     const [files, setFiles] = useState<FormattedUserIpfsFile[]>([]);
@@ -43,8 +52,12 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
     const [viewMode, setViewMode] = useState<"list" | "card">("list");
     const [isDownloading, setIsDownloading] = useState(false);
     const [isEncryptionDialogOpen, setIsEncryptionDialogOpen] = useState(false);
-    const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(null);
-    const [selectedOutputDir, setSelectedOutputDir] = useState<string | null>(null);
+    const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(
+        null
+    );
+    const [selectedOutputDir, setSelectedOutputDir] = useState<string | null>(
+        null
+    );
     const isPrivateFolder = activeSubMenuItem === "Private";
 
     // State needed for FilesContent integration
@@ -96,23 +109,35 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
 
                 console.log("Loaded folder contents:", fileEntries);
                 // Convert FileEntry to FormattedUserIpfsFile format
-                const formattedFiles = fileEntries.map((entry): FormattedUserIpfsFile => ({
-                    cid: entry.cid,
-                    name: entry.file_name,
-                    size: entry.file_size,
-                    type: entry.file_name.split('.').pop() || "unknown",
-                    fileHash: entry.file_hash,
-                    isAssigned: true,
-                    source: entry.source,
-                    createdAt: Number(entry.created_at),
-                    minerIds: parseMinerIds(entry.miner_ids),
-                    lastChargedAt: Number(entry.last_charged_at),
-                }));
+                const formattedFiles = fileEntries.map(
+                    (entry): FormattedUserIpfsFile => {
+                        const isErasureCoded = entry.file_name.endsWith(".ec_metadata");
+                        const displayName = isErasureCoded
+                            ? entry.file_name.slice(0, -".ec_metadata".length)
+                            : entry.file_name;
+                        return {
+                            cid: entry.cid,
+                            name: displayName || "Unnamed File",
+                            size: entry.file_size,
+                            type: entry.file_name.split(".").pop() || "unknown",
+                            fileHash: entry.file_hash,
+                            isAssigned: true,
+                            source: entry.source,
+                            createdAt: Number(entry.created_at),
+                            minerIds: parseMinerIds(entry.miner_ids),
+                            lastChargedAt: Number(entry.last_charged_at),
+                            isErasureCoded
+                        };
+                    }
+                );
 
                 setFiles(formattedFiles);
             } catch (error) {
                 console.error("Error loading folder contents:", error);
-                toast.error(`Failed to load folder contents: ${error instanceof Error ? error.message : String(error)}`);
+                toast.error(
+                    `Failed to load folder contents: ${error instanceof Error ? error.message : String(error)
+                    }`
+                );
             } finally {
                 setIsLoading(false);
             }
@@ -130,10 +155,10 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
 
         try {
             // Ask user to select download location
-            const outputDir = await open({
+            const outputDir = (await open({
                 directory: true,
-                multiple: false,
-            }) as string | null;
+                multiple: false
+            })) as string | null;
 
             if (!outputDir) {
                 return;
@@ -151,11 +176,17 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
             }
         } catch (error) {
             console.error("Error selecting download location:", error);
-            toast.error(`Failed to select download location: ${error instanceof Error ? error.message : String(error)}`);
+            toast.error(
+                `Failed to select download location: ${error instanceof Error ? error.message : String(error)
+                }`
+            );
         }
     };
 
-    const downloadFolder = async (outputDir: string, encryptionKey: string | null) => {
+    const downloadFolder = async (
+        outputDir: string,
+        encryptionKey: string | null
+    ) => {
         if (!folderCid || !outputDir) return;
 
         setIsDownloading(true);
@@ -163,19 +194,28 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
 
         try {
             // Use the encrypted download method
-            const result = await invoke<{ success: boolean; error?: string; message?: string }>("download_and_decrypt_folder", {
+            const result = await invoke<{
+                success: boolean;
+                error?: string;
+                message?: string;
+            }>("download_and_decrypt_folder", {
                 accountId: polkadotAddress,
                 folderMetadataCid: folderCid,
                 folderName: folderName,
                 outputDir: outputDir,
-                encryptionKey: encryptionKey,
+                encryptionKey: encryptionKey
             });
 
             toast.dismiss(toastId);
 
             if (result && !result.success) {
-                if (result.error === "INVALID_KEY" || result.error === "INVALID_KEY_FORMAT") {
-                    setEncryptionKeyError(result.message || "Incorrect encryption key. Please try again.");
+                if (
+                    result.error === "INVALID_KEY" ||
+                    result.error === "INVALID_KEY_FORMAT"
+                ) {
+                    setEncryptionKeyError(
+                        result.message || "Incorrect encryption key. Please try again."
+                    );
                     setIsEncryptionDialogOpen(true);
                     return;
                 }
@@ -187,7 +227,10 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
         } catch (error) {
             console.error("Error downloading folder:", error);
             toast.dismiss(toastId);
-            toast.error(`Failed to download folder: ${error instanceof Error ? error.message : String(error)}`);
+            toast.error(
+                `Failed to download folder: ${error instanceof Error ? error.message : String(error)
+                }`
+            );
         } finally {
             setIsDownloading(false);
         }
@@ -203,7 +246,9 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
             const keyExists = savedKeys.some((k) => k.key === encryptionKey);
 
             if (!keyExists) {
-                return setEncryptionKeyError("Incorrect encryption key. Please try again with a correct one.");
+                return setEncryptionKeyError(
+                    "Incorrect encryption key. Please try again with a correct one."
+                );
             }
         }
         await downloadFolder(selectedOutputDir, encryptionKey);
@@ -211,7 +256,12 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
 
     // Handle applying filters
     const handleApplyFilters = useCallback(
-        (fileTypes: FileTypes[], date: string, fileSize: number, sizeUnit: string) => {
+        (
+            fileTypes: FileTypes[],
+            date: string,
+            fileSize: number,
+            sizeUnit: string
+        ) => {
             setSelectedFileTypes(fileTypes);
             setSelectedDate(date);
             setSelectedFileSize(fileSize);
@@ -258,13 +308,15 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
     return (
         <div className="container mx-auto py-8 px-4">
             <div className="flex items-center justify-between mb-6">
-                <Link
-                    className="flex gap-2 font-semibold text-lg items-center"
-                    href="/files"
-                >
-                    <Icons.ArrowLeft className="size-5 text-grey-10" />
-                    Back
-                </Link>
+                <div className="flex items-center gap-2">
+                    <Link
+                        className="flex gap-2 font-semibold text-lg items-center"
+                        href="/files"
+                    >
+                        <Icons.ArrowLeft className="size-5 text-grey-10" />
+                        Back
+                    </Link>
+                </div>
 
                 <div className="flex items-center gap-4">
                     {/* Search Input */}
@@ -360,8 +412,12 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
                     {files.length === 0 ? (
                         <div className="flex flex-col items-center justify-center py-16 bg-grey-95 rounded-lg">
                             <Icons.Folder className="size-12 text-grey-60 mb-4" />
-                            <h3 className="text-lg font-medium text-grey-30 mb-1">Empty Folder</h3>
-                            <p className="text-grey-50 text-sm">This folder does not contain any files.</p>
+                            <h3 className="text-lg font-medium text-grey-30 mb-1">
+                                Empty Folder
+                            </h3>
+                            <p className="text-grey-50 text-sm">
+                                This folder does not contain any files.
+                            </p>
                         </div>
                     ) : (
                         <FilesContent

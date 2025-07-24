@@ -2,7 +2,6 @@ import React from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 
 import { Icons } from "@/components/ui";
-import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
@@ -10,12 +9,17 @@ interface VideoPlayerErrorProps {
   message: string;
   file?: FormattedUserIpfsFile;
   onReload?: () => void;
+  handleFileDownload: (
+    file: FormattedUserIpfsFile,
+    polkadotAddress: string
+  ) => void;
 }
 
 const VideoPlayerError: React.FC<VideoPlayerErrorProps> = ({
   message,
   file,
   onReload,
+  handleFileDownload
 }) => {
   const { polkadotAddress } = useWalletAuth();
 
@@ -44,7 +48,7 @@ const VideoPlayerError: React.FC<VideoPlayerErrorProps> = ({
 
         {file && (
           <button
-            onClick={() => downloadIpfsFile(file, polkadotAddress ?? "")}
+            onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
             className="flex items-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium"
           >
             <Icons.DocumentDownload className="size-5" />

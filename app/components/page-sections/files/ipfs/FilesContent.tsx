@@ -1,6 +1,14 @@
 "use client";
 
-import { FC, useState, useRef, useCallback, useEffect, memo, DragEvent } from "react";
+import {
+    FC,
+    useState,
+    useRef,
+    useCallback,
+    useEffect,
+    memo,
+    DragEvent
+} from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { Icons, WaitAMoment } from "@/components/ui";
 import FilesTable from "./files-table";
@@ -132,7 +140,10 @@ const FilesContent: FC<FilesContentProps> = ({
         e.preventDefault();
         e.stopPropagation();
 
-        if (e.dataTransfer.items && Array.from(e.dataTransfer.items).some(item => item.kind === "file")) {
+        if (
+            e.dataTransfer.items &&
+            Array.from(e.dataTransfer.items).some((item) => item.kind === "file")
+        ) {
             dragCounterRef.current++;
             setIsDragging(true);
 
@@ -164,27 +175,30 @@ const FilesContent: FC<FilesContentProps> = ({
         setIsDragging(true);
     };
 
-    const handleDrop = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
+    const handleDrop = useCallback(
+        (e: React.DragEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
 
-        dragCounterRef.current = 0;
-        setIsDragging(false);
-        setAnimateCloud(false);
+            dragCounterRef.current = 0;
+            setIsDragging(false);
+            setAnimateCloud(false);
 
-        if (dragTimeoutRef.current) {
-            clearTimeout(dragTimeoutRef.current);
-        }
+            if (dragTimeoutRef.current) {
+                clearTimeout(dragTimeoutRef.current);
+            }
 
-        if (addButtonRef?.current && e.dataTransfer.files.length > 0) {
-            addButtonRef.current.openWithFiles(e.dataTransfer.files);
-        } else if (e.dataTransfer.files.length > 0) {
-            const customEvent = new CustomEvent("hippius:file-drop", {
-                detail: { files: e.dataTransfer.files }
-            });
-            window.dispatchEvent(customEvent);
-        }
-    }, [addButtonRef]);
+            if (addButtonRef?.current && e.dataTransfer.files.length > 0) {
+                addButtonRef.current.openWithFiles(e.dataTransfer.files);
+            } else if (e.dataTransfer.files.length > 0) {
+                const customEvent = new CustomEvent("hippius:file-drop", {
+                    detail: { files: e.dataTransfer.files }
+                });
+                window.dispatchEvent(customEvent);
+            }
+        },
+        [addButtonRef]
+    );
 
     // Clean up any timers when component unmounts
     useEffect(() => {
@@ -204,7 +218,7 @@ const FilesContent: FC<FilesContentProps> = ({
             setEncryptionKeyError(null);
             setIsEncryptionDialogOpen(true);
         } else {
-            downloadIpfsFile(file, polkadotAddress);
+            downloadIpfsFile(file, polkadotAddress, isPrivateView);
         }
     };
 
@@ -214,6 +228,7 @@ const FilesContent: FC<FilesContentProps> = ({
         const result = await downloadIpfsFile(
             fileToDownload,
             polkadotAddress,
+            isPrivateView,
             encryptionKey
         );
 
@@ -303,7 +318,6 @@ const FilesContent: FC<FilesContentProps> = ({
                 onDragLeave={handleDragLeave}
                 onDragEnter={handleDragEnter}
             >
-
                 {isDragging && (
                     <div className="absolute inset-0 bg-opacity-80 flex flex-col items-center justify-center z-20 pointer-events-none">
                         <div
@@ -356,7 +370,8 @@ const FilesContent: FC<FilesContentProps> = ({
                         });
                 }}
                 button={isDeleting ? "Deleting..." : "Delete File"}
-                text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""}`}
+                text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""
+                    }`}
                 heading="Delete File"
                 disableButton={isDeleting}
             />
@@ -403,7 +418,7 @@ const FilesContent: FC<FilesContentProps> = ({
                     onNavigate={setSelectedFile}
                 />
             )}
-            {selectedFileType === "PDF" && (
+            {selectedFileType === "pdfDocument" && (
                 <PdfDialog
                     onCloseClicked={() => setSelectedFile(null)}
                     handleFileDownload={handleFileDownload}

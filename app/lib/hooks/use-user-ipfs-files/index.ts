@@ -25,6 +25,7 @@ export type FormattedUserIpfsFile = {
   source?: string;
   isFolder?: boolean;
   type?: string;
+  isErasureCoded: boolean;
 };
 
 // Updated to include file size breakdown
@@ -127,20 +128,27 @@ export const useUserIpfsFiles = () => {
 
         // Format the data to match what the UI expects
         const formattedFiles = dbFiles.map(
-          (file): FormattedUserIpfsFile => ({
-            name: file.fileName || "Unnamed File",
-            size: file.fileSizeInBytes,
-            createdAt: file.lastChargedAt,
-            cid: hexToCid(file.fileHash) ?? "",
-            source: file.source || "Unknown",
-            minerIds: parseMinerIds(file.minerIds),
-            isAssigned: file.isAssigned,
-            lastChargedAt: file.lastChargedAt,
-            fileHash: file.fileHash,
-            fileDetails: [],
-            isFolder: file.isFolder,
-            type: file.type
-          })
+          (file): FormattedUserIpfsFile & { isErasureCoded: boolean } => {
+            const isErasureCoded = file.fileName.endsWith(".ec_metadata");
+            const displayName = isErasureCoded
+              ? file.fileName.slice(0, -".ec_metadata".length)
+              : file.fileName;
+            return {
+              name: displayName || "Unnamed File",
+              size: file.fileSizeInBytes,
+              createdAt: file.lastChargedAt,
+              cid: hexToCid(file.fileHash) ?? "",
+              source: file.source || "Unknown",
+              minerIds: parseMinerIds(file.minerIds),
+              isAssigned: file.isAssigned,
+              lastChargedAt: file.lastChargedAt,
+              fileHash: file.fileHash,
+              fileDetails: [],
+              isFolder: file.isFolder,
+              type: file.type,
+              isErasureCoded
+            };
+          }
         );
 
         formattedFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);

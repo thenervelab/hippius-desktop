@@ -16,13 +16,18 @@ interface VideoPlayerProps {
   fileFormat: string;
   file?: FormattedUserIpfsFile;
   isHippius?: boolean;
+  handleFileDownload: (
+    file: FormattedUserIpfsFile,
+    polkadotAddress: string
+  ) => void;
 }
 
 const VideoPlayer: React.FC<VideoPlayerProps> = ({
   videoUrl,
   fileFormat,
   isHippius = false,
-  file
+  file,
+  handleFileDownload
 }) => {
   const [error, setError] = useState<string>("");
   const [playUrl, setPlayUrl] = useState<string>("");
@@ -105,7 +110,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     >
       <MediaProvider />
       {error ? (
-        <VideoPlayerError message={error} file={file} onReload={handleReload} />
+        <VideoPlayerError
+          message={error}
+          file={file}
+          onReload={handleReload}
+          handleFileDownload={handleFileDownload}
+        />
       ) : (
         <DefaultVideoLayout icons={defaultLayoutIcons} />
       )}
