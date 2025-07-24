@@ -21,7 +21,8 @@ use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
     upload_file_public, download_file_public, public_download_with_erasure, public_upload_with_erasure ,
-    encrypt_and_upload_folder , download_and_decrypt_folder, public_download_folder, public_upload_folder,list_folder_contents
+    encrypt_and_upload_folder , download_and_decrypt_folder, public_download_folder, public_upload_folder,list_folder_contents,
+    remove_file_from_folder, add_file_to_folder,
 };
 use commands::accounts::{create_encryption_key, get_encryption_keys, import_key};
 use utils::file_operations::delete_and_unpin_file_by_name;
@@ -69,6 +70,8 @@ fn main() {
             encrypt_and_upload_folder,
             list_folder_contents,
             download_and_decrypt_folder,
+            remove_file_from_folder,
+            add_file_to_folder,
             create_encryption_key,
             get_encryption_keys,
             import_key,
