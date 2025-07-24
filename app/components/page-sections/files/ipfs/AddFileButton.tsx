@@ -133,7 +133,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     const handleBackToOptions = useCallback(() => {
       setCurrentStep("options");
       setDroppedFiles(null);
-    }, [closeDialog]);
+    }, []);
 
     // Handle external events
     useEffect(() => {
@@ -212,7 +212,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         default:
           return null;
       }
-    }, [currentStep, droppedFiles, closeDialog, handleStepChange]);
+    }, [currentStep, droppedFiles, closeDialog, handleStepChange, isPrivateView]);
 
     return (
       <>

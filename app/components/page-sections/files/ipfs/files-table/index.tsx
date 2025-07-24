@@ -393,34 +393,18 @@ const FilesTable: FC<FilesTableProps> = memo(({
 
   const table = useReactTable(tableConfig);
 
-  if (showEmptyState) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
-        <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
-          <Icons.File className="size-7 text-primary-50" />
-        </div>
-        <h3 className="text-lg font-medium text-grey-10 mb-1">
-          No matching files found
-        </h3>
-        <p className="text-grey-50 text-sm max-w-[270px] text-center">
-          Try adjusting the filters or clearing them to see more results.
-        </p>
-      </div>
-    );
-  }
-
-  const headerRows = useMemo(() => {
-    return table.getHeaderGroups().map((headerGroup) => (
+  const headerRows = useMemo(() => (
+    table.getHeaderGroups().map((headerGroup) => (
       <TableModule.Tr key={headerGroup.id}>
         {headerGroup.headers.map((header) => (
           <TableModule.Th key={header.id} header={header} />
         ))}
       </TableModule.Tr>
-    ));
-  }, [table]);
+    ))
+  ), [table]);
 
-  const tableBody = useMemo(() => {
-    return table.getRowModel().rows?.map((row) => {
+  const tableBody = useMemo(() => (
+    table.getRowModel().rows?.map((row) => {
       const rowData = row.original;
       let rowState: "success" | "pending" | "error" = "success";
 
@@ -458,13 +442,11 @@ const FilesTable: FC<FilesTableProps> = memo(({
           ))}
         </TableModule.Tr>
       );
-    });
-  }, [table, localHandleContextMenu, paginatedData]);
+    })
+  ), [table, localHandleContextMenu, paginatedData]);
 
-  // Memoize pagination component
   const paginationComponent = useMemo(() => {
     if (totalPages <= 1) return null;
-
     return (
       <TableModule.Pagination
         currentPage={currentPage}
@@ -474,10 +456,8 @@ const FilesTable: FC<FilesTableProps> = memo(({
     );
   }, [currentPage, totalPages, setCurrentPage]);
 
-  // Memoize dialog component
   const dialogComponent = useMemo(() => {
     if (sharedState || !localIsFileDetailsOpen) return null;
-
     return (
       <SidebarDialog
         heading="File Details"
@@ -488,6 +468,22 @@ const FilesTable: FC<FilesTableProps> = memo(({
       </SidebarDialog>
     );
   }, [sharedState, localIsFileDetailsOpen, localFileDetailsFile]);
+
+  if (showEmptyState) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
+        <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
+          <Icons.File className="size-7 text-primary-50" />
+        </div>
+        <h3 className="text-lg font-medium text-grey-10 mb-1">
+          No matching files found
+        </h3>
+        <p className="text-grey-50 text-sm max-w-[270px] text-center">
+          Try adjusting the filters or clearing them to see more results.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-y-8 relative">
@@ -502,7 +498,6 @@ const FilesTable: FC<FilesTableProps> = memo(({
             <TableModule.THead>
               {headerRows}
             </TableModule.THead>
-
             <TableModule.TBody>
               {tableBody}
             </TableModule.TBody>
@@ -512,7 +507,6 @@ const FilesTable: FC<FilesTableProps> = memo(({
           {paginationComponent}
         </div>
       </div>
-
       {dialogComponent}
     </div>
   );
