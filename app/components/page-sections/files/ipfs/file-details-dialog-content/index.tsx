@@ -7,7 +7,7 @@ import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { getFileIcon, isDirectory } from "@/app/lib/utils/fileTypeUtils";
+import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
 import { HIPPIUS_EXPLORER_CONFIG } from "@/app/lib/config";
 import { useNodeLocations } from "@/app/lib/hooks/api/useNodeLocations";
@@ -75,8 +75,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
     const { fileFormat } = getFilePartsFromFileName(file.name);
     const fileType = getFileTypeFromExtension(fileFormat || null);
     const decodedCid = decodeHexCid(file.cid);
-    const isDir = isDirectory(file.name);
-    const { icon: Icon, color } = getFileIcon(fileType ?? undefined, isDir);
+    const { icon: Icon, color } = getFileIcon(fileType ?? undefined, !!file.isFolder);
 
     // Format file size
     const fileSize = !file.isAssigned ? "Unknown" : file.size ? formatBytesFromBigInt(BigInt(file.size)) : "Unknown";
@@ -107,7 +106,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
                 <DetailRow label="File Type">
                     <div className="flex items-center gap-1">
                         <Icon className={cn('size-5', color)} />
-                        {fileType ? fileType.charAt(0).toUpperCase() + fileType.slice(1) : ""}
+                        {file.isFolder ? "Folder" : fileType ? fileType.charAt(0).toUpperCase() + fileType.slice(1) : ""}
                     </div>
                 </DetailRow>
 

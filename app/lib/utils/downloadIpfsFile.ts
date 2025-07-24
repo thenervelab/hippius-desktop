@@ -3,6 +3,7 @@ import { decodeHexCid } from "./decodeHexCid";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
+import { downloadIpfsFolder } from "./downloadIpfsFolder";
 
 const getFileSavePath = async (name: string) => {
   const fileExtension = name.split(".").pop() || "";
@@ -35,7 +36,15 @@ export const downloadIpfsFile = async (
 ) => {
   const { source } = file;
 
-  if (source !== "Hippius" && isPrivateView && file.isErasureCoded) {
+  if (file.isFolder) {
+    return downloadIpfsFolder({
+      folderCid: file.cid,
+      folderName: file.name,
+      polkadotAddress,
+      isPrivate: isPrivateView,
+      encryptionKey,
+    });
+  } else if (source !== "Hippius" && isPrivateView && file.isErasureCoded) {
     return downloadEncryptedIpfsFile(
       file,
       polkadotAddress ?? "",
@@ -72,8 +81,7 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
   } catch (err) {
     console.error("Download failed:", err);
     toast.error(
-      `Download failed: ${
-        err instanceof Error ? err.message : "Unknown error"
+      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
       }`,
       { id: toastId }
     );
@@ -115,8 +123,7 @@ const downloadPublicErasureCodedFile = async (
   } catch (err) {
     console.error("Public erasure-coded download failed:", err);
     toast.error(
-      `Download failed: ${
-        err instanceof Error ? err.message : "Unknown error"
+      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
       }`,
       { id: toastId }
     );
