@@ -5,7 +5,8 @@ import { Icons, CardButton } from "@/components/ui";
 import FileDropzone from "./FileDropzone";
 import { useSetAtom } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "../atoms/query-atoms";
-import { Trash2 } from "lucide-react";
+import { Trash2, Check } from "lucide-react";
+import * as Checkbox from "@radix-ui/react-checkbox";
 
 interface UploadFilesFlowProps {
   reset: () => void;
@@ -20,6 +21,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
 }) => {
   const [revealFiles, setRevealFiles] = useState(false);
   const [files, setFiles] = useState<FileList | null>(null);
+  const [erasureCoding, setErasureCoding] = useState(false);
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
 
   const { upload } = useFilesUpload({
@@ -135,12 +137,35 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
         </div>
       )}
 
-      <div className="mt-4 flex flex-col gap-y-3">
+      {!isPrivateView && (
+        <div className="flex items-start mt-3">
+          <Checkbox.Root
+            className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 mt-[3px] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors"
+            checked={erasureCoding}
+            onCheckedChange={() => setErasureCoding((prev) => !prev)}
+            id="erasureCoding"
+          >
+            <Checkbox.Indicator>
+              <Check className="h-3.5 w-3.5 text-white" />
+            </Checkbox.Indicator>
+          </Checkbox.Root>
+          <div className="ml-2">
+            <label
+              htmlFor="erasureCoding"
+              className="text-[15px] font-medium text-grey-20 leading-[22px]"
+            >
+              Use Erasure Coding
+            </label>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-col gap-y-3">
         <CardButton
           onClick={() => {
             if (files) {
               reset();
-              upload(files, isPrivateView);
+              upload(files, isPrivateView, erasureCoding);
             }
           }}
           disabled={!files?.length}

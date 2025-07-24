@@ -32,7 +32,11 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     []
   );
 
-  async function upload(files: FileList, isPrivateView: boolean) {
+  async function upload(
+    files: FileList,
+    isPrivateView: boolean,
+    useErasureCoding: boolean = false
+  ) {
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
     // start toast and progress
@@ -73,6 +77,12 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
             filePath: tempPath,
             seedPhrase: mnemonic,
             encryptionKey: null
+          });
+        } else if (!isPrivateView && useErasureCoding) {
+          cid = await invoke<string>("public_upload_with_erasure", {
+            accountId: polkadotAddress,
+            filePath: tempPath,
+            seedPhrase: mnemonic
           });
         } else {
           cid = await invoke<string>("upload_file_public", {
