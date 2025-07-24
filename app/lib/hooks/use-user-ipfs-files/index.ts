@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { hexToCid } from "../../utils/hexToCid";
-import { toast } from "sonner";
 
 export type FileDetail = {
   filename: string;

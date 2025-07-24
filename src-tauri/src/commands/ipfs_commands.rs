@@ -314,7 +314,7 @@ pub async fn download_and_decrypt_file(
             &encrypted_data,
             final_encryption_key.clone(),
         ))?;
-        println!("Decrypted data: {}", decrypted_data.len());
+
         // Hash check
         let mut hasher = Sha256::new();
         hasher.update(&decrypted_data);
