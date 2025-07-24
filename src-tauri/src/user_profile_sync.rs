@@ -17,6 +17,16 @@ use serde_json;
 use sqlx::Row;
 use std::str;
 
+use sqlx::SqlitePool;
+use std::path::Path;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSizeBreakdown {
+    pub public_size: i64,
+    pub private_size: i64,
+}
+
 // Track which accounts are already syncing to prevent duplicates
 static SYNCING_ACCOUNTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
@@ -442,7 +452,6 @@ pub fn start_user_sync(account_id: &str) {
 
 #[tauri::command]
 pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileWithType>, String> {
-    use std::path::Path;
     if let Some(pool) = DB_POOL.get() {
         let user_profile_rows = sqlx::query(
             r#"
@@ -539,23 +548,83 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
 }
 
 #[tauri::command]
-pub async fn get_user_total_file_size(owner: String) -> Result<i64, String> {
+pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown, String> {
     if let Some(pool) = DB_POOL.get() {
-        let total_size = sqlx::query(
+        // Get sync folder paths
+        let public_sync_path = get_public_sync_path().await;
+        let private_sync_path = get_private_sync_path().await;
+
+        // Query user_profiles to get file sizes
+        let user_profile_rows = sqlx::query(
             r#"
-            SELECT COALESCE(SUM(file_size_in_bytes), 0) as total_size
+            SELECT file_name, file_size_in_bytes, source
             FROM user_profiles
             WHERE owner = ?
             "#
         )
         .bind(&owner)
-        .fetch_one(pool)
+        .fetch_all(pool)
         .await
         .map_err(|e| format!("Database error: {}", e))?;
 
-        let total_size: i64 = total_size.get("total_size");
-        println!("[UserSync] Total file size for owner {}: {} bytes", owner, total_size);
-        Ok(total_size)
+        // Build a map of file_name -> type from sync_folder_files
+        let sync_file_infos = sqlx::query(
+            "SELECT file_name, type FROM sync_folder_files WHERE owner = ?"
+        )
+        .bind(&owner)
+        .fetch_all(pool)
+        .await
+        .map(|rows| {
+            rows.into_iter().map(|row| {
+                let file_name = row.get::<String, _>("file_name");
+                let type_ = row.get::<String, _>("type");
+                (file_name, type_)
+            }).collect::<std::collections::HashMap<_, _>>()
+        })
+        .map_err(|e| format!("Database error: {}", e))?;
+
+        let mut public_size = 0;
+        let mut private_size = 0;
+
+        // Classify and sum file sizes using the same logic as get_user_synced_files
+        for row in user_profile_rows {
+            let file_name = row.get::<String, _>("file_name");
+            let file_size = row.get::<i64, _>("file_size_in_bytes");
+            let source = row.get::<String, _>("source");
+            let public_path = format!("{}/{}", public_sync_path, file_name);
+            let private_path = format!("{}/{}", private_sync_path, file_name);
+
+            // Default to public
+            let mut type_ = "public".to_string();
+
+            // If found in sync_folder_files, use its type
+            if let Some(t) = sync_file_infos.get(&file_name) {
+                type_ = t.clone();
+            } else {
+                // Fallback: check filesystem for type
+                if Path::new(&public_path).exists() {
+                    type_ = "public".to_string();
+                } else if Path::new(&private_path).exists() {
+                    type_ = "private".to_string();
+                }
+            }
+
+            if type_ == "public" {
+                public_size += file_size;
+            } else if type_ == "private" {
+                private_size += file_size;
+            }
+        }
+
+        println!(
+            "[UserSync] Total file sizes for owner {}: public={} bytes, private={} bytes",
+            owner, public_size, private_size
+        );
+
+        Ok(FileSizeBreakdown {
+            public_size,
+            private_size,
+        })
     } else {
         Err("DB not initialized".to_string())
     }

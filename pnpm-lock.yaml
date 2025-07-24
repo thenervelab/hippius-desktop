@@ -140,6 +140,9 @@ importers:
       jotai-tanstack-query:
         specifier: ^0.9.0
         version: 0.9.2(@tanstack/query-core@5.83.0)(jotai@2.12.5(@types/react@19.1.8)(react@19.1.0))
+      js-base64:
+        specifier: ^3.7.7
+        version: 3.7.7
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -3308,6 +3311,9 @@ packages:
         optional: true
       react:
         optional: true
+
+  js-base64@3.7.7:
+    resolution: {integrity: sha512-7rCnleh0z2CkXhH67J8K1Ytz0b2Y+yxTPL+/KOJoa20hfnVQ/3/T6W/KflYI4bRHRagNeXeU2bkNGI3v1oS/lw==}
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -7937,6 +7943,8 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.1.8
       react: 19.1.0
+
+  js-base64@3.7.7: {}
 
   js-tokens@4.0.0: {}
 
