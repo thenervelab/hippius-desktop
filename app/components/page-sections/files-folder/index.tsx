@@ -6,7 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { FormattedUserIpfsFile, parseMinerIds } from "@/lib/hooks/use-user-ipfs-files";
 import FilesContent from "@/components/page-sections/files/ipfs/FilesContent";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -23,6 +23,11 @@ interface FileEntry {
     file_name: string;
     file_size: number;
     cid: string;
+    created_at: string;
+    file_hash: string;
+    last_charged_at: string;
+    miner_ids: string | string[];
+    source: string;
 }
 
 interface FolderViewProps {
@@ -89,17 +94,19 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
                     folderMetadataCid: folderCid
                 });
 
+                console.log("Loaded folder contents:", fileEntries);
                 // Convert FileEntry to FormattedUserIpfsFile format
                 const formattedFiles = fileEntries.map((entry): FormattedUserIpfsFile => ({
                     cid: entry.cid,
                     name: entry.file_name,
                     size: entry.file_size,
                     type: entry.file_name.split('.').pop() || "unknown",
+                    fileHash: entry.file_hash,
                     isAssigned: true,
-                    source: folderName,
-                    createdAt: Date.now(),
-                    minerIds: [],
-                    lastChargedAt: Date.now(),
+                    source: entry.source,
+                    createdAt: Number(entry.created_at),
+                    minerIds: parseMinerIds(entry.miner_ids),
+                    lastChargedAt: Number(entry.last_charged_at),
                 }));
 
                 setFiles(formattedFiles);

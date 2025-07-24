@@ -127,7 +127,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({ fil
                         title="Copy CID"
                         toastMessage="CID Copied Successfully!"
                         copyAbleText={decodedCid}
-                        forSmallScreen
+                        isTable={true}
                         className="max-sm:[200px] max-w-[400px] h-full"
                     />
                     <div

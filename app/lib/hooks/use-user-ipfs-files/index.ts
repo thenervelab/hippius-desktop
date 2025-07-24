@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { hexToCid } from "../../utils/hexToCid";
-import { toast } from "sonner";
 
 export type FileDetail = {
   filename: string;
@@ -58,7 +57,7 @@ interface FileSizeBreakdown {
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
 
-const parseMinerIds = (minerIds: string | string[]): string[] => {
+export const parseMinerIds = (minerIds: string | string[]): string[] => {
   // If it's already an array, return it
   if (Array.isArray(minerIds)) {
     return minerIds;

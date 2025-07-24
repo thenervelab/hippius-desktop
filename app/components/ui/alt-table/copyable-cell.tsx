@@ -32,6 +32,9 @@ export const CopyableCell: React.FC<{
   linkClass,
 }) => {
     const { isMobile, isLaptop, isDesktop, isLargeDesktop } = useBreakpoint();
+    console.log("forSmallScreen", forSmallScreen)
+    console.log("isTable", isTable)
+
     const display = forSmallScreen
       ? shortenCopyAbleText(copyAbleText)
       : shortenCopyAbleText(copyAbleText, {
