@@ -303,6 +303,28 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     activeFilters.length
   ]);
 
+  useEffect(() => {
+    const handleFileDrop = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.files && addButtonRef.current) {
+        console.log("Handling files via global event", customEvent.detail.files);
+        addButtonRef.current.openWithFiles(customEvent.detail.files);
+      }
+    };
+
+    window.addEventListener("hippius:file-drop", handleFileDrop);
+    return () => {
+      window.removeEventListener("hippius:file-drop", handleFileDrop);
+    };
+  }, []);
+
+  useEffect(() => {
+    console.log("AddButtonRef status:", addButtonRef.current ? "available" : "not available");
+
+    const canUpload = activeSubMenuItem === "Private" || activeSubMenuItem === "Public";
+    console.log("Current view allows uploads:", canUpload, "View:", activeSubMenuItem);
+  }, [activeSubMenuItem]);
+
   // Determine what content to render
   let content;
   if (isCheckingSyncPath) {

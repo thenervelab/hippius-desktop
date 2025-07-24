@@ -1,4 +1,4 @@
-import React, { FC, useState, useEffect, useCallback, useRef } from "react";
+import React, { FC, useState, useEffect, useCallback, memo } from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,7 +7,6 @@ import {
   Copy,
   Download,
   Share,
-  HardDrive
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -23,11 +22,9 @@ import { useRouter } from "next/navigation";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "../shared/file-view-utils";
-import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
 import FileDetailsDialogContent from "../file-details-dialog-content";
 import SidebarDialog from "@/app/components/ui/sidebar-dialog";
 
-// Custom event names for file drop communication
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 interface Filter {
   type: string;
@@ -67,12 +64,6 @@ const CardView: FC<CardViewProps> = ({
     useState<FormattedUserIpfsFile | null>(null);
   const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
 
-  const [isDragging, setIsDragging] = useState(false);
-  const [animateCloud, setAnimateCloud] = useState(false);
-  const dragCounterRef = useRef<number>(0);
-  const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Use either provided shared state or local state
   const {
     setFileToDelete,
     setOpenDeleteModal,
@@ -81,7 +72,6 @@ const CardView: FC<CardViewProps> = ({
     handleContextMenu
   } = sharedState || {};
 
-  // Local handler for file details if no shared state
   const localHandleShowFileDetails = useCallback(
     (file: FormattedUserIpfsFile) => {
       if (!handleShowFileDetails) {
@@ -103,7 +93,6 @@ const CardView: FC<CardViewProps> = ({
     [handleContextMenu]
   );
 
-  // Show empty state if no files and search/filters are active
   const showEmptyState =
     files.length === 0 &&
     (searchTerm || (activeFilters && activeFilters.length > 0));
@@ -113,87 +102,7 @@ const CardView: FC<CardViewProps> = ({
     setCurrentPage,
     currentPage,
     totalPages
-  } = usePagination(files || [], 12); // Using more items per page for card view
-
-  useEffect(() => {
-    if (isDragging) {
-      const timer = setTimeout(() => {
-        setAnimateCloud(true);
-      }, 200);
-      return () => clearTimeout(timer);
-    } else {
-      setAnimateCloud(false);
-    }
-  }, [isDragging]);
-
-  const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (
-      e.dataTransfer.items &&
-      Array.from(e.dataTransfer.items).some((item) => item.kind === "file")
-    ) {
-      dragCounterRef.current += 1;
-      setIsDragging(true);
-
-      if (dragTimeoutRef.current) clearTimeout(dragTimeoutRef.current);
-      dragTimeoutRef.current = setTimeout(() => {
-        setAnimateCloud(true);
-      }, 200);
-    }
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    dragCounterRef.current -= 1;
-
-    if (dragCounterRef.current === 0) {
-      setIsDragging(false);
-      setAnimateCloud(false);
-    }
-  }, []);
-
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    if (
-      e.dataTransfer.items &&
-      Array.from(e.dataTransfer.items).some((item) => item.kind === "file")
-    ) {
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer.dropEffect = "copy";
-    }
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Reset counter and states
-    dragCounterRef.current = 0;
-    setIsDragging(false);
-    setAnimateCloud(false);
-
-    if (dragTimeoutRef.current) {
-      clearTimeout(dragTimeoutRef.current);
-    }
-
-    // File handling is now done in FilesContent
-    const event = new CustomEvent("hippius:file-drop", {
-      detail: { files: e.dataTransfer.files }
-    });
-    window.dispatchEvent(event);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-      }
-    };
-  }, []);
+  } = usePagination(files || [], 12);
 
   useEffect(() => {
     if (resetPagination) {
@@ -224,42 +133,10 @@ const CardView: FC<CardViewProps> = ({
     <div className="flex flex-col gap-y-8 relative">
       <div
         className={cn(
-          "w-full relative ",
-          isRecentFiles ? "max-h-[150px]" : "min-h-[700px]",
-          isDragging &&
-            "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
+          "w-full relative",
+          isRecentFiles ? "max-h-[150px]" : "min-h-[700px]"
         )}
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
       >
-        {isDragging && (
-          <div className="absolute inset-0 bg-opacity-80 flex flex-col items-center justify-center z-20 pointer-events-none">
-            <div
-              className={cn(
-                "relative transition-all duration-500 ease-in-out",
-                animateCloud ? "scale-110 transform -translate-y-2" : ""
-              )}
-            >
-              <div className="size-15 p-2 rounded-full flex items-center justify-center">
-                <CloudArrowUpIcon className="size-10 text-[#3167dc] animate-slide-up" />
-              </div>
-            </div>
-
-            <div className="mt-2 font-medium text-center bg-primary-50 p-4 rounded-lg shadow-lg">
-              <div className="text-white text-base">
-                Drop files here to upload them to
-              </div>
-              <div className="flex items-center justify-center">
-                <HardDrive className="size-6 text-white mr-2" />
-                <div className="text-white text-lg font-bold">IPFS Storage</div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Card view container */}
         <div className="duration-300 delay-300">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {data.map((file, index) => {
@@ -312,17 +189,17 @@ const CardView: FC<CardViewProps> = ({
                             }
                           },
                           ...(fileType === "video" ||
-                          fileType === "image" ||
-                          fileType === "pdfDocument"
+                            fileType === "image" ||
+                            fileType === "pdfDocument"
                             ? [
-                                {
-                                  icon: <Icons.Eye className="size-4" />,
-                                  itemTitle: "View",
-                                  onItemClick: () => {
-                                    setSelectedFile?.(file);
-                                  }
+                              {
+                                icon: <Icons.Eye className="size-4" />,
+                                itemTitle: "View",
+                                onItemClick: () => {
+                                  setSelectedFile?.(file);
                                 }
-                              ]
+                              }
+                            ]
                             : []),
                           {
                             icon: <Share className="size-4" />,
@@ -378,22 +255,21 @@ const CardView: FC<CardViewProps> = ({
                             icon: <Icons.InfoCircle className="size-4" />,
                             itemTitle: "File Details",
                             onItemClick: () => {
-                              // Use local handler that will work with or without shared state
                               localHandleShowFileDetails(file);
                             }
                           },
                           ...(file.isAssigned
                             ? [
-                                {
-                                  icon: <Icons.Trash className="size-4" />,
-                                  itemTitle: "Delete",
-                                  onItemClick: () => {
-                                    setFileToDelete?.(file);
-                                    setOpenDeleteModal?.(true);
-                                  },
-                                  variant: "destructive" as const
-                                }
-                              ]
+                              {
+                                icon: <Icons.Trash className="size-4" />,
+                                itemTitle: "Delete",
+                                onItemClick: () => {
+                                  setFileToDelete?.(file);
+                                  setOpenDeleteModal?.(true);
+                                },
+                                variant: "destructive" as const
+                              }
+                            ]
                             : [])
                         ]}
                       >
@@ -423,7 +299,6 @@ const CardView: FC<CardViewProps> = ({
         </div>
       </div>
 
-      {/* Add this for standalone usage */}
       {!sharedState && localIsFileDetailsOpen && (
         <SidebarDialog
           heading="File Details"
@@ -437,4 +312,5 @@ const CardView: FC<CardViewProps> = ({
   );
 };
 
-export default CardView;
+// Wrap the component with memo to prevent unnecessary re-renders
+export default memo(CardView);
