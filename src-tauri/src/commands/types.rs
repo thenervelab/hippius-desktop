@@ -49,7 +49,7 @@ pub const DEFAULT_K: usize = 3;
 pub const DEFAULT_M: usize = 5;
 pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024; // 1MB
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileEntry {
     pub file_name: String,
     pub file_size: usize,

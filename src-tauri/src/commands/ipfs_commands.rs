@@ -5,7 +5,9 @@ use crate::utils::{
     ipfs::{
         download_from_ipfs,upload_to_ipfs
     },
-    file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, request_file_storage}
+    file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, 
+        request_file_storage, remove_file_from_sync_and_db
+    , remove_from_sync_folder, copy_to_sync_folder}
 };
 use uuid::Uuid;
 use std::fs;
@@ -23,6 +25,8 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use base64::decode;
 use sqlx::Row;
+use crate::utils::sync::get_public_sync_path;
+use std::path::PathBuf;
 
 // Helper function to format file sizes
 fn format_file_size(size_bytes: usize) -> String {
@@ -855,7 +859,13 @@ pub async fn encrypt_and_upload_folder(
                 metadata_cid: None,
             };
 
-            let metadata_path = temp_dir.path().join(format!("{}_metadata.json", file_id));
+            // --- Ensure per-file metadata file ends with .ec_metadata ---
+            let meta_filename = if relative_path.ends_with(".ec_metadata") {
+                relative_path.clone()
+            } else {
+                format!("{}.ec_metadata", relative_path)
+            };
+            let metadata_path = temp_dir.path().join(&meta_filename);
             let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
             fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
 
@@ -870,8 +880,8 @@ pub async fn encrypt_and_upload_folder(
                 cid: metadata_cid.clone(),
             });
 
-            // collect for storage request
-            file_pairs.push((relative_path, metadata_cid));
+            // collect for storage request: use meta_filename (with .ec_metadata)
+            file_pairs.push((meta_filename, metadata_cid));
         }
 
         println!("[encrypt_and_upload_folder] ✅ Folder processing done");
@@ -1176,4 +1186,237 @@ pub async fn public_download_folder(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn add_file_to_folder(
+    account_id: String,
+    folder_metadata_cid: String,
+    folder_name: String,
+    file_path: String,
+    seed_phrase: String,
+) -> Result<String, String> {
+    let api_url = "http://127.0.0.1:5001";
+    let file_path_obj = Path::new(&file_path);
+
+    // Extract file name
+    let file_name = file_path_obj
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
+
+    // Check if file already exists
+    let file_entries = list_folder_contents(folder_name.clone(), folder_metadata_cid.clone()).await?;
+    if file_entries.iter().any(|entry| entry.file_name == file_name) {
+        return Err(format!("File '{}' already exists in folder '{}'.", file_name, folder_name));
+    }
+
+    // Download existing folder metadata
+    let metadata_bytes = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        let folder_metadata_cid_clone = folder_metadata_cid.clone();
+        move || {
+            download_from_ipfs(&api_url, &folder_metadata_cid_clone)
+                .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid_clone, e))
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for CID {}: {}", folder_metadata_cid, e))??;
+
+    let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+
+    // Process the new file and update metadata in a single blocking task
+    let (new_file_entry, new_file_pairs, new_folder_metadata_cid) = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        let file_path_cloned = file_path.clone();
+        let file_name_cloned = file_name.clone();
+        move || {
+            // Create temporary directory inside the blocking task
+            let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {}", e))?;
+            let temp_dir_path = temp_dir.path().to_path_buf();
+
+            // Read and upload the new file
+            let file_data = fs::read(&file_path_cloned).map_err(|e| format!("Failed to read file {}: {}", file_path_cloned, e))?;
+            let file_size = file_data.len();
+
+            // Hash the file (for consistency, though unused)
+            let _original_file_hash = {
+                let mut hasher = Sha256::new();
+                hasher.update(&file_data);
+                format!("{:x}", hasher.finalize())
+            };
+
+            let file_cid = upload_to_ipfs(&api_url, &file_path_cloned)
+                .map_err(|e| format!("Failed to upload file to IPFS: {}", e))?;
+            let new_file_entry = FileEntry {
+                file_name: file_name_cloned.clone(),
+                file_size,
+                cid: file_cid.clone(),
+            };
+            let files_for_storage = vec![(file_name_cloned.clone(), file_cid.clone())];
+
+            // Update folder metadata
+            file_entries.push(new_file_entry.clone());
+            let folder_metadata_path = temp_dir_path.join("folder_metadata.json");
+            let folder_metadata = serde_json::to_string_pretty(&file_entries)
+                .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
+            fs::write(&folder_metadata_path, folder_metadata.as_bytes())
+                .map_err(|e| format!("Failed to write folder metadata to {}: {}", folder_metadata_path.display(), e))?;
+
+            let new_folder_metadata_cid = upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap())
+                .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e))?;
+
+            // Temporary directory is automatically cleaned up when temp_dir goes out of scope
+            Ok::<_, String>((new_file_entry, files_for_storage, new_folder_metadata_cid))
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for file upload: {}", e))??;
+
+    // Prepare storage request
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder") { "" } else { "-folder" });
+    let mut files_for_storage = vec![(meta_filename.clone(), new_folder_metadata_cid.clone())];
+    files_for_storage.extend(new_file_pairs);
+
+    // Get the sync folder path
+    let sync_folder = PathBuf::from(get_public_sync_path().await);
+    let dest_path = sync_folder.join(&folder_name);
+
+    // Submit storage request, handle RequestAlreadyExists
+    println!("[add_file_to_folder] Submitting storage request for updated folder metadata: {}", meta_filename);
+    let storage_result = request_file_storage(&meta_filename, &new_folder_metadata_cid, api_url, &seed_phrase).await
+        .map_err(|e| {
+            if e.contains("RequestAlreadyExists") {
+                format!("Storage request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+            } else {
+                format!("Failed to request file storage: {}", e)
+            }
+        })?;
+
+
+    // Update the database with the new folder metadata
+    copy_to_sync_folder(
+        &file_path_obj, // Pass the original file path
+        &folder_name, // Pass the folder name
+        &account_id,
+        &new_folder_metadata_cid,
+        &storage_result,
+        true,
+        false, // This is a file, not a folder
+        &file_name, // Use the actual file name
+    ).await;
+
+    println!("[add_file_to_folder] Storage request result: {}", storage_result);
+    println!("[add_file_to_folder] New folder metadata CID: {}", new_folder_metadata_cid);
+
+    Ok(new_folder_metadata_cid)
+}
+
+#[tauri::command]
+pub async fn remove_file_from_folder(
+    account_id: String,
+    folder_metadata_cid: String,
+    folder_name: String,
+    file_name: String,
+    seed_phrase: String,
+) -> Result<String, String> {
+    let api_url = "http://127.0.0.1:5001";
+    let folder_metadata_cid_for_log = folder_metadata_cid.clone();
+
+    // Download existing folder metadata
+    let metadata_bytes = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        let folder_metadata_cid_cloned = folder_metadata_cid.clone();
+        move || {
+            download_from_ipfs(&api_url, &folder_metadata_cid_cloned)
+                .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid_cloned, e))
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for CID {}: {}", folder_metadata_cid_for_log, e))??;
+
+    let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+
+    // Remove the file entry
+    let initial_len = file_entries.len();
+    file_entries.retain(|entry| entry.file_name != file_name);
+    if file_entries.len() == initial_len {
+        return Err(format!("File '{}' not found in folder '{}'.", file_name, folder_name));
+    }
+
+    // Process metadata update in a single blocking task
+    let new_folder_metadata_cid = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        move || {
+            // Create temporary directory inside the blocking task
+            let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {}", e))?;
+            let temp_dir_path = temp_dir.path().to_path_buf();
+
+            // Update folder metadata
+            let folder_metadata_path = temp_dir_path.join("folder_metadata.json");
+            let folder_metadata = serde_json::to_string_pretty(&file_entries)
+                .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
+            fs::write(&folder_metadata_path, folder_metadata.as_bytes())
+                .map_err(|e| format!("Failed to write folder metadata to {}: {}", folder_metadata_path.display(), e))?;
+
+            let new_folder_metadata_cid = upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap())
+                .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e))?;
+
+            // Temporary directory is automatically cleaned up when temp_dir goes out of scope
+            Ok::<_, String>(new_folder_metadata_cid)
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for metadata update: {}", e))??;
+
+    // Prepare storage request
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder") { "" } else { "-folder" });
+
+    // Get the sync folder path
+    let sync_folder = PathBuf::from(get_public_sync_path().await);
+    let dest_path = sync_folder.join(&folder_name);
+
+    // Update database to remove file
+    if let Some(pool) = DB_POOL.get() {
+        sqlx::query("DELETE FROM user_profiles WHERE owner = ? AND file_name = ?")
+            .bind(&account_id)
+            .bind(&file_name)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("DB error: {}", e))?;
+    }
+
+    // Remove the file from the sync directory
+    let file_path = dest_path.join(&file_name);
+    if file_path.exists() {
+        fs::remove_file(&file_path)
+            .map_err(|e| format!("Failed to remove file from sync directory {}: {}", file_path.display(), e))?;
+    }
+
+    // Submit storage request, handle RequestAlreadyExists
+    println!(
+        "[remove_file_from_folder] Submitting storage request for updated folder metadata: {}",
+        meta_filename
+    );
+    let storage_result = request_file_storage(&meta_filename, &new_folder_metadata_cid, api_url, &seed_phrase).await
+        .map_err(|e| {
+            if e.contains("RequestAlreadyExists") {
+                format!("Storage request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+            } else {
+                format!("Failed to request file storage: {}", e)
+            }
+        })?;
+
+    // Update database to remove file and remove the file from the sync directory
+    remove_from_sync_folder(&file_name, &folder_name, true, false).await;
+
+    println!("[remove_file_from_folder] Storage request result: {}", storage_result);
+    println!(
+        "[remove_file_from_folder] New folder metadata CID: {}",
+        new_folder_metadata_cid
+    );
+
+    Ok(new_folder_metadata_cid)
 }
