@@ -995,6 +995,17 @@ pub async fn list_folder_contents(
             }
         };
         
+        // Sanitize file_name for UI/consumer
+        let mut file_detail = file_detail;
+        file_detail.file_name = if file_detail.file_name.ends_with("-folder.ec_metadata") {
+            file_detail.file_name.trim_end_matches("-folder.ec_metadata").to_string()
+        } else if file_detail.file_name.ends_with("-folder") {
+            file_detail.file_name.trim_end_matches("-folder").to_string()
+        } else if file_detail.file_name.ends_with(".ec_metadata") {
+            file_detail.file_name.trim_end_matches(".ec_metadata").to_string()
+        } else {
+            file_detail.file_name
+        };
         files_in_folder.push(file_detail);
     }
 
