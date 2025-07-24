@@ -859,7 +859,13 @@ pub async fn encrypt_and_upload_folder(
                 metadata_cid: None,
             };
 
-            let metadata_path = temp_dir.path().join(format!("{}_metadata.json", file_id));
+            // --- Ensure per-file metadata file ends with .ec_metadata ---
+            let meta_filename = if relative_path.ends_with(".ec_metadata") {
+                relative_path.clone()
+            } else {
+                format!("{}.ec_metadata", relative_path)
+            };
+            let metadata_path = temp_dir.path().join(&meta_filename);
             let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
             fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
 
@@ -874,8 +880,8 @@ pub async fn encrypt_and_upload_folder(
                 cid: metadata_cid.clone(),
             });
 
-            // collect for storage request
-            file_pairs.push((relative_path, metadata_cid));
+            // collect for storage request: use meta_filename (with .ec_metadata)
+            file_pairs.push((meta_filename, metadata_cid));
         }
 
         println!("[encrypt_and_upload_folder] ✅ Folder processing done");
