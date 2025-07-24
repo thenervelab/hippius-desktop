@@ -5,7 +5,7 @@ import "@vidstack/react/player/styles/default/theme.css";
 import "@vidstack/react/player/styles/default/layouts/video.css";
 import {
   defaultLayoutIcons,
-  DefaultVideoLayout,
+  DefaultVideoLayout
 } from "@vidstack/react/player/layouts/default";
 import { SUPPORTED_VIDEO_MIME_TYPES } from "@/lib/constants/supportedMimeTypes";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
@@ -15,14 +15,18 @@ interface VideoPlayerProps {
   videoUrl: string;
   fileFormat: string;
   file?: FormattedUserIpfsFile;
+  isHippius?: boolean;
 }
 
 const VideoPlayer: React.FC<VideoPlayerProps> = ({
   videoUrl,
   fileFormat,
-  file,
+  isHippius = false,
+  file
 }) => {
   const [error, setError] = useState<string>("");
+  const [playUrl, setPlayUrl] = useState<string>("");
+
   const [reloadKey, setReloadKey] = useState<number>(0);
   const timeoutRef = useRef<number | undefined>(undefined);
   const LOAD_TIMEOUT = 120_000;
@@ -57,6 +61,29 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return clearLoadTimer;
   }, [videoUrl, fileFormat, isFirefox, reloadKey]);
 
+  async function toBlobUrl(url: string) {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  }
+
+  useEffect(() => {
+    let revoke: string | null = null;
+
+    (async () => {
+      if (isHippius) {
+        setPlayUrl(videoUrl); // keep remote as is
+        return;
+      }
+      const blobUrl = await toBlobUrl(videoUrl);
+      revoke = blobUrl;
+      setPlayUrl(blobUrl);
+    })();
+
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [videoUrl, isHippius]);
   return (
     <MediaPlayer
       key={reloadKey}
@@ -64,8 +91,10 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       load="eager"
       autoPlay
       src={{
-        src: videoUrl,
-        type: SUPPORTED_VIDEO_MIME_TYPES[fileFormat] as import("@vidstack/react").VideoMimeType,
+        src: playUrl || videoUrl,
+        type: SUPPORTED_VIDEO_MIME_TYPES[
+          fileFormat
+        ] as import("@vidstack/react").VideoMimeType
       }}
       playsInline
       onLoadedData={clearLoadTimer}

@@ -20,7 +20,6 @@ pub async fn request_file_storage(
     api_url: &str,
     seed_phrase: &str,
 ) -> Result<String, String> {
-    println!("orignal file hash is :{}", file_cid);
     // 1. Create the JSON
     let json = serde_json::json!([{
         "filename": file_name,
@@ -182,7 +181,7 @@ fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str, is_public: bool, is_folder: bool) {    
+pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str, is_public: bool, is_folder: bool, requested_file_name: &str) {    
     // Choose sync folder path based on is_public
     let sync_folder = if is_public {
         PathBuf::from(get_public_sync_path().await)
@@ -200,12 +199,11 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
         recently_uploaded_folders.insert(dest_path.to_string_lossy().to_string());
         
         // Collect all files in the folder and add to RECENTLY_UPLOADED
-        collect_files_recursively(&original_path, &mut files_in_folder);
+        let _ = collect_files_recursively(&original_path, &mut files_in_folder);
         let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
         for file_path in &files_in_folder {
             let file_path_str = sync_folder.join(file_path.strip_prefix(original_path).unwrap()).to_string_lossy().to_string();
             recently_uploaded.insert(file_path_str.clone());
-            println!("[CopyToSync] Added file to recently uploaded: {}", file_path_str);
         }
     } else {
         let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
@@ -222,17 +220,13 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
         if is_folder {
             let mut recently_uploaded_folders = RECENTLY_UPLOADED_FOLDERS.lock().unwrap();
             recently_uploaded_folders.remove(&dest_path_str);
-            println!("[CopyToSync] Removed folder from recently uploaded: {}", dest_path_str);
-            
             let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
             for file_path_str in files_to_remove {
                 recently_uploaded.remove(&file_path_str);
-                println!("[CopyToSync] Removed file from recently uploaded: {}", file_path_str);
             }
         } else {
             let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
             recently_uploaded.remove(&dest_path_str);
-            println!("[CopyToSync] Removed file from recently uploaded: {}", dest_path_str);
         }
     });
     
@@ -247,14 +241,13 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             0
         }
     };
-    println!("copy sync folder file size in bytes is : {}", file_size_in_bytes);
     if let Some(pool) = crate::DB_POOL.get() {
         // Check if file already exists in user_profiles for this account
         let exists: Option<(String,)> = sqlx::query_as(
             "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
         )
         .bind(account_id)
-        .bind(&file_name)
+        .bind(&requested_file_name)
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
@@ -269,7 +262,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             .bind(account_id)
             .bind(request_cid) // cid
             .bind(&file_hash)
-            .bind(&file_name)
+            .bind(&requested_file_name)
             .bind(file_size_in_bytes)
             .bind(false)
             .bind(request_cid) // main_req_hash
@@ -281,7 +274,6 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
 
     // Add to sync_folder_files DB
     if let Some(pool) = crate::DB_POOL.get() {
-        println!("is puiblic inside copy fn {:?}",is_public);
         insert_file_if_not_exists(pool, &original_path, account_id, is_public, is_folder).await;
     }
     
@@ -321,7 +313,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
     if sync_file_path.is_dir() || is_folder {
         // Recursively collect all files inside the folder
         let mut files = Vec::new();
-        collect_files_recursively(&sync_file_path, &mut files);
+        let _ = collect_files_recursively(&sync_file_path, &mut files);
 
         if let Some(pool) = crate::DB_POOL.get() {
             for file in &files {
@@ -377,4 +369,45 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
             }
         }
     }
+}
+
+pub async fn request_erasure_storage(
+    file_name: &str,
+    files: &[(String, String)],
+    api_url: &str,
+    seed_phrase: &str,
+) -> Result<String, String> {
+    println!("[request_erasure_storage] files: {:?}", files);
+    if files.is_empty() {
+        return Err("files array cannot be empty".to_string());
+    }
+
+    let json_vec: Vec<_> = files
+        .iter()
+        .map(|(filename, cid)| serde_json::json!({
+            "filename": filename,
+            "cid": cid,
+        }))
+        .collect();
+    let json = serde_json::Value::Array(json_vec);
+    let json_string = serde_json::to_string(&json).unwrap();
+
+    // 2. Pin JSON to local IPFS node
+    let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
+    println!("[request_erasure_storage] JSON CID requesting is : {}", json_cid);
+    // 3. Construct FileInput
+    let file_input = FileInputWrapper {
+        file_hash: json_cid.as_bytes().to_vec(),
+        file_name: file_name.as_bytes().to_vec(),
+    };
+
+    // 4. Call storage_request_tauri (still call it for side effects, but ignore its result)
+    let _ = crate::commands::substrate_tx::storage_request_tauri(
+        vec![file_input],
+        None,
+        seed_phrase.to_string(),
+    )
+    .await?;
+
+    Ok(json_cid)
 }

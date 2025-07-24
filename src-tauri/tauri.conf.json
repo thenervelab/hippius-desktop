@@ -25,8 +25,20 @@
     ],
 
     "security": {
-      "csp": null,
-      "capabilities": ["default"]
+      "capabilities": ["default"],
+      "csp": {
+        "default-src": "'self' ipc: asset: http://asset.localhost",
+        "img-src": "'self' asset: http://asset.localhost blob: data:",
+        "media-src": "'self' asset: http://asset.localhost blob: data:",
+        "connect-src": "ipc: http://ipc.localhost asset: http://asset.localhost",
+        "style-src": "'self' 'unsafe-inline'",
+        "font-src": "'self' asset: http://asset.localhost data:",
+        "frame-src": "'self' asset: http://asset.localhost"
+      },
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$HOME/**", "%USERPROFILE%/**", "$RESOURCE/**"]
+      }
     }
   },
   "bundle": {
