@@ -5,7 +5,7 @@ import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import {
@@ -13,6 +13,7 @@ import {
   getPrevViewableFile
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 export const ImageDialogTrigger: React.FC<{
   children: ReactNode;
@@ -31,6 +32,40 @@ export const ImageDialogTrigger: React.FC<{
   );
 };
 
+const ImageError: React.FC<{
+  message: string;
+  file: FormattedUserIpfsFile;
+  handleFileDownload: (
+    file: FormattedUserIpfsFile,
+    polkadotAddress: string
+  ) => void;
+}> = ({ message, file, handleFileDownload }) => {
+  const { polkadotAddress } = useWalletAuth();
+
+  return (
+    <div className="flex flex-col items-center justify-center text-white p-4 rounded w-full h-full">
+      <div className="mb-6 text-center">
+        <AlertCircle className="size-12 mx-auto mb-3 text-red-400" />
+        <p className="text-lg font-medium">Failed to load image</p>
+        <p className="text-sm text-gray-300 mt-2">
+          {message ||
+            "This image format may not be supported by your browser or the connection failed."}
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
+        <button
+          onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
+          className="flex items-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium"
+        >
+          <Icons.DocumentDownload className="size-5" />
+          <span>Download File Instead</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const ImageDialog: React.FC<{
   file: null | FormattedUserIpfsFile;
   allFiles: FormattedUserIpfsFile[];
@@ -43,6 +78,7 @@ const ImageDialog: React.FC<{
 }> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
   const { polkadotAddress } = useWalletAuth();
   const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
   const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
 
@@ -56,6 +92,7 @@ const ImageDialog: React.FC<{
     setNextFile(next);
     setPrevFile(prev);
     setImageLoaded(false);
+    setImageError(null); // Reset error state when file changes
   }, [file, allFiles]);
 
   const handleNext = () => {
@@ -90,6 +127,9 @@ const ImageDialog: React.FC<{
     };
   }, [file, nextFile, prevFile]);
 
+  const normalised = file && file.source?.replace(/\\/g, "/");
+  const isHippius = file && file.source === "Hippius";
+
   return (
     <Dialog.Root
       open={!!file}
@@ -104,9 +144,9 @@ const ImageDialog: React.FC<{
           <Dialog.Content className="h-full max-w-screen-1.5xl text-grey-10 w-full flex flex-col items-center">
             {(() => {
               if (file) {
-                const imageUrl = `https://get.hippius.network/ipfs/${decodeHexCid(
-                  file.cid
-                )}`;
+                const imageUrl = isHippius
+                  ? `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
+                  : convertFileSrc(normalised ?? "");
 
                 return (
                   <>
@@ -136,20 +176,22 @@ const ImageDialog: React.FC<{
                               Download File
                             </span>
                           </button>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard
-                                .writeText(imageUrl)
-                                .then(() => {
-                                  toast.success(
-                                    "Copied to clipboard successfully!"
-                                  );
-                                });
-                            }}
-                            className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"
-                          >
-                            <Icons.Link className="size-5 [&>path]:stroke-2" />
-                          </button>
+                          {isHippius && (
+                            <button
+                              onClick={() => {
+                                navigator.clipboard
+                                  .writeText(imageUrl)
+                                  .then(() => {
+                                    toast.success(
+                                      "Copied to clipboard successfully!"
+                                    );
+                                  });
+                              }}
+                              className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"
+                            >
+                              <Icons.Link className="size-5 [&>path]:stroke-2" />
+                            </button>
+                          )}
                           <button
                             className="duration-300"
                             onClick={onCloseClicked}
@@ -186,37 +228,60 @@ const ImageDialog: React.FC<{
                       onClick={onCloseClicked}
                       className="w-full h-full flex items-center justify-center"
                     >
-                      <div
-                        className={cn(
-                          "absolute top-0 left-0 h-full flex items-center justify-center w-full pointer-events-none",
-                          imageLoaded && "opacity-0"
-                        )}
-                      >
-                        <Loader2 className="size-6 text-primary-50 animate-spin" />
-                      </div>
-                      <motion.div
-                        layout
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{
-                          opacity: imageLoaded ? 1 : 0,
-                          scale: imageLoaded ? 1 : 1.0
-                        }}
-                        transition={{ duration: 0.3, ease: "easeInOut" }}
-                        onClick={(e) => e.stopPropagation()}
-                        className="min-w-28 min-h-28 relative shadow-dialog flex max-w-full max-h-full h-fit flex-col rounded overflow-hidden"
-                      >
-                        <img
-                          onLoad={() => {
-                            setImageLoaded(true);
+                      {/* Loading spinner - only show when not loaded and no error */}
+                      {!imageLoaded && !imageError && (
+                        <div className="absolute top-0 left-0 h-full flex items-center justify-center w-full pointer-events-none">
+                          <Loader2 className="size-6 text-primary-50 animate-spin" />
+                        </div>
+                      )}
+
+                      {!imageError && (
+                        <motion.div
+                          layout
+                          initial={{ opacity: 0, scale: 0.95 }}
+                          animate={{
+                            opacity: imageLoaded || imageError ? 1 : 0,
+                            scale: imageLoaded || imageError ? 1 : 1.0
                           }}
-                          src={imageUrl}
-                          alt={file.name}
-                          className={cn(
-                            "max-h-[80vh] duration-300 opacity-0 max-w-full relative w-auto h-auto object-contain rounded",
-                            imageLoaded && "opacity-100"
-                          )}
-                        />
-                      </motion.div>
+                          transition={{ duration: 0.3, ease: "easeInOut" }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="min-w-28 min-h-28 relative shadow-dialog flex max-w-full max-h-full h-fit flex-col rounded overflow-hidden"
+                        >
+                          <img
+                            onLoad={() => {
+                              setImageLoaded(true);
+                              setImageError(null);
+                            }}
+                            onError={(e) => {
+                              setImageLoaded(false);
+                              setImageError("Failed to load image");
+                            }}
+                            src={imageUrl}
+                            alt={file.name}
+                            className={cn(
+                              "max-h-[80vh] duration-300 opacity-0 max-w-full relative w-auto h-auto object-contain rounded",
+                              imageLoaded && "opacity-100"
+                            )}
+                          />
+                        </motion.div>
+                      )}
+
+                      {/* Error Container */}
+                      {imageError && (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.95 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ duration: 0.3, ease: "easeInOut" }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-full max-w-md mx-auto shadow-dialog bg-black/70 backdrop-blur-sm rounded-lg overflow-hidden"
+                        >
+                          <ImageError
+                            handleFileDownload={handleFileDownload}
+                            message={imageError}
+                            file={file}
+                          />
+                        </motion.div>
+                      )}
                     </div>
                   </>
                 );
