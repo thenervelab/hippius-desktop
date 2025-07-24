@@ -53,7 +53,10 @@ export function filterFiles(
     if (criteria.fileTypes.length > 0) {
         result = result.filter(file => {
             const { fileFormat } = getFilePartsFromFileName(file.name);
-            const fileType = getFileTypeFromExtension(fileFormat || null);
+            let fileType = getFileTypeFromExtension(fileFormat || null);
+            if (file.isFolder) {
+                fileType = "ec";
+            }
             return criteria.fileTypes.includes(fileType as FileTypes);
         });
     }
