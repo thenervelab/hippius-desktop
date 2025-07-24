@@ -492,14 +492,22 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                 let mut files = Vec::new();
                 for row in user_rows {
                     let file_name = row.get::<String, _>("file_name");
-                    let public_path = format!("{}/{}", public_sync_path, file_name);
-                    let private_path = format!("{}/{}", private_sync_path, file_name);
+                    // Strip metadata suffixes when looking up in sync_folder_files
+                    let lookup_name = if file_name.ends_with(".ec_metadata") {
+                        file_name.trim_end_matches(".ec_metadata").to_string()
+                    } else if file_name.ends_with(".folder_ec_metadata") {
+                        file_name.trim_end_matches(".folder_ec_metadata").to_string()
+                    } else {
+                        file_name.clone()
+                    };
+                    let public_path = format!("{}/{}", public_sync_path, lookup_name);
+                    let private_path = format!("{}/{}", private_sync_path, lookup_name);
                     // Default values
                     let mut type_ = "public".to_string();
                     let mut source = row.get::<String, _>("source");
                     let mut is_folder = false;
                     // If found in sync_folder_files, use its type and is_folder
-                    if let Some((t, f)) = sync_map.get(&file_name) {
+                    if let Some((t, f)) = sync_map.get(&lookup_name) {
                         type_ = t.clone();
                         is_folder = *f;
                         if type_ == "public" {

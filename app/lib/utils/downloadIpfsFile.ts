@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
-// import { decode as base64Decode } from "js-base64";
+
 
 export const downloadIpfsFile = async (
   file: FormattedUserIpfsFile,

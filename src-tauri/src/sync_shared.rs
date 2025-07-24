@@ -61,8 +61,6 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     };
     let file_name = file_path.file_name().unwrap().to_string_lossy();
     let file_type = if is_public { "public" } else { "private" };
-    println!("file type {:?}, is_folder : {:?}, file_path {:?}", file_type, is_folder, file_path);
-    println!("Path exists: {:?}, is_dir: {:?}", file_path.exists(), file_path.is_dir());
     // Wait for directory to exist (with timeout)
     if is_folder {
         let mut attempts = 0;
@@ -71,18 +69,14 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
             attempts += 1;
         }
     }
-    println!("Path exists: {:?}, is_dir: {:?}", file_path.exists(), file_path.is_dir());
     // Rest of your function remains the same...
     if is_folder {
-        println!("[DB] Processing folder: {}", file_path.display());
         let mut files = Vec::new();
                
         // Enhanced directory reading with error handling
         match collect_files_recursively(&file_path, &mut files) {
             Ok(_) => {
-                println!("[DB] Found {} files in folder", files.len());
                 for file in &files {
-                    println!("[DB] Processing file");
                     let file_name = file.file_name().unwrap().to_string_lossy();
                     let exists: Option<(String,)> = sqlx::query_as("SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?")
                         .bind(&file_name)
@@ -91,9 +85,7 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
                         .fetch_optional(pool)
                         .await
                         .unwrap();
-                    println!("file exists: {:?}", exists.is_some());
                     if exists.is_none() {
-                        println!("file type {:?}, is_folder : {:?}, filename {:?}", file_type, is_folder, file_name);
                         sqlx::query(
                             "INSERT INTO sync_folder_files (
                                 file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
@@ -133,7 +125,6 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
         .fetch_optional(pool)
         .await
         .unwrap();
-    println!("folder exists: {:?}", exists.is_some());
     if exists.is_none() {
         sqlx::query(
             "INSERT INTO sync_folder_files (

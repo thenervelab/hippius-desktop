@@ -5,14 +5,13 @@ use crate::utils::{
     ipfs::{
         download_from_ipfs,upload_to_ipfs
     },
-    file_operations::{request_file_storage, copy_to_sync_and_add_to_db}
+    file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, request_file_storage}
 };
 use uuid::Uuid;
 use std::fs;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
-use std::path::PathBuf;
 use tempfile::tempdir;
 use crate::DB_POOL;
 use crate::commands::types::*;
@@ -25,23 +24,22 @@ use std::path::Path;
 use base64::decode;
 use sqlx::Row;
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileEntry {
-    pub file_name: String,
-    pub file_size: usize,
-    pub cid: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FileDetail {
-    pub file_name: String,
-    pub cid: String,
-    pub source: String,
-    pub file_hash: String,
-    pub miner_ids: String,
-    pub file_size: usize,
-    pub created_at: String,
-    pub last_charged_at: String,
+// Helper function to format file sizes
+fn format_file_size(size_bytes: usize) -> String {
+    const UNITS: &[&str] = &["bytes", "KB", "MB", "GB", "TB"];
+    let mut size = size_bytes as f64;
+    let mut unit_index = 0;
+    
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    
+    if unit_index == 0 {
+        format!("{} {}", size_bytes, UNITS[unit_index])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_index])
+    }
 }
 
 #[tauri::command]
@@ -82,8 +80,8 @@ pub async fn encrypt_and_upload_file(
     let file_path_cloned = file_path.clone();
     let api_url_cloned = api_url.to_string();
     let encryption_key_cloned = encryption_key.clone();
-    // Run blocking work and return file_name and metadata_cid
-    let (file_name, metadata_cid) = tokio::task::spawn_blocking(move || {
+    // Run blocking work and return file_name, metadata_cid, and chunk_pairs (filename,cid)
+    let (file_name, metadata_cid, chunk_pairs) = tokio::task::spawn_blocking(move || {
         // Read file
         let file_data = fs::read(&file_path_cloned).map_err(|e| e.to_string())?;
         // Calculate original file hash
@@ -106,6 +104,7 @@ pub async fn encrypt_and_upload_file(
         let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
         let mut all_chunk_info = vec![];
+        let mut chunk_pairs: Vec<(String,String)> = Vec::new();
         let file_id = Uuid::new_v4().to_string();
         for (orig_idx, chunk) in chunks.iter().enumerate() {
             // Split chunk into k sub-blocks
@@ -139,12 +138,20 @@ pub async fn encrypt_and_upload_file(
                 f.write_all(shard).map_err(|e| e.to_string())?;
                 let cid = upload_to_ipfs(&api_url_cloned, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
                 all_chunk_info.push(ChunkInfo {
-                    name: chunk_name,
-                    cid,
+                    name: chunk_name.clone(),
+                    path: chunk_path.to_string_lossy().to_string(),
+                    cid: CidInfo {
+                        cid: cid.clone(),
+                        filename: chunk_name.clone(),
+                        size_bytes: shard.len(),
+                        encrypted: true,
+                        size_formatted: format_file_size(shard.len()),
+                    },
                     original_chunk: orig_idx,
                     share_idx,
                     size: shard.len(),
                 });
+                chunk_pairs.push((chunk_name.clone(), cid.clone()));
             }
         }
         // Build metadata
@@ -175,19 +182,20 @@ pub async fn encrypt_and_upload_file(
         fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
         // Upload metadata
         let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
-        Ok::<(String, String), String>((file_name, metadata_cid))
+        Ok::<(String, String, Vec<(String,String)>), String>((file_name, metadata_cid, chunk_pairs))
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    // Log the metadata CID
-    println!(" Metadata CID: {}", metadata_cid);
-
-    // Call request_file_storage and log its returned CID
-    let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
+    // Build files array: metadata entry plus chunk entries
+    let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ec_metadata") { "" } else { ".ec_metadata" });
+    let mut files_for_storage = Vec::with_capacity(chunk_pairs.len() + 1);
+    files_for_storage.push((meta_filename.clone(), metadata_cid.clone()));
+    files_for_storage.extend(chunk_pairs);
+    let storage_result = request_erasure_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, false, false).await;
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, false, false, &meta_filename).await;
             println!("[encrypt_and_upload_file] : {}", res);
         },
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
@@ -246,7 +254,7 @@ pub async fn download_and_decrypt_file(
             // Download shards into Vec<Option<Vec<u8>>>
             let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
             for chunk in available_chunks {
-                let data = download_from_ipfs(&api_url, &chunk.cid).map_err(|e| e.to_string())?;
+                let data = download_from_ipfs(&api_url, &chunk.cid.cid).map_err(|e| e.to_string())?;
                 shards[chunk.share_idx] = Some(data);
             }
 
@@ -380,10 +388,10 @@ pub async fn upload_file_public(
     println!("[upload_file_public] File CID: {}", file_cid);
 
     // Call request_file_storage and log its returned CID
-    let storage_result = request_file_storage(&file_name, &file_cid, api_url, &seed_phrase).await;
+    let storage_result = request_file_storage(&file_name.clone(), &file_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id, &file_cid, &res, true, false).await;
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id, &file_cid, &res, true, false, &file_name).await;
             println!("[upload_file_public] Storage request result: {}", res);
         },
         Err(e) => println!("[upload_file_public] Storage request error: {}", e),
@@ -455,8 +463,8 @@ pub async fn public_upload_with_erasure(
 
     let file_path_cloned = file_path.clone();
     let api_url_cloned = api_url.to_string();
-    // Run blocking work and return file_name and metadata_cid
-    let (file_name, metadata_cid) = tokio::task::spawn_blocking(move || {
+    // Run blocking work and return file_name, metadata_cid and chunk_pairs
+    let (file_name, metadata_cid, chunk_pairs) = tokio::task::spawn_blocking(move || {
         // Read file
         let file_data = fs::read(&file_path_cloned).map_err(|e| e.to_string())?;
         // Calculate original file hash
@@ -479,6 +487,7 @@ pub async fn public_upload_with_erasure(
         let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
         let mut all_chunk_info = vec![];
+        let mut chunk_pairs: Vec<(String,String)> = Vec::new();
         let file_id = Uuid::new_v4().to_string();
         for (orig_idx, chunk) in chunks.iter().enumerate() {
             // Split chunk into k sub-blocks
@@ -512,12 +521,20 @@ pub async fn public_upload_with_erasure(
                 f.write_all(shard).map_err(|e| e.to_string())?;
                 let cid = upload_to_ipfs(&api_url_cloned, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
                 all_chunk_info.push(ChunkInfo {
-                    name: chunk_name,
-                    cid,
+                    name: chunk_name.clone(),
+                    path: chunk_path.to_string_lossy().to_string(),
+                    cid: CidInfo {
+                        cid: cid.clone(),
+                        filename: chunk_name.clone(),
+                        size_bytes: shard.len(),
+                        encrypted: false,
+                        size_formatted: format_file_size(shard.len()),
+                    },
                     original_chunk: orig_idx,
                     share_idx,
                     size: shard.len(),
                 });
+                chunk_pairs.push((chunk_name.clone(), cid.clone()));
             }
         }
         // Build metadata
@@ -548,19 +565,21 @@ pub async fn public_upload_with_erasure(
         fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
         // Upload metadata
         let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
-        Ok::<(String, String), String>((file_name, metadata_cid))
+        Ok::<(String, String, Vec<(String,String)>), String>((file_name, metadata_cid, chunk_pairs))
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    // Log the metadata CID
-    println!("[upload_file_no_encrypt] Metadata CID: {}", metadata_cid);
+    // Build files array: metadata + chunks
+    let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ec_metadata") { "" } else { ".ec_metadata" });
+    let mut files_for_storage = Vec::with_capacity(chunk_pairs.len() + 1);
+    files_for_storage.push((meta_filename.clone(), metadata_cid.clone()));
+    files_for_storage.extend(chunk_pairs);
 
-    // Call request_file_storage and log its returned CID
-    let storage_result = request_file_storage(&file_name, &metadata_cid, api_url, &seed_phrase).await;
+    let storage_result = request_erasure_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, true, false).await;
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, true, false, &meta_filename).await;
             println!("[upload_file_no_encrypt] : {}", res);
         },
         Err(e) => println!("[upload_file_no_encrypt] Storage request error: {}", e),
@@ -606,7 +625,7 @@ pub async fn public_download_with_erasure(
             // Download shards into Vec<Option<Vec<u8>>>
             let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
             for chunk in available_chunks {
-                let data = download_from_ipfs(&api_url, &chunk.cid).map_err(|e| e.to_string())?;
+                let data = download_from_ipfs(&api_url, &chunk.cid.cid).map_err(|e| e.to_string())?;
                 shards[chunk.share_idx] = Some(data);
             }
 
@@ -686,7 +705,6 @@ pub async fn encrypt_and_upload_folder(
     seed_phrase: String,
     encryption_key: Option<Vec<u8>>,
 ) -> Result<String, String> {
-    use std::path::Path;
     let api_url = "http://127.0.0.1:5001";
     
     let folder_path = Path::new(&folder_path);
@@ -719,10 +737,11 @@ pub async fn encrypt_and_upload_folder(
     let api_url_cloned = api_url.to_string();
     let account_id_cloned = account_id.clone();
     let encryption_key_cloned = encryption_key.clone();
-    let (folder_name, folder_metadata_cid) = tokio::task::spawn_blocking(move || {
+    let (folder_name, folder_metadata_cid, file_pairs) = tokio::task::spawn_blocking(move || {
         let mut file_entries = Vec::new();
         let mut files = Vec::new();
-        collect_files_recursively(&folder_path_cloned, &mut files);
+        let mut file_pairs: Vec<(String, String)> = Vec::new(); // Collect (filename, cid) pairs for storage request later
+        let _ = collect_files_recursively(&folder_path_cloned, &mut files);
 
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
 
@@ -796,8 +815,15 @@ pub async fn encrypt_and_upload_folder(
                         .map_err(|e| e.to_string())?;
 
                     all_chunk_info.push(ChunkInfo {
-                        name: chunk_name,
-                        cid,
+                        name: chunk_name.clone(),
+                        path: chunk_path.to_string_lossy().to_string(),
+                        cid: CidInfo {
+                            cid: cid.clone(),
+                            filename: chunk_name.clone(),
+                            size_bytes: shard.len(),
+                            encrypted: true,
+                            size_formatted: format_file_size(shard.len()),
+                        },
                         original_chunk: orig_idx,
                         share_idx,
                         size: shard.len(),
@@ -833,14 +859,19 @@ pub async fn encrypt_and_upload_folder(
             let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
             fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
 
-            let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap())
-                .map_err(|e| e.to_string())?;
+            let metadata_cid = upload_to_ipfs(
+                &api_url_cloned,
+                metadata_path.to_str().unwrap(),
+            ).map_err(|e| e.to_string())?;
 
             file_entries.push(FileEntry {
-                file_name: relative_path,
+                file_name: relative_path.clone(),
                 file_size,
-                cid: metadata_cid,
+                cid: metadata_cid.clone(),
             });
+
+            // collect for storage request
+            file_pairs.push((relative_path, metadata_cid));
         }
 
         println!("[encrypt_and_upload_folder] ✅ Folder processing done");
@@ -857,16 +888,20 @@ pub async fn encrypt_and_upload_folder(
             folder_metadata_path.to_str().unwrap(),
         ).map_err(|e| e.to_string())?;
 
-        Ok::<(String, String), String>((folder_name, folder_metadata_cid))
+        Ok::<(String, String, Vec<(String,String)>), String>((folder_name, folder_metadata_cid, file_pairs))
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    // Submit storage request
-    let storage_result = request_file_storage(&folder_name, &folder_metadata_cid, api_url, &seed_phrase).await;
+    // Build files array: folder metadata + per-file metadata
+    let mut files_for_storage = Vec::with_capacity(file_pairs.len() + 1);
+    files_for_storage.push((folder_name.clone(), folder_metadata_cid.clone()));
+    files_for_storage.extend(file_pairs);
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder_ec_metadata") { "" } else { ".folder_ec_metadata" });
+    let storage_result = request_erasure_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id,  &folder_metadata_cid, &res, false, true).await;
+            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id,  &folder_metadata_cid, &res, false, true, &folder_name.clone()).await;
             println!("[encrypt_and_upload_file] : {}", res);
         },
         Err(e) => println!("[encrypt_and_upload_folder] Storage request error: {}", e),
@@ -1039,7 +1074,7 @@ pub async fn public_upload_folder(
     let (folder_name, folder_metadata_cid) = tokio::task::spawn_blocking(move || {
         let mut file_entries = Vec::new();
         let mut files = Vec::new();
-        collect_files_recursively(&folder_path_cloned, &mut files);
+        let _ = collect_files_recursively(&folder_path_cloned, &mut files);
 
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
 
@@ -1062,9 +1097,9 @@ pub async fn public_upload_folder(
                 .map_err(|e| e.to_string())?;
 
             file_entries.push(FileEntry {
-                file_name: relative_path,
+                file_name: relative_path.clone(),
                 file_size,
-                cid: file_cid,
+                cid: file_cid.clone(),
             });
         }
 
@@ -1088,11 +1123,10 @@ pub async fn public_upload_folder(
     .map_err(|e| e.to_string())??;
 
     // Submit storage request
-    let storage_result = request_file_storage(&folder_name, &folder_metadata_cid, api_url, &seed_phrase).await;
+    let storage_result = request_file_storage(&folder_name.clone(), &folder_metadata_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            println!("is puiblic folder upload");
-            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id, &folder_metadata_cid, &res, true, true).await;
+            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id, &folder_metadata_cid, &res, true, true, &folder_name.clone()).await;
             println!("[public_upload_folder] Storage request result: {}", res);
         },
         Err(e) => println!("[public_upload_folder] Storage request error: {}", e),
