@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { hexToCid } from "../../utils/hexToCid";
+import { toast } from "sonner";
 
 export type FileDetail = {
   filename: string;
@@ -27,9 +28,11 @@ export type FormattedUserIpfsFile = {
   type?: string;
 };
 
-// Add new type to include total storage size and length
+// Updated to include file size breakdown
 export type UserIpfsResponse = {
   files: FormattedUserIpfsFile[];
+  publicStorageSize: bigint;
+  privateStorageSize: bigint;
   totalStorageSize: bigint;
   length: number;
 };
@@ -47,6 +50,11 @@ type UserProfileFile = {
   isFolder: boolean;
   type: string;
 };
+
+interface FileSizeBreakdown {
+  publicSize: number;
+  privateSize: number;
+}
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
 
@@ -88,16 +96,24 @@ export const useUserIpfsFiles = () => {
       }
 
       try {
-        // Get total storage size from local database instead of blockchain
-        let totalStorageSize = BigInt(0);
+        let publicStorageSize = BigInt(0);
+        let privateStorageSize = BigInt(0);
+
         try {
-          const totalSize = await invoke<number>("get_user_total_file_size", {
-            owner: polkadotAddress
-          });
-          // Convert the returned number to BigInt
-          totalStorageSize = BigInt(totalSize);
+          const sizeBreakdown = await invoke<FileSizeBreakdown>(
+            "get_user_total_file_size",
+            {
+              owner: polkadotAddress
+            }
+          );
+
+          publicStorageSize = BigInt(sizeBreakdown.publicSize);
+          privateStorageSize = BigInt(sizeBreakdown.privateSize);
         } catch (error) {
-          console.error("Error fetching total storage size from DB:", error);
+          console.error(
+            "Error fetching storage size breakdown from DB:",
+            error
+          );
         }
 
         // Fetch files from local database
@@ -132,7 +148,8 @@ export const useUserIpfsFiles = () => {
 
         return {
           files: formattedFiles,
-          totalStorageSize
+          publicStorageSize,
+          privateStorageSize
         };
       } catch (error) {
         console.error("Error fetching user files from DB:", error);

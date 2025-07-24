@@ -30,6 +30,7 @@ import FilesContent from "./FilesContent";
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { api } = usePolkadotApi();
   const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
+  const isPrivateView = activeSubMenuItem === "Private";
   const {
     data,
     isLoading,
@@ -209,11 +210,18 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     []
   );
 
-  // Format storage size with proper units
+  // Format storage size with proper units based on view type
   const formattedStorageSize = useMemo(() => {
-    if (!data?.totalStorageSize) return "0 B";
-    return formatBytesFromBigInt(data.totalStorageSize);
-  }, [data?.totalStorageSize]);
+    if (!data) return "0 B";
+
+    if (isPrivateView && data.privateStorageSize !== undefined) {
+      return formatBytesFromBigInt(data.privateStorageSize);
+    } else if (!isPrivateView && data.publicStorageSize !== undefined) {
+      return formatBytesFromBigInt(data.publicStorageSize);
+    } else {
+      return "0 B";
+    }
+  }, [data, isPrivateView]);
 
   // Handle resetting filters
   const handleResetFilters = useCallback(() => {
@@ -259,7 +267,9 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       } catch (error) {
         console.error("Failed to set sync folder:", error);
         toast.error(
-          `Failed to set sync folder: ${error instanceof Error ? error.message : "Unknown error"}`
+          `Failed to set sync folder: ${
+            error instanceof Error ? error.message : "Unknown error"
+          }`
         );
       }
     },
@@ -334,7 +344,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           isLoading={isLoading}
           isFetching={isFetching}
           isProcessingTimestamps={isProcessingTimestamps}
-          isPrivateView={activeSubMenuItem === "Private"}
+          isPrivateView={isPrivateView}
           filteredData={filteredData}
           displayedData={displayedData}
           searchTerm={searchTerm}
