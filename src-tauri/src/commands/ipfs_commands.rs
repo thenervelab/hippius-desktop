@@ -6,8 +6,7 @@ use crate::utils::{
         download_from_ipfs,upload_to_ipfs
     },
     file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, 
-        request_file_storage, remove_file_from_sync_and_db
-    , remove_from_sync_folder, copy_to_sync_folder}
+        request_file_storage , remove_from_sync_folder, copy_to_sync_folder}
 };
 use uuid::Uuid;
 use std::fs;
@@ -905,13 +904,13 @@ pub async fn encrypt_and_upload_folder(
 
     // Build files array: folder metadata + per-file metadata
     let mut files_for_storage = Vec::with_capacity(file_pairs.len() + 1);
-    files_for_storage.push((folder_name.clone(), folder_metadata_cid.clone()));
-    files_for_storage.extend(file_pairs);
     let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+    files_for_storage.push((meta_filename.clone(), folder_metadata_cid.clone()));
+    files_for_storage.extend(file_pairs);
     let storage_result = request_erasure_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id,  &folder_metadata_cid, &res, false, true, &folder_name.clone()).await;
+            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id,  &folder_metadata_cid, &res, false, true, &meta_filename.clone()).await;
             println!("[encrypt_and_upload_file] : {}", res);
         },
         Err(e) => println!("[encrypt_and_upload_folder] Storage request error: {}", e),
@@ -1565,7 +1564,7 @@ pub async fn add_file_to_private_folder(
             std::fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
             let metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
             let file_entry = crate::commands::types::FileEntry {
-                file_name: file_name_cloned.clone(),
+                file_name: meta_filename.clone(), 
                 file_size,
                 cid: metadata_cid.clone(),
             };
@@ -1608,16 +1607,31 @@ pub async fn add_file_to_private_folder(
             }
         })?;
 
+    // Sanitize folder_name for local sync folder usage
+    let sanitized_folder_name = if folder_name.ends_with("-folder.ec_metadata") {
+        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if folder_name.ends_with("-folder") {
+        folder_name.trim_end_matches("-folder").to_string()
+    } else {
+        folder_name.clone()
+    };
+
+    // Sanitize file_name for local sync file usage
+    let sanitized_file_name = if file_name.ends_with(".ec_metadata") {
+        file_name.trim_end_matches(".ec_metadata").to_string()
+    } else {
+        file_name.clone()
+    };
     // Update the database and sync folder
     copy_to_sync_folder(
         file_path_obj,
-        &folder_name,
+        &sanitized_folder_name,
         &account_id,
         &new_folder_metadata_cid,
         &storage_result,
         false,
         false,
-        &file_name,
+        &sanitized_file_name,
     ).await;
 
     Ok(new_folder_metadata_cid)
@@ -1682,7 +1696,21 @@ pub async fn remove_file_from_private_folder(
                 format!("Failed to request file storage: {}", e)
             }
         })?;
+    // Sanitize folder_name for local sync folder usage
+    let sanitized_folder_name = if folder_name.ends_with("-folder.ec_metadata") {
+        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if folder_name.ends_with("-folder") {
+        folder_name.trim_end_matches("-folder").to_string()
+    } else {
+        folder_name.clone()
+    };
 
+    // Sanitize file_name for local sync file usage
+    let sanitized_file_name = if file_name.ends_with(".ec_metadata") {
+        file_name.trim_end_matches(".ec_metadata").to_string()
+    } else {
+        file_name.clone()
+    };
     // Remove the file from the sync directory and DB
     remove_from_sync_folder(&file_name, &folder_name, false, false).await;
 
