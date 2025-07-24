@@ -177,7 +177,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
         itemTitle: "Download",
         onItemClick: () => handleDownload(file)
       },
-      ...(fileType === "video" || fileType === "image" || fileType === "pdfDocument"
+      ...(fileType === "video" || fileType === "image" || fileType === "PDF"
         ? [
           {
             icon: <Icons.Eye className="size-4" />,
@@ -259,7 +259,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
               />
             </ImageDialogTrigger>
           );
-        } else if (fileType === "pdfDocument") {
+        } else if (fileType === "PDF") {
           return (
             <PdfDialogTrigger
               onClick={() => handleSetSelectedFile(info.row.original)}

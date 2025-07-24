@@ -38,6 +38,29 @@ export const useDeleteIpfsFile = ({ cid, fileToDelete: file }: { cid: string, fi
 
             console.log("fileToDelete", fileToDelete);
 
+            if (fileToDelete.isFolder) {
+                return false; // TODO: Implement folder deletion logic
+                // try {
+                //     if (!mnemonic) {
+                //         throw new Error("Seed phrase required to delete local files");
+                //     }
+
+                //     await invoke("delete_and_unpin_folder_by_name", {
+                //         folderName: fileToDelete.name,
+                //         seedPhrase: mnemonic
+                //     });
+
+                //     await queryClient.refetchQueries({
+                //         queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
+                //     });
+                //     console.log("Local file deleted successfully");
+                //     return;
+                // } catch (error) {
+                //     console.error("Failed to delete local file:", error);
+                //     throw new Error(`Failed to delete local file: ${error instanceof Error ? error.message : String(error)}`);
+                // }
+            }
+
             if (fileToDelete.source && fileToDelete.source !== "Hippius") {
                 try {
                     if (!mnemonic) {

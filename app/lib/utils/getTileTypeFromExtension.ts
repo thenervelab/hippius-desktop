@@ -4,9 +4,9 @@ import { SUPPORTED_VIDEO_FORMATS } from "@/lib/constants/supportedFileTypes";
 export const SUPPORTED_FILE_TYPES = [
     "image",
     "video",
-    "pdfDocument",
-    "presentationDocument",
-    "spreadSheet",
+    "PDF",
+    "PPT",
+    "XLS",
     "document",
     "doc",
     "ec",
@@ -21,9 +21,9 @@ export const extensionGroups: Record<FileTypes, string[]> = {
     doc: ["doc", "docx"],
     code: ["json"],
     svg: ["svg"],
-    pdfDocument: ["pdf"],
-    presentationDocument: ["ppt", "pptx"],
-    spreadSheet: ["xls", "xlsx"],
+    PDF: ["pdf"],
+    PPT: ["ppt", "pptx"],
+    XLS: ["xls", "xlsx"],
     ec: ["ec_metadata"],
 };
 

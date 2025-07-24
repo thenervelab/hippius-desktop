@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle, Eye, EyeOff, FolderAdd, ShieldSecurity } from "@/components/ui/icons";
-import { Graphsheet, RevealTextLine } from "@/app/components/ui";
+import { AbstractIconWrapper, RevealTextLine } from "@/app/components/ui";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
 import { AlertCircle, FolderIcon } from "lucide-react";
@@ -137,24 +137,13 @@ export default function FolderUploadDialog({
 
                     <div className="flex items-center sm:justify-center">
                         <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
-                            <Graphsheet
-                                majorCell={{
-                                    lineColor: [31, 80, 189, 1],
-                                    lineWidth: 2,
-                                    cellDim: 40,
-                                }}
-                                minorCell={{
-                                    lineColor: [31, 80, 189, 1],
-                                    lineWidth: 2,
-                                    cellDim: 40,
-                                }}
-                                className="absolute w-full h-full inset-0 duration-300 opacity-10"
-                            />
-                            <FolderAdd className="size-10 text-primary-50" />
+                            <AbstractIconWrapper className="size-10 rounded-2xl text-primary-50 ">
+                                <FolderAdd className="absolute size-6 text-primary-50" />
+                            </AbstractIconWrapper>
                         </div>
                     </div>
 
-                    <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center mt-2">
+                    <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center">
                         Upload Folder
                     </Dialog.Title>
 
@@ -245,14 +234,7 @@ export default function FolderUploadDialog({
                             </div>
                         )}
 
-                        <div className="flex gap-2 pt-2">
-                            <button
-                                type="button"
-                                onClick={handleClose}
-                                className="w-full py-3.5 bg-grey-100 border border-grey-80 rounded text-grey-10 hover:bg-grey-90 transition text-lg font-medium"
-                            >
-                                Cancel
-                            </button>
+                        <div className="flex flex-col gap-2">
                             <button
                                 type="submit"
                                 className="w-full p-1 bg-primary-50 text-grey-100 rounded shadow border border-primary-40 hover:bg-primary-40 transition"
@@ -260,6 +242,13 @@ export default function FolderUploadDialog({
                                 <div className="py-2.5 rounded border border-primary-40 text-lg">
                                     Upload Folder
                                 </div>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleClose}
+                                className="w-full py-3.5 bg-grey-100 border border-grey-80 rounded text-grey-10 hover:bg-grey-90 transition text-lg font-medium"
+                            >
+                                Cancel
                             </button>
                         </div>
                     </form>

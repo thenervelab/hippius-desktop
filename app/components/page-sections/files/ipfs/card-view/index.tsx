@@ -155,7 +155,7 @@ const CardView: FC<CardViewProps> = ({
                 if (
                   fileType === "video" ||
                   fileType === "image" ||
-                  fileType === "pdfDocument"
+                  fileType === "PDF"
                 ) {
                   setSelectedFile?.(file);
                 } else if (fileType === "ec") {
@@ -190,7 +190,7 @@ const CardView: FC<CardViewProps> = ({
                           },
                           ...(fileType === "video" ||
                             fileType === "image" ||
-                            fileType === "pdfDocument"
+                            fileType === "PDF"
                             ? [
                               {
                                 icon: <Icons.Eye className="size-4" />,

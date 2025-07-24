@@ -30,14 +30,14 @@ const fileTypes: Array<{
       icon: File,
       color: "text-primary-70 fill-primary-60",
     },
-    { type: "pdfDocument", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
+    { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
     {
-      type: "presentationDocument",
+      type: "PPT",
       label: "PPT",
       icon: Presentation,
       color: "text-[#fbbc04]",
     },
-    { type: "spreadSheet", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
+    { type: "XLS", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
     { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
     { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
     { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
@@ -117,13 +117,13 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
                 readOnly
                 className="w-4 h-4 text-primary-60 bg-grey-90 border-grey-70 rounded focus:ring-primary-60 focus:ring-2 pointer-events-none"
               />
-              <div className="flex gap-1.5">
+              <div className="flex gap-1.5 items-center">
                 <div className="flex justify-center items-center p-0.5">
                   <fileType.icon
-                    className={cn("size-[13px]", fileType.color)}
+                    className={cn("size-4", fileType.color)}
                   />
                 </div>
-                <span className="flex-1">{fileType.label}</span>
+                <span className="flex-1 font-medium text-xs">{fileType.label}</span>
               </div>
             </Menubar.Item>
           ))}

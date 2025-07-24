@@ -2,7 +2,7 @@ import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { getFilePartsFromFileName } from "./getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "./getTileTypeFromExtension";
 
-export type ViewableFileType = "image" | "video" | "pdfDocument";
+export type ViewableFileType = "image" | "video" | "PDF";
 
 /**
  * Determines if a file is viewable in a dialog (image, video, or PDF)
@@ -10,7 +10,7 @@ export type ViewableFileType = "image" | "video" | "pdfDocument";
 export function isViewableFile(file: FormattedUserIpfsFile): boolean {
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
-  return fileType === "image" || fileType === "video" || fileType === "pdfDocument";
+  return fileType === "image" || fileType === "video" || fileType === "PDF";
 }
 
 /**
@@ -20,7 +20,7 @@ export function getViewableFileType(file: FormattedUserIpfsFile): ViewableFileTy
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
 
-  if (fileType === "image" || fileType === "video" || fileType === "pdfDocument") {
+  if (fileType === "image" || fileType === "video" || fileType === "PDF") {
     return fileType as ViewableFileType;
   }
 

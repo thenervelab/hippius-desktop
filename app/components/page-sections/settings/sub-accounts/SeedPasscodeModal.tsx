@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle, ShieldSecurity } from "@/components/ui/icons";
-import { Graphsheet, RevealTextLine } from "@/app/components/ui";
+import { AbstractIconWrapper, RevealTextLine } from "@/app/components/ui";
 import PasscodeInput from "../encryption-key/PasscodeInput";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
@@ -127,20 +127,9 @@ export default function SeedPasscodeModal({
 
                     <div className="flex items-center sm:justify-center">
                         <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
-                            <Graphsheet
-                                majorCell={{
-                                    lineColor: [31, 80, 189, 1],
-                                    lineWidth: 2,
-                                    cellDim: 40,
-                                }}
-                                minorCell={{
-                                    lineColor: [31, 80, 189, 1],
-                                    lineWidth: 2,
-                                    cellDim: 40,
-                                }}
-                                className="absolute w-full h-full inset-0 duration-300 opacity-10"
-                            />
-                            <ShieldSecurity className="size-10 text-primary-50" />
+                            <AbstractIconWrapper className="size-10 rounded-2xl text-primary-50 ">
+                                <ShieldSecurity className="absolute size-6 text-primary-50" />
+                            </AbstractIconWrapper>
                         </div>
                     </div>
 

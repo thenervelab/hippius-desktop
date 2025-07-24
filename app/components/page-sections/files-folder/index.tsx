@@ -258,15 +258,13 @@ export default function FolderView({ folderCid, folderName = "Folder" }: FolderV
     return (
         <div className="container mx-auto py-8 px-4">
             <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                    <Link
-                        href="/files"
-                        className="flex items-center text-grey-50 hover:text-grey-30"
-                    >
-                        <Icons.ArrowLeft className="size-4 mr-1" />
-                        Back
-                    </Link>
-                </div>
+                <Link
+                    className="flex gap-2 font-semibold text-lg items-center"
+                    href="/files"
+                >
+                    <Icons.ArrowLeft className="size-5 text-grey-10" />
+                    Back
+                </Link>
 
                 <div className="flex items-center gap-4">
                     {/* Search Input */}

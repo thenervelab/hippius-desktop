@@ -115,7 +115,7 @@ export default function FileContextMenu({
           </button>
           {(fileType === "video" ||
             fileType === "image" ||
-            fileType === "pdfDocument") &&
+            fileType === "PDF") &&
             onSelectFile && (
               <button
                 className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"

@@ -253,6 +253,7 @@ const ImageDialog: React.FC<{
                               setImageError(null);
                             }}
                             onError={(e) => {
+                              console.error("error", e);
                               setImageLoaded(false);
                               setImageError("Failed to load image");
                             }}
