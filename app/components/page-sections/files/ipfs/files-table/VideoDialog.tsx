@@ -186,6 +186,7 @@ const VideoDialog: React.FC<{
                         isHippius={isHippius}
                         fileFormat={fileFormat}
                         file={file}
+                        handleFileDownload={handleFileDownload}
                       />
                     </div>
                   </>
