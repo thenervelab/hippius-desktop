@@ -14,6 +14,30 @@ use crate::sync_shared::RECENTLY_UPLOADED_FOLDERS;
 use tokio::time::Duration;
 use tokio::time::sleep;
 
+// Helper to sanitize file/folder names for DB and filesystem operations
+fn sanitize_file_name(name: &str) -> String {
+    if name.ends_with("-folder.ec_metadata") {
+        name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if name.ends_with("-folder") {
+        name.trim_end_matches("-folder").to_string()
+    } else if name.ends_with(".ec_metadata") {
+        name.trim_end_matches(".ec_metadata").to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+fn build_storage_json(files: &[(String, String)]) -> String {
+    let json_vec: Vec<_> = files
+        .iter()
+        .map(|(filename, cid)| serde_json::json!({
+            "filename": filename,
+            "cid": cid,
+        }))
+        .collect();
+    serde_json::to_string(&serde_json::Value::Array(json_vec)).unwrap()
+}
+
 pub async fn request_file_storage(
     file_name: &str,
     file_cid: &str,
@@ -59,6 +83,7 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
                 .map_err(|e| format!("DB error (fetch): {e}"))?;
 
         if let Some((main_req_hash,)) = hashes.first() {
+            println!("main_req_hash for unpinning {:?}",main_req_hash);
             // 1. Create the JSON
             let json = serde_json::json!([{
                 "filename": file_name,
@@ -106,15 +131,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
 
         // Sanitize file_name for local sync usage
-        let sanitized_file_name = if file_name.ends_with("-folder.ec_metadata") {
-            file_name.trim_end_matches("-folder.ec_metadata").to_string()
-        } else if file_name.ends_with("-folder") {
-            file_name.trim_end_matches("-folder").to_string()
-        } else if file_name.ends_with(".ec_metadata") {
-            file_name.trim_end_matches(".ec_metadata").to_string()
-        } else {
-            file_name.to_string()
-        };
+        let sanitized_file_name = sanitize_file_name(file_name);
         // Delete from user_profiles
         let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
             .bind(file_name)
@@ -261,7 +278,7 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
-
+        println!("request_cid {:?}",request_cid);
         if exists.is_none() {
             // Insert minimal record into user_profiles with is_assigned = false and file_hash set
             let _ = sqlx::query(
@@ -392,19 +409,44 @@ pub async fn request_erasure_storage(
         return Err("files array cannot be empty".to_string());
     }
 
-    let json_vec: Vec<_> = files
-        .iter()
-        .map(|(filename, cid)| serde_json::json!({
-            "filename": filename,
-            "cid": cid,
-        }))
-        .collect();
-    let json = serde_json::Value::Array(json_vec);
-    let json_string = serde_json::to_string(&json).unwrap();
-
+    let json_string = build_storage_json(files);
+    println!("[request_erasure_storage] JSON CID requesting is : {}", json_string);
     // 2. Pin JSON to local IPFS node
     let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
     println!("[request_erasure_storage] JSON CID requesting is : {}", json_cid);
+    // 3. Construct FileInput
+    let file_input = FileInputWrapper {
+        file_hash: json_cid.as_bytes().to_vec(),
+        file_name: file_name.as_bytes().to_vec(),
+    };
+
+    // 4. Call storage_request_tauri (still call it for side effects, but ignore its result)
+    let _ = crate::commands::substrate_tx::storage_request_tauri(
+        vec![file_input],
+        None,
+        seed_phrase.to_string(),
+    )
+    .await?;
+
+    Ok(json_cid)
+}
+
+pub async fn request_folder_storage(
+    file_name: &str,
+    files: &[(String, String)],
+    api_url: &str,
+    seed_phrase: &str,
+) -> Result<String, String> {
+    println!("[request_folder_storage] files: {:?}", files);
+    if files.is_empty() {
+        return Err("files array cannot be empty".to_string());
+    }
+
+    let json_string = build_storage_json(files);
+    println!("[request_folder_storage] JSON CID requesting is : {}", json_string);
+    // 2. Pin JSON to local IPFS node
+    let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
+    println!("[request_folder_storage] JSON CID requesting is : {}", json_cid);
     // 3. Construct FileInput
     let file_input = FileInputWrapper {
         file_hash: json_cid.as_bytes().to_vec(),
@@ -669,5 +711,40 @@ async fn insert_file_if_not_exists_in_folder(pool: &sqlx::Pool<sqlx::Sqlite>, fi
         .bind(chrono::Utc::now().timestamp())
         .execute(pool)
         .await;
+    }
+}
+
+/// Deletes all user_profiles records with the given file name and unpins the file.
+/// Also deletes from sync_folder_files. Returns the total number of deleted records or an error.
+pub async fn delete_and_unpin_user_file_records_by_name_from_folder(
+    file_name: &str,
+    folder_name: &str, 
+    is_folder: bool,
+    is_public: bool,
+    seed_phrase: &str,
+    orignal_file_name: &str,
+) -> Result<u64, String> {
+    if let Some(pool) = DB_POOL.get() {
+        // Call unpin_user_file_by_name after successful deletes
+        unpin_user_file_by_name(orignal_file_name, seed_phrase)
+            .await
+            .map_err(|e| format!("Unpin failed for '{}': {}", orignal_file_name, e))?;
+
+        // Delete from user_profiles
+        let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
+            .bind(orignal_file_name)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
+
+        // Remove from sync folder as well
+        remove_from_sync_folder(&file_name, &folder_name, is_public, is_folder).await;
+
+        // Calculate total rows affected
+        let total_deleted = result1.rows_affected();
+
+        Ok(total_deleted)
+    } else {
+        Err("DB_POOL not initialized".to_string())
     }
 }

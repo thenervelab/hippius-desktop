@@ -95,31 +95,31 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
     let startup_account_id = account_id.clone();
     let startup_seed_phrase = seed_phrase.clone();
     tokio::spawn(async move {
-        if let Some(pool) = crate::DB_POOL.get() {
+    if let Some(pool) = crate::DB_POOL.get() {
             let sync_path = PathBuf::from(get_private_sync_path().await);
 
             let mut paths = Vec::new();
             collect_paths_recursively(&sync_path, &mut paths);
             let dir_paths: HashSet<String> = paths.iter()
                 .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()))
-                .collect();
+            .collect();
             let db_paths: Vec<(String, bool)> = sqlx::query_as(
                 "SELECT file_name, is_folder FROM sync_folder_files WHERE owner = ? AND type = 'private'"
             )
             .bind(&startup_account_id)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default();
-
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+    
             for (db_path, is_folder) in &db_paths {
                 if !dir_paths.contains(db_path) {
                     println!("[Startup] Path deleted from sync folder: {} (is_folder: {})", db_path, is_folder);
                     if delete_and_unpin_user_file_records_by_name(db_path, &startup_seed_phrase, false).await.is_ok() {
-                        let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
+                    let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                             .bind(&startup_account_id)
                             .bind(db_path)
-                            .execute(pool)
-                            .await;
+                        .execute(pool)
+                        .await;
                     }
                 }
             }
@@ -314,14 +314,14 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                         if let Some(sender) = UPLOAD_SENDER.get() {
                             for (path, is_folder) in paths {
                                 println!("[Watcher][Create] Enqueuing for upload: {} (is_folder: {})", path.to_string_lossy(), is_folder);
-                                sender
-                                    .send(UploadJob {
-                                        account_id: account_id.clone(),
-                                        seed_phrase: seed_phrase.clone(),
+                                    sender
+                                        .send(UploadJob {
+                                            account_id: account_id.clone(),
+                                            seed_phrase: seed_phrase.clone(),
                                         file_path: path.to_string_lossy().to_string(),
                                         is_folder,
-                                    })
-                                    .unwrap();
+                                            })
+                                            .unwrap();
                             }
                         }
                     }
@@ -352,9 +352,9 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                     if result.is_ok() {
                         if let Some(pool) = crate::DB_POOL.get() {
                             let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
-                                .bind(account_id)
-                                .bind(file_name)
-                                .execute(pool)
+                                    .bind(account_id)
+                                    .bind(file_name)
+                                    .execute(pool)
                                 .await;
                             println!("[Watcher] Successfully deleted old records for '{}'", file_name);
                         }
@@ -400,9 +400,9 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                             if result.is_ok() {
                                 if let Some(pool) = crate::DB_POOL.get() {
                                     let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
-                                        .bind(account_id)
-                                        .bind(file_name)
-                                        .execute(pool)
+                                            .bind(account_id)
+                                            .bind(file_name)
+                                            .execute(pool)
                                         .await;
                                     println!("[Watcher] Successfully deleted records for '{}'", file_name);
                                 }
@@ -424,9 +424,9 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                     if result.is_ok() {
                         if let Some(pool) = crate::DB_POOL.get() {
                             let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
-                                .bind(account_id)
-                                .bind(file_name)
-                                .execute(pool)
+                                    .bind(account_id)
+                                    .bind(file_name)
+                                    .execute(pool)
                                 .await;
                         }
                     }
@@ -456,10 +456,10 @@ async fn upload_path(path: &Path, account_id: &str, seed_phrase: &str, is_folder
     let _guard = UPLOAD_LOCK.lock().unwrap();
     let result = if is_folder {
         encrypt_and_upload_folder(
-            account_id.to_string(),
+        account_id.to_string(),
             path_str.clone(),
-            seed_phrase.to_string(),
-            None,
+        seed_phrase.to_string(),
+        None,
         ).await
     } else {
         encrypt_and_upload_file(
@@ -520,16 +520,16 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
 
     let should_upload = if let Some(pool) = crate::DB_POOL.get() {
         let row: Option<(bool,)> = sqlx::query_as(
-            "SELECT is_assigned FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
-        )
-        .bind(account_id)
-        .bind(&file_name)
-        .fetch_optional(pool)
-        .await
+                    "SELECT is_assigned FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+                )
+                .bind(account_id)
+                .bind(&file_name)
+                .fetch_optional(pool)
+                .await
         .unwrap_or(None);
         matches!(row, Some((true,)))
-    } else {
-        false
+        } else {
+            false
     };
 
     if !should_upload {
@@ -574,10 +574,10 @@ async fn is_path_in_profile_db(path: &Path, account_id: &str) -> bool {
 
     let found = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT 1 FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
-    )
-    .bind(account_id)
-    .bind(file_name)
-    .fetch_optional(pool)
+        )
+        .bind(account_id)
+        .bind(file_name)
+        .fetch_optional(pool)
     .await;
 
     if matches!(found, Ok(Some(_))) {
