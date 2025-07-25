@@ -189,7 +189,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
     Object.values(fieldError).every((v) => !v);
 
   return (
-    <div className="w-full relative ">
+    <div className="w-full relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
       <div
         className={cn(
           "border relative border-grey-80 overflow-hidden rounded-xl w-full h-full",

@@ -15,7 +15,11 @@ import { ConfirmModal, Icons } from "@/app/components/ui";
 import { useSubAccounts } from "@/app/lib/hooks/api/useSubAccounts";
 import { WalletManager } from "@/app/lib/web3/wallet-manager";
 import SectionHeader from "../SectionHeader";
-import { saveSubAccountSeed, hasSubAccountSeed, deleteSubAccountSeed } from "@/app/lib/helpers/subAccountSeedsDb";
+import {
+  saveSubAccountSeed,
+  hasSubAccountSeed,
+  deleteSubAccountSeed
+} from "@/app/lib/helpers/subAccountSeedsDb";
 import { getWalletRecord } from "@/app/lib/helpers/walletDb";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import SeedPasscodeModal from "./SeedPasscodeModal";
@@ -29,7 +33,9 @@ const SubAccounts: React.FC = () => {
   // form + draft state
   const [formOpen, setFormOpen] = useState(false);
   const [draftAddress, setDraftAddress] = useState("");
-  const [draftRole, setDraftRole] = useState<"Upload" | "UploadDelete">("Upload");
+  const [draftRole, setDraftRole] = useState<"Upload" | "UploadDelete">(
+    "Upload"
+  );
   const [openNewAccountModal, setOpenNewAccountModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [generatedMnemonic, setGeneratedMnemonic] = useState("");
@@ -46,7 +52,9 @@ const SubAccounts: React.FC = () => {
   const [isFromDirectCreation, setIsFromDirectCreation] = useState(false);
 
   // Track sub-accounts with seeds
-  const [accountsWithSeeds, setAccountsWithSeeds] = useState<Set<string>>(new Set());
+  const [accountsWithSeeds, setAccountsWithSeeds] = useState<Set<string>>(
+    new Set()
+  );
 
   // confirm modal state
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -136,49 +144,64 @@ const SubAccounts: React.FC = () => {
       setTxLoading(false);
       setConfirmOpen(false);
     }
-  }, [pending, api, isConnected, walletManager, reload, generatedMnemonic, draftAddress, isFromDirectCreation]);
+  }, [
+    pending,
+    api,
+    isConnected,
+    walletManager,
+    reload,
+    generatedMnemonic,
+    draftAddress,
+    isFromDirectCreation
+  ]);
 
-  const handlePasscodeSubmit = useCallback(async ({ passcode }: { seed?: string; passcode: string }) => {
-    try {
-      const walletRecord = await getWalletRecord();
-      if (!walletRecord) throw new Error("No wallet record found");
+  const handlePasscodeSubmit = useCallback(
+    async ({ passcode }: { seed?: string; passcode: string }) => {
+      try {
+        const walletRecord = await getWalletRecord();
+        if (!walletRecord) throw new Error("No wallet record found");
 
-      if (hashPasscode(passcode) !== walletRecord.passcodeHash) {
-        return { success: false, error: "Incorrect passcode" };
+        if (hashPasscode(passcode) !== walletRecord.passcodeHash) {
+          return { success: false, error: "Incorrect passcode" };
+        }
+
+        await saveSubAccountSeed(addressForSeed, seedToSave, passcode);
+        setAccountsWithSeeds((prev) => new Set([...prev, addressForSeed]));
+
+        return { success: true };
+      } catch (error) {
+        console.error("Failed to save seed:", error);
+        return { success: false, error: "Failed to save seed" };
       }
+    },
+    [seedToSave, addressForSeed]
+  );
 
-      await saveSubAccountSeed(addressForSeed, seedToSave, passcode);
-      setAccountsWithSeeds(prev => new Set([...prev, addressForSeed]));
+  const handleSeedAndPasscodeSubmit = useCallback(
+    async ({ seed, passcode }: { seed?: string; passcode: string }) => {
+      try {
+        if (!seed) {
+          return { success: false, error: "Seed phrase is required" };
+        }
 
-      return { success: true };
-    } catch (error) {
-      console.error("Failed to save seed:", error);
-      return { success: false, error: "Failed to save seed" };
-    }
-  }, [seedToSave, addressForSeed]);
+        const walletRecord = await getWalletRecord();
+        if (!walletRecord) throw new Error("No wallet record found");
 
-  const handleSeedAndPasscodeSubmit = useCallback(async ({ seed, passcode }: { seed?: string; passcode: string }) => {
-    try {
-      if (!seed) {
-        return { success: false, error: "Seed phrase is required" };
+        if (hashPasscode(passcode) !== walletRecord.passcodeHash) {
+          return { success: false, error: "Incorrect passcode" };
+        }
+
+        await saveSubAccountSeed(addressForSeed, seed, passcode);
+        setAccountsWithSeeds((prev) => new Set([...prev, addressForSeed]));
+
+        return { success: true };
+      } catch (error) {
+        console.error("Failed to save seed:", error);
+        return { success: false, error: "Failed to save seed" };
       }
-
-      const walletRecord = await getWalletRecord();
-      if (!walletRecord) throw new Error("No wallet record found");
-
-      if (hashPasscode(passcode) !== walletRecord.passcodeHash) {
-        return { success: false, error: "Incorrect passcode" };
-      }
-
-      await saveSubAccountSeed(addressForSeed, seed, passcode);
-      setAccountsWithSeeds(prev => new Set([...prev, addressForSeed]));
-
-      return { success: true };
-    } catch (error) {
-      console.error("Failed to save seed:", error);
-      return { success: false, error: "Failed to save seed" };
-    }
-  }, [addressForSeed]);
+    },
+    [addressForSeed]
+  );
 
   const onCreate = useCallback(() => {
     if (!draftAddress.trim()) {
@@ -201,7 +224,7 @@ const SubAccounts: React.FC = () => {
       if (accountsWithSeeds.has(addr)) {
         try {
           await deleteSubAccountSeed(addr);
-          setAccountsWithSeeds(prev => {
+          setAccountsWithSeeds((prev) => {
             const updated = new Set(prev);
             updated.delete(addr);
             return updated;
@@ -226,9 +249,12 @@ const SubAccounts: React.FC = () => {
     loadAccountsWithSeeds();
   }, [loadAccountsWithSeeds]);
 
-  const checkHasSeed = useCallback((address: string) => {
-    return accountsWithSeeds.has(address);
-  }, [accountsWithSeeds]);
+  const checkHasSeed = useCallback(
+    (address: string) => {
+      return accountsWithSeeds.has(address);
+    },
+    [accountsWithSeeds]
+  );
 
   const handleGenerateWallet = async () => {
     setError("");
@@ -284,7 +310,7 @@ const SubAccounts: React.FC = () => {
   }, []);
 
   return (
-    <div className="w-full space-y-6 border broder-grey-80 rounded-lg p-4 ">
+    <div className="w-full space-y-6 border broder-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
       <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center flex-wrap gap-2">
         <div className="flex justify-between w-full sm:w-auto">
           <SectionHeader

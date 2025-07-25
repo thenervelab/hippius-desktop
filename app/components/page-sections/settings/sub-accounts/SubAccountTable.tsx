@@ -4,7 +4,7 @@ import React, { useState, useMemo } from "react";
 import {
   createColumnHelper,
   getCoreRowModel,
-  useReactTable,
+  useReactTable
 } from "@tanstack/react-table";
 import {
   TableWrapper,
@@ -15,7 +15,7 @@ import {
   Th,
   Td,
   CopyableCell,
-  Pagination,
+  Pagination
 } from "@/components/ui/alt-table";
 import { Loader2 } from "lucide-react";
 import { SubAccount } from "@/app/lib/hooks/api/useSubAccounts";
@@ -49,7 +49,10 @@ const SubAccountTable: React.FC<Props> = ({
   const [selectedAddress, setSelectedAddress] = useState("");
   const [isViewSeedModalOpen, setIsViewSeedModalOpen] = useState(false);
   const [isSetSeedModalOpen, setIsSetSeedModalOpen] = useState(false);
-  const totalPages = useMemo(() => Math.ceil(subs.length / ITEMS_PER_PAGE), [subs.length]);
+  const totalPages = useMemo(
+    () => Math.ceil(subs.length / ITEMS_PER_PAGE),
+    [subs.length]
+  );
 
   const paginatedData = useMemo(() => {
     const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
@@ -66,7 +69,13 @@ const SubAccountTable: React.FC<Props> = ({
     setIsSetSeedModalOpen(true);
   };
 
-  const handleSetSeedSubmit = async ({ seed, passcode }: { seed?: string; passcode: string }) => {
+  const handleSetSeedSubmit = async ({
+    seed,
+    passcode
+  }: {
+    seed?: string;
+    passcode: string;
+  }) => {
     try {
       if (!seed) {
         return { success: false, error: "Seed phrase is required" };
@@ -105,7 +114,7 @@ const SubAccountTable: React.FC<Props> = ({
               copyAbleText={value}
             />
           );
-        },
+        }
       }),
 
       columnHelper.accessor("role", {
@@ -114,7 +123,7 @@ const SubAccountTable: React.FC<Props> = ({
           <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
             {info.getValue()}
           </span>
-        ),
+        )
       }),
 
       columnHelper.accessor("seed", {
@@ -148,7 +157,7 @@ const SubAccountTable: React.FC<Props> = ({
               )}
             </div>
           );
-        },
+        }
       }),
 
       columnHelper.display({
@@ -167,8 +176,8 @@ const SubAccountTable: React.FC<Props> = ({
               </button>
             </div>
           );
-        },
-      }),
+        }
+      })
     ],
     [hasSeed]
   );
@@ -176,12 +185,12 @@ const SubAccountTable: React.FC<Props> = ({
   const table = useReactTable({
     data: paginatedData,
     columns,
-    getCoreRowModel: getCoreRowModel(),
+    getCoreRowModel: getCoreRowModel()
   });
 
   return (
     <>
-      <TableWrapper className="mt-4">
+      <TableWrapper className="mt-4 bg-white">
         {loading ? (
           <div className="p-8 flex justify-center">
             <Loader2 className="animate-spin text-gray-500 size-8" />
@@ -214,7 +223,6 @@ const SubAccountTable: React.FC<Props> = ({
                 ))}
               </TBody>
             </Table>
-
           </>
         )}
       </TableWrapper>

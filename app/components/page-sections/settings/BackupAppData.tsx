@@ -35,7 +35,7 @@ const BackupAppData: React.FC<ExportEncryptedSeedProps> = ({ className }) => {
         <div
           ref={ref}
           className={cn(
-            "flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4",
+            "flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover",
             className
           )}
         >
