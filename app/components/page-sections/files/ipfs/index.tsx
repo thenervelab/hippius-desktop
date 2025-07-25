@@ -10,7 +10,9 @@ import { WaitAMoment } from "@/components/ui";
 import SyncFolderSelector from "./SyncFolderSelector";
 import {
   getPrivateSyncPath,
-  setPrivateSyncPath
+  setPrivateSyncPath,
+  getPublicSyncPath,
+  setPublicSyncPath
 } from "@/lib/utils/syncPathUtils";
 import { formatBytesFromBigInt } from "@/lib/utils";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
@@ -65,7 +67,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   >([]);
   const [isProcessingTimestamps, setIsProcessingTimestamps] = useState(false);
 
-  // State to track if private sync folder is configured
+  // State to track if sync folder is configured
   const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<
     boolean | null
   >(null);
@@ -240,10 +242,16 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     const checkSyncPath = async () => {
       try {
         setIsCheckingSyncPath(true);
-        const privateSyncPath = await getPrivateSyncPath();
-        setIsSyncPathConfigured(!!privateSyncPath);
+        const syncPath = isPrivateView
+          ? await getPrivateSyncPath()
+          : await getPublicSyncPath();
+
+        setIsSyncPathConfigured(!!syncPath);
       } catch (error) {
-        console.error("Failed to check sync path:", error);
+        console.error(
+          `Failed to check ${isPrivateView ? "private" : "public"} sync path:`,
+          error
+        );
         setIsSyncPathConfigured(false);
       } finally {
         setIsCheckingSyncPath(false);
@@ -251,14 +259,20 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     };
 
     checkSyncPath();
-  }, []);
+  }, [isPrivateView]);
 
   // Handle folder selection from SyncFolderSelector
   const handleFolderSelected = useCallback(
     async (path: string) => {
       try {
-        await setPrivateSyncPath(path);
-        toast.success(`Sync folder set successfully`);
+        if (isPrivateView) {
+          await setPrivateSyncPath(path);
+        } else {
+          await setPublicSyncPath(path);
+        }
+        toast.success(
+          `${isPrivateView ? "Private" : "Public"} sync folder set successfully`
+        );
         setIsSyncPathConfigured(true);
 
         // Refresh files to get any new files from the configured path
@@ -273,7 +287,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         );
       }
     },
-    [refetchUserFiles]
+    [refetchUserFiles, isPrivateView]
   );
 
   // Load the table once on mount and set up interval refresh
@@ -317,7 +331,10 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     const handleFileDrop = (event: Event) => {
       const customEvent = event as CustomEvent;
       if (customEvent.detail?.files && addButtonRef.current) {
-        console.log("Handling files via global event", customEvent.detail.files);
+        console.log(
+          "Handling files via global event",
+          customEvent.detail.files
+        );
         addButtonRef.current.openWithFiles(customEvent.detail.files);
       }
     };
@@ -329,10 +346,19 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   }, []);
 
   useEffect(() => {
-    console.log("AddButtonRef status:", addButtonRef.current ? "available" : "not available");
+    console.log(
+      "AddButtonRef status:",
+      addButtonRef.current ? "available" : "not available"
+    );
 
-    const canUpload = activeSubMenuItem === "Private" || activeSubMenuItem === "Public";
-    console.log("Current view allows uploads:", canUpload, "View:", activeSubMenuItem);
+    const canUpload =
+      activeSubMenuItem === "Private" || activeSubMenuItem === "Public";
+    console.log(
+      "Current view allows uploads:",
+      canUpload,
+      "View:",
+      activeSubMenuItem
+    );
   }, [activeSubMenuItem]);
 
   // Determine what content to render
@@ -340,7 +366,12 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   if (isCheckingSyncPath) {
     content = <WaitAMoment />;
   } else if (isSyncPathConfigured === false && !isRecentFiles) {
-    content = <SyncFolderSelector onFolderSelected={handleFolderSelected} />;
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleFolderSelected}
+        isPrivateView={isPrivateView}
+      />
+    );
   } else {
     content = (
       <div className="w-full relative mt-6">

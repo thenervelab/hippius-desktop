@@ -11,13 +11,15 @@ interface SyncFolderSelectorProps {
   initialPath?: string;
   isFromSettingsPage?: boolean;
   handleBackClick?: () => void;
+  isPrivateView?: boolean;
 }
 
 const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   onFolderSelected,
   initialPath,
   isFromSettingsPage = false,
-  handleBackClick
+  handleBackClick,
+  isPrivateView = true
 }) => {
   const [suggested, setSuggested] = useState({
     desktop: "",
@@ -114,13 +116,15 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
                 Icon={Icons.File2}
                 title={
                   initialPath
-                    ? "Change your sync folder"
+                    ? `Change your sync folder`
                     : "Welcome to Hippius!"
                 }
                 subtitle={
                   initialPath
-                    ? "Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
-                    : "Choose a folder on your device to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
+                    ? `Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
+                    : `Choose a folder on your device to keep your ${
+                        isPrivateView ? "private" : "public"
+                      } files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
                 }
               />
             </div>
