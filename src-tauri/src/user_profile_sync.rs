@@ -48,6 +48,8 @@ pub struct UserProfileFile {
     pub source: String,
     pub miner_ids: Option<String>,
     pub created_at: i64,
+    pub file_type: String,
+    pub is_folder: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -244,14 +246,77 @@ pub fn start_user_sync(account_id: &str) {
                                             "[]".to_string()
                                         };
 
+                                        let mut file_type = "public".to_string();
+                                        let mut actual_file_size = file_size_in_bytes;
+
+                                        // If this is an .ec_metadata file, fetch its metadata content
+                                        if file_name.ends_with(".ec_metadata") {
+                                            let decoded_hash = decode_file_hash(&file_hash.as_bytes())
+                                            .unwrap_or_else(|_| "Invalid file hash".to_string());
+                                            let ipfs_url = format!("https://get.hippius.network/ipfs/{}", decoded_hash);
+                                            match client.get(&ipfs_url).send().await {
+                                                Ok(resp) => {
+                                                    if let Ok(data) = resp.text().await {
+                                                        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&data) {
+                                                            if let Some(original_file) = metadata.get("original_file") {
+                                                                if let Some(size) = original_file.get("size").and_then(|v| v.as_i64()) {
+                                                                    actual_file_size = size;
+                                                                }
+                                                                if let Some(encrypted) = metadata.get("erasure_coding")
+                                                                    .and_then(|ec| ec.get("encrypted"))
+                                                                    .and_then(|v| v.as_bool())
+                                                                {
+                                                                    file_type = if encrypted { "private" } else { "public" }.to_string();
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("[UserSync] Failed to fetch metadata for {}: {}", file_hash, e);
+                                                }
+                                            }
+                                        }
+                                        // If this is a folder file, fetch its content and calculate total size
+                                        else if file_name.ends_with("-folder") || file_name.ends_with(".folder") || file_name.ends_with(".folder.ec_metadata") {
+                                            let decoded_hash = decode_file_hash(&file_hash.as_bytes())
+                                                .unwrap_or_else(|_| "Invalid file hash".to_string());
+                                            println!("[UserSync] Found folder file: {}, file_hash {:?}", file_name, decoded_hash); // Add debug logging
+                                            let ipfs_url = format!("https://get.hippius.network/ipfs/{}", decoded_hash);
+                                            match client.get(&ipfs_url).send().await {
+                                                Ok(resp) => {
+                                                    if let Ok(data) = resp.text().await {
+                                                        if let Ok(folder_data) = serde_json::from_str::<serde_json::Value>(&data) {
+                                                            if let Some(files) = folder_data.as_array() {
+                                                                let total_size: i64 = files.iter()
+                                                                    .filter_map(|file| file.get("file_size"))
+                                                                    .filter_map(|size| size.as_i64())
+                                                                    .sum();
+                                                                actual_file_size = total_size;
+                                                                println!("[UserSync] Folder {} contains {} files with total size {} bytes", file_name, files.len(), total_size); // Add debug logging
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("[UserSync] Failed to fetch folder content for {}: {}", file_hash, e);
+                                                }
+                                            }
+                                            file_type = "public".to_string();
+                                        }
+
                                         let file_key = (file_hash.clone(), file_name.clone());
+                                        // Skip files ending with .ec, .ec_metadata, or .ff
+                                        if file_name.ends_with(".ec") || file_name.ends_with(".ff") {
+                                            continue;
+                                        }
                                         if seen_files.insert(file_key) {
                                             records_to_insert.push(UserProfileFile {
                                                 owner: account_id.clone(),
                                                 cid: profile_cid.clone(),
                                                 file_hash,
-                                                file_name,
-                                                file_size_in_bytes,
+                                                file_name: file_name.clone(),
+                                                file_size_in_bytes: actual_file_size,
                                                 is_assigned,
                                                 last_charged_at,
                                                 main_req_hash,
@@ -262,6 +327,8 @@ pub fn start_user_sync(account_id: &str) {
                                                 source: source_value,
                                                 miner_ids: Some(miner_ids_json),
                                                 created_at,
+                                                file_type: file_type,
+                                                is_folder: file_name.ends_with("-folder") || file_name.ends_with(".folder") || file_name.ends_with(".folder.ec_metadata") || file_name.ends_with("-folder.ec_metadata"),
                                             });
                                         }
                                     }
@@ -367,6 +434,9 @@ pub fn start_user_sync(account_id: &str) {
                                 };
 
                                 let file_key = (file_hash.clone(), file_name.clone());
+                                if file_name.ends_with(".ec") || file_name.ends_with(".ff") {
+                                    continue;
+                                }
                                 if seen_files.insert(file_key) {
                                     records_to_insert.push(UserProfileFile {
                                         owner: owner_ss58,
@@ -384,6 +454,8 @@ pub fn start_user_sync(account_id: &str) {
                                         source: "Hippius".to_string(),
                                         miner_ids: Some(miner_ids_json),
                                         created_at: storage_request.created_at as i64,
+                                        is_folder: false,
+                                        file_type: "public".to_string(),
                                     });
                                 }
                             }
@@ -415,8 +487,9 @@ pub fn start_user_sync(account_id: &str) {
                         "INSERT INTO user_profiles (
                             owner, cid, file_hash, file_name, file_size_in_bytes,
                             is_assigned, last_charged_at, main_req_hash,
-                            selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                            selected_validator, total_replicas, block_number, profile_cid, source, 
+                            miner_ids, created_at, type, is_folder
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     )
                     .bind(&record.owner)
                     .bind(&record.cid)
@@ -433,6 +506,8 @@ pub fn start_user_sync(account_id: &str) {
                     .bind(&record.source)
                     .bind(&record.miner_ids)
                     .bind(record.created_at)
+                    .bind(&record.file_type)
+                    .bind(record.is_folder)
                     .execute(pool)
                     .await;
 
@@ -458,7 +533,8 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
             SELECT owner, cid, file_hash, file_name,
                    file_size_in_bytes, is_assigned, last_charged_at,
                    main_req_hash, selected_validator,
-                   total_replicas, block_number, profile_cid, source, miner_ids, created_at
+                   total_replicas, block_number, profile_cid, source, miner_ids, created_at,
+                   type, is_folder
               FROM user_profiles
              WHERE owner = ?
             "#
@@ -467,80 +543,53 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
         .fetch_all(pool)
         .await;
 
-        // Get sync folder paths
+        // Get sync folder paths, but don't return error if they're missing
         let public_sync_path = match get_public_sync_path().await {
-            Ok(path) => path,
-            Err(e) => return Err(format!("Failed to get public sync path: {}", e)),
+            Ok(path) => Some(path),
+            Err(_) => None,
         };
         let private_sync_path = match get_private_sync_path().await {
-            Ok(path) => path,
-            Err(e) => return Err(format!("Failed to get private sync path: {}", e)),
+            Ok(path) => Some(path),
+            Err(_) => None,
         };
 
-        // Build a map of file_name -> (type, is_folder) from sync_folder_files
-        let sync_file_infos = sqlx::query(
-            "SELECT file_name, type, is_folder FROM sync_folder_files WHERE owner = ?"
-        )
-        .bind(&owner)
-        .fetch_all(pool)
-        .await
-        .map(|rows| {
-            rows.into_iter().map(|row| {
-                let file_name = row.get::<String, _>("file_name");
-                let type_ = row.get::<String, _>("type");
-                let is_folder = row.get::<bool, _>("is_folder");
-                (file_name, (type_, is_folder))
-            }).collect::<std::collections::HashMap<_, _>>()
-        });
-
-        match (user_profile_rows, sync_file_infos) {
-            (Ok(user_rows), Ok(sync_map)) => {
+        match user_profile_rows {
+            Ok(user_rows) => {
                 let mut files = Vec::new();
                 for row in user_rows {
                     let file_name = row.get::<String, _>("file_name");
-                    // Strip metadata suffixes when looking up in sync_folder_files
-                    let lookup_name = if file_name.ends_with(".folder.ec_metadata") {
+                    let type_ = row.get::<String, _>("type");
+                    let is_folder = row.get::<bool, _>("is_folder");
+
+                   // Get base file name by removing specific suffixes
+                   let base_file_name = if file_name.ends_with(".ec_metadata") {
+                    file_name.trim_end_matches(".ec_metadata").to_string()
+                    } else if file_name.ends_with(".ec") {
+                        file_name.trim_end_matches(".ec").to_string()
+                    } else if file_name.ends_with(".folder.ec_metadata") {
                         file_name.trim_end_matches(".folder.ec_metadata").to_string()
                     } else if file_name.ends_with(".folder") {
                         file_name.trim_end_matches(".folder").to_string()
-                    }else if file_name.ends_with(".ec_metadata") {
-                        file_name.trim_end_matches(".ec_metadata").to_string()
+                    } else if file_name.ends_with("-folder") {
+                        file_name.trim_end_matches("-folder").to_string()
                     } else {
                         file_name.clone()
                     };
-                    let public_path = format!("{}/{}", public_sync_path, lookup_name);
-                    let private_path = format!("{}/{}", private_sync_path, lookup_name);
-                    // Default values
-                    let mut type_ = "public".to_string();
-                    let mut source = row.get::<String, _>("source");
-                    let mut is_folder = false;
-                    // If found in sync_folder_files, use its type and is_folder
-                    if let Some((t, f)) = sync_map.get(&lookup_name) {
-                        type_ = t.clone();
-                        is_folder = *f;
-                        if type_ == "public" {
-                            source = public_path.clone();
-                        } else if type_ == "private" {
-                            source = private_path.clone();
-                        }
-                    } else {
-                        // Fallback: check filesystem for type/source
-                        if Path::new(&public_path).exists() {
-                            type_ = "public".to_string();
-                            source = public_path.clone();
-                        } else if Path::new(&private_path).exists() {
-                            type_ = "private".to_string();
-                            source = private_path.clone();
-                        }
-                    }
 
-                    // Infer type and folder status based on new suffixes (Leave .ec_metadata unchanged)
-                    if file_name.ends_with(".folder.ec_metadata") {
-                        type_ = "private".to_string();
-                        is_folder = true;
-                    } else if file_name.ends_with(".folder") {
-                        type_ = "public".to_string();
-                        is_folder = true;
+                    // Default source is Hippius
+                    let mut source = "Hippius".to_string();
+
+                    // Check if file exists in sync paths
+                    if public_sync_path.is_some() && type_ == "public" {
+                        let public_path = format!("{}/{}", public_sync_path.as_ref().unwrap(), base_file_name);
+                        if Path::new(&public_path).exists() {
+                            source = public_path;
+                        }
+                    } else if private_sync_path.is_some() && type_ == "private" {
+                        let private_path = format!("{}/{}", private_sync_path.as_ref().unwrap(), base_file_name);
+                        if Path::new(&private_path).exists() {
+                            source = private_path;
+                        }
                     }
 
                     files.push(UserProfileFileWithType {
@@ -566,7 +615,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                 println!("[UserSync] Returning {} files for owner: {}", files.len(), owner);
                 Ok(files)
             }
-            (Err(e), _) | (_, Err(e)) => Err(format!("Database error: {}", e)),
+            Err(e) => Err(format!("Database error: {}", e)),
         }
     } else {
         Err("DB not initialized".to_string())
@@ -576,20 +625,10 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
 #[tauri::command]
 pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown, String> {
     if let Some(pool) = DB_POOL.get() {
-        // Get sync folder paths
-        let public_sync_path = match get_public_sync_path().await {
-            Ok(path) => path,
-            Err(e) => return Err(format!("Failed to get public sync path: {}", e)),
-        };
-        let private_sync_path = match get_private_sync_path().await {
-            Ok(path) => path,
-            Err(e) => return Err(format!("Failed to get private sync path: {}", e)),
-        };
-
-        // Query user_profiles to get file sizes
+        // Query user_profiles to get file sizes and types
         let user_profile_rows = sqlx::query(
             r#"
-            SELECT file_name, file_size_in_bytes, source
+            SELECT file_name, file_size_in_bytes, type 
             FROM user_profiles
             WHERE owner = ?
             "#
@@ -599,77 +638,20 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
         .await
         .map_err(|e| format!("Database error: {}", e))?;
 
-        // Build a map of file_name -> type from sync_folder_files
-        let sync_file_infos = sqlx::query(
-            "SELECT file_name, type FROM sync_folder_files WHERE owner = ?"
-        )
-        .bind(&owner)
-        .fetch_all(pool)
-        .await
-        .map(|rows| {
-            rows.into_iter().map(|row| {
-                let file_name = row.get::<String, _>("file_name");
-                let type_ = row.get::<String, _>("type");
-                (file_name, type_)
-            }).collect::<std::collections::HashMap<_, _>>()
-        })
-        .map_err(|e| format!("Database error: {}", e))?;
-
         let mut public_size = 0;
         let mut private_size = 0;
 
-        // Classify and sum file sizes using the same logic as get_user_synced_files
+        // Calculate sizes based on type
         for row in user_profile_rows {
-            let file_name = row.get::<String, _>("file_name");
             let file_size = row.get::<i64, _>("file_size_in_bytes");
+            let type_ = row.get::<String, _>("type");
 
-            // Build lookup name stripped of metadata suffixes
-            let lookup_name = if file_name.ends_with(".folder.ec_metadata") {
-                file_name.trim_end_matches(".folder.ec_metadata").to_string()
-            } else if file_name.ends_with(".folder") {
-                file_name.trim_end_matches(".folder").to_string()
-            } else if file_name.ends_with(".ec_metadata") {
-                file_name.trim_end_matches(".ec_metadata").to_string()
-            } else {
-                file_name.clone()
-            };
-
-            let public_path = format!("{}/{}", public_sync_path, lookup_name);
-            let private_path = format!("{}/{}", private_sync_path, lookup_name);
-
-            // Default to public
-            let mut type_ = "public".to_string();
-
-            // If found in sync_folder_files, use its type
-            if let Some(t) = sync_file_infos.get(&lookup_name) {
-                type_ = t.clone();
-            } else {
-                // Fallback: check filesystem for type
-                if Path::new(&public_path).exists() {
-                    type_ = "public".to_string();
-                } else if Path::new(&private_path).exists() {
-                    type_ = "private".to_string();
-                }
-            }
-
-            // Final inference from filename suffixes
-            if file_name.ends_with(".folder.ec_metadata") {
-                type_ = "private".to_string();
-            } else if file_name.ends_with(".folder") {
-                type_ = "public".to_string();
-            }
-
-            if type_ == "public" {
-                public_size += file_size;
-            } else {
-                private_size += file_size;
+            match type_.as_str() {
+                "public" => public_size += file_size,
+                "private" => private_size += file_size,
+                _ => {} // Ignore unknown types
             }
         }
-
-        println!(
-            "[UserSync] Total file sizes for owner {}: public={} bytes, private={} bytes",
-            owner, public_size, private_size
-        );
 
         Ok(FileSizeBreakdown {
             public_size,

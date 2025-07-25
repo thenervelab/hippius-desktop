@@ -16,12 +16,18 @@ use tokio::time::sleep;
 
 // Helper to sanitize file/folder names for DB and filesystem operations
 fn sanitize_file_name(name: &str) -> String {
-    if name.ends_with(".folder.ec_metadata") {
-        name.trim_end_matches(".folder.ec_metadata").to_string()
-    } else if name.ends_with(".folder") {
-        name.trim_end_matches(".folder").to_string()
-    } else if name.ends_with(".ec_metadata") {
+    if name.ends_with(".ec_metadata") {
         name.trim_end_matches(".ec_metadata").to_string()
+    } else if name.ends_with(".ff") {
+        name.trim_end_matches(".ff").to_string()
+    } else if name.ends_with(".ec") {
+        name.trim_end_matches(".ec").to_string()
+    } else if name.ends_with("-folder") {
+        name.trim_end_matches("-folder").to_string()
+    } else if name.ends_with("-folder.ec_metadata") {
+        name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if name.ends_with(".folder.ec_metadata") {
+        name.trim_end_matches(".folder.ec_metadata").to_string()
     } else {
         name.to_string()
     }
@@ -295,8 +301,10 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             // Insert minimal record into user_profiles with is_assigned = false and file_hash set
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
-                    owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, 0, '', ?, 0)"
+                    owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
+                    main_req_hash, selected_validator, total_replicas, block_number, profile_cid, 
+                    source, miner_ids, created_at, file_type, is_folder
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, 0, '', ?, 0, ?, ?)"
             )
             .bind(account_id)
             .bind(request_cid) // cid
@@ -306,6 +314,9 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
             .bind(false)
             .bind(request_cid) // main_req_hash
             .bind(file_size_in_bytes)
+            .bind("Hippius") // source
+            .bind(is_public) // file_type - true for public, false for private
+            .bind(is_folder) // is_folder
             .execute(pool)
             .await;
         }
@@ -588,8 +599,10 @@ pub async fn copy_to_sync_folder(original_path: &Path, folder_name: &str, accoun
             // Insert minimal record into user_profiles with is_assigned = false and file_hash set
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
-                    owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, 0, '', ?, 0)"
+                    owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
+                    main_req_hash, selected_validator, total_replicas, block_number, profile_cid, 
+                    source, miner_ids, created_at, file_type, is_folder
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, 0, '', ?, 0, ?, ?)"
             )
             .bind(account_id)
             .bind(request_cid) // cid
@@ -599,6 +612,9 @@ pub async fn copy_to_sync_folder(original_path: &Path, folder_name: &str, accoun
             .bind(false)
             .bind(request_cid) // main_req_hash
             .bind(file_size_in_bytes)
+            .bind("Hippius") // source
+            .bind(is_public) // file_type - true for public, false for private
+            .bind(is_folder) // is_folder
             .execute(pool)
             .await;
         }
@@ -732,8 +748,7 @@ pub async fn remove_from_sync_folder(file_name: &str, folder_name: &str, is_publ
     }
 }
 
-// Helper function for inserting files with folder paths
-async fn insert_file_if_not_exists_in_folder(pool: &sqlx::Pool<sqlx::Sqlite>, file_path: &Path, account_id: &str, is_public: bool, is_folder: bool) {
+pub async fn insert_file_if_not_exists_in_folder(pool: &sqlx::Pool<sqlx::Sqlite>, file_path: &Path, account_id: &str, is_public: bool, is_folder: bool) {
     let file_name = file_path.to_string_lossy().to_string();
     let file_type = if is_public { "public" } else { "private" };
     let entry_type = if is_folder { "folder" } else { "file" };
