@@ -851,7 +851,7 @@ pub async fn encrypt_and_upload_folder(
                             cid: cid.clone(),
                             filename: chunk_name.clone(),
                             size_bytes: shard.len(),
-                            encrypted: encryption_key_cloned.is_some(),
+                            encrypted: true,
                             size_formatted: format_file_size(shard.len()),
                         },
                         original_chunk: orig_idx,
@@ -877,7 +877,7 @@ pub async fn encrypt_and_upload_folder(
                     k,
                     m,
                     chunk_size,
-                    encrypted: encryption_key_cloned.is_some(),
+                    encrypted: true,
                     file_id: file_id.clone(),
                     encrypted_size,
                 },
@@ -920,7 +920,7 @@ pub async fn encrypt_and_upload_folder(
         let meta_folder_name = format!(
             "{}{}",
             folder_name,
-            if folder_name.ends_with(".folder") { "" } else { ".folder" }
+            if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" }
         );
         all_files_for_storage.push((meta_folder_name.clone(), folder_metadata_cid.clone()));
 
@@ -933,7 +933,7 @@ pub async fn encrypt_and_upload_folder(
     let meta_folder_name = format!(
         "{}{}",
         folder_name,
-        if folder_name.ends_with(".folder") { "" } else { ".folder" }
+        if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" }
     );
     let storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, api_url, &seed_phrase).await;
 
@@ -979,50 +979,45 @@ pub async fn list_folder_contents(
     
     // Get database pool
     let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
-    
-    // For each file from IPFS, look up additional details from the database
+        
+    // Get folder record from database
+    let folder_record = sqlx::query(
+        r#"
+        SELECT 
+            source, 
+            miner_ids, 
+            created_at, 
+            last_charged_at
+        FROM user_profiles 
+        WHERE file_name = ?
+        LIMIT 1
+        "#
+    )
+    .bind(&folder_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("DB query failed for folder {}: {}", folder_name, e))?;
+
+    // For each file from IPFS, create file detail
     let mut files_in_folder = Vec::new();
     
     for file_entry in file_entries {
-        // Query database for additional file details
-        let db_row = sqlx::query(
-            r#"
-            SELECT 
-                cid, 
-                source, 
-                file_hash, 
-                miner_ids, 
-                created_at, 
-                last_charged_at,
-                file_size_in_bytes
-            FROM user_profiles 
-            WHERE file_name = ?
-            LIMIT 1
-            "#
-        )
-        .bind(&file_entry.file_name)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("DB query failed for file {}: {}", file_entry.file_name, e))?;
-
-        let file_detail = if let Some(row) = db_row {
-            // File found in database, use DB data
+        let file_detail = if let Some(row) = &folder_record {
+            // Use folder's DB info for all files
             FileDetail {
-                file_name: file_entry.file_name,
-                cid: row.get::<Option<String>, _>("cid").unwrap_or(file_entry.cid),
+                file_name: file_entry.file_name.clone(),
+                cid: file_entry.cid,
                 source: row.get::<Option<String>, _>("source").unwrap_or_default(),
-                file_hash: row.get::<Option<String>, _>("file_hash").unwrap_or_default(),
+                file_hash: String::new(),
                 miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
-                file_size: row.get::<Option<i64>, _>("file_size_in_bytes")
-                    .map(|size| size as usize)
-                    .unwrap_or(file_entry.file_size),
+                file_size: file_entry.file_size,
                 created_at: row.get::<Option<i64>, _>("created_at").unwrap_or(0).to_string(),
                 last_charged_at: row.get::<Option<i64>, _>("last_charged_at").unwrap_or(0).to_string(),
             }
         } else {
-            // File not found in database, use IPFS data with defaults
+            // No folder record found, use defaults
             FileDetail {
-                file_name: file_entry.file_name,
+                file_name: file_entry.file_name.clone(),
                 cid: file_entry.cid,
                 source: String::new(),
                 file_hash: String::new(),
@@ -1033,20 +1028,27 @@ pub async fn list_folder_contents(
             }
         };
         
-        // Sanitize file_name for UI/consumer
+        // Clean file name at the end
         let mut file_detail = file_detail;
-        file_detail.file_name = if file_detail.file_name.ends_with(".folder.ec_metadata") {
-            file_detail.file_name.trim_end_matches(".folder.ec_metadata").to_string()
-        } else if file_detail.file_name.ends_with(".folder") {
-            file_detail.file_name.trim_end_matches(".folder").to_string()
-        } else if file_detail.file_name.ends_with(".ec_metadata") {
+        file_detail.file_name = if file_detail.file_name.ends_with(".ec_metadata") {
             file_detail.file_name.trim_end_matches(".ec_metadata").to_string()
+        } else if file_detail.file_name.ends_with(".ff") {
+            file_detail.file_name.trim_end_matches(".ff").to_string()
+        } else if file_detail.file_name.ends_with(".ec") {
+            file_detail.file_name.trim_end_matches(".ec").to_string()
+        } else if file_detail.file_name.ends_with("-folder") {
+            file_detail.file_name.trim_end_matches("-folder").to_string()
+        } else if file_detail.file_name.ends_with("-folder.ec_metadata") {
+            file_detail.file_name.trim_end_matches("-folder.ec_metadata").to_string()
+        } else if file_detail.file_name.ends_with(".folder.ec_metadata") {
+            file_detail.file_name.trim_end_matches(".folder.ec_metadata").to_string()
         } else {
             file_detail.file_name
         };
         files_in_folder.push(file_detail);
     }
 
+    println!("[list_folder_contents] Folder {} contains {:?} files", folder_name, files_in_folder);
     Ok(files_in_folder)
 }
 
@@ -1140,6 +1142,16 @@ pub async fn public_upload_folder(
                 .map_err(|e| e.to_string())?
                 .to_string_lossy()
                 .to_string();
+            // Get original filename without any suffixes
+            let file_name = file_path
+                .file_name()
+                .ok_or_else(|| "Invalid file path".to_string())?
+                .to_string_lossy()
+                .to_string();
+
+            // Add .ff suffix for IPFS storage
+            let ipfs_file_name = format!("{}{}", file_name, if file_name.ends_with(".ff") { "" } else { ".ff" });
+        
             let file_data = fs::read(&file_path).map_err(|e| e.to_string())?;
             let file_size = file_data.len();
             let mut hasher = Sha256::new();
@@ -1149,12 +1161,12 @@ pub async fn public_upload_folder(
             let file_cid = upload_to_ipfs(&api_url_cloned, file_path.to_str().unwrap())
                 .map_err(|e| e.to_string())?;
             file_entries.push(FileEntry {
-                file_name: relative_path.clone(),
+                file_name: ipfs_file_name.clone(),
                 file_size,
                 cid: file_cid.clone(),
             });
-            // Collect for storage request: (relative_path, file_cid)
-            file_cid_pairs.push((relative_path.clone(), file_cid.clone()));
+            // Collect for storage request: (ipfs_file_name, file_cid)
+            file_cid_pairs.push((ipfs_file_name.clone(), file_cid.clone()));
         }
         println!("[public_upload_folder] ✅ Folder processing done");
         let folder_metadata_path = temp_dir.path().join("folder_metadata.json");
@@ -1349,7 +1361,6 @@ pub async fn add_file_to_public_folder(
                 format!("Failed to request file storage: {}", e)
             }
         })?;
-
 
     // Update the database with the new folder metadata
     copy_to_sync_folder(
@@ -1588,10 +1599,10 @@ pub async fn add_file_to_private_folder(
                     let mut f = std::fs::File::create(&chunk_path).map_err(|e| e.to_string())?;
                     f.write_all(shard).map_err(|e| e.to_string())?;
                     let cid = crate::utils::ipfs::upload_to_ipfs(&api_url, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
-                    all_chunk_info.push(crate::commands::types::ChunkInfo {
+                    all_chunk_info.push(ChunkInfo {
                         name: chunk_name.clone(),
                         path: chunk_path.to_string_lossy().to_string(),
-                        cid: crate::commands::types::CidInfo {
+                        cid: CidInfo {
                             cid: cid.clone(),
                             filename: chunk_name.clone(),
                             size_bytes: shard.len(),
@@ -1689,17 +1700,36 @@ pub async fn add_file_to_private_folder(
         })?;
 
     // Sanitize folder_name for local sync folder usage
-    let sanitized_folder_name = if folder_name.ends_with(".folder.ec_metadata") {
+    let sanitized_folder_name = if folder_name.ends_with(".ec_metadata") {
+        folder_name.trim_end_matches(".ec_metadata").to_string()
+    } else if folder_name.ends_with(".ff") {
+        folder_name.trim_end_matches(".ff").to_string()
+    } else if folder_name.ends_with(".ec") {
+        folder_name.trim_end_matches(".ec").to_string()
+    } else if folder_name.ends_with("-folder") {
+        folder_name.trim_end_matches("-folder").to_string()
+    } else if folder_name.ends_with("-folder.ec_metadata") {
+        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if folder_name.ends_with(".folder.ec_metadata") {
         folder_name.trim_end_matches(".folder.ec_metadata").to_string()
-    } else if folder_name.ends_with(".folder") {
-        folder_name.trim_end_matches(".folder").to_string()
     } else {
         folder_name.clone()
     };
 
+
     // Sanitize file_name for local sync file usage
     let sanitized_file_name = if file_name.ends_with(".ec_metadata") {
         file_name.trim_end_matches(".ec_metadata").to_string()
+    } else if file_name.ends_with(".ff") {
+        file_name.trim_end_matches(".ff").to_string()
+    } else if file_name.ends_with(".ec") {
+        file_name.trim_end_matches(".ec").to_string()
+    } else if file_name.ends_with("-folder") {
+        file_name.trim_end_matches("-folder").to_string()
+    } else if file_name.ends_with("-folder.ec_metadata") {
+        file_name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if file_name.ends_with(".folder.ec_metadata") {
+        file_name.trim_end_matches(".folder.ec_metadata").to_string()
     } else {
         file_name.clone()
     };
@@ -1787,20 +1817,40 @@ pub async fn remove_file_from_private_folder(
             }
         })?;
     // Sanitize folder_name for local sync folder usage
-    let sanitized_folder_name = if folder_name.ends_with(".folder.ec_metadata") {
+    let sanitized_folder_name = if folder_name.ends_with(".ec_metadata") {
+        folder_name.trim_end_matches(".ec_metadata").to_string()
+    } else if folder_name.ends_with(".ff") {
+        folder_name.trim_end_matches(".ff").to_string()
+    } else if folder_name.ends_with(".ec") {
+        folder_name.trim_end_matches(".ec").to_string()
+    } else if folder_name.ends_with("-folder") {
+        folder_name.trim_end_matches("-folder").to_string()
+    } else if folder_name.ends_with("-folder.ec_metadata") {
+        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if folder_name.ends_with(".folder.ec_metadata") {
         folder_name.trim_end_matches(".folder.ec_metadata").to_string()
-    } else if folder_name.ends_with(".folder") {
-        folder_name.trim_end_matches(".folder").to_string()
     } else {
         folder_name.clone()
     };
 
+
     // Sanitize file_name for local sync file usage
     let sanitized_file_name = if file_name.ends_with(".ec_metadata") {
         file_name.trim_end_matches(".ec_metadata").to_string()
+    } else if file_name.ends_with(".ff") {
+        file_name.trim_end_matches(".ff").to_string()
+    } else if file_name.ends_with(".ec") {
+        file_name.trim_end_matches(".ec").to_string()
+    } else if file_name.ends_with("-folder") {
+        file_name.trim_end_matches("-folder").to_string()
+    } else if file_name.ends_with("-folder.ec_metadata") {
+        file_name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if file_name.ends_with(".folder.ec_metadata") {
+        file_name.trim_end_matches(".folder.ec_metadata").to_string()
     } else {
         file_name.clone()
     };
+
     // Remove the file from the sync directory and DB
     remove_from_sync_folder(&file_name, &folder_name, false, false).await;
 

@@ -32,6 +32,8 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("source", "TEXT"),
                 ("miner_ids", "TEXT"),
                 ("created_at", "INTEGER"),
+                ("type", "TEXT DEFAULT 'public'"),
+                ("is_folder", "BOOLEAN DEFAULT 0"),
             ],
         ),
         (
@@ -152,16 +154,36 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 return;
             }
 
-            // Set type = 'private' and is_folder = false for all existing records where they are NULL
+            // Set default values for existing records
             if let Err(e) = sqlx::query(
-                "UPDATE sync_folder_files SET type = 'private' WHERE type IS NULL OR type = ''"
+                r#"
+                UPDATE user_profiles 
+                SET type = CASE 
+                    WHEN file_name LIKE '%.ec' OR file_name LIKE '%.ec_metadata' THEN 'private'
+                    ELSE 'public'
+                END,
+                is_folder = CASE 
+                    WHEN file_name LIKE '%.folder' OR file_name LIKE '%.folder.ec' THEN 1
+                    ELSE 0
+                END,
+                source = COALESCE(source, 'Hippius')
+                WHERE type IS NULL OR is_folder IS NULL OR source IS NULL
+                "#
             ).execute(&pool).await {
-                eprintln!("[Setup] Failed to update type column in sync_folder_files: {}", e);
+                eprintln!("[Setup] Failed to update type, is_folder, and source columns in user_profiles: {}", e);
             }
+
+            // Set default values for sync_folder_files
             if let Err(e) = sqlx::query(
-                "UPDATE sync_folder_files SET is_folder = 0 WHERE is_folder IS NULL"
+                r#"
+                UPDATE sync_folder_files 
+                SET type = 'public',
+                    is_folder = 0,
+                    source = 'Hippius'
+                WHERE type IS NULL OR is_folder IS NULL OR source IS NULL
+                "#
             ).execute(&pool).await {
-                eprintln!("[Setup] Failed to update is_folder column in sync_folder_files: {}", e);
+                eprintln!("[Setup] Failed to update default values in sync_folder_files: {}", e);
             }
 
             // Check if any encryption keys exist, create one if none found
