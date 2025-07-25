@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Icons, RevealTextLine, IconButton } from "@/components/ui";
+import { Icons, RevealTextLine, IconButton, BackButton } from "@/components/ui";
 import { toast } from "sonner";
 import SectionHeader from "../SectionHeader";
 import { getWalletRecord } from "@/app/lib/helpers/walletDb";
@@ -19,7 +19,7 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
   inView,
   onBack,
   onKeyGenerated,
-  generatedKey,
+  generatedKey
 }) => {
   const [passcode, setPasscode] = useState("");
   const [showPasscode, setShowPasscode] = useState(false);
@@ -91,13 +91,7 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
         className="delay-300 w-full"
       >
         <div className="w-full flex flex-col gap-4 ">
-          <button
-            className="flex gap-2 font-semibold text-lg items-center"
-            onClick={onBack}
-          >
-            <Icons.ArrowLeft className="size-5 text-grey-10" />
-            Back
-          </button>
+          <BackButton onBack={onBack} />
           <SectionHeader
             Icon={Icons.ShieldSecurity}
             title="Generate New Key"
@@ -147,11 +141,11 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
           customWarnings={[
             {
               id: 1,
-              text: "Store this encryption key in a secure password manager",
+              text: "Store this encryption key in a secure password manager"
             },
             {
               id: 2,
-              text: "This key is required to decrypt your private files",
+              text: "This key is required to decrypt your private files"
             },
             {
               id: 3,
@@ -160,8 +154,8 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
                   We <b>cannot</b> help you decrypt your files if you lose this
                   key
                 </div>
-              ),
-            },
+              )
+            }
           ]}
           onDone={handleDialogClose}
         />

@@ -69,7 +69,7 @@ const NotificationSettings: React.FC = () => {
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="flex flex-col w-full border broder-grey-80 rounded-lg p-4"
+          className="flex flex-col w-full border broder-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover"
         >
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <SectionHeader
