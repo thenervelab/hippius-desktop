@@ -1,5 +1,5 @@
 import { CardButton } from "@/components/ui";
-import { PlusCircle, Loader2, Upload } from "lucide-react";
+import { PlusCircle, Loader2 } from "lucide-react";
 import {
     useState,
     useMemo,

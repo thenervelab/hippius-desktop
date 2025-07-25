@@ -26,8 +26,6 @@ import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import EncryptionKeyDialog from "@/components/page-sections/files/ipfs/EncryptionKeyDialog";
 import { downloadIpfsFolder } from "@/lib/utils/downloadIpfsFolder";
 import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFileToFolderButton";
-import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
-import DeleteConfirmationDialog from "@/components/delete-confirmation-dialog";
 
 interface FileEntry {
     file_name: string;
@@ -60,12 +58,6 @@ export default function FolderView({
     const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(
         null
     );
-    const [selectedOutputDir, setSelectedOutputDir] = useState<string | null>(
-        null
-    );
-    const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
-    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-
     const isPrivateFolder = activeSubMenuItem === "Private";
     const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
 
@@ -86,15 +78,6 @@ export default function FolderView({
             fileSize: selectedFileSize
         });
     }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
-
-    // File deletion mutation
-    const { mutate: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
-        cid: fileToDelete?.cid || "",
-        fileToDelete,
-        folderCid,
-        folderName,
-        isPrivateFolder
-    });
 
 
     useEffect(() => {
@@ -150,9 +133,6 @@ export default function FolderView({
             );
 
             setFiles(formattedFiles);
-            if (!showLoading) {
-                toast.success("Folder contents refreshed successfully");
-            }
         } catch (error) {
             console.error("Error loading folder contents:", error);
             toast.error(
@@ -175,62 +155,6 @@ export default function FolderView({
         loadFolderContents(false);
     };
 
-    const handleFileDownload = useCallback((
-        file: FormattedUserIpfsFile,
-        polkadotAddress: string
-    ) => {
-        if (isPrivateFolder && file.source !== "Hippius") {
-            // Private file download handling
-            // This would need to be implemented based on your system requirements
-            toast.error("Private file download not implemented");
-        } else {
-            // Public file download
-            // You could implement this based on existing file download functionality
-            toast.error("File download from folder not implemented");
-        }
-    }, [isPrivateFolder]);
-
-    // Handle file deletion
-    const handleFileDelete = useCallback(() => {
-        if (!fileToDelete) return;
-
-        deleteFile(undefined, {
-            onSuccess: () => {
-                toast.success(`File ${fileToDelete.name} deleted from folder successfully!`);
-                setFileToDelete(null);
-                setIsDeleteDialogOpen(false);
-                loadFolderContents(false);
-            },
-            onError: (error) => {
-                toast.error(`Failed to delete file: ${error.message || "Unknown error"}`);
-                console.error("Delete error:", error);
-            }
-        });
-    }, [deleteFile, fileToDelete, loadFolderContents]);
-
-    // Set up sharedState for FilesContent
-    const sharedState = useMemo(() => ({
-        files,
-        setFileToDelete: (file: FormattedUserIpfsFile | null) => {
-            setFileToDelete(file);
-            setIsDeleteDialogOpen(true);
-        },
-        openDeleteModal: isDeleteDialogOpen,
-        setOpenDeleteModal: setIsDeleteDialogOpen,
-        selectedFile: null,
-        setSelectedFile: () => { }, // No preview handling needed here
-        fileDetailsFile: null,
-        setFileDetailsFile: () => { }, // No details handling needed here
-        isFileDetailsOpen: false,
-        setIsFileDetailsOpen: () => { }, // No details handling needed here
-        deleteFile: handleFileDelete,
-        isDeleting,
-        getFileType: () => null,
-        contextMenu: null,
-        setContextMenu: () => { },
-    }), [files, isDeleteDialogOpen, isDeleting, handleFileDelete]);
-
-
     function handlePaginationReset() {
         setShouldResetPagination(false);
     }
@@ -239,23 +163,71 @@ export default function FolderView({
         if (!folderCid) return;
 
         try {
-            const outputDir = (await open({
-                directory: true,
-                multiple: false
-            })) as string | null;
-
-            if (!outputDir) {
-                return;
-            }
-
-            setSelectedOutputDir(outputDir);
-
+            // For private folders, show encryption dialog first
             if (isPrivateFolder) {
                 setEncryptionKeyError(null);
                 setIsEncryptionDialogOpen(true);
             } else {
+                // For public folders, directly ask for output directory
+                const outputDir = await open({
+                    directory: true,
+                    multiple: false
+                }) as string | null;
+
+                if (!outputDir) {
+                    return; // User canceled directory selection
+                }
+
+                // Download public folder directly
                 await downloadFolder(outputDir, null);
             }
+        } catch (error) {
+            console.error("Error initiating folder download:", error);
+            toast.error(
+                `Failed to initiate download: ${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+    };
+
+    const handleEncryptedDownload = async (encryptionKey: string | null) => {
+        // Validate encryption key if provided
+        if (encryptionKey) {
+            try {
+                const savedKeys = await invoke<Array<{ id: number; key: string }>>(
+                    "get_encryption_keys"
+                );
+
+                const keyExists = savedKeys.some((k) => k.key === encryptionKey);
+
+                if (!keyExists) {
+                    setEncryptionKeyError(
+                        "Incorrect encryption key. Please try again with a correct one."
+                    );
+                    return;
+                }
+            } catch (error) {
+                console.error("Error validating encryption key:", error);
+                toast.error("Failed to validate encryption key");
+                return;
+            }
+        }
+
+        setIsEncryptionDialogOpen(false);
+
+
+        // After handling the encryption key, prompt for output directory
+        try {
+            const outputDir = await open({
+                directory: true,
+                multiple: false
+            }) as string | null;
+
+            if (!outputDir) {
+                return; // User canceled directory selection
+            }
+
+            // Now download with the previously obtained encryption key
+            await downloadFolder(outputDir, encryptionKey);
         } catch (error) {
             console.error("Error selecting download location:", error);
             toast.error(
@@ -295,28 +267,14 @@ export default function FolderView({
             toast.error(
                 `Failed to download folder: ${result.message || "Unknown error"}`
             );
-        } else if (result && result.success) {
-            setIsEncryptionDialogOpen(false);
         }
+
         setIsDownloading(false);
-    };
 
-    const handleEncryptedDownload = async (encryptionKey: string | null) => {
-        if (!selectedOutputDir) return;
-        if (encryptionKey) {
-            const savedKeys = await invoke<Array<{ id: number; key: string }>>(
-                "get_encryption_keys"
-            );
-
-            const keyExists = savedKeys.some((k) => k.key === encryptionKey);
-
-            if (!keyExists) {
-                return setEncryptionKeyError(
-                    "Incorrect encryption key. Please try again with a correct one."
-                );
-            }
+        // Show success message if download completed
+        if (result && result.success) {
+            toast.success(`Folder downloaded successfully to ${outputDir}`);
         }
-        await downloadFolder(selectedOutputDir, encryptionKey);
     };
 
     const handleApplyFilters = useCallback(
@@ -532,32 +490,15 @@ export default function FolderView({
                 </>
             )}
 
-            <DeleteConfirmationDialog
-                open={isDeleteDialogOpen}
-                onClose={() => {
-                    setIsDeleteDialogOpen(false);
-                    setFileToDelete(null);
-                }}
-                onBack={() => {
-                    setIsDeleteDialogOpen(false);
-                    setFileToDelete(null);
-                }}
-                onDelete={handleFileDelete}
-                button={isDeleting ? "Deleting..." : "Delete File"}
-                text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""}`}
-                heading="Delete File"
-                disableButton={isDeleting}
-            />
-
             <EncryptionKeyDialog
                 open={isEncryptionDialogOpen}
                 onClose={() => {
                     setIsEncryptionDialogOpen(false);
                     setEncryptionKeyError(null);
-                    setSelectedOutputDir(null);
                 }}
                 onDownload={handleEncryptedDownload}
                 keyError={encryptionKeyError}
+                isFolder
             />
         </div>
     );

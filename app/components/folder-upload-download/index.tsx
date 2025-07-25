@@ -183,6 +183,8 @@ export default function IpfsFolderDemo() {
       const command = isPrivateFolder ? "remove_file_from_private_folder" : "remove_file_from_public_folder";
       const params = { accountId, folderMetadataCid: manifestCid, folderName, fileName: fileToRemove, seedPhrase };
 
+      console.log("params", params)
+
       const result = await invoke<string>(command, params);
 
       console.log("✅ File removed. New Manifest CID:", result);
@@ -261,11 +263,10 @@ export default function IpfsFolderDemo() {
         <button
           onClick={handleUploadFolder}
           disabled={!folderPath}
-          className={`px-4 py-2 rounded transition ${
-            folderPath
+          className={`px-4 py-2 rounded transition ${folderPath
               ? "bg-green-500 text-white hover:bg-green-600"
               : "bg-gray-300 text-gray-600 cursor-not-allowed"
-          }`}
+            }`}
         >
           Upload Folder ({isPrivateFolder ? "Private" : "Public"})
         </button>
@@ -316,11 +317,10 @@ export default function IpfsFolderDemo() {
           <button
             onClick={handleAddFile}
             disabled={!filePath || !manifestCid}
-            className={`mt-2 px-4 py-2 rounded transition ${
-              filePath && manifestCid
+            className={`mt-2 px-4 py-2 rounded transition ${filePath && manifestCid
                 ? "bg-green-500 text-white hover:bg-green-600"
                 : "bg-gray-300 text-gray-600 cursor-not-allowed"
-            }`}
+              }`}
           >
             Add File to Folder ({isPrivateFolder ? "Private" : "Public"})
           </button>
@@ -348,11 +348,10 @@ export default function IpfsFolderDemo() {
           <button
             onClick={handleRemoveFile}
             disabled={!fileToRemove || !manifestCid}
-            className={`px-4 py-2 rounded transition ${
-              fileToRemove && manifestCid
+            className={`px-4 py-2 rounded transition ${fileToRemove && manifestCid
                 ? "bg-red-500 text-white hover:bg-red-600"
                 : "bg-gray-300 text-gray-600 cursor-not-allowed"
-            }`}
+              }`}
           >
             Remove File from Folder ({isPrivateFolder ? "Private" : "Public"})
           </button>

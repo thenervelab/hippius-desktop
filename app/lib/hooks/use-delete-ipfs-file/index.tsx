@@ -47,6 +47,9 @@ export const useDeleteIpfsFile = ({
 
             if (!fileToDelete) throw new Error("Cannot find file");
 
+            console.log("Deleting file:", fileToDelete.name, "CID:", fileToDelete.cid);
+
+            console.log("Folder CID:", folderCid, "Folder Name:", folderName, "Is Private Folder:", isPrivateFolder);
             // Handle file in folder deletion
             if (folderCid && folderName) {
                 if (!mnemonic) {
@@ -54,28 +57,16 @@ export const useDeleteIpfsFile = ({
                 }
 
                 try {
-                    if (isPrivateFolder) {
-                        // Use private folder file removal function
-                        await invoke("remove_file_from_private_folder", {
-                            accountId: polkadotAddress,
-                            folderMetadataCid: folderCid,
-                            folderName: folderName,
-                            fileName: fileToDelete.name,
-                            seedPhrase: mnemonic
-                        });
-                    } else {
-                        // Use public folder file removal function
-                        await invoke("remove_file_from_folder", {
-                            accountId: polkadotAddress,
-                            folderMetadataCid: folderCid,
-                            folderName: folderName,
-                            fileName: fileToDelete.name,
-                            seedPhrase: mnemonic
-                        });
+                    const command = isPrivateFolder ? "remove_file_from_private_folder" : "remove_file_from_public_folder";
+                    const params = {
+                        accountId: polkadotAddress,
+                        folderMetadataCid: folderCid,
+                        folderName: folderName,
+                        fileName: fileToDelete.name,
+                        seedPhrase: mnemonic
                     }
-
-                    // No need to refetch the query for user IPFS files,
-                    // as the folder view will refresh separately
+                    console.log("params", params);
+                    await invoke<string>(command, params);
                     return true;
                 } catch (error) {
                     console.error("Failed to delete file from folder:", error);
@@ -85,7 +76,25 @@ export const useDeleteIpfsFile = ({
 
             // Handle folder deletion
             if (fileToDelete.isFolder) {
-                throw new Error("Folder deletion is not implemented yet");
+                console.log("filetoDelete is a folder, deleting folder:", fileToDelete);
+                try {
+                    if (!mnemonic) {
+                        throw new Error("Seed phrase required to delete local files");
+                    }
+
+                    await invoke("delete_and_unpin_file_by_name", {
+                        fileName: fileToDelete.name,
+                        seedPhrase: mnemonic
+                    });
+
+                    await queryClient.refetchQueries({
+                        queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
+                    });
+                    return true;
+                } catch (error) {
+                    console.error("Failed to delete local file:", error);
+                    throw new Error(`Failed to delete local file: ${error instanceof Error ? error.message : String(error)}`);
+                }
             }
 
             // Handle local file deletion

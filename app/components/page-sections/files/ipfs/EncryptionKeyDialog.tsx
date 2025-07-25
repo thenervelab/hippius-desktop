@@ -7,6 +7,7 @@ import { AbstractIconWrapper, RevealTextLine } from "@/app/components/ui";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
+import { FormattedUserIpfsFile } from "@/app/lib/hooks/use-user-ipfs-files";
 
 type Props = {
   open: boolean;
@@ -14,6 +15,7 @@ type Props = {
   onDownload: (encryptionKey: string | null) => void;
   keyError: string | null;
   isFolder?: boolean;
+  file?: FormattedUserIpfsFile | null;
 };
 
 export default function EncryptionKeyDialog({
@@ -22,6 +24,7 @@ export default function EncryptionKeyDialog({
   onDownload,
   keyError,
   isFolder = false,
+  file
 }: Props) {
   const [encryptionKey, setEncryptionKey] = useState("");
   const [internalKeyError, setInternalKeyError] = useState<string | null>(null);
@@ -79,13 +82,13 @@ export default function EncryptionKeyDialog({
           </div>
 
           <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center pt-2">
-            Decrypt {isFolder ? "Folder" : "File"}
+            Decrypt {(isFolder || file?.isFolder) ? "Folder" : "File"}
           </Dialog.Title>
 
           <div className="space-y-4">
             <div className="text-grey-70 text-sm text-center mb-8">
               <RevealTextLine rotate reveal={true} className="delay-300">
-                Please enter your encryption key to decrypt your {isFolder ? "folder" : "file"}.
+                Please enter your encryption key to decrypt your {(isFolder || file?.isFolder) ? "folder" : "file"}.
               </RevealTextLine>
             </div>
 
@@ -114,7 +117,7 @@ export default function EncryptionKeyDialog({
               </div>
               <p className="text-xs text-grey-70">
                 {encryptionKey.trim()
-                  ? `Using custom encryption key for this ${isFolder ? "folder" : "file"}.`
+                  ? `Using custom encryption key for this ${(isFolder || file?.isFolder) ? "folder" : "file"}.`
                   : "Default encryption key will be used if left empty."}
               </p>
 

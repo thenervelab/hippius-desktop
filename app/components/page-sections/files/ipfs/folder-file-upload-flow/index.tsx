@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -26,8 +26,8 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     const [files, setFiles] = useState<FileList | null>(null);
     const [revealFiles, setRevealFiles] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
     const { polkadotAddress, mnemonic } = useWalletAuth();
-    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Handle initial files if provided
     useEffect(() => {
@@ -37,13 +37,18 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
         }
     }, [initialFiles]);
 
+    // Generate a unique key for each file
+    const getFileKey = (file: File): string => {
+        return `${file.name}-${file.size}-${file.lastModified}`;
+    };
+
     // Append files, avoiding duplicates
     const appendFiles = useCallback((newFiles: FileList | null) => {
         if (!newFiles?.length) return;
         setFiles(prev => {
             if (!prev) return newFiles;
-            const seen = new Set(Array.from(prev).map(f => `${f.name}-${f.size}-${f.lastModified}`));
-            const unique = Array.from(newFiles).filter(f => !seen.has(`${f.name}-${f.size}-${f.lastModified}`));
+            const seen = new Set(Array.from(prev).map(f => getFileKey(f)));
+            const unique = Array.from(newFiles).filter(f => !seen.has(getFileKey(f)));
             if (!unique.length) return prev;
             const combined = [...Array.from(prev), ...unique];
             const dt = new DataTransfer();
@@ -62,15 +67,9 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
         arr.forEach(f => dt.items.add(f));
         setFiles(dt.files);
         if (arr.length === 1) setRevealFiles(false);
-    }, [files]);
-
-    const handleBrowse = useCallback(() => {
-        if (fileInputRef.current) {
-            fileInputRef.current.click();
-        }
     }, []);
 
-    const uploadFiles = useCallback(async () => {
+    const handleAddFilesToFolder = async () => {
         if (!folderCid || !files?.length) {
             toast.error("No files selected or folder information missing");
             return;
@@ -82,60 +81,85 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
         }
 
         setIsUploading(true);
+        setUploadProgress(0);
+
+        // Start toast for better UX
+        const toastId = toast.loading(
+            files.length > 1
+                ? `Adding ${files.length} files to folder: 0%`
+                : "Adding file to folder: 0%"
+        );
 
         try {
             // Process each file in the selection
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
+                const percent = Math.round(((i + 1) / files.length) * 100);
+                setUploadProgress(percent);
 
-                // For Tauri file dialog we should already have absolute paths
-                // We need to use the absolute path from file.path if it exists (desktop app)
-                // If not (web browsers), this won't work with the backend which expects a file system path
-                if (!file.path) {
-                    throw new Error(`File path is not available for ${file.name}. Please use the system file browser to select files.`);
-                }
+                // Update toast with progress
+                const msg = files.length > 1
+                    ? `Adding ${files.length} files to folder: ${percent}%`
+                    : `Adding file to folder: ${percent}%`;
+                toast.loading(msg, { id: toastId });
 
-                if (isPrivateFolder) {
-                    await invoke<string>("add_file_to_private_folder", {
-                        accountId: polkadotAddress,
-                        folderMetadataCid: folderCid,
-                        folderName,
-                        filePath: file.path, // Use absolute path from file object
-                        seedPhrase: mnemonic,
-                    });
-                } else {
-                    await invoke<string>("add_file_to_folder", {
-                        accountId: polkadotAddress,
-                        folderMetadataCid: folderCid,
-                        folderName,
-                        filePath: file.path, // Use absolute path from file object
-                        seedPhrase: mnemonic,
-                    });
-                }
+                // Convert file to ArrayBuffer
+                const arrayBuffer = await file.arrayBuffer();
+
+                // Create a temporary file path
+                const tempPath = `/tmp/${file.name}`;
+
+                // Write file to disk using Tauri's API
+                await invoke("write_file", {
+                    path: tempPath,
+                    data: Array.from(new Uint8Array(arrayBuffer))
+                });
+
+                // Now add the file to the folder using the temp path
+                const functionName = isPrivateFolder
+                    ? "add_file_to_private_folder"
+                    : "add_file_to_public_folder";
+
+
+
+                const params = {
+                    accountId: polkadotAddress,
+                    folderMetadataCid: folderCid,
+                    folderName,
+                    filePath: tempPath,
+                    seedPhrase: mnemonic,
+                    ...(isPrivateFolder ? { encryptionKey: null } : {})
+                };
+                console.log("params for adding file:", params);
+
+                await invoke<string>(functionName, params);
+
+                // Small delay to make progress visible when adding multiple small files
+                if (files.length > 1) await new Promise(r => setTimeout(r, 300));
             }
 
-            toast.success(`${files.length > 1 ? 'Files' : 'File'} added to folder successfully!`);
+            toast.success(
+                files.length > 1
+                    ? `${files.length} files successfully added to folder!`
+                    : `File successfully added to folder!`,
+                { id: toastId }
+            );
+
             onSuccess();
         } catch (error) {
             console.error("Failed to add files to folder:", error);
-            toast.error(`Failed to add files: ${error instanceof Error ? error.message : String(error)}`);
+            toast.error(
+                `Failed to add files: ${error instanceof Error ? error.message : String(error)}`,
+                { id: toastId }
+            );
         } finally {
             setIsUploading(false);
+            setUploadProgress(0);
         }
-    }, [folderCid, folderName, isPrivateFolder, files, polkadotAddress, mnemonic, onSuccess]);
-
-    const isReady = files?.length && !isUploading;
+    };
 
     return (
         <div className="w-full">
-            <input
-                type="file"
-                ref={fileInputRef}
-                style={{ display: 'none' }}
-                multiple
-                onChange={(e) => appendFiles(e.target.files)}
-            />
-
             <FileDropzone setFiles={appendFiles} />
 
             {files?.length ? (
@@ -154,6 +178,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                                 <button
                                     onClick={() => setRevealFiles(v => !v)}
                                     className="flex items-center gap-x-2 text-sm text-grey-10"
+                                    disabled={isUploading}
                                 >
                                     {revealFiles ? "Hide" : "View"} <Icons.ArrowRight className="size-4" />
                                 </button>
@@ -162,6 +187,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                                 onClick={() => removeFile(0)}
                                 className="text-grey-60 hover:text-error-50"
                                 title="Remove file"
+                                disabled={isUploading}
                             >
                                 <Trash2 className="size-4" />
                             </button>
@@ -182,6 +208,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                                             onClick={() => removeFile(i + 1)}
                                             className="ml-2 text-grey-60 hover:text-error-50 flex-shrink-0"
                                             title="Remove file"
+                                            disabled={isUploading}
                                         >
                                             <Trash2 className="size-4" />
                                         </button>
@@ -192,15 +219,37 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                 </div>
             ) : null}
 
+            {isUploading && (
+                <div className="mt-3">
+                    <div className="w-full h-2 bg-grey-80 rounded-full overflow-hidden">
+                        <div
+                            className="h-full bg-primary-50 transition-all duration-300"
+                            style={{ width: `${uploadProgress}%` }}
+                        />
+                    </div>
+                    <div className="mt-1 text-center text-sm text-grey-40">
+                        {uploadProgress}% complete
+                    </div>
+                </div>
+            )}
+
             <div className="mt-3 flex flex-col gap-y-3">
                 <CardButton
-                    onClick={uploadFiles}
+                    onClick={handleAddFilesToFolder}
                     disabled={!files?.length || isUploading}
                     className="w-full"
                 >
-                    {isUploading ? "Uploading..." : `Add ${files && files.length > 1 ? 'Files' : 'File'} to Folder`}
+                    {isUploading
+                        ? `Adding to Folder...`
+                        : `Add ${files && files.length > 1 ? 'Files' : 'File'} to Folder`
+                    }
                 </CardButton>
-                <CardButton onClick={onCancel} className="w-full" variant="secondary">
+                <CardButton
+                    onClick={onCancel}
+                    className="w-full"
+                    variant="secondary"
+                    disabled={isUploading}
+                >
                     Cancel
                 </CardButton>
             </div>
