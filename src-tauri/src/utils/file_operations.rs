@@ -16,10 +16,10 @@ use tokio::time::sleep;
 
 // Helper to sanitize file/folder names for DB and filesystem operations
 fn sanitize_file_name(name: &str) -> String {
-    if name.ends_with("-folder.ec_metadata") {
-        name.trim_end_matches("-folder.ec_metadata").to_string()
-    } else if name.ends_with("-folder") {
-        name.trim_end_matches("-folder").to_string()
+    if name.ends_with(".folder.ec_metadata") {
+        name.trim_end_matches(".folder.ec_metadata").to_string()
+    } else if name.ends_with(".folder") {
+        name.trim_end_matches(".folder").to_string()
     } else if name.ends_with(".ec_metadata") {
         name.trim_end_matches(".ec_metadata").to_string()
     } else {

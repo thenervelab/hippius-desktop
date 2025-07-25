@@ -920,7 +920,7 @@ pub async fn encrypt_and_upload_folder(
         let meta_folder_name = format!(
             "{}{}",
             folder_name,
-            if folder_name.ends_with("-folder") { "" } else { "-folder" }
+            if folder_name.ends_with(".folder") { "" } else { ".folder" }
         );
         all_files_for_storage.push((meta_folder_name.clone(), folder_metadata_cid.clone()));
 
@@ -933,7 +933,7 @@ pub async fn encrypt_and_upload_folder(
     let meta_folder_name = format!(
         "{}{}",
         folder_name,
-        if folder_name.ends_with("-folder") { "" } else { "-folder" }
+        if folder_name.ends_with(".folder") { "" } else { ".folder" }
     );
     let storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, api_url, &seed_phrase).await;
 
@@ -1035,10 +1035,10 @@ pub async fn list_folder_contents(
         
         // Sanitize file_name for UI/consumer
         let mut file_detail = file_detail;
-        file_detail.file_name = if file_detail.file_name.ends_with("-folder.ec_metadata") {
-            file_detail.file_name.trim_end_matches("-folder.ec_metadata").to_string()
-        } else if file_detail.file_name.ends_with("-folder") {
-            file_detail.file_name.trim_end_matches("-folder").to_string()
+        file_detail.file_name = if file_detail.file_name.ends_with(".folder.ec_metadata") {
+            file_detail.file_name.trim_end_matches(".folder.ec_metadata").to_string()
+        } else if file_detail.file_name.ends_with(".folder") {
+            file_detail.file_name.trim_end_matches(".folder").to_string()
         } else if file_detail.file_name.ends_with(".ec_metadata") {
             file_detail.file_name.trim_end_matches(".ec_metadata").to_string()
         } else {
@@ -1170,7 +1170,7 @@ pub async fn public_upload_folder(
     })
     .await
     .map_err(|e| e.to_string())??;
-    let meta_folder_name = format!("{}{}", folder_name, if folder_name.ends_with("-folder") { "" } else { "-folder" });
+    let meta_folder_name = format!("{}{}", folder_name, if folder_name.ends_with(".folder") { "" } else { ".folder" });
     // Build files array: folder metadata + all file CIDs
     let mut files_for_storage = Vec::with_capacity(file_cid_pairs.len() + 1);
     files_for_storage.push((meta_folder_name.clone(), folder_metadata_cid.clone()));
@@ -1316,7 +1316,7 @@ pub async fn add_file_to_public_folder(
     .map_err(|e| format!("Failed to execute blocking task for file upload: {}", e))??;
 
     // Prepare storage request
-    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder") { "" } else { "-folder" });
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder") { "" } else { ".folder" });
     let mut files_for_storage = vec![(meta_filename.clone(), new_folder_metadata_cid.clone())];
     files_for_storage.extend(new_file_pairs);
 
@@ -1428,7 +1428,7 @@ pub async fn remove_file_from_public_folder(
     .map_err(|e| format!("Failed to execute blocking task for metadata update: {}", e))??;
 
     // Prepare storage request
-    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder") { "" } else { "-folder" });
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder") { "" } else { ".folder" });
 
     // Get the sync folder path
     let sync_folder = match get_public_sync_path().await {
@@ -1659,7 +1659,7 @@ pub async fn add_file_to_private_folder(
             std::fs::write(&folder_metadata_path, folder_metadata.as_bytes()).map_err(|e| e.to_string())?;
             let folder_metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
             // Build files_for_storage: folder metadata + file metadata
-            let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+            let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" });
             let mut files_for_storage = vec![(meta_filename, folder_metadata_cid.clone()), file_meta_pair];
             Ok::<_, String>((folder_metadata_cid, files_for_storage))
         }
@@ -1668,7 +1668,7 @@ pub async fn add_file_to_private_folder(
     .map_err(|e| format!("Failed to execute blocking task for folder metadata update: {}", e))??;
 
     // Submit storage request
-    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" });
     
     // clear old from user_profile and send unpin tx
     let unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
@@ -1689,10 +1689,10 @@ pub async fn add_file_to_private_folder(
         })?;
 
     // Sanitize folder_name for local sync folder usage
-    let sanitized_folder_name = if folder_name.ends_with("-folder.ec_metadata") {
-        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
-    } else if folder_name.ends_with("-folder") {
-        folder_name.trim_end_matches("-folder").to_string()
+    let sanitized_folder_name = if folder_name.ends_with(".folder.ec_metadata") {
+        folder_name.trim_end_matches(".folder.ec_metadata").to_string()
+    } else if folder_name.ends_with(".folder") {
+        folder_name.trim_end_matches(".folder").to_string()
     } else {
         folder_name.clone()
     };
@@ -1768,7 +1768,7 @@ pub async fn remove_file_from_private_folder(
     .map_err(|e| format!("Failed to execute blocking task for metadata update: {}", e))??;
 
     // Prepare storage request
-    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" });
     // clear old from user_profile and send unpin tx
     let unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
     .map_err(|e| {
@@ -1787,10 +1787,10 @@ pub async fn remove_file_from_private_folder(
             }
         })?;
     // Sanitize folder_name for local sync folder usage
-    let sanitized_folder_name = if folder_name.ends_with("-folder.ec_metadata") {
-        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
-    } else if folder_name.ends_with("-folder") {
-        folder_name.trim_end_matches("-folder").to_string()
+    let sanitized_folder_name = if folder_name.ends_with(".folder.ec_metadata") {
+        folder_name.trim_end_matches(".folder.ec_metadata").to_string()
+    } else if folder_name.ends_with(".folder") {
+        folder_name.trim_end_matches(".folder").to_string()
     } else {
         folder_name.clone()
     };

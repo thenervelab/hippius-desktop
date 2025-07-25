@@ -499,10 +499,10 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                 for row in user_rows {
                     let file_name = row.get::<String, _>("file_name");
                     // Strip metadata suffixes when looking up in sync_folder_files
-                    let lookup_name = if file_name.ends_with("-folder.ec_metadata") {
-                        file_name.trim_end_matches("-folder.ec_metadata").to_string()
-                    } else if file_name.ends_with("-folder") {
-                        file_name.trim_end_matches("-folder").to_string()
+                    let lookup_name = if file_name.ends_with(".folder.ec_metadata") {
+                        file_name.trim_end_matches(".folder.ec_metadata").to_string()
+                    } else if file_name.ends_with(".folder") {
+                        file_name.trim_end_matches(".folder").to_string()
                     }else if file_name.ends_with(".ec_metadata") {
                         file_name.trim_end_matches(".ec_metadata").to_string()
                     } else {
@@ -535,10 +535,10 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                     }
 
                     // Infer type and folder status based on new suffixes (Leave .ec_metadata unchanged)
-                    if file_name.ends_with("-folder.ec_metadata") {
+                    if file_name.ends_with(".folder.ec_metadata") {
                         type_ = "private".to_string();
                         is_folder = true;
-                    } else if file_name.ends_with("-folder") {
+                    } else if file_name.ends_with(".folder") {
                         type_ = "public".to_string();
                         is_folder = true;
                     }
@@ -624,10 +624,10 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
             let file_size = row.get::<i64, _>("file_size_in_bytes");
 
             // Build lookup name stripped of metadata suffixes
-            let lookup_name = if file_name.ends_with("-folder.ec_metadata") {
-                file_name.trim_end_matches("-folder.ec_metadata").to_string()
-            } else if file_name.ends_with("-folder") {
-                file_name.trim_end_matches("-folder").to_string()
+            let lookup_name = if file_name.ends_with(".folder.ec_metadata") {
+                file_name.trim_end_matches(".folder.ec_metadata").to_string()
+            } else if file_name.ends_with(".folder") {
+                file_name.trim_end_matches(".folder").to_string()
             } else if file_name.ends_with(".ec_metadata") {
                 file_name.trim_end_matches(".ec_metadata").to_string()
             } else {
@@ -653,9 +653,9 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
             }
 
             // Final inference from filename suffixes
-            if file_name.ends_with("-folder.ec_metadata") {
+            if file_name.ends_with(".folder.ec_metadata") {
                 type_ = "private".to_string();
-            } else if file_name.ends_with("-folder") {
+            } else if file_name.ends_with(".folder") {
                 type_ = "public".to_string();
             }
 
