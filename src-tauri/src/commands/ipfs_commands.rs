@@ -6,7 +6,7 @@ use crate::utils::{
         download_from_ipfs,upload_to_ipfs
     },
     file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, request_folder_storage,
-        request_file_storage , delete_and_unpin_user_file_records_by_name_from_folder, copy_to_sync_folder}
+        request_file_storage , remove_from_sync_folder, copy_to_sync_folder, delete_and_unpin_user_file_records_from_folder}
 };
 use uuid::Uuid;
 use std::fs;
@@ -1326,6 +1326,17 @@ pub async fn add_file_to_public_folder(
 
     // Submit storage request, handle RequestAlreadyExists
     println!("[add_file_to_public_folder] Submitting storage request for updated folder metadata: {}", meta_filename);
+
+    // clear old from user_profile and send unpin tx
+    let unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
+    .map_err(|e| {
+        if e.contains("RequestAlreadyExists") {
+            format!("unpin request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+        } else {
+            format!("Failed to request file storage: {}", e)
+        }
+    })?;
+
     let storage_result = request_file_storage(&meta_filename, &new_folder_metadata_cid, api_url, &seed_phrase).await
         .map_err(|e| {
             if e.contains("RequestAlreadyExists") {
@@ -1441,6 +1452,17 @@ pub async fn remove_file_from_public_folder(
         "[remove_file_from_public_folder] Submitting storage request for updated folder metadata: {}",
         meta_filename
     );
+
+    // clear old from user_profile and send unpin tx
+    let unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
+    .map_err(|e| {
+        if e.contains("RequestAlreadyExists") {
+            format!("unpin request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+        } else {
+            format!("Failed to request file storage: {}", e)
+        }
+    })?;
+
     let storage_result = request_file_storage(&meta_filename, &new_folder_metadata_cid, api_url, &seed_phrase).await
         .map_err(|e| {
             if e.contains("RequestAlreadyExists") {
@@ -1451,7 +1473,7 @@ pub async fn remove_file_from_public_folder(
         })?;
 
     // Update database to remove file and remove the file from the sync directory
-    delete_and_unpin_user_file_records_by_name_from_folder(&file_name, &folder_name, true, false, &seed_phrase, &file_name).await;
+    remove_from_sync_folder(&file_name, &folder_name, true, false).await;
 
     println!("[remove_file_from_public_folder] Storage request result: {}", storage_result);
     println!(
@@ -1640,6 +1662,16 @@ pub async fn add_file_to_private_folder(
 
     // Submit storage request
     let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+    
+    // clear old from user_profile and send unpin tx
+    let unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
+    .map_err(|e| {
+        if e.contains("RequestAlreadyExists") {
+            format!("unpin request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+        } else {
+            format!("Failed to request file storage: {}", e)
+        }
+    })?;
     let storage_result = request_erasure_storage(&meta_filename, &files_for_storage, api_url, &seed_phrase).await
         .map_err(|e| {
             if e.contains("RequestAlreadyExists") {
@@ -1730,6 +1762,15 @@ pub async fn remove_file_from_private_folder(
 
     // Prepare storage request
     let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+    // clear old from user_profile and send unpin tx
+    let unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
+    .map_err(|e| {
+        if e.contains("RequestAlreadyExists") {
+            format!("unpin request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+        } else {
+            format!("Failed to request file storage: {}", e)
+        }
+    })?;
     let storage_result = request_erasure_storage(&meta_filename, &vec![(meta_filename.clone(), new_folder_metadata_cid.clone())], api_url, &seed_phrase).await
         .map_err(|e| {
             if e.contains("RequestAlreadyExists") {
@@ -1754,7 +1795,7 @@ pub async fn remove_file_from_private_folder(
         file_name.clone()
     };
     // Remove the file from the sync directory and DB
-    delete_and_unpin_user_file_records_by_name_from_folder(&file_name, &folder_name, false, false, &seed_phrase, &file_name).await;
+    remove_from_sync_folder(&file_name, &folder_name, false, false).await;
 
     Ok(new_folder_metadata_cid)
 }

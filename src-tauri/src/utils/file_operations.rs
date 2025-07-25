@@ -716,29 +716,22 @@ async fn insert_file_if_not_exists_in_folder(pool: &sqlx::Pool<sqlx::Sqlite>, fi
 
 /// Deletes all user_profiles records with the given file name and unpins the file.
 /// Also deletes from sync_folder_files. Returns the total number of deleted records or an error.
-pub async fn delete_and_unpin_user_file_records_by_name_from_folder(
-    file_name: &str,
-    folder_name: &str, 
-    is_folder: bool,
-    is_public: bool,
+pub async fn delete_and_unpin_user_file_records_from_folder(
+    folder_name: &str,
     seed_phrase: &str,
-    orignal_file_name: &str,
 ) -> Result<u64, String> {
     if let Some(pool) = DB_POOL.get() {
         // Call unpin_user_file_by_name after successful deletes
-        unpin_user_file_by_name(orignal_file_name, seed_phrase)
+        unpin_user_file_by_name(folder_name, seed_phrase)
             .await
-            .map_err(|e| format!("Unpin failed for '{}': {}", orignal_file_name, e))?;
+            .map_err(|e| format!("Unpin failed for '{}': {}", folder_name, e))?;
 
         // Delete from user_profiles
         let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
-            .bind(orignal_file_name)
+            .bind(folder_name)
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
-
-        // Remove from sync folder as well
-        remove_from_sync_folder(&file_name, &folder_name, is_public, is_folder).await;
 
         // Calculate total rows affected
         let total_deleted = result1.rows_affected();
