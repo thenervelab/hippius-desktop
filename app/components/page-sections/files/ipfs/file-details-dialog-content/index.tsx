@@ -85,6 +85,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
     : [];
 
   const { uniqueLocations, isLoading } = useNodeLocations(minerIds);
+  const isPrivateView = useIsPrivateView();
 
   if (!file) return null;
 
@@ -96,7 +97,6 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
     !!file.isFolder
   );
 
-  const isPrivateView = useIsPrivateView();
   // Format file size
   const fileSize = !file.isAssigned
     ? "Unknown"

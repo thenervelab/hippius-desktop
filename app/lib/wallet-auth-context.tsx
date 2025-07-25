@@ -7,7 +7,7 @@ import React, {
   useState,
   useEffect,
   useRef,
-  useCallback,
+  useCallback
 } from "react";
 import { Keyring } from "@polkadot/keyring";
 import { getWalletRecord, clearWalletDb } from "./helpers/walletDb";
@@ -15,6 +15,7 @@ import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
+import { checkForUpdatesOnce } from "./utils/updater/checkForUpdates";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -34,7 +35,7 @@ const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
 export function WalletAuthProvider({
-  children,
+  children
 }: {
   children: React.ReactNode;
 }) {
@@ -77,7 +78,7 @@ export function WalletAuthProvider({
       "mousedown",
       "keydown",
       "touchstart",
-      "scroll",
+      "scroll"
     ];
     events.forEach((event) => window.addEventListener(event, resetLogoutTimer));
 
@@ -110,15 +111,15 @@ export function WalletAuthProvider({
         console.log("[WalletAuth] Starting sync for account:", pair.address);
         try {
           invoke("start_user_profile_sync_tauri", {
-            accountId: pair.address,
+            accountId: pair.address
           });
           invoke("start_folder_sync_tauri", {
             accountId: pair.address,
-            seedPhrase: inputMnemonic,
+            seedPhrase: inputMnemonic
           });
           invoke("start_public_folder_sync_tauri", {
             accountId: pair.address,
-            seedPhrase: inputMnemonic,
+            seedPhrase: inputMnemonic
           });
           syncInitialized.current = true;
           console.log("[WalletAuth] Sync commands started successfully");
@@ -168,6 +169,17 @@ export function WalletAuthProvider({
     await clearWalletDb();
     logout();
   };
+
+  useEffect(() => {
+    checkForUpdatesOnce(); // first run
+
+    const id = setInterval(() => {
+      checkForUpdatesOnce();
+    }, 2 * 1000); // every 6 hours
+
+    return () => clearInterval(id);
+  }, []);
+
   useTrayInit();
 
   return (
@@ -181,7 +193,7 @@ export function WalletAuthProvider({
         setSession,
         unlockWithPasscode,
         logout,
-        resetWallet,
+        resetWallet
       }}
     >
       {children}

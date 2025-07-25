@@ -68,6 +68,8 @@
     "core:menu:allow-new",
     "core:menu:allow-items",
     "core:menu:allow-get",
-    "core:tray:default"
+    "core:tray:default",
+    "updater:default",
+    "process:default"
   ]
 }
