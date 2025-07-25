@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { CardButton, Icons } from "@/components/ui";
+import { BackButton, CardButton, Icons } from "@/components/ui";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { desktopDir, documentDir, downloadDir } from "@tauri-apps/api/path";
@@ -10,17 +10,19 @@ interface SyncFolderSelectorProps {
   onFolderSelected: (path: string) => void;
   initialPath?: string;
   isFromSettingsPage?: boolean;
+  handleBackClick?: () => void;
 }
 
 const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   onFolderSelected,
   initialPath,
   isFromSettingsPage = false,
+  handleBackClick
 }) => {
   const [suggested, setSuggested] = useState({
     desktop: "",
     documents: "",
-    downloads: "",
+    downloads: ""
   });
   const [selected, setSelected] = useState<string | null>(null);
   const [custom, setCustom] = useState<string | null>(null);
@@ -57,7 +59,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
       const p = await open({
         directory: true,
         multiple: false,
-        title: "Select Folder to Sync",
+        title: "Select Folder to Sync"
       });
       if (typeof p === "string") {
         setCustom(p);
@@ -99,17 +101,30 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
       >
         <div className="border relative border-grey-80 overflow-hidden rounded-xl w-full h-full">
           <div className="w-full flex flex-col p-4">
-            <SectionHeader
-              Icon={Icons.File2}
-              title={
-                initialPath ? "Change your sync folder" : "Welcome to Hippius!"
-              }
-              subtitle={
-                initialPath
-                  ? "Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
-                  : "Choose a folder on your device to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
-              }
-            />
+            <div className="w-full flex flex-col gap-4">
+              {isFromSettingsPage && (
+                <BackButton
+                  onBack={() => {
+                    if (handleBackClick) return handleBackClick();
+                  }}
+                />
+              )}
+
+              <SectionHeader
+                Icon={Icons.File2}
+                title={
+                  initialPath
+                    ? "Change your sync folder"
+                    : "Welcome to Hippius!"
+                }
+                subtitle={
+                  initialPath
+                    ? "Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
+                    : "Choose a folder on your device to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
+                }
+              />
+            </div>
+
             <div className="mt-4 space-y-4">
               {(["desktop", "documents", "downloads"] as const).map((opt) => (
                 <div
