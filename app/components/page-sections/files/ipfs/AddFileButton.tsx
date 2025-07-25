@@ -29,7 +29,7 @@ import { useAtomValue } from "jotai";
 import AddCidFlow from "./add-cid-flow";
 import AddCSVFlow from "./add-csv-flow";
 import { cn } from "@/lib/utils";
-import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
 
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -95,9 +95,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
     );
     const isLoading = uploadingState !== "idle";
-
-    const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
-    const isPrivateView = activeSubMenuItem === "Private";
+    const isPrivateView = useIsPrivateView();
 
     // Expose methods to parent components
     useImperativeHandle(
@@ -212,7 +210,13 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         default:
           return null;
       }
-    }, [currentStep, droppedFiles, closeDialog, handleStepChange, isPrivateView]);
+    }, [
+      currentStep,
+      droppedFiles,
+      closeDialog,
+      handleStepChange,
+      isPrivateView
+    ]);
 
     return (
       <>

@@ -18,9 +18,11 @@ use std::thread;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::sync_shared::{SYNCING_ACCOUNTS,  UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
+use crate::sync_shared::{SYNCING_ACCOUNTS, UPLOADING_FILES, RECENTLY_UPLOADED, SYNC_STATUS, 
     UPLOAD_LOCK, RECENTLY_UPLOADED_FOLDERS, CREATE_BATCH, CREATE_BATCH_TIMER_RUNNING, UploadJob, insert_file_if_not_exists};
+
 pub static UPLOAD_SENDER: OnceCell<mpsc::UnboundedSender<UploadJob>> = OnceCell::new();
+
 pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
@@ -31,6 +33,26 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
         syncing_accounts.insert((account_id.clone(), "private"));
     }
 
+    // Periodically check for sync path and start sync when available
+    let checker_account_id = account_id.clone();
+    let checker_seed_phrase = seed_phrase.clone();
+    tokio::spawn(async move {
+        loop {
+            match get_private_sync_path().await {
+                Ok(sync_path) => {
+                    println!("[FolderSync] Private sync path found: {}, starting sync process", sync_path);
+                    start_sync_process(checker_account_id.clone(), checker_seed_phrase.clone(), sync_path).await;
+                    break; // Exit loop once sync starts
+                }
+                Err(e) => {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+        }
+    });
+}
+
+async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: String) {
     if UPLOAD_SENDER.get().is_none() {
         let (tx, mut rx) = mpsc::unbounded_channel::<UploadJob>();
         UPLOAD_SENDER.set(tx).ok();
@@ -94,9 +116,10 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
 
     let startup_account_id = account_id.clone();
     let startup_seed_phrase = seed_phrase.clone();
+    let sync_path_cloned = sync_path.clone();
     tokio::spawn(async move {
         if let Some(pool) = crate::DB_POOL.get() {
-            let sync_path = PathBuf::from(get_private_sync_path().await);
+            let sync_path = PathBuf::from(&sync_path);
 
             let mut paths = Vec::new();
             collect_paths_recursively(&sync_path, &mut paths);
@@ -154,18 +177,24 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
         }
     });
 
-    let sync_path = PathBuf::from(get_private_sync_path().await);
+    let sync_path = PathBuf::from(sync_path_cloned);
     let watcher_account_id = account_id.clone();
     let watcher_seed_phrase = seed_phrase.clone();
-    spawn_watcher_thread(account_id.clone(), seed_phrase.clone());
+    spawn_watcher_thread(account_id.clone(), seed_phrase.clone(), sync_path);
 
     let checker_account_id = account_id.clone();
     let checker_seed_phrase = seed_phrase.clone();
     tokio::spawn(async move {
         loop {
             println!("[FolderSync] Periodic check: scanning for unsynced paths...");
-            let sync_path_str = get_private_sync_path().await;
-            let sync_path = PathBuf::from(&sync_path_str);
+            let sync_path = match get_private_sync_path().await {
+                Ok(path) => PathBuf::from(path),
+                Err(e) => {
+                    eprintln!("[FolderSync] Failed to get private sync path: {}", e);
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
 
             let mut paths_to_check = Vec::new();
             collect_paths_recursively(&sync_path, &mut paths_to_check);
@@ -194,14 +223,14 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
     });
 }
 
-fn spawn_watcher_thread(account_id: String, seed_phrase: String) {
+fn spawn_watcher_thread(account_id: String, seed_phrase: String, sync_path: PathBuf) {
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime for watcher");
         let mut current_path = String::new();
         let mut watcher: Option<RecommendedWatcher> = None;
 
         loop {
-            let sync_path_str = rt.block_on(get_private_sync_path());
+            let sync_path_str = sync_path.to_string_lossy().to_string();
             if sync_path_str != current_path {
                 if let Some(w) = watcher.take() {
                     drop(w);
@@ -214,7 +243,7 @@ fn spawn_watcher_thread(account_id: String, seed_phrase: String) {
                         .expect("[FolderSync] Failed to create watcher");
 
                 new_watcher
-                    .watch(Path::new(&sync_path_str), RecursiveMode::Recursive)
+                    .watch(&sync_path, RecursiveMode::Recursive)
                     .expect("[FolderSync] Failed to watch sync directory");
 
                 let watcher_account_id = account_id.clone();

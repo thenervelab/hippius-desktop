@@ -10,7 +10,11 @@ import {
 import { SUPPORTED_VIDEO_MIME_TYPES } from "@/lib/constants/supportedMimeTypes";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import VideoPlayerError from "./VideoPlayerError";
-
+export async function toBlobUrl(url: string) {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
 interface VideoPlayerProps {
   videoUrl: string;
   fileFormat: string;
@@ -66,18 +70,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return clearLoadTimer;
   }, [videoUrl, fileFormat, isFirefox, reloadKey]);
 
-  async function toBlobUrl(url: string) {
-    const res = await fetch(url);
-    const blob = await res.blob();
-    return URL.createObjectURL(blob);
-  }
-
   useEffect(() => {
     let revoke: string | null = null;
 
     (async () => {
       if (isHippius) {
-        setPlayUrl(videoUrl); // keep remote as is
+        setPlayUrl(videoUrl);
         return;
       }
       const blobUrl = await toBlobUrl(videoUrl);

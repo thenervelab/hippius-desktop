@@ -38,6 +38,4 @@ export { default as FileTypeIcon } from "./file-type-icon";
 export { default as WaitAMoment } from "./wait-a-moment";
 export { default as BlockTimestamp } from "./block-timestamp";
 export { default as IconButton } from "./IconButton";
-
-
-
+export { default as BackButton } from "./back-button";

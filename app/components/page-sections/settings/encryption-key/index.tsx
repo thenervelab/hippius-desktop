@@ -65,7 +65,7 @@ const EncryptionKey = () => {
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="w-full border broder-grey-80 rounded-lg  overflow-hidden"
+          className="w-full border broder-grey-80 rounded-lg  overflow-hidden relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover"
         >
           <div className="relative w-full">
             {/* List View */}
