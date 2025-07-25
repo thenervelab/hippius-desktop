@@ -43,8 +43,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     const toastId = toast.loading(
       files.length > 1
         ? `Uploading ${files.length} files: 0%`
-        : "Uploading file: 0%",
-      { position: "top-center" }
+        : "Uploading file: 0%"
     );
     setRequestState("uploading");
     setProgress(0);
@@ -100,7 +99,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           files.length > 1
             ? `Uploading ${files.length} files: ${percent}%`
             : `Uploading file: ${percent}%`;
-        toast.loading(msg, { id: toastId, position: "top-center" });
+        toast.loading(msg, { id: toastId });
       }
 
       // finish up
@@ -112,7 +111,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           files.length > 1
             ? `${files.length} files successfully uploaded!`
             : `File successfully uploaded!`,
-          { id: toastId, position: "top-center" }
+          { id: toastId }
         );
       }, 500);
     } catch (err) {
@@ -124,7 +123,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         files.length > 1
           ? `${files.length} files failed to upload!`
           : `File failed to upload!`,
-        { id: toastId, position: "top-center" }
+        { id: toastId }
       );
     }
   }

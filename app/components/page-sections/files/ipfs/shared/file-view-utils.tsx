@@ -9,6 +9,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { decodeHexCid } from "@/app/lib/utils/decodeHexCid";
 import { FileDetail } from "../files-table/UnpinFilesDialog";
+import { useSearchParams } from "next/dist/client/components/navigation";
+import { useAtom } from "jotai";
+import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 export interface FileViewSharedProps {
   files: FormattedUserIpfsFile[];
@@ -51,6 +54,13 @@ export function useFileViewShared(
   props: FileViewSharedProps
 ): FileViewSharedState {
   const { files, showUnpinnedDialog } = props;
+  const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
+
+  const params = useSearchParams();
+  const folderCid = params.get("folderCid");
+  const folderName = params.get("folderName") || "Folder";
+  const isPrivateFolder = activeSubMenuItem === "Private";
+
 
   const [fileToDelete, setFileToDelete] =
     useState<FormattedUserIpfsFile | null>(null);
@@ -58,7 +68,10 @@ export function useFileViewShared(
   const { mutateAsync: deleteFileMutation, isPending: isDeleting } =
     useDeleteIpfsFile({
       cid: fileToDelete?.cid || "",
-      fileToDelete
+      fileToDelete,
+      folderCid: folderCid ?? undefined,
+      folderName,
+      isPrivateFolder
     });
 
   const [selectedFile, setSelectedFile] =
@@ -77,12 +90,12 @@ export function useFileViewShared(
   // Extract unpinned file details from files
   const unpinnedFileDetails = showUnpinnedDialog
     ? files
-        .filter((file) => !file.isAssigned)
-        .map((file) => ({
-          filename: file.name || "Unnamed File",
-          cid: decodeHexCid(file.cid),
-          createdAt: file.createdAt
-        }))
+      .filter((file) => !file.isAssigned)
+      .map((file) => ({
+        filename: file.name || "Unnamed File",
+        cid: decodeHexCid(file.cid),
+        createdAt: file.createdAt
+      }))
     : [];
 
   // Update unpinned files state when unpinned file details change
@@ -100,6 +113,7 @@ export function useFileViewShared(
   }
 
   const deleteFile = async () => {
+    console.log("we are here in delete File")
     await deleteFileMutation();
   };
 
