@@ -4,8 +4,6 @@ import { FC, useEffect, useRef, useMemo, useState, useCallback } from "react";
 import useUserIpfsFiles, {
   FormattedUserIpfsFile
 } from "@/lib/hooks/use-user-ipfs-files";
-import { useAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { WaitAMoment } from "@/components/ui";
 import SyncFolderSelector from "./SyncFolderSelector";
 import {
@@ -28,11 +26,14 @@ import { enrichFilesWithTimestamps } from "@/lib/utils/blockTimestampUtils";
 import { toast } from "sonner";
 import FilesHeader from "./FilesHeader";
 import FilesContent from "./FilesContent";
+import { useAtomValue } from "jotai";
+import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { api } = usePolkadotApi();
-  const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
+  const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
   const isPrivateView = activeSubMenuItem === "Private";
+
   const {
     data,
     isLoading,
@@ -344,22 +345,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       window.removeEventListener("hippius:file-drop", handleFileDrop);
     };
   }, []);
-
-  useEffect(() => {
-    console.log(
-      "AddButtonRef status:",
-      addButtonRef.current ? "available" : "not available"
-    );
-
-    const canUpload =
-      activeSubMenuItem === "Private" || activeSubMenuItem === "Public";
-    console.log(
-      "Current view allows uploads:",
-      canUpload,
-      "View:",
-      activeSubMenuItem
-    );
-  }, [activeSubMenuItem]);
 
   // Determine what content to render
   let content;
