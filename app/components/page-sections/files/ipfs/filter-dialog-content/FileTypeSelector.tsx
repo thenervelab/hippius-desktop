@@ -13,8 +13,8 @@ import {
   Sheet,
   SVG,
   Terminal,
-  EC,
-  File
+  File,
+  Folder2
 } from "@/components/ui/icons";
 import { FileTypes } from "@/lib/types/fileTypes";
 
@@ -24,27 +24,27 @@ const fileTypes: Array<{
   icon: React.FC<Record<string, unknown>>;
   color: string;
 }> = [
-  { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
-  { type: "image", label: "Picture", icon: Image, color: "text-[#ea4335]" },
-  {
-    type: "document",
-    label: "Unknown",
-    icon: File,
-    color: "text-primary-70 fill-primary-60"
-  },
-  { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
-  {
-    type: "PPT",
-    label: "PPT",
-    icon: Presentation,
-    color: "text-[#fbbc04]"
-  },
-  { type: "XLS", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
-  { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
-  { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
-  { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
-  { type: "ec", label: "Folder", icon: EC, color: "text-primary-40" }
-];
+    { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
+    { type: "image", label: "Picture", icon: Image, color: "text-[#ea4335]" },
+    {
+      type: "document",
+      label: "Unknown",
+      icon: File,
+      color: "text-primary-70 fill-primary-60"
+    },
+    { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
+    {
+      type: "PPT",
+      label: "PPT",
+      icon: Presentation,
+      color: "text-[#fbbc04]"
+    },
+    { type: "XLS", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
+    { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
+    { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
+    { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
+    { type: "folder", label: "Folder", icon: Folder2, color: "text-primary-40" }
+  ];
 
 interface FileTypeSelectorProps {
   selectedTypes?: FileTypes[];

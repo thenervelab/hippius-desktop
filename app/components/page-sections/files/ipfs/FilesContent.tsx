@@ -441,7 +441,7 @@ const FilesContent: FC<FilesContentProps> = ({
                     onNavigate={setSelectedFile}
                 />
             )}
-            {selectedFileType === "pdfDocument" && (
+            {selectedFileType === "PDF" && (
                 <PdfDialog
                     onCloseClicked={() => setSelectedFile(null)}
                     handleFileDownload={handleFileDownload}

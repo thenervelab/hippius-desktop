@@ -12,6 +12,7 @@ export const SUPPORTED_FILE_TYPES = [
     "ec",
     "code",
     "svg",
+    "folder",
 ] as const;
 
 export const extensionGroups: Record<FileTypes, string[]> = {
@@ -25,6 +26,7 @@ export const extensionGroups: Record<FileTypes, string[]> = {
     PPT: ["ppt", "pptx"],
     XLS: ["xls", "xlsx"],
     ec: ["ec_metadata"],
+    folder: ["folder", "folder.ec_metadata", "folder.ec"],
 };
 
 export const getFileTypeFromExtension = (

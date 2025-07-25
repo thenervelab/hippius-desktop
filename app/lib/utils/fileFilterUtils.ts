@@ -55,7 +55,7 @@ export function filterFiles(
             const { fileFormat } = getFilePartsFromFileName(file.name);
             let fileType = getFileTypeFromExtension(fileFormat || null);
             if (file.isFolder) {
-                fileType = "ec";
+                fileType = "folder";
             }
             return criteria.fileTypes.includes(fileType as FileTypes);
         });
