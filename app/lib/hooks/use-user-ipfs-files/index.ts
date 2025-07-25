@@ -26,6 +26,8 @@ export type FormattedUserIpfsFile = {
   isFolder?: boolean;
   type?: string;
   isErasureCoded: boolean;
+  parentFolderId?: string;
+  parentFolderName?: string;
 };
 
 // Updated to include file size breakdown

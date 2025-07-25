@@ -25,7 +25,9 @@ import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import EncryptionKeyDialog from "@/components/page-sections/files/ipfs/EncryptionKeyDialog";
 import { downloadIpfsFolder } from "@/lib/utils/downloadIpfsFolder";
-import AddButton from "@/components/page-sections/files/ipfs/AddFileButton";
+import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFileToFolderButton";
+import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
+import DeleteConfirmationDialog from "@/components/delete-confirmation-dialog";
 
 interface FileEntry {
     file_name: string;
@@ -61,6 +63,9 @@ export default function FolderView({
     const [selectedOutputDir, setSelectedOutputDir] = useState<string | null>(
         null
     );
+    const [fileToDelete, setFileToDelete] = useState<FormattedUserIpfsFile | null>(null);
+    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+
     const isPrivateFolder = activeSubMenuItem === "Private";
     const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
 
@@ -81,6 +86,16 @@ export default function FolderView({
             fileSize: selectedFileSize
         });
     }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+
+    // File deletion mutation
+    const { mutate: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
+        cid: fileToDelete?.cid || "",
+        fileToDelete,
+        folderCid,
+        folderName,
+        isPrivateFolder
+    });
+
 
     useEffect(() => {
         const newActiveFilters = generateActiveFilters(
@@ -127,14 +142,22 @@ export default function FolderView({
                         createdAt: Number(entry.created_at),
                         minerIds: parseMinerIds(entry.miner_ids),
                         lastChargedAt: Number(entry.last_charged_at),
-                        isErasureCoded
+                        isErasureCoded,
+                        parentFolderId: folderCid,
+                        parentFolderName: folderName
                     };
                 }
             );
 
             setFiles(formattedFiles);
+            if (!showLoading) {
+                toast.success("Folder contents refreshed successfully");
+            }
         } catch (error) {
             console.error("Error loading folder contents:", error);
+            toast.error(
+                `Failed to load folder contents: ${error instanceof Error ? error.message : String(error)}`
+            );
         } finally {
             if (showLoading) {
                 setIsLoading(false);
@@ -151,6 +174,62 @@ export default function FolderView({
     const handleRefresh = () => {
         loadFolderContents(false);
     };
+
+    const handleFileDownload = useCallback((
+        file: FormattedUserIpfsFile,
+        polkadotAddress: string
+    ) => {
+        if (isPrivateFolder && file.source !== "Hippius") {
+            // Private file download handling
+            // This would need to be implemented based on your system requirements
+            toast.error("Private file download not implemented");
+        } else {
+            // Public file download
+            // You could implement this based on existing file download functionality
+            toast.error("File download from folder not implemented");
+        }
+    }, [isPrivateFolder]);
+
+    // Handle file deletion
+    const handleFileDelete = useCallback(() => {
+        if (!fileToDelete) return;
+
+        deleteFile(undefined, {
+            onSuccess: () => {
+                toast.success(`File ${fileToDelete.name} deleted from folder successfully!`);
+                setFileToDelete(null);
+                setIsDeleteDialogOpen(false);
+                loadFolderContents(false);
+            },
+            onError: (error) => {
+                toast.error(`Failed to delete file: ${error.message || "Unknown error"}`);
+                console.error("Delete error:", error);
+            }
+        });
+    }, [deleteFile, fileToDelete, loadFolderContents]);
+
+    // Set up sharedState for FilesContent
+    const sharedState = useMemo(() => ({
+        files,
+        setFileToDelete: (file: FormattedUserIpfsFile | null) => {
+            setFileToDelete(file);
+            setIsDeleteDialogOpen(true);
+        },
+        openDeleteModal: isDeleteDialogOpen,
+        setOpenDeleteModal: setIsDeleteDialogOpen,
+        selectedFile: null,
+        setSelectedFile: () => { }, // No preview handling needed here
+        fileDetailsFile: null,
+        setFileDetailsFile: () => { }, // No details handling needed here
+        isFileDetailsOpen: false,
+        setIsFileDetailsOpen: () => { }, // No details handling needed here
+        deleteFile: handleFileDelete,
+        isDeleting,
+        getFileType: () => null,
+        contextMenu: null,
+        setContextMenu: () => { },
+    }), [files, isDeleteDialogOpen, isDeleting, handleFileDelete]);
+
 
     function handlePaginationReset() {
         setShouldResetPagination(false);
@@ -371,6 +450,15 @@ export default function FolderView({
                         </button>
                     </div>
 
+                    <AddFileToFolderButton
+                        ref={addButtonRef}
+                        className="h-9"
+                        folderCid={folderCid}
+                        folderName={folderName}
+                        isPrivateFolder={isPrivateFolder}
+                        onFileAdded={handleRefresh}
+                    />
+
                     <button
                         onClick={initiateDownloadFolder}
                         disabled={isDownloading}
@@ -386,8 +474,6 @@ export default function FolderView({
                         )}
                         Download Folder
                     </button>
-                    <AddButton ref={addButtonRef} className="h-9" />
-
                 </div>
             </div>
 
@@ -445,6 +531,23 @@ export default function FolderView({
                     )}
                 </>
             )}
+
+            <DeleteConfirmationDialog
+                open={isDeleteDialogOpen}
+                onClose={() => {
+                    setIsDeleteDialogOpen(false);
+                    setFileToDelete(null);
+                }}
+                onBack={() => {
+                    setIsDeleteDialogOpen(false);
+                    setFileToDelete(null);
+                }}
+                onDelete={handleFileDelete}
+                button={isDeleting ? "Deleting..." : "Delete File"}
+                text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""}`}
+                heading="Delete File"
+                disableButton={isDeleting}
+            />
 
             <EncryptionKeyDialog
                 open={isEncryptionDialogOpen}

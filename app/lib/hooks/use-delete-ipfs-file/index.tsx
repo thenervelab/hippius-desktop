@@ -14,7 +14,19 @@ import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import type { SubmittableResult } from "@polkadot/api";
 import type { DispatchError } from "@polkadot/types/interfaces";
 
-export const useDeleteIpfsFile = ({ cid, fileToDelete: file }: { cid: string, fileToDelete: FormattedUserIpfsFile | null }) => {
+export const useDeleteIpfsFile = ({
+    cid,
+    fileToDelete: file,
+    folderCid,
+    folderName,
+    isPrivateFolder
+}: {
+    cid: string,
+    fileToDelete: FormattedUserIpfsFile | null,
+    folderCid?: string,
+    folderName?: string,
+    isPrivateFolder?: boolean
+}) => {
     const { data: ipfsFiles } = useUserIpfsFiles();
     const { api } = usePolkadotApi();
     const { walletManager, polkadotAddress, mnemonic } = useWalletAuth();
@@ -23,44 +35,60 @@ export const useDeleteIpfsFile = ({ cid, fileToDelete: file }: { cid: string, fi
     return useMutation({
         mutationKey: ["delete-ipfs-file", cid],
         mutationFn: async () => {
-            if (!ipfsFiles) throw new Error("No Files Found");
+            if (!ipfsFiles && !file) throw new Error("No Files Found");
             if (!api) throw new Error("Polkadot API not initialised");
             if (!walletManager) throw new Error("Error getting wallet manager");
 
-            let fileToDelete = ipfsFiles.files.find(f => f.cid === cid);
+            let fileToDelete = ipfsFiles?.files.find(f => f.cid === cid);
 
             if (!fileToDelete) {
-                fileToDelete = file ?? undefined
+                fileToDelete = file ?? undefined;
             }
 
             if (!fileToDelete) throw new Error("Cannot find file");
 
+            // Handle file in folder deletion
+            if (folderCid && folderName) {
+                if (!mnemonic) {
+                    throw new Error("Seed phrase required to delete files from folder");
+                }
 
-            console.log("fileToDelete", fileToDelete);
+                try {
+                    if (isPrivateFolder) {
+                        // Use private folder file removal function
+                        await invoke("remove_file_from_private_folder", {
+                            accountId: polkadotAddress,
+                            folderMetadataCid: folderCid,
+                            folderName: folderName,
+                            fileName: fileToDelete.name,
+                            seedPhrase: mnemonic
+                        });
+                    } else {
+                        // Use public folder file removal function
+                        await invoke("remove_file_from_folder", {
+                            accountId: polkadotAddress,
+                            folderMetadataCid: folderCid,
+                            folderName: folderName,
+                            fileName: fileToDelete.name,
+                            seedPhrase: mnemonic
+                        });
+                    }
 
-            if (fileToDelete.isFolder) {
-                return false; // TODO: Implement folder deletion logic
-                // try {
-                //     if (!mnemonic) {
-                //         throw new Error("Seed phrase required to delete local files");
-                //     }
-
-                //     await invoke("delete_and_unpin_folder_by_name", {
-                //         folderName: fileToDelete.name,
-                //         seedPhrase: mnemonic
-                //     });
-
-                //     await queryClient.refetchQueries({
-                //         queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
-                //     });
-                //     console.log("Local file deleted successfully");
-                //     return;
-                // } catch (error) {
-                //     console.error("Failed to delete local file:", error);
-                //     throw new Error(`Failed to delete local file: ${error instanceof Error ? error.message : String(error)}`);
-                // }
+                    // No need to refetch the query for user IPFS files,
+                    // as the folder view will refresh separately
+                    return true;
+                } catch (error) {
+                    console.error("Failed to delete file from folder:", error);
+                    throw new Error(`Failed to delete file from folder: ${error instanceof Error ? error.message : String(error)}`);
+                }
             }
 
+            // Handle folder deletion
+            if (fileToDelete.isFolder) {
+                throw new Error("Folder deletion is not implemented yet");
+            }
+
+            // Handle local file deletion
             if (fileToDelete.source && fileToDelete.source !== "Hippius") {
                 try {
                     if (!mnemonic) {
@@ -75,17 +103,14 @@ export const useDeleteIpfsFile = ({ cid, fileToDelete: file }: { cid: string, fi
                     await queryClient.refetchQueries({
                         queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
                     });
-                    console.log("Local file deleted successfully");
-                    return;
+                    return true;
                 } catch (error) {
                     console.error("Failed to delete local file:", error);
                     throw new Error(`Failed to delete local file: ${error instanceof Error ? error.message : String(error)}`);
                 }
             }
 
-            console.log("Deleting file from blockchain", fileToDelete);
-
-            // For Hippius-sourced files, use the blockchain unpinning process
+            // Handle Hippius-sourced file deletion (blockchain unpinning)
             const deleteInput = [
                 {
                     cid: decodeHexCid(fileToDelete.cid),
