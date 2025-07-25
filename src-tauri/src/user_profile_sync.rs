@@ -468,8 +468,14 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
         .await;
 
         // Get sync folder paths
-        let public_sync_path = get_public_sync_path().await;
-        let private_sync_path = get_private_sync_path().await;
+        let public_sync_path = match get_public_sync_path().await {
+            Ok(path) => path,
+            Err(e) => return Err(format!("Failed to get public sync path: {}", e)),
+        };
+        let private_sync_path = match get_private_sync_path().await {
+            Ok(path) => path,
+            Err(e) => return Err(format!("Failed to get private sync path: {}", e)),
+        };
 
         // Build a map of file_name -> (type, is_folder) from sync_folder_files
         let sync_file_infos = sqlx::query(
@@ -571,8 +577,14 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
 pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown, String> {
     if let Some(pool) = DB_POOL.get() {
         // Get sync folder paths
-        let public_sync_path = get_public_sync_path().await;
-        let private_sync_path = get_private_sync_path().await;
+        let public_sync_path = match get_public_sync_path().await {
+            Ok(path) => path,
+            Err(e) => return Err(format!("Failed to get public sync path: {}", e)),
+        };
+        let private_sync_path = match get_private_sync_path().await {
+            Ok(path) => path,
+            Err(e) => return Err(format!("Failed to get private sync path: {}", e)),
+        };
 
         // Query user_profiles to get file sizes
         let user_profile_rows = sqlx::query(

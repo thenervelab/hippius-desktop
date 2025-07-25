@@ -1321,7 +1321,11 @@ pub async fn add_file_to_public_folder(
     files_for_storage.extend(new_file_pairs);
 
     // Get the sync folder path
-    let sync_folder = PathBuf::from(get_public_sync_path().await);
+    let sync_folder = match get_public_sync_path().await {
+        Ok(path) => PathBuf::from(path),
+        Err(e) => return Err(format!("Failed to get public sync path: {}", e)),
+    };
+
     let dest_path = sync_folder.join(&folder_name);
 
     // Submit storage request, handle RequestAlreadyExists
@@ -1427,7 +1431,10 @@ pub async fn remove_file_from_public_folder(
     let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder") { "" } else { "-folder" });
 
     // Get the sync folder path
-    let sync_folder = PathBuf::from(get_public_sync_path().await);
+    let sync_folder = match get_public_sync_path().await {
+        Ok(path) => PathBuf::from(path),
+        Err(e) => return Err(format!("Failed to get public sync path: {}", e)),
+    };
     let dest_path = sync_folder.join(&folder_name);
 
     // Update database to remove file

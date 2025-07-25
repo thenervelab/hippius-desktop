@@ -211,9 +211,21 @@ fn copy_dir(src: &Path, dst: &Path) {
 pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, metadata_cid: &str, request_cid: &str, is_public: bool, is_folder: bool, requested_file_name: &str) {    
     // Choose sync folder path based on is_public
     let sync_folder = if is_public {
-        PathBuf::from(get_public_sync_path().await)
+        match get_public_sync_path().await {
+            Ok(path) => PathBuf::from(path),
+            Err(e) => {
+                eprintln!("Failed to get public sync path: {}", e);
+                return;
+            }
+        }
     } else {
-        PathBuf::from(get_private_sync_path().await)
+        match get_private_sync_path().await {
+            Ok(path) => PathBuf::from(path),
+            Err(e) => {
+                eprintln!("Failed to get private sync path: {}", e);
+                return;
+            }
+        }
     };
     
     let file_name = original_path.file_name().unwrap().to_string_lossy().to_string();
@@ -329,10 +341,23 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
     use std::fs;
     use std::path::PathBuf;
 
+    // Choose sync folder path based on is_public
     let sync_folder = if is_public {
-        PathBuf::from(get_public_sync_path().await)
+        match get_public_sync_path().await {
+            Ok(path) => PathBuf::from(path),
+            Err(e) => {
+                eprintln!("Failed to get public sync path: {}", e);
+                return;
+            }
+        }
     } else {
-        PathBuf::from(get_private_sync_path().await)
+        match get_private_sync_path().await {
+            Ok(path) => PathBuf::from(path),
+            Err(e) => {
+                eprintln!("Failed to get private sync path: {}", e);
+                return;
+            }
+        }
     };
     let sync_file_path = sync_folder.join(file_name);
 
@@ -467,9 +492,21 @@ pub async fn request_folder_storage(
 pub async fn copy_to_sync_folder(original_path: &Path, folder_name: &str, account_id: &str, metadata_cid: &str, request_cid: &str, is_public: bool, is_folder: bool, requested_file_name: &str) {
     // Choose sync folder path based on is_public
     let sync_folder = if is_public {
-        PathBuf::from(get_public_sync_path().await)
+        match get_public_sync_path().await {
+            Ok(path) => PathBuf::from(path),
+            Err(e) => {
+                eprintln!("Failed to get public sync path: {}", e);
+                return;
+            }
+        }
     } else {
-        PathBuf::from(get_private_sync_path().await)
+        match get_private_sync_path().await {
+            Ok(path) => PathBuf::from(path),
+            Err(e) => {
+                eprintln!("Failed to get private sync path: {}", e);
+                return;
+            }
+        }
     };
     
     // Create the target folder path inside sync directory
@@ -598,10 +635,23 @@ pub async fn remove_from_sync_folder(file_name: &str, folder_name: &str, is_publ
     use std::fs;
     use std::path::PathBuf;
 
+    // Choose sync folder path based on is_public
     let sync_folder = if is_public {
-        PathBuf::from(get_public_sync_path().await)
+        match get_public_sync_path().await {
+            Ok(path) => PathBuf::from(path),
+            Err(e) => {
+                eprintln!("Failed to get public sync path: {}", e);
+                return;
+            }
+        }
     } else {
-        PathBuf::from(get_private_sync_path().await)
+        match get_private_sync_path().await {
+            Ok(path) => PathBuf::from(path),
+            Err(e) => {
+                eprintln!("Failed to get private sync path: {}", e);
+                return;
+            }
+        }
     };
     
     let target_folder = sync_folder.join(folder_name);
