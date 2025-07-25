@@ -6,8 +6,7 @@ use crate::utils::{
         download_from_ipfs,upload_to_ipfs
     },
     file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, 
-        request_file_storage, remove_file_from_sync_and_db
-    , remove_from_sync_folder, copy_to_sync_folder}
+        request_file_storage , remove_from_sync_folder, copy_to_sync_folder}
 };
 use uuid::Uuid;
 use std::fs;
@@ -905,13 +904,13 @@ pub async fn encrypt_and_upload_folder(
 
     // Build files array: folder metadata + per-file metadata
     let mut files_for_storage = Vec::with_capacity(file_pairs.len() + 1);
-    files_for_storage.push((folder_name.clone(), folder_metadata_cid.clone()));
-    files_for_storage.extend(file_pairs);
     let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+    files_for_storage.push((meta_filename.clone(), folder_metadata_cid.clone()));
+    files_for_storage.extend(file_pairs);
     let storage_result = request_erasure_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id,  &folder_metadata_cid, &res, false, true, &folder_name.clone()).await;
+            copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id,  &folder_metadata_cid, &res, false, true, &meta_filename.clone()).await;
             println!("[encrypt_and_upload_file] : {}", res);
         },
         Err(e) => println!("[encrypt_and_upload_folder] Storage request error: {}", e),
@@ -996,6 +995,17 @@ pub async fn list_folder_contents(
             }
         };
         
+        // Sanitize file_name for UI/consumer
+        let mut file_detail = file_detail;
+        file_detail.file_name = if file_detail.file_name.ends_with("-folder.ec_metadata") {
+            file_detail.file_name.trim_end_matches("-folder.ec_metadata").to_string()
+        } else if file_detail.file_name.ends_with("-folder") {
+            file_detail.file_name.trim_end_matches("-folder").to_string()
+        } else if file_detail.file_name.ends_with(".ec_metadata") {
+            file_detail.file_name.trim_end_matches(".ec_metadata").to_string()
+        } else {
+            file_detail.file_name
+        };
         files_in_folder.push(file_detail);
     }
 
@@ -1189,7 +1199,7 @@ pub async fn public_download_folder(
 }
 
 #[tauri::command]
-pub async fn add_file_to_folder(
+pub async fn add_file_to_public_folder(
     account_id: String,
     folder_metadata_cid: String,
     folder_name: String,
@@ -1284,7 +1294,7 @@ pub async fn add_file_to_folder(
     let dest_path = sync_folder.join(&folder_name);
 
     // Submit storage request, handle RequestAlreadyExists
-    println!("[add_file_to_folder] Submitting storage request for updated folder metadata: {}", meta_filename);
+    println!("[add_file_to_public_folder] Submitting storage request for updated folder metadata: {}", meta_filename);
     let storage_result = request_file_storage(&meta_filename, &new_folder_metadata_cid, api_url, &seed_phrase).await
         .map_err(|e| {
             if e.contains("RequestAlreadyExists") {
@@ -1307,14 +1317,14 @@ pub async fn add_file_to_folder(
         &file_name, // Use the actual file name
     ).await;
 
-    println!("[add_file_to_folder] Storage request result: {}", storage_result);
-    println!("[add_file_to_folder] New folder metadata CID: {}", new_folder_metadata_cid);
+    println!("[add_file_to_public_folder] Storage request result: {}", storage_result);
+    println!("[add_file_to_public_folder] New folder metadata CID: {}", new_folder_metadata_cid);
 
     Ok(new_folder_metadata_cid)
 }
 
 #[tauri::command]
-pub async fn remove_file_from_folder(
+pub async fn remove_file_from_public_folder(
     account_id: String,
     folder_metadata_cid: String,
     folder_name: String,
@@ -1397,7 +1407,7 @@ pub async fn remove_file_from_folder(
 
     // Submit storage request, handle RequestAlreadyExists
     println!(
-        "[remove_file_from_folder] Submitting storage request for updated folder metadata: {}",
+        "[remove_file_from_public_folder] Submitting storage request for updated folder metadata: {}",
         meta_filename
     );
     let storage_result = request_file_storage(&meta_filename, &new_folder_metadata_cid, api_url, &seed_phrase).await
@@ -1412,11 +1422,308 @@ pub async fn remove_file_from_folder(
     // Update database to remove file and remove the file from the sync directory
     remove_from_sync_folder(&file_name, &folder_name, true, false).await;
 
-    println!("[remove_file_from_folder] Storage request result: {}", storage_result);
+    println!("[remove_file_from_public_folder] Storage request result: {}", storage_result);
     println!(
-        "[remove_file_from_folder] New folder metadata CID: {}",
+        "[remove_file_from_public_folder] New folder metadata CID: {}",
         new_folder_metadata_cid
     );
+
+    Ok(new_folder_metadata_cid)
+}
+
+#[tauri::command]
+pub async fn add_file_to_private_folder(
+    account_id: String,
+    folder_metadata_cid: String,
+    folder_name: String,
+    file_path: String,
+    seed_phrase: String,
+    encryption_key: Option<Vec<u8>>,
+) -> Result<String, String> {
+    use std::path::Path;
+    let api_url = "http://127.0.0.1:5001";
+    let file_path_obj = Path::new(&file_path);
+
+    // Extract file name
+    let file_name = file_path_obj
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
+
+    // Check if file already exists in folder
+    let file_entries = list_folder_contents(folder_name.clone(), folder_metadata_cid.clone()).await?;
+    if file_entries.iter().any(|entry| entry.file_name == file_name) {
+        return Err(format!("File '{}' already exists in folder '{}'.", file_name, folder_name));
+    }
+
+    // Download and parse folder metadata
+    let metadata_bytes = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        let folder_metadata_cid_clone = folder_metadata_cid.clone();
+        move || {
+            download_from_ipfs(&api_url, &folder_metadata_cid_clone)
+                .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid_clone, e))
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for CID {}: {}", folder_metadata_cid, e))??;
+
+    let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+
+    // Encrypt, erasure-code, and upload the file, and create .ec_metadata
+    let (new_file_entry, file_meta_pair) = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        let file_path_cloned = file_path.clone();
+        let file_name_cloned = file_name.clone();
+        let encryption_key_cloned = encryption_key.clone();
+        move || {
+            let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+            let file_data = std::fs::read(&file_path_cloned).map_err(|e| format!("Failed to read file: {}", e))?;
+            let file_size = file_data.len();
+
+            // Hash original file
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(&file_data);
+            let original_file_hash = format!("{:x}", hasher.finalize());
+
+            // Encrypt
+            let to_process = tauri::async_runtime::block_on(crate::utils::accounts::encrypt_file(&file_data, encryption_key_cloned))?;
+
+            // Erasure coding
+            let k = DEFAULT_K;
+            let m = DEFAULT_M;
+            let chunk_size = DEFAULT_CHUNK_SIZE;
+            let mut chunks = vec![];
+            for i in (0..to_process.len()).step_by(chunk_size) {
+                let mut chunk = to_process[i..std::cmp::min(i + chunk_size, to_process.len())].to_vec();
+                if chunk.len() < chunk_size {
+                    chunk.resize(chunk_size, 0);
+                }
+                chunks.push(chunk);
+            }
+            let r = reed_solomon_erasure::galois_8::ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
+            let mut all_chunk_info = vec![];
+            let file_id = uuid::Uuid::new_v4().to_string();
+            for (orig_idx, chunk) in chunks.iter().enumerate() {
+                let sub_block_size = (chunk.len() + k - 1) / k;
+                let sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
+                    let start = j * sub_block_size;
+                    let end = std::cmp::min(start + sub_block_size, chunk.len());
+                    let mut sub_block = chunk[start..end].to_vec();
+                    if sub_block.len() < sub_block_size {
+                        sub_block.resize(sub_block_size, 0);
+                    }
+                    sub_block
+                }).collect();
+                let mut shards: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
+                for _ in k..m {
+                    shards.push(Some(vec![0u8; sub_block_size]));
+                }
+                let mut shard_refs: Vec<_> = shards.iter_mut().map(|x| x.as_mut().unwrap().as_mut_slice()).collect();
+                r.encode(&mut shard_refs).map_err(|e| format!("ReedSolomon encode error: {e}"))?;
+                for (share_idx, shard) in shard_refs.iter().enumerate() {
+                    let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
+                    let chunk_path = temp_dir.path().join(&chunk_name);
+                    let mut f = std::fs::File::create(&chunk_path).map_err(|e| e.to_string())?;
+                    f.write_all(shard).map_err(|e| e.to_string())?;
+                    let cid = crate::utils::ipfs::upload_to_ipfs(&api_url, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+                    all_chunk_info.push(crate::commands::types::ChunkInfo {
+                        name: chunk_name.clone(),
+                        path: chunk_path.to_string_lossy().to_string(),
+                        cid: crate::commands::types::CidInfo {
+                            cid: cid.clone(),
+                            filename: chunk_name.clone(),
+                            size_bytes: shard.len(),
+                            encrypted: true,
+                            size_formatted: crate::commands::ipfs_commands::format_file_size(shard.len()),
+                        },
+                        original_chunk: orig_idx,
+                        share_idx,
+                        size: shard.len(),
+                    });
+                }
+            }
+            let file_extension = std::path::Path::new(&file_path_cloned).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+            let encrypted_size = to_process.len();
+            let metadata = crate::commands::types::Metadata {
+                original_file: crate::commands::types::OriginalFileInfo {
+                    name: file_name_cloned.clone(),
+                    size: file_size,
+                    hash: original_file_hash,
+                    extension: file_extension,
+                },
+                erasure_coding: crate::commands::types::ErasureCodingInfo {
+                    k,
+                    m,
+                    chunk_size,
+                    encrypted: true,
+                    file_id: file_id.clone(),
+                    encrypted_size,
+                },
+                chunks: all_chunk_info,
+                metadata_cid: None,
+            };
+            // Write metadata to temp file
+            let meta_filename = if file_name_cloned.ends_with(".ec_metadata") {
+                file_name_cloned.clone()
+            } else {
+                format!("{}.ec_metadata", file_name_cloned)
+            };
+            let metadata_path = temp_dir.path().join(&meta_filename);
+            let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
+            std::fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
+            let metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+            let file_entry = crate::commands::types::FileEntry {
+                file_name: meta_filename.clone(), 
+                file_size,
+                cid: metadata_cid.clone(),
+            };
+            Ok::<_, String>((file_entry, (meta_filename, metadata_cid)))
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for file upload: {}", e))??;
+
+    // Update folder metadata
+    file_entries.push(new_file_entry);
+    let (new_folder_metadata_cid, files_for_storage) = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        let file_meta_pair = file_meta_pair.clone();
+        let file_entries = file_entries.clone();
+        let folder_name = folder_name.clone();
+        move || {
+            let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+            let folder_metadata_path = temp_dir.path().join("folder_metadata.json");
+            let folder_metadata = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
+            std::fs::write(&folder_metadata_path, folder_metadata.as_bytes()).map_err(|e| e.to_string())?;
+            let folder_metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+            // Build files_for_storage: folder metadata + file metadata
+            let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+            let mut files_for_storage = vec![(meta_filename, folder_metadata_cid.clone()), file_meta_pair];
+            Ok::<_, String>((folder_metadata_cid, files_for_storage))
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for folder metadata update: {}", e))??;
+
+    // Submit storage request
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+    let storage_result = request_erasure_storage(&meta_filename, &files_for_storage, api_url, &seed_phrase).await
+        .map_err(|e| {
+            if e.contains("RequestAlreadyExists") {
+                format!("Storage request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+            } else {
+                format!("Failed to request file storage: {}", e)
+            }
+        })?;
+
+    // Sanitize folder_name for local sync folder usage
+    let sanitized_folder_name = if folder_name.ends_with("-folder.ec_metadata") {
+        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if folder_name.ends_with("-folder") {
+        folder_name.trim_end_matches("-folder").to_string()
+    } else {
+        folder_name.clone()
+    };
+
+    // Sanitize file_name for local sync file usage
+    let sanitized_file_name = if file_name.ends_with(".ec_metadata") {
+        file_name.trim_end_matches(".ec_metadata").to_string()
+    } else {
+        file_name.clone()
+    };
+    // Update the database and sync folder
+    copy_to_sync_folder(
+        file_path_obj,
+        &sanitized_folder_name,
+        &account_id,
+        &new_folder_metadata_cid,
+        &storage_result,
+        false,
+        false,
+        &sanitized_file_name,
+    ).await;
+
+    Ok(new_folder_metadata_cid)
+}
+
+#[tauri::command]
+pub async fn remove_file_from_private_folder(
+    account_id: String,
+    folder_metadata_cid: String,
+    folder_name: String,
+    file_name: String,
+    seed_phrase: String,
+) -> Result<String, String> {
+    let api_url = "http://127.0.0.1:5001";
+    let folder_metadata_cid_for_log = folder_metadata_cid.clone();
+
+    // Download and parse folder metadata
+    let metadata_bytes = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        let folder_metadata_cid_cloned = folder_metadata_cid.clone();
+        move || {
+            download_from_ipfs(&api_url, &folder_metadata_cid_cloned)
+                .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid_cloned, e))
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for CID {}: {}", folder_metadata_cid_for_log, e))??;
+
+    let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+
+    // Remove the file entry
+    let initial_len = file_entries.len();
+    file_entries.retain(|entry| entry.file_name != file_name);
+    if file_entries.len() == initial_len {
+        return Err(format!("File '{}' not found in folder '{}'.", file_name, folder_name));
+    }
+
+    // Update folder metadata and upload
+    let new_folder_metadata_cid = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        let file_entries = file_entries.clone();
+        move || {
+            let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+            let folder_metadata_path = temp_dir.path().join("folder_metadata.json");
+            let folder_metadata = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
+            std::fs::write(&folder_metadata_path, folder_metadata.as_bytes()).map_err(|e| e.to_string())?;
+            let folder_metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+            Ok::<_, String>(folder_metadata_cid)
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task for metadata update: {}", e))??;
+
+    // Prepare storage request
+    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with("-folder.ec_metadata") { "" } else { "-folder.ec_metadata" });
+    let storage_result = request_erasure_storage(&meta_filename, &vec![(meta_filename.clone(), new_folder_metadata_cid.clone())], api_url, &seed_phrase).await
+        .map_err(|e| {
+            if e.contains("RequestAlreadyExists") {
+                format!("Storage request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+            } else {
+                format!("Failed to request file storage: {}", e)
+            }
+        })?;
+    // Sanitize folder_name for local sync folder usage
+    let sanitized_folder_name = if folder_name.ends_with("-folder.ec_metadata") {
+        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if folder_name.ends_with("-folder") {
+        folder_name.trim_end_matches("-folder").to_string()
+    } else {
+        folder_name.clone()
+    };
+
+    // Sanitize file_name for local sync file usage
+    let sanitized_file_name = if file_name.ends_with(".ec_metadata") {
+        file_name.trim_end_matches(".ec_metadata").to_string()
+    } else {
+        file_name.clone()
+    };
+    // Remove the file from the sync directory and DB
+    remove_from_sync_folder(&file_name, &folder_name, false, false).await;
 
     Ok(new_folder_metadata_cid)
 }

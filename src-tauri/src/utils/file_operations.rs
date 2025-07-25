@@ -105,6 +105,16 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .await
             .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
 
+        // Sanitize file_name for local sync usage
+        let sanitized_file_name = if file_name.ends_with("-folder.ec_metadata") {
+            file_name.trim_end_matches("-folder.ec_metadata").to_string()
+        } else if file_name.ends_with("-folder") {
+            file_name.trim_end_matches("-folder").to_string()
+        } else if file_name.ends_with(".ec_metadata") {
+            file_name.trim_end_matches(".ec_metadata").to_string()
+        } else {
+            file_name.to_string()
+        };
         // Delete from user_profiles
         let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
             .bind(file_name)
@@ -114,14 +124,14 @@ pub async fn delete_and_unpin_user_file_records_by_name(
 
         // Delete from sync_folder_files (dynamic type)
         let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
-            .bind(file_name)
+            .bind(&sanitized_file_name)
             .bind(if is_public { "public" } else { "private" })
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
 
         // Remove from sync folder as well
-        remove_file_from_sync_and_db(file_name, is_public, false).await;
+        remove_file_from_sync_and_db(&sanitized_file_name, is_public, false).await;
 
         // Calculate total rows affected
         let total_deleted = result1.rows_affected() + result2.rows_affected();
@@ -345,7 +355,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                 eprintln!("Failed to remove folder from sync_folder_files DB: {}", e);
             }
         }
-        // Remove the folder from filesystem
+    // Remove the folder from filesystem
     if sync_file_path.exists() {
             if let Err(e) = fs::remove_dir_all(&sync_file_path) {
                 eprintln!("Failed to remove folder from sync folder: {}", e);

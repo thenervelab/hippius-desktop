@@ -22,6 +22,7 @@ export default function IpfsFolderDemo() {
   const [downloadStatus, setDownloadStatus] = useState<string>("");
   const [addFileStatus, setAddFileStatus] = useState<string>("");
   const [removeFileStatus, setRemoveFileStatus] = useState<string>("");
+  const [isPrivateFolder, setIsPrivateFolder] = useState<boolean>(false); // Toggle for public/private folder
   const { polkadotAddress, mnemonic } = useWalletAuth();
   const accountId = polkadotAddress;
   const seedPhrase = mnemonic;
@@ -78,7 +79,7 @@ export default function IpfsFolderDemo() {
     }
   };
 
-  // Upload the folder (public)
+  // Upload the folder (public or private)
   const handleUploadFolder = async () => {
     if (!folderPath) {
       setUploadStatus("No folder selected.");
@@ -86,14 +87,15 @@ export default function IpfsFolderDemo() {
     }
 
     console.log("⏫ Uploading folder:", folderPath);
-    setUploadStatus("Uploading folder...");
+    setUploadStatus(`Uploading ${isPrivateFolder ? "private" : "public"} folder...`);
 
     try {
-      const result = await invoke<string>("public_upload_folder", {
-        accountId,
-        folderPath,
-        seedPhrase,
-      });
+      const command = isPrivateFolder ? "encrypt_and_upload_folder" : "public_upload_folder";
+      const params = isPrivateFolder
+        ? { accountId, folderPath, seedPhrase, encryptionKey: null }
+        : { accountId, folderPath, seedPhrase };
+
+      const result = await invoke<string>(command, params);
 
       console.log("✅ Upload complete. Manifest CID:", result);
       setManifestCid(result);
@@ -114,9 +116,10 @@ export default function IpfsFolderDemo() {
     setUploadStatus("Listing files...");
 
     try {
+      const folderName = folderPath.split("/").pop() || "uploaded_folder";
       const files = await invoke<FileEntry[]>("list_folder_contents", {
         folderMetadataCid: manifestCid,
-        folderName: folderPath.split("/").pop() || "uploaded_folder",
+        folderName,
       });
 
       setFileList(files);
@@ -127,7 +130,7 @@ export default function IpfsFolderDemo() {
     }
   };
 
-  // Add a file to the public folder
+  // Add a file to the folder (public or private)
   const handleAddFile = async () => {
     if (!manifestCid) {
       setAddFileStatus("No manifest CID available.");
@@ -139,17 +142,16 @@ export default function IpfsFolderDemo() {
     }
 
     console.log("⏫ Adding file:", filePath);
-    setAddFileStatus("Adding file to folder...");
+    setAddFileStatus(`Adding file to ${isPrivateFolder ? "private" : "public"} folder...`);
 
     try {
       const folderName = folderPath.split("/").pop() || "uploaded_folder";
-      const result = await invoke<string>("add_file_to_folder", {
-        accountId,
-        folderMetadataCid: manifestCid,
-        folderName,
-        filePath,
-        seedPhrase,
-      });
+      const command = isPrivateFolder ? "add_file_to_private_folder" : "add_file_to_public_folder";
+      const params = isPrivateFolder
+        ? { accountId, folderMetadataCid: manifestCid, folderName, filePath, seedPhrase, encryptionKey: null }
+        : { accountId, folderMetadataCid: manifestCid, folderName, filePath, seedPhrase };
+
+      const result = await invoke<string>(command, params);
 
       console.log("✅ File added. New Manifest CID:", result);
       setManifestCid(result);
@@ -162,7 +164,7 @@ export default function IpfsFolderDemo() {
     }
   };
 
-  // Remove a file from the public folder
+  // Remove a file from the folder (public or private)
   const handleRemoveFile = async () => {
     if (!manifestCid) {
       setRemoveFileStatus("No manifest CID available.");
@@ -174,17 +176,14 @@ export default function IpfsFolderDemo() {
     }
 
     console.log("🗑️ Removing file:", fileToRemove);
-    setRemoveFileStatus("Removing file from folder...");
+    setRemoveFileStatus(`Removing file from ${isPrivateFolder ? "private" : "public"} folder...`);
 
     try {
       const folderName = folderPath.split("/").pop() || "uploaded_folder";
-      const result = await invoke<string>("remove_file_from_folder", {
-        accountId,
-        folderMetadataCid: manifestCid,
-        folderName,
-        fileName: fileToRemove,
-        seedPhrase,
-      });
+      const command = isPrivateFolder ? "remove_file_from_private_folder" : "remove_file_from_public_folder";
+      const params = { accountId, folderMetadataCid: manifestCid, folderName, fileName: fileToRemove, seedPhrase };
+
+      const result = await invoke<string>(command, params);
 
       console.log("✅ File removed. New Manifest CID:", result);
       setManifestCid(result);
@@ -197,14 +196,14 @@ export default function IpfsFolderDemo() {
     }
   };
 
-  // Download the folder (public)
+  // Download the folder (public or private)
   const handleDownloadFolder = async () => {
     if (!manifestCid) {
       setDownloadStatus("No manifest CID available.");
       return;
     }
 
-    setDownloadStatus("Downloading folder...");
+    setDownloadStatus(`Downloading ${isPrivateFolder ? "private" : "public"} folder...`);
     try {
       const outputDir: string | null = await open({
         directory: true,
@@ -219,12 +218,12 @@ export default function IpfsFolderDemo() {
       const sanitizedOutputDir = outputDir.trim();
       console.log("📥 Downloading to:", sanitizedOutputDir);
 
-      await invoke("public_download_folder", {
-        accountId,
-        folderMetadataCid: manifestCid,
-        folderName: folderPath.split("/").pop() || "uploaded_folder",
-        outputDir: sanitizedOutputDir,
-      });
+      const command = isPrivateFolder ? "download_and_decrypt_folder" : "public_download_folder";
+      const params = isPrivateFolder
+        ? { accountId, folderMetadataCid: manifestCid, folderName: folderPath.split("/").pop() || "uploaded_folder", outputDir: sanitizedOutputDir, encryptionKey: null }
+        : { accountId, folderMetadataCid: manifestCid, folderName: folderPath.split("/").pop() || "uploaded_folder", outputDir: sanitizedOutputDir };
+
+      await invoke(command, params);
 
       setDownloadStatus("Download successful!");
     } catch (e: unknown) {
@@ -235,9 +234,18 @@ export default function IpfsFolderDemo() {
 
   return (
     <div className="p-4 max-w-3xl mx-auto">
-      <h2 className="text-2xl font-bold mb-6">IPFS Public Folder Demo</h2>
+      <h2 className="text-2xl font-bold mb-6">IPFS Folder Demo</h2>
 
       <div className="mb-6">
+        <label className="flex items-center gap-2 mb-2">
+          <input
+            type="checkbox"
+            checked={isPrivateFolder}
+            onChange={(e) => setIsPrivateFolder(e.target.checked)}
+            className="form-checkbox h-5 w-5 text-blue-600"
+          />
+          <span>Use Private Folder (No Encryption)</span>
+        </label>
         <button
           onClick={handleSelectFolder}
           className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
@@ -259,7 +267,7 @@ export default function IpfsFolderDemo() {
               : "bg-gray-300 text-gray-600 cursor-not-allowed"
           }`}
         >
-          Upload Folder (Public)
+          Upload Folder ({isPrivateFolder ? "Private" : "Public"})
         </button>
         {uploadStatus && (
           <div className="mt-2 text-blue-600">{uploadStatus}</div>
@@ -282,7 +290,7 @@ export default function IpfsFolderDemo() {
               onClick={handleDownloadFolder}
               className="bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 transition"
             >
-              Download Folder (Public)
+              Download Folder ({isPrivateFolder ? "Private" : "Public"})
             </button>
           </div>
           {downloadStatus && (
@@ -314,7 +322,7 @@ export default function IpfsFolderDemo() {
                 : "bg-gray-300 text-gray-600 cursor-not-allowed"
             }`}
           >
-            Add File to Folder
+            Add File to Folder ({isPrivateFolder ? "Private" : "Public"})
           </button>
           {addFileStatus && (
             <div className="mt-2 text-blue-600">{addFileStatus}</div>
@@ -346,7 +354,7 @@ export default function IpfsFolderDemo() {
                 : "bg-gray-300 text-gray-600 cursor-not-allowed"
             }`}
           >
-            Remove File from Folder
+            Remove File from Folder ({isPrivateFolder ? "Private" : "Public"})
           </button>
           {removeFileStatus && (
             <div className="mt-2 text-red-600">{removeFileStatus}</div>
