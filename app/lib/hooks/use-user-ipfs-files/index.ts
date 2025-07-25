@@ -10,6 +10,7 @@ export type FileDetail = {
 
 export type FormattedUserIpfsFile = {
   name: string;
+  actualFileName?: string;
   size?: number;
   createdAt: number;
   cid: string;
@@ -147,6 +148,7 @@ export const useUserIpfsFiles = () => {
 
             return {
               name: displayName || "Unnamed File",
+              actualFileName: file.fileName,
               size: file.fileSizeInBytes,
               createdAt: file.lastChargedAt,
               cid: hexToCid(file.fileHash) ?? "",

@@ -169,7 +169,7 @@ export default function FileContextMenu({
             onClick={handleShowFileDetails}
           >
             <Icons.InfoCircle className="size-4" />
-            <span>File Details</span>
+            <span>{file?.isFolder ? "Folder" : "File"} Details</span>
           </button>
 
           {file.isAssigned && (
