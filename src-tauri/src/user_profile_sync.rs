@@ -281,7 +281,6 @@ pub fn start_user_sync(account_id: &str) {
                                         else if file_name.ends_with("-folder") || file_name.ends_with(".folder") || file_name.ends_with(".folder.ec_metadata") {
                                             let decoded_hash = decode_file_hash(&file_hash.as_bytes())
                                                 .unwrap_or_else(|_| "Invalid file hash".to_string());
-                                            println!("[UserSync] Found folder file: {}, file_hash {:?}", file_name, decoded_hash); // Add debug logging
                                             let ipfs_url = format!("https://get.hippius.network/ipfs/{}", decoded_hash);
                                             match client.get(&ipfs_url).send().await {
                                                 Ok(resp) => {
@@ -293,9 +292,9 @@ pub fn start_user_sync(account_id: &str) {
                                                                     .filter_map(|size| size.as_i64())
                                                                     .sum();
                                                                 actual_file_size = total_size;
-                                                                println!("[UserSync] Folder {} contains {} files with total size {} bytes", file_name, files.len(), total_size); // Add debug logging
                                                             }
                                                         }
+                                                        file_type = "private".to_string();
                                                     }
                                                 }
                                                 Err(e) => {
@@ -364,60 +363,61 @@ pub fn start_user_sync(account_id: &str) {
                     Ok(StorageKeyValuePair { value, .. }) => {
                         if let Some(storage_request) = value {
                             if storage_request.owner == account {
+                                println!("[UserSync] Found storage request for account: {}", account);
                                 let file_hash_raw = bounded_vec_to_string(&storage_request.file_hash.0);
                                 let decoded_hash = decode_file_hash(&storage_request.file_hash.0)
                                     .unwrap_or_else(|_| "Invalid file hash".to_string());
                                 let mut file_hash = file_hash_raw.clone();
                                 let mut file_size_in_bytes = 0;
 
-                                if decoded_hash != "Invalid file hash" {
-                                    let api_url = "http://127.0.0.1:5001";
-                                    match crate::utils::ipfs::download_content_from_ipfs(&api_url, &decoded_hash).await {
-                                        Ok(json_bytes) => {
-                                            let json_str = match String::from_utf8(json_bytes) {
-                                                Ok(s) => s,
-                                                Err(e) => {
-                                                    eprintln!("[UserSync] Failed to convert IPFS bytes to string for {}: {}", decoded_hash, e);
-                                                    continue;
-                                                }
-                                            };
-                                            let json_value: serde_json::Value = match serde_json::from_str(&json_str) {
-                                                Ok(v) => v,
-                                                Err(e) => {
-                                                    eprintln!("[UserSync] Failed to parse JSON from IPFS for {}: {}", decoded_hash, e);
-                                                    continue;
-                                                }
-                                            };
-                                            let cid = match json_value.get(0)
-                                                .and_then(|v| v.get("cid"))
-                                                .and_then(|v| v.as_str()) {
-                                                Some(cid) => cid,
-                                                None => {
-                                                    eprintln!("[UserSync] CID not found in JSON for decoded hash: {}", decoded_hash);
-                                                    continue;
-                                                }
-                                            };
-                                            match tokio::time::timeout(
-                                                Duration::from_secs(30),
-                                                crate::ipfs::get_ipfs_file_size(cid)
-                                            ).await {
-                                                Ok(Ok(size)) => {
-                                                    file_hash = hex::encode(cid.as_bytes());
-                                                    file_size_in_bytes = size as i64;
-                                                }
-                                                Ok(Err(e)) => {
-                                                    eprintln!("[UserSync] Failed to fetch IPFS file size for {}: {}", cid, e);
-                                                }
-                                                Err(_) => {
-                                                    eprintln!("[UserSync] Timeout fetching IPFS file size for {}", cid);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("[UserSync] Failed to download from IPFS for {}: {}", decoded_hash, e);
-                                        }
-                                    }
-                                }
+                                // if decoded_hash != "Invalid file hash" {
+                                //     let api_url = "http://127.0.0.1:5001";
+                                //     match crate::utils::ipfs::download_content_from_ipfs(&api_url, &decoded_hash).await {
+                                //         Ok(json_bytes) => {
+                                //             let json_str = match String::from_utf8(json_bytes) {
+                                //                 Ok(s) => s,
+                                //                 Err(e) => {
+                                //                     eprintln!("[UserSync] Failed to convert IPFS bytes to string for {}: {}", decoded_hash, e);
+                                //                     continue;
+                                //                 }
+                                //             };
+                                //             let json_value: serde_json::Value = match serde_json::from_str(&json_str) {
+                                //                 Ok(v) => v,
+                                //                 Err(e) => {
+                                //                     eprintln!("[UserSync] Failed to parse JSON from IPFS for {}: {}", decoded_hash, e);
+                                //                     continue;
+                                //                 }
+                                //             };
+                                //             let cid = match json_value.get(0)
+                                //                 .and_then(|v| v.get("cid"))
+                                //                 .and_then(|v| v.as_str()) {
+                                //                 Some(cid) => cid,
+                                //                 None => {
+                                //                     eprintln!("[UserSync] CID not found in JSON for decoded hash: {}", decoded_hash);
+                                //                     continue;
+                                //                 }
+                                //             };
+                                //             match tokio::time::timeout(
+                                //                 Duration::from_secs(30),
+                                //                 crate::ipfs::get_ipfs_file_size(cid)
+                                //             ).await {
+                                //                 Ok(Ok(size)) => {
+                                //                     file_hash = hex::encode(cid.as_bytes());
+                                //                     file_size_in_bytes = size as i64;
+                                //                 }
+                                //                 Ok(Err(e)) => {
+                                //                     eprintln!("[UserSync] Failed to fetch IPFS file size for {}: {}", cid, e);
+                                //                 }
+                                //                 Err(_) => {
+                                //                     eprintln!("[UserSync] Timeout fetching IPFS file size for {}", cid);
+                                //                 }
+                                //             }
+                                //         }
+                                //         Err(e) => {
+                                //             eprintln!("[UserSync] Failed to download from IPFS for {}: {}", decoded_hash, e);
+                                //         }
+                                //     }
+                                // }
 
                                 let file_name = bounded_vec_to_string(&storage_request.file_name.0);
                                 let owner_ss58 = format!("{}", storage_request.owner);
@@ -433,11 +433,76 @@ pub fn start_user_sync(account_id: &str) {
                                     "[]".to_string()
                                 };
 
+                                let mut file_type = "public".to_string();
+                                
+                                // Check if this is an encrypted file by fetching its metadata
+                                if file_name.ends_with(".ec_metadata") {
+                                    let decoded_hash = decode_file_hash(&file_hash.as_bytes())
+                                        .unwrap_or_else(|_| "Invalid file hash".to_string());
+                                    if decoded_hash != "Invalid file hash" {
+                                        let ipfs_url = format!("https://get.hippius.network/ipfs/{}", decoded_hash);
+                                        match client.get(&ipfs_url).send().await {
+                                            Ok(resp) => {
+                                                if let Ok(data) = resp.text().await {                  
+                                                    if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&data) {
+                                                        if let Some(metadata_array) = metadata.as_array() {
+                                                            let mut has_folder_metadata = false;
+                                                            has_folder_metadata = metadata_array.iter().any(|item| {
+                                                                item.get("filename")
+                                                                    .and_then(|f| f.as_str())
+                                                                    .map(|f| f.ends_with(".folder.ec_metadata"))
+                                                                    .unwrap_or(false)
+                                                            });
+                                                                
+                                                            if has_folder_metadata {
+                                                                file_type = "private".to_string();
+                                                                println!("Found .folder.ec_metadata, setting file type to private");
+                                                            } else {
+                                                                // Look for the .ec_metadata file in the array
+                                                                if let Some(metadata_array) = metadata.as_array() {
+                                                                    if let Some(ec_metadata) = metadata_array.iter().find(|item| {
+                                                                        item.get("filename")
+                                                                            .and_then(|f| f.as_str())
+                                                                            .map(|f| f.ends_with(".ec_metadata"))
+                                                                            .unwrap_or(false)
+                                                                    }) {
+                                                                        if let Some(ec_metadata_cid) = ec_metadata.get("cid").and_then(|c| c.as_str()) {
+                                                                            let ec_metadata_url = format!("https://get.hippius.network/ipfs/{}", ec_metadata_cid);
+                                                                            if let Ok(ec_resp) = client.get(&ec_metadata_url).send().await {
+                                                                                if let Ok(ec_data) = ec_resp.text().await {
+                                                                                    if let Ok(ec_metadata) = serde_json::from_str::<serde_json::Value>(&ec_data) {
+                                                                                        
+                                                                                        // Now check the encryption status
+                                                                                        if let Some(encrypted) = ec_metadata.get("erasure_coding")
+                                                                                            .and_then(|ec| ec.get("encrypted"))
+                                                                                            .and_then(|v| v.as_bool()) {
+                                                                                            file_type = if encrypted { "private" } else { "public" }.to_string();
+                                                                                            println!("File type from .ec_metadata: {}", file_type);
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("[UserSync] Failed to fetch metadata for {}: {}", file_hash, e);
+                                            }
+                                        }
+                                    }
+                                }
+
                                 let file_key = (file_hash.clone(), file_name.clone());
                                 if file_name.ends_with(".ec") || file_name.ends_with(".ff") {
                                     continue;
                                 }
                                 if seen_files.insert(file_key) {
+                                    println!("Inserting file: {}, type: {}", file_name, file_type);
                                     records_to_insert.push(UserProfileFile {
                                         owner: owner_ss58,
                                         cid: file_hash.clone(),
@@ -455,7 +520,7 @@ pub fn start_user_sync(account_id: &str) {
                                         miner_ids: Some(miner_ids_json),
                                         created_at: storage_request.created_at as i64,
                                         is_folder: false,
-                                        file_type: "public".to_string(),
+                                        file_type,
                                     });
                                 }
                             }
@@ -667,3 +732,6 @@ pub async fn start_user_profile_sync_tauri(account_id: String) {
     println!("[UserSync] Starting sync for account: {}", account_id);
     start_user_sync(&account_id);
 }
+
+
+
