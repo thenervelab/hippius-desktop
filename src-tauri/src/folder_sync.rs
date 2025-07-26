@@ -24,35 +24,79 @@ use crate::sync_shared::{SYNCING_ACCOUNTS, UPLOADING_FILES, RECENTLY_UPLOADED, S
 pub static UPLOAD_SENDER: OnceCell<mpsc::UnboundedSender<UploadJob>> = OnceCell::new();
 
 pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
-    {
-        let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-        if syncing_accounts.contains(&(account_id.clone(), "private")) {
-            println!("[PrivateFolderSync] Account {} is already syncing, skipping.", account_id);
-            return;
+    loop {
+        // Check if the account is already syncing
+        {
+            let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+            if syncing_accounts.contains(&(account_id.clone(), "private")) {
+                println!("[PrivateFolderSync] Account {} is already syncing, skipping.", account_id);
+                return;
+            }
+            syncing_accounts.insert((account_id.clone(), "private"));
         }
-        syncing_accounts.insert((account_id.clone(), "private"));
-    }
 
-    // Periodically check for sync path and start sync when available
-    let checker_account_id = account_id.clone();
-    let checker_seed_phrase = seed_phrase.clone();
-    tokio::spawn(async move {
-        loop {
-            match get_private_sync_path().await {
-                Ok(sync_path) => {
-                    println!("[PrivateFolderSync] Private sync path found: {}, starting sync process", sync_path);
-                    start_sync_process(checker_account_id.clone(), checker_seed_phrase.clone(), sync_path).await;
-                    break; // Exit loop once sync starts
+        // Create a channel to receive path change notifications
+        let (path_change_tx, mut path_change_rx) = mpsc::channel::<String>(100);
+        let cancel_token = Arc::new(AtomicBool::new(false));
+
+        // Get initial sync path and start sync process
+        let sync_path_result = get_private_sync_path().await;
+        if let Ok(sync_path) = sync_path_result {
+            println!("[PrivateFolderSync] Private sync path found: {}, starting sync process", sync_path);
+            start_sync_process(
+                account_id.clone(),
+                seed_phrase.clone(),
+                sync_path,
+                Arc::clone(&cancel_token),
+                path_change_tx.clone(),
+            ).await;
+        } else {
+            eprintln!("[PrivateFolderSync] Failed to get private sync path: {:?}", sync_path_result.err());
+            {
+                let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+                syncing_accounts.remove(&(account_id.clone(), "private"));
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            continue;
+        }
+
+        // Wait for a path change or cancellation in a separate task
+        let account_id_clone = account_id.clone();
+        let cancel_token_clone = Arc::clone(&cancel_token);
+        tokio::spawn(async move {
+            if let Some(new_sync_path) = path_change_rx.recv().await {
+                println!("[PrivateFolderSync] Received path change to: {}. Stopping current sync.", new_sync_path);
+                cancel_token_clone.store(true, Ordering::SeqCst);
+                {
+                    let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+                    syncing_accounts.remove(&(account_id_clone, "private"));
                 }
-                Err(e) => {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+            } else {
+                // Channel closed or error, clean up and exit
+                println!("[PrivateFolderSync] Path change channel closed, stopping sync for account {}.", account_id_clone);
+                cancel_token_clone.store(true, Ordering::SeqCst);
+                {
+                    let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+                    syncing_accounts.remove(&(account_id_clone, "private"));
                 }
             }
+        });
+
+        // Wait for cancellation to ensure the loop doesn't proceed until the current sync stops
+        while !cancel_token.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-    });
+    }
 }
 
-async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: String) {
+async fn start_sync_process(
+    account_id: String,
+    seed_phrase: String,
+    sync_path: String,
+    cancel_token: Arc<AtomicBool>,
+    path_change_tx: mpsc::Sender<String>,
+) {
+    // Initialize upload queue if not already set
     if UPLOAD_SENDER.get().is_none() {
         let (tx, mut rx) = mpsc::unbounded_channel::<UploadJob>();
         UPLOAD_SENDER.set(tx).ok();
@@ -68,7 +112,7 @@ async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: 
                     uploading_files.insert(path_str.clone());
                 }
 
-                let result = if job.is_folder {
+                let _result = if job.is_folder {
                     encrypt_and_upload_folder(
                         job.account_id.clone(),
                         job.file_path.clone(),
@@ -114,6 +158,7 @@ async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: 
         });
     }
 
+    // Perform startup check
     let startup_account_id = account_id.clone();
     let startup_seed_phrase = seed_phrase.clone();
     let sync_path_cloned = sync_path.clone();
@@ -134,9 +179,9 @@ async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: 
             .await
             .unwrap_or_default();
 
-            for (db_path, is_folder) in &db_paths {
+            for (db_path, _is_folder) in &db_paths {
                 if !dir_paths.contains(db_path) {
-                    println!("[Startup] Path deleted from sync folder: {} (is_folder: {})", db_path, is_folder);
+                    println!("[Startup] Path deleted from sync folder: {} (is_folder: {})", db_path, _is_folder);
                     if delete_and_unpin_user_file_records_by_name(db_path, &startup_seed_phrase, false).await.is_ok() {
                         let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                             .bind(&startup_account_id)
@@ -177,25 +222,57 @@ async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: 
         }
     });
 
+    // Start watcher thread
     let sync_path = PathBuf::from(sync_path_cloned);
-    let watcher_account_id = account_id.clone();
-    let watcher_seed_phrase = seed_phrase.clone();
-    spawn_watcher_thread(account_id.clone(), seed_phrase.clone(), sync_path);
+    spawn_watcher_thread(account_id, seed_phrase, sync_path, cancel_token, path_change_tx);
+}
 
-    let checker_account_id = account_id.clone();
-    let checker_seed_phrase = seed_phrase.clone();
-    tokio::spawn(async move {
+fn spawn_watcher_thread(
+    account_id: String,
+    seed_phrase: String,
+    sync_path: PathBuf,
+    cancel_token: Arc<AtomicBool>,
+    path_change_tx: mpsc::Sender<String>,
+) {
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime for watcher");
+        let current_path = sync_path.to_string_lossy().to_string();
+        let mut watcher: Option<RecommendedWatcher> = None;
+
         loop {
-            println!("[PrivateFolderSync] Periodic check: scanning for unsynced paths...");
-            let sync_path = match get_private_sync_path().await {
+            if cancel_token.load(Ordering::SeqCst) {
+                if let Some(w) = watcher.take() {
+                    drop(w);
+                    println!("[PrivateFolderSync] Stopped watching path: {}", current_path);
+                }
+                println!("[PrivateFolderSync] Watcher thread cancelled for account {}", account_id);
+                break;
+            }
+
+            // Check for sync path changes
+            let latest_sync_path = match rt.block_on(get_private_sync_path()) {
                 Ok(path) => PathBuf::from(path),
                 Err(e) => {
                     eprintln!("[PrivateFolderSync] Failed to get private sync path: {}", e);
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    thread::sleep(Duration::from_secs(5));
                     continue;
                 }
             };
 
+            let latest_sync_path_str = latest_sync_path.to_string_lossy().to_string();
+            if latest_sync_path_str != current_path {
+                // Notify start_folder_sync of path change
+                if rt.block_on(path_change_tx.send(latest_sync_path_str.clone())).is_ok() {
+                    println!("[PrivateFolderSync] Sent path change notification: {}", latest_sync_path_str);
+                } else {
+                    eprintln!("[PrivateFolderSync] Failed to send path change notification");
+                }
+                break; // Exit to let start_folder_sync restart
+            }
+
+            // Periodic check for unsynced paths
+            println!("[PrivateFolderSync] Periodic check: scanning for unsynced paths...");
+            let sync_path = PathBuf::from(&current_path);
             let mut paths_to_check = Vec::new();
             collect_paths_recursively(&sync_path, &mut paths_to_check);
 
@@ -215,52 +292,33 @@ async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: 
                         continue;
                     }
                 }
-                is_path_in_profile_db(&path, &checker_account_id).await;
+                rt.block_on(is_path_in_profile_db(&path, &account_id));
             }
 
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        }
-    });
-}
-
-fn spawn_watcher_thread(account_id: String, seed_phrase: String, sync_path: PathBuf) {
-    thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime for watcher");
-        let mut current_path = String::new();
-        let mut watcher: Option<RecommendedWatcher> = None;
-
-        loop {
-            let sync_path_str = sync_path.to_string_lossy().to_string();
-            if sync_path_str != current_path {
-                if let Some(w) = watcher.take() {
-                    drop(w);
-                    println!("[PrivateFolderSync] Stopped watching old path: {}", current_path);
-                }
-
+            // Initialize or update watcher
+            if watcher.is_none() && sync_path.exists() {
                 let (tx, rx) = channel();
-                let mut new_watcher: RecommendedWatcher =
-                    Watcher::new(tx, notify::Config::default())
-                        .expect("[PrivateFolderSync] Failed to create watcher");
+                let mut new_watcher: RecommendedWatcher = Watcher::new(tx, notify::Config::default())
+                    .expect("[PrivateFolderSync] Failed to create watcher");
 
                 new_watcher
                     .watch(&sync_path, RecursiveMode::Recursive)
                     .expect("[PrivateFolderSync] Failed to watch sync directory");
 
-                let watcher_account_id = account_id.clone();
-                let watcher_seed_phrase = seed_phrase.clone();
+                let _watcher_account_id = account_id.clone();
+                let _watcher_seed_phrase = seed_phrase.clone();
 
                 thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime for watcher handler");
                     for res in rx {
                         match res {
-                            Ok(event) => rt.block_on(handle_event(event, &watcher_account_id, &watcher_seed_phrase)),
+                            Ok(event) => rt.block_on(handle_event(event, &_watcher_account_id, &_watcher_seed_phrase)),
                             Err(e) => eprintln!("[PrivateFolderSync] Watch error: {:?}", e),
                         }
                     }
                 });
 
-                println!("[PrivateFolderSync] Started watching new private path: {}", sync_path_str);
-                current_path = sync_path_str;
+                println!("[PrivateFolderSync] Started watching private path: {}", current_path);
                 watcher = Some(new_watcher);
             }
 
@@ -314,16 +372,13 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                             }
                             if path.is_file() {
                                 let mut last_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                                let mut stable = false;
-                                for _ in 0..10 {
+                                let stable = (0..10).all(|_| {
                                     std::thread::sleep(Duration::from_millis(100));
                                     let new_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                                    if new_size == last_size {
-                                        stable = true;
-                                        break;
-                                    }
+                                    let is_stable = new_size == last_size;
                                     last_size = new_size;
-                                }
+                                    is_stable
+                                });
                                 if stable {
                                     paths.push((path.clone(), false));
                                 }
@@ -376,9 +431,9 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                 let new_path = &event.paths[1];
                 if let Some(file_name) = old_path.file_name().and_then(|s| s.to_str()) {
                     println!("[Watcher] Path renamed, deleting old records: {}", file_name);
-                    let is_folder = old_path.is_dir();
-                    let result = delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false).await;
-                    if result.is_ok() {
+                    let _is_folder = old_path.is_dir();
+                    let _result = delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false).await;
+                    if _result.is_ok() {
                         if let Some(pool) = crate::DB_POOL.get() {
                             let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                                 .bind(account_id)
@@ -424,9 +479,9 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                     if !path.exists() {
                         if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
                             println!("[Watcher] Path deleted (via rename/move) from sync folder: {}", file_name);
-                            let is_folder = path.is_dir();
-                            let result = delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false).await;
-                            if result.is_ok() {
+                            let _is_folder = path.is_dir();
+                            let _result = delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false).await;
+                            if _result.is_ok() {
                                 if let Some(pool) = crate::DB_POOL.get() {
                                     let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                                         .bind(account_id)
@@ -448,9 +503,9 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str) {
                 let file_name = path.file_name().and_then(|s| s.to_str());
                 if let Some(file_name) = file_name {
                     println!("[Watcher] Path deleted from sync folder: {} (is_folder: {})", file_name, path.is_dir());
-                    let is_folder = path.is_dir();
-                    let result = delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false).await;
-                    if result.is_ok() {
+                    let _is_folder = path.is_dir();
+                    let _result = delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false).await;
+                    if _result.is_ok() {
                         if let Some(pool) = crate::DB_POOL.get() {
                             let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                                 .bind(account_id)
@@ -483,7 +538,7 @@ async fn upload_path(path: &Path, account_id: &str, seed_phrase: &str, is_folder
     }
 
     let _guard = UPLOAD_LOCK.lock().unwrap();
-    let result = if is_folder {
+    let _result = if is_folder {
         encrypt_and_upload_folder(
             account_id.to_string(),
             path_str.clone(),
@@ -499,7 +554,7 @@ async fn upload_path(path: &Path, account_id: &str, seed_phrase: &str, is_folder
         ).await
     };
 
-    match result {
+    match _result {
         Ok(res) => {
             println!("Uploaded path: {}", res);
             let mut uploading_files = UPLOADING_FILES.lock().unwrap();
@@ -573,12 +628,12 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
 
     if upload_result {
         println!("[PrivateFolderSync] Upload successful for '{}', now cleaning up old records...", file_name);
-        let delete_result = delete_and_unpin_user_file_records_by_name(
+        let _delete_result = delete_and_unpin_user_file_records_by_name(
             &file_name,
             seed_phrase,
             false,
         ).await;
-        if delete_result.is_err() {
+        if _delete_result.is_err() {
             eprintln!("[PrivateFolderSync] Failed to delete/unpin old records for '{}', but upload succeeded.", file_name);
         } else {
             println!("[PrivateFolderSync] Successfully cleaned up old records for '{}'", file_name);
