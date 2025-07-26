@@ -462,7 +462,7 @@ const FilesContent: FC<FilesContentProps> = ({
             <UploadStatusWidget />
 
             <SidebarDialog
-                heading="File Details"
+                heading={`${fileDetailsFile?.isFolder ? "Folder" : "File"} Details`}
                 open={isFileDetailsOpen}
                 onOpenChange={setIsFileDetailsOpen}
             >
