@@ -90,19 +90,10 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 
         if let Some((main_req_hash,)) = hashes.first() {
             println!("main_req_hash for unpinning {:?}",main_req_hash);
-            // 1. Create the JSON
-            let json = serde_json::json!([{
-                "filename": file_name,
-                "cid": main_req_hash
-            }]);
-            let json_string = serde_json::to_string(&json).unwrap();
-            let api_url = "http://127.0.0.1:5001";
-            // 2. Pin JSON to local IPFS node
-            let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
 
             // Wrap in FileHashWrapper
             let file_hash_wrapper = FileHashWrapper {
-                file_hash: json_cid.as_bytes().to_vec(),
+                file_hash: main_req_hash.as_bytes().to_vec(),
             };
             // Call the unpin request
             let result =
@@ -303,8 +294,9 @@ pub async fn copy_to_sync_and_add_to_db(original_path: &Path, account_id: &str, 
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
                     main_req_hash, selected_validator, total_replicas, block_number, profile_cid, 
-                    source, miner_ids, created_at, file_type, is_folder
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, 0, '', ?, 0, ?, ?)"
+                    source, miner_ids, created_at, type, is_folder
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, 0, '', ?, 0, ?, ?)
+                "
             )
             .bind(account_id)
             .bind(request_cid) // cid

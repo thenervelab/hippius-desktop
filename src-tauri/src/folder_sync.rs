@@ -27,7 +27,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(&(account_id.clone(), "private")) {
-            println!("[FolderSync] Account {} is already syncing, skipping.", account_id);
+            println!("[PrivateFolderSync] Account {} is already syncing, skipping.", account_id);
             return;
         }
         syncing_accounts.insert((account_id.clone(), "private"));
@@ -40,7 +40,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
         loop {
             match get_private_sync_path().await {
                 Ok(sync_path) => {
-                    println!("[FolderSync] Private sync path found: {}, starting sync process", sync_path);
+                    println!("[PrivateFolderSync] Private sync path found: {}, starting sync process", sync_path);
                     start_sync_process(checker_account_id.clone(), checker_seed_phrase.clone(), sync_path).await;
                     break; // Exit loop once sync starts
                 }
@@ -186,11 +186,11 @@ async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: 
     let checker_seed_phrase = seed_phrase.clone();
     tokio::spawn(async move {
         loop {
-            println!("[FolderSync] Periodic check: scanning for unsynced paths...");
+            println!("[PrivateFolderSync] Periodic check: scanning for unsynced paths...");
             let sync_path = match get_private_sync_path().await {
                 Ok(path) => PathBuf::from(path),
                 Err(e) => {
-                    eprintln!("[FolderSync] Failed to get private sync path: {}", e);
+                    eprintln!("[PrivateFolderSync] Failed to get private sync path: {}", e);
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
@@ -204,14 +204,14 @@ async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: 
                 {
                     let uploading_files = UPLOADING_FILES.lock().unwrap();
                     if uploading_files.contains(&path_str) {
-                        println!("[FolderSync] Path {:?} is being uploaded, skipping periodic check.", path);
+                        println!("[PrivateFolderSync] Path {:?} is being uploaded, skipping periodic check.", path);
                         continue;
                     }
                 }
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&path_str) {
-                        println!("[FolderSync] Path {:?} was recently uploaded, skipping periodic check.", path);
+                        println!("[PrivateFolderSync] Path {:?} was recently uploaded, skipping periodic check.", path);
                         continue;
                     }
                 }
@@ -234,17 +234,17 @@ fn spawn_watcher_thread(account_id: String, seed_phrase: String, sync_path: Path
             if sync_path_str != current_path {
                 if let Some(w) = watcher.take() {
                     drop(w);
-                    println!("[FolderSync] Stopped watching old path: {}", current_path);
+                    println!("[PrivateFolderSync] Stopped watching old path: {}", current_path);
                 }
 
                 let (tx, rx) = channel();
                 let mut new_watcher: RecommendedWatcher =
                     Watcher::new(tx, notify::Config::default())
-                        .expect("[FolderSync] Failed to create watcher");
+                        .expect("[PrivateFolderSync] Failed to create watcher");
 
                 new_watcher
                     .watch(&sync_path, RecursiveMode::Recursive)
-                    .expect("[FolderSync] Failed to watch sync directory");
+                    .expect("[PrivateFolderSync] Failed to watch sync directory");
 
                 let watcher_account_id = account_id.clone();
                 let watcher_seed_phrase = seed_phrase.clone();
@@ -254,12 +254,12 @@ fn spawn_watcher_thread(account_id: String, seed_phrase: String, sync_path: Path
                     for res in rx {
                         match res {
                             Ok(event) => rt.block_on(handle_event(event, &watcher_account_id, &watcher_seed_phrase)),
-                            Err(e) => eprintln!("[FolderSync] Watch error: {:?}", e),
+                            Err(e) => eprintln!("[PrivateFolderSync] Watch error: {:?}", e),
                         }
                     }
                 });
 
-                println!("[FolderSync] Started watching new private path: {}", sync_path_str);
+                println!("[PrivateFolderSync] Started watching new private path: {}", sync_path_str);
                 current_path = sync_path_str;
                 watcher = Some(new_watcher);
             }
@@ -531,7 +531,7 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
     {
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         if uploading_files.contains(&path_str) {
-            println!("[FolderSync] Path {:?} is already being uploaded, skipping replace.", path);
+            println!("[PrivateFolderSync] Path {:?} is already being uploaded, skipping replace.", path);
             return;
         }
         uploading_files.insert(path_str.clone());
@@ -540,7 +540,7 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
     let file_name = match path.file_name().map(|s| s.to_string_lossy().to_string()) {
         Some(name) => name,
         None => {
-            eprintln!("[FolderSync] Could not extract name from path: {}", path.display());
+            eprintln!("[PrivateFolderSync] Could not extract name from path: {}", path.display());
             let mut uploading_files = UPLOADING_FILES.lock().unwrap();
             uploading_files.remove(&path_str);
             return;
@@ -562,29 +562,29 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
     };
 
     if !should_upload {
-        println!("[FolderSync] Skipping upload: path '{}' is not assigned or not found in user_profiles.", file_name);
+        println!("[PrivateFolderSync] Skipping upload: path '{}' is not assigned or not found in user_profiles.", file_name);
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         uploading_files.remove(&path_str);
         return;
     }
 
-    println!("[FolderSync] Replacing path: {}", file_name);
+    println!("[PrivateFolderSync] Replacing path: {}", file_name);
     let upload_result = upload_path(path, account_id, seed_phrase, path.is_dir()).await;
 
     if upload_result {
-        println!("[FolderSync] Upload successful for '{}', now cleaning up old records...", file_name);
+        println!("[PrivateFolderSync] Upload successful for '{}', now cleaning up old records...", file_name);
         let delete_result = delete_and_unpin_user_file_records_by_name(
             &file_name,
             seed_phrase,
             false,
         ).await;
         if delete_result.is_err() {
-            eprintln!("[FolderSync] Failed to delete/unpin old records for '{}', but upload succeeded.", file_name);
+            eprintln!("[PrivateFolderSync] Failed to delete/unpin old records for '{}', but upload succeeded.", file_name);
         } else {
-            println!("[FolderSync] Successfully cleaned up old records for '{}'", file_name);
+            println!("[PrivateFolderSync] Successfully cleaned up old records for '{}'", file_name);
         }
     } else {
-        eprintln!("[FolderSync] Upload failed for '{}', skipping delete/unpin.", file_name);
+        eprintln!("[PrivateFolderSync] Upload failed for '{}', skipping delete/unpin.", file_name);
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         uploading_files.remove(&path_str);
     }

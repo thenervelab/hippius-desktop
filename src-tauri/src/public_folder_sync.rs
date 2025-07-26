@@ -28,7 +28,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(&(account_id.clone(), "public")) {
-            println!("[FolderSync] Account {} is already syncing, skipping.", account_id);
+            println!("[PublicFolderSync] Account {} is already syncing, skipping.", account_id);
             return;
         }
         syncing_accounts.insert((account_id.clone(), "public"));
@@ -190,7 +190,7 @@ async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: 
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime for periodic checker");
         loop {
-            println!("[FolderSync] Periodic check: scanning for unsynced paths...");
+            println!("[PublicFolderSync] Periodic check: scanning for unsynced paths...");
             let sync_path = match rt.block_on(get_public_sync_path()) {
                 Ok(path) => PathBuf::from(path),
                 Err(e) => {
@@ -208,14 +208,14 @@ async fn start_sync_process(account_id: String, seed_phrase: String, sync_path: 
                 {
                     let uploading_files = UPLOADING_FILES.lock().unwrap();
                     if uploading_files.contains(&path_str) {
-                        println!("[FolderSync] Path {:?} is being uploaded, skipping periodic check.", path);
+                        println!("[PublicFolderSync] Path {:?} is being uploaded, skipping periodic check.", path);
                         continue;
                     }
                 }
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&path_str) {
-                        println!("[FolderSync] Path {:?} was recently uploaded, skipping periodic check.", path);
+                        println!("[PublicFolderSync] Path {:?} was recently uploaded, skipping periodic check.", path);
                         continue;
                     }
                 }
@@ -238,17 +238,17 @@ fn spawn_watcher_thread(account_id: String, seed_phrase: String, sync_path: Path
             if sync_path_str != current_path {
                 if let Some(w) = watcher.take() {
                     drop(w);
-                    println!("[FolderSync] Stopped watching old path: {}", current_path);
+                    println!("[PublicFolderSync] Stopped watching old path: {}", current_path);
                 }
 
                 let (tx, rx) = channel();
                 let mut new_watcher: RecommendedWatcher =
                     Watcher::new(tx, notify::Config::default())
-                        .expect("[FolderSync] Failed to create watcher");
+                        .expect("[PublicFolderSync] Failed to create watcher");
 
                 new_watcher
                     .watch(&sync_path, RecursiveMode::Recursive)
-                    .expect("[FolderSync] Failed to watch sync directory");
+                    .expect("[PublicFolderSync] Failed to watch sync directory");
 
                 let watcher_account_id = account_id.clone();
                 let watcher_seed_phrase = seed_phrase.clone();
@@ -258,12 +258,12 @@ fn spawn_watcher_thread(account_id: String, seed_phrase: String, sync_path: Path
                     for res in rx {
                         match res {
                             Ok(event) => rt.block_on(handle_event(event, &watcher_account_id, &watcher_seed_phrase)),
-                            Err(e) => eprintln!("[FolderSync] Watch error: {:?}", e),
+                            Err(e) => eprintln!("[PublicFolderSync] Watch error: {:?}", e),
                         }
                     }
                 });
 
-                println!("[FolderSync] Started watching new public path: {}", sync_path_str);
+                println!("[PublicFolderSync] Started watching new public path: {}", sync_path_str);
                 current_path = sync_path_str;
                 watcher = Some(new_watcher);
             }
@@ -532,7 +532,7 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
     {
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         if uploading_files.contains(&path_str) {
-            println!("[FolderSync] Path {:?} is already being uploaded, skipping replace.", path);
+            println!("[PublicFolderSync] Path {:?} is already being uploaded, skipping replace.", path);
             return;
         }
         uploading_files.insert(path_str.clone());
@@ -541,7 +541,7 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
     let file_name = match path.file_name().map(|s| s.to_string_lossy().to_string()) {
         Some(name) => name,
         None => {
-            eprintln!("[FolderSync] Could not extract name from path: {}", path.display());
+            eprintln!("[PublicFolderSync] Could not extract name from path: {}", path.display());
             let mut uploading_files = UPLOADING_FILES.lock().unwrap();
             uploading_files.remove(&path_str);
             return;
@@ -563,29 +563,29 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
     };
 
     if !should_upload {
-        println!("[FolderSync] Skipping upload: path '{}' is not assigned or not found in user_profiles.", file_name);
+        println!("[PublicFolderSync] Skipping upload: path '{}' is not assigned or not found in user_profiles.", file_name);
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         uploading_files.remove(&path_str);
         return;
     }
 
-    println!("[FolderSync] Replacing path: {}", file_name);
+    println!("[PublicFolderSync] Replacing path: {}", file_name);
     let upload_result = upload_path(path, account_id, seed_phrase, path.is_dir()).await;
 
     if upload_result {
-        println!("[FolderSync] Upload successful for '{}', now cleaning up old records...", file_name);
+        println!("[PublicFolderSync] Upload successful for '{}', now cleaning up old records...", file_name);
         let delete_result = delete_and_unpin_user_file_records_by_name(
             &file_name,
             seed_phrase,
             true
         ).await;
         if delete_result.is_err() {
-            eprintln!("[FolderSync] Failed to delete/unpin old records for '{}', but upload succeeded.", file_name);
+            eprintln!("[PublicFolderSync] Failed to delete/unpin old records for '{}', but upload succeeded.", file_name);
         } else {
-            println!("[FolderSync] Successfully cleaned up old records for '{}'", file_name);
+            println!("[PublicFolderSync] Successfully cleaned up old records for '{}'", file_name);
         }
     } else {
-        eprintln!("[FolderSync] Upload failed for '{}', skipping delete/unpin.", file_name);
+        eprintln!("[PublicFolderSync] Upload failed for '{}', skipping delete/unpin.", file_name);
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         uploading_files.remove(&path_str);
     }

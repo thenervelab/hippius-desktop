@@ -1047,8 +1047,6 @@ pub async fn list_folder_contents(
         };
         files_in_folder.push(file_detail);
     }
-
-    println!("[list_folder_contents] Folder {} contains {:?} files", folder_name, files_in_folder);
     Ok(files_in_folder)
 }
 
