@@ -439,13 +439,17 @@ pub fn start_user_sync(account_id: &str) {
                                 if file_name.ends_with(".ec_metadata") {
                                     let decoded_hash = decode_file_hash(&file_hash.as_bytes())
                                         .unwrap_or_else(|_| "Invalid file hash".to_string());
+                                    println!("file_name found {:?}, decoded_hash {:?} ",file_name, decoded_hash);
                                     if decoded_hash != "Invalid file hash" {
-                                        let ipfs_url = format!("https://get.hippius.network/ipfs/{}", decoded_hash);
-                                        match client.get(&ipfs_url).send().await {
+                                        let ipfs_url = format!("http://127.0.0.1:5001/api/v0/cat?arg={}", decoded_hash);
+                                        match client.post(&ipfs_url).send().await {
                                             Ok(resp) => {
-                                                if let Ok(data) = resp.text().await {                  
+                                                println!("resp : {:?}",resp);
+                                                if let Ok(data) = resp.text().await {          
+                                                    println!("data : {:?}",data);
                                                     if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&data) {
                                                         if let Some(metadata_array) = metadata.as_array() {
+                                                            println!("metadata_array {:?}", metadata_array);
                                                             let mut has_folder_metadata = false;
                                                             has_folder_metadata = metadata_array.iter().any(|item| {
                                                                 item.get("filename")
@@ -471,7 +475,7 @@ pub fn start_user_sync(account_id: &str) {
                                                                             if let Ok(ec_resp) = client.get(&ec_metadata_url).send().await {
                                                                                 if let Ok(ec_data) = ec_resp.text().await {
                                                                                     if let Ok(ec_metadata) = serde_json::from_str::<serde_json::Value>(&ec_data) {
-                                                                                        
+                                                                                        println!("ec_metadata is {:?}",ec_metadata);
                                                                                         // Now check the encryption status
                                                                                         if let Some(encrypted) = ec_metadata.get("erasure_coding")
                                                                                             .and_then(|ec| ec.get("encrypted"))
