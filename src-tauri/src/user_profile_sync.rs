@@ -294,14 +294,16 @@ pub fn start_user_sync(account_id: &str) {
                                                                 actual_file_size = total_size;
                                                             }
                                                         }
-                                                        file_type = "private".to_string();
+                                                        if file_name.ends_with(".folder.ec_metadata") {
+                                                            file_type = "private".to_string();
+                                                        }
                                                     }
                                                 }
                                                 Err(e) => {
                                                     eprintln!("[UserSync] Failed to fetch folder content for {}: {}", file_hash, e);
                                                 }
                                             }
-                                            file_type = "public".to_string();
+
                                         }
 
                                         let file_key = (file_hash.clone(), file_name.clone());
@@ -439,50 +441,31 @@ pub fn start_user_sync(account_id: &str) {
                                 if file_name.ends_with(".ec_metadata") {
                                     let decoded_hash = decode_file_hash(&file_hash.as_bytes())
                                         .unwrap_or_else(|_| "Invalid file hash".to_string());
-                                    println!("file_name found {:?}, decoded_hash {:?} ",file_name, decoded_hash);
                                     if decoded_hash != "Invalid file hash" {
                                         let ipfs_url = format!("http://127.0.0.1:5001/api/v0/cat?arg={}", decoded_hash);
                                         match client.post(&ipfs_url).send().await {
                                             Ok(resp) => {
-                                                println!("resp : {:?}",resp);
                                                 if let Ok(data) = resp.text().await {          
-                                                    println!("data : {:?}",data);
                                                     if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&data) {
                                                         if let Some(metadata_array) = metadata.as_array() {
-                                                            println!("metadata_array {:?}", metadata_array);
-                                                            let mut has_folder_metadata = false;
-                                                            has_folder_metadata = metadata_array.iter().any(|item| {
-                                                                item.get("filename")
-                                                                    .and_then(|f| f.as_str())
-                                                                    .map(|f| f.ends_with(".folder.ec_metadata"))
-                                                                    .unwrap_or(false)
-                                                            });
-                                                                
-                                                            if has_folder_metadata {
-                                                                file_type = "private".to_string();
-                                                                println!("Found .folder.ec_metadata, setting file type to private");
-                                                            } else {
-                                                                // Look for the .ec_metadata file in the array
-                                                                if let Some(metadata_array) = metadata.as_array() {
-                                                                    if let Some(ec_metadata) = metadata_array.iter().find(|item| {
-                                                                        item.get("filename")
-                                                                            .and_then(|f| f.as_str())
-                                                                            .map(|f| f.ends_with(".ec_metadata"))
-                                                                            .unwrap_or(false)
-                                                                    }) {
-                                                                        if let Some(ec_metadata_cid) = ec_metadata.get("cid").and_then(|c| c.as_str()) {
-                                                                            let ec_metadata_url = format!("https://get.hippius.network/ipfs/{}", ec_metadata_cid);
-                                                                            if let Ok(ec_resp) = client.get(&ec_metadata_url).send().await {
-                                                                                if let Ok(ec_data) = ec_resp.text().await {
-                                                                                    if let Ok(ec_metadata) = serde_json::from_str::<serde_json::Value>(&ec_data) {
-                                                                                        println!("ec_metadata is {:?}",ec_metadata);
-                                                                                        // Now check the encryption status
-                                                                                        if let Some(encrypted) = ec_metadata.get("erasure_coding")
-                                                                                            .and_then(|ec| ec.get("encrypted"))
-                                                                                            .and_then(|v| v.as_bool()) {
-                                                                                            file_type = if encrypted { "private" } else { "public" }.to_string();
-                                                                                            println!("File type from .ec_metadata: {}", file_type);
-                                                                                        }
+                                                            // Look for the .ec_metadata file in the array
+                                                            if let Some(metadata_array) = metadata.as_array() {
+                                                                if let Some(ec_metadata) = metadata_array.iter().find(|item| {
+                                                                    item.get("filename")
+                                                                        .and_then(|f| f.as_str())
+                                                                        .map(|f| f.ends_with(".ec_metadata"))
+                                                                        .unwrap_or(false)
+                                                                }) {
+                                                                    if let Some(ec_metadata_cid) = ec_metadata.get("cid").and_then(|c| c.as_str()) {
+                                                                        let ec_metadata_url = format!("https://get.hippius.network/ipfs/{}", ec_metadata_cid);
+                                                                        if let Ok(ec_resp) = client.get(&ec_metadata_url).send().await {
+                                                                            if let Ok(ec_data) = ec_resp.text().await {
+                                                                                if let Ok(ec_metadata) = serde_json::from_str::<serde_json::Value>(&ec_data) {
+                                                                                    // Now check the encryption status
+                                                                                    if let Some(encrypted) = ec_metadata.get("erasure_coding")
+                                                                                        .and_then(|ec| ec.get("encrypted"))
+                                                                                        .and_then(|v| v.as_bool()) {
+                                                                                        file_type = if encrypted { "private" } else { "public" }.to_string();
                                                                                     }
                                                                                 }
                                                                             }
@@ -499,7 +482,44 @@ pub fn start_user_sync(account_id: &str) {
                                             }
                                         }
                                     }
+                                } else if file_name.ends_with("-folder")
+                                || file_name.ends_with(".folder")
+                                || file_name.ends_with(".folder.ec_metadata")
+                            {
+                                let decoded_hash = decode_file_hash(&file_hash.as_bytes())
+                                    .unwrap_or_else(|_| "Invalid file hash".to_string());
+                            
+                                if decoded_hash != "Invalid file hash" {
+                                    let ipfs_url = format!("http://127.0.0.1:5001/api/v0/cat?arg={}", decoded_hash);
+                                    match client.post(&ipfs_url).send().await {
+                                        Ok(resp) => {
+                                            if let Ok(data) = resp.text().await {
+                                                if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&data) {
+                                                    if let Some(metadata_array) = metadata.as_array() {
+                                                        if let Some(ec_metadata) = metadata_array.iter().find(|item| {
+                                                            item.get("filename")
+                                                                .and_then(|f| f.as_str())
+                                                                .map(|f| {
+                                                                    f.ends_with(".folder.ec_metadata")
+                                                                })
+                                                                .unwrap_or(false)
+                                                        }) {
+                                                            file_type = "private".to_string();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        Err(e) => {
+                                            eprintln!(
+                                                "[UserSync] Failed to fetch metadata for {}: {}",
+                                                file_hash, e
+                                            );
+                                        }
+                                    }
                                 }
+                            }
+                            
 
                                 let file_key = (file_hash.clone(), file_name.clone());
                                 if file_name.ends_with(".ec") || file_name.ends_with(".ff") {
@@ -511,7 +531,7 @@ pub fn start_user_sync(account_id: &str) {
                                         owner: owner_ss58,
                                         cid: file_hash.clone(),
                                         file_hash,
-                                        file_name,
+                                        file_name: file_name.clone(),
                                         file_size_in_bytes,
                                         is_assigned: storage_request.is_assigned,
                                         last_charged_at: storage_request.last_charged_at as i64,
@@ -523,7 +543,7 @@ pub fn start_user_sync(account_id: &str) {
                                         source: "Hippius".to_string(),
                                         miner_ids: Some(miner_ids_json),
                                         created_at: storage_request.created_at as i64,
-                                        is_folder: false,
+                                        is_folder: file_name.ends_with("-folder") || file_name.ends_with(".folder") || file_name.ends_with(".folder.ec_metadata") || file_name.ends_with("-folder.ec_metadata"),
                                         file_type,
                                     });
                                 }
