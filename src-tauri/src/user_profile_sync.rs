@@ -756,6 +756,3 @@ pub async fn start_user_profile_sync_tauri(account_id: String) {
     println!("[UserSync] Starting sync for account: {}", account_id);
     start_user_sync(&account_id);
 }
-
-
-

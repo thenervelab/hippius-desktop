@@ -944,7 +944,7 @@ pub async fn encrypt_and_upload_folder(
                 &account_id,
                 &folder_metadata_cid,
                 &res,
-                true,
+                false,
                 true,
                 &meta_folder_name,
             )
