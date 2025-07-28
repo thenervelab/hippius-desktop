@@ -77,7 +77,6 @@ async fn get_latest_encryption_key_from_db() -> Result<secretbox::Key, String> {
             .await
             .map_err(|e| format!("DB error (fetch key): {}", e))?;
         let key_bytes: Vec<u8> = row.get("key");
-        println!("key_bytes from db latest: {:?}", key_bytes);
         secretbox::Key::from_slice(&key_bytes).ok_or("Invalid key length".to_string())
     } else {
         Err("DB_POOL not initialized".to_string())

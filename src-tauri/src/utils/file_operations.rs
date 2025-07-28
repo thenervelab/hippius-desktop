@@ -116,7 +116,7 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 
 /// Deletes all user_profiles records with the given file name and unpins the file.
 /// Also deletes from sync_folder_files. Returns the total number of deleted records or an error.
-pub async fn delete_and_unpin_user_file_records_by_name(
+pub async fn delete_and_unpin_user_file_records_and_dir_by_name(
     file_name: &str,
     seed_phrase: &str,
     is_public: bool,
@@ -156,6 +156,45 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     }
 }
 
+/// Deletes all user_profiles records with the given file name and unpins the file.
+/// Also deletes from sync_folder_files. Returns the total number of deleted records or an error.
+pub async fn delete_and_unpin_user_file_records_by_name(
+    file_name: &str,
+    seed_phrase: &str,
+    is_public: bool,
+) -> Result<u64, String> {
+    if let Some(pool) = DB_POOL.get() {
+        // Call unpin_user_file_by_name after successful deletes
+        unpin_user_file_by_name(file_name, seed_phrase)
+            .await
+            .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
+
+        // Sanitize file_name for local sync usage
+        let sanitized_file_name = sanitize_file_name(file_name);
+        // Delete from user_profiles
+        let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
+            .bind(file_name)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
+
+        // Delete from sync_folder_files (dynamic type)
+        let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
+            .bind(&sanitized_file_name)
+            .bind(if is_public { "public" } else { "private" })
+            .execute(pool)
+            .await
+            .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
+
+        // Calculate total rows affected
+        let total_deleted = result1.rows_affected() + result2.rows_affected();
+
+        Ok(total_deleted)
+    } else {
+        Err("DB_POOL not initialized".to_string())
+    }
+}
+
 #[tauri::command]
 pub async fn delete_and_unpin_file_by_name(
     file_name: String,
@@ -177,7 +216,7 @@ pub async fn delete_and_unpin_file_by_name(
             }
         }
     }
-    delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase, is_public).await
+    delete_and_unpin_user_file_records_and_dir_by_name(&file_name, &seed_phrase, is_public).await
 }
 
 // Helper function for recursive directory copy
