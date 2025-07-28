@@ -13,6 +13,19 @@ export type UploadFilesHandlers = {
   onError?: (err: Error | unknown) => void;
 };
 
+export const readFileAsArrayBuffer = (file: File): Promise<number[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result as ArrayBuffer;
+      const uint8Array = new Uint8Array(arrayBuffer);
+      resolve(Array.from(uint8Array));
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsArrayBuffer(file);
+  });
+};
+
 export function useFilesUpload(handlers: UploadFilesHandlers) {
   const { onSuccess, onError } = handlers;
   const setProgress = useSetAtom(uploadProgressAtom);
@@ -68,25 +81,30 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           path: tempPath,
           data: Array.from(new Uint8Array(arrayBuffer))
         });
+        const fileData = await readFileAsArrayBuffer(file);
+
         let cid;
         // encrypt & upload
         if (isPrivateView) {
           cid = await invoke<string>("encrypt_and_upload_file", {
             accountId: polkadotAddress,
-            filePath: tempPath,
+            fileData: fileData,
+            fileName: file.name,
             seedPhrase: mnemonic,
             encryptionKey: null
           });
         } else if (!isPrivateView && useErasureCoding) {
           cid = await invoke<string>("public_upload_with_erasure", {
             accountId: polkadotAddress,
-            filePath: tempPath,
+            fileData: fileData,
+            fileName: file.name,
             seedPhrase: mnemonic
           });
         } else {
           cid = await invoke<string>("upload_file_public", {
             accountId: polkadotAddress,
-            filePath: tempPath,
+            fileData: fileData,
+            fileName: file.name,
             seedPhrase: mnemonic
           });
         }
