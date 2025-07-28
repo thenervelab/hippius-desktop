@@ -19,6 +19,7 @@ import { Graphsheet } from "@/app/components/ui";
 export type ModalData = {
   address: string;
   role: "Upload" | "UploadDelete";
+  seed?: string;
 };
 
 type Props = {
@@ -28,7 +29,7 @@ type Props = {
   onAddressChange: (address: string) => void;
   onRoleChange: (role: ModalData["role"]) => void;
   onClose: () => void;
-  onSubmit: () => void;
+  onSubmit: (data: ModalData) => void;
 };
 
 const roles = ["Upload", "UploadDelete"] as const;
@@ -42,6 +43,10 @@ export default function SubAccountModal({
   onClose,
   onSubmit,
 }: Props) {
+  const handleSubmit = () => {
+    onSubmit({ address, role });
+  };
+
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
@@ -66,7 +71,6 @@ export default function SubAccountModal({
             </button>
           </Dialog.Close>
 
-          {/* Icon */}
           <div className="flex items-center sm:justify-center mb-4 mt-3 sm:mt-0">
             <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
               <Graphsheet
@@ -114,7 +118,6 @@ export default function SubAccountModal({
               <label className="text-sm font-medium text-grey-70">Role</label>
               <div className="mt-2">
                 <Select value={role} onValueChange={onRoleChange}>
-                  {/* Trigger stays the same */}
                   <SelectTrigger
                     className="
                             w-full flex items-center justify-between relative
@@ -127,7 +130,6 @@ export default function SubAccountModal({
                     <ChevronDown className="absolute size-5 right-4 top-1/2 -translate-y-1/2 text-grey-60 pointer-events-none" />
                   </SelectTrigger>
 
-                  {/* Dropdown panel */}
                   <SelectContent
                     className="
                             mt-1 bg-grey-100 border border-grey-80 rounded-[8px]
@@ -135,7 +137,6 @@ export default function SubAccountModal({
                         "
                   >
                     <SelectScrollUpButton />
-                    {/* Use the underlying Primitive.Viewport so we can zero out padding */}
                     <SelectPrimitive.Viewport className="p-0">
                       <SelectGroup>
                         {roles.map((r) => (
@@ -168,7 +169,7 @@ export default function SubAccountModal({
 
           <div className="mt-6 space-y-3">
             <button
-              onClick={onSubmit}
+              onClick={handleSubmit}
               className="
                 w-full p-1 bg-primary-50 text-grey-100 rounded shadow border border-primary-40
                 hover:bg-primary-40 transition

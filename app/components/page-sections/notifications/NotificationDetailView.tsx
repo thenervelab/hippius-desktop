@@ -2,13 +2,15 @@ import React, { useState } from "react";
 import { AbstractIconWrapper, CardButton } from "../../ui";
 import { IconComponent } from "@/app/lib/types";
 import NotificationType from "./NotificationType";
-import { openLinkByKey } from "@/app/lib/utils/links";
+import { handleButtonLink } from "@/app/lib/utils/links";
 import { MoreVertical } from "lucide-react";
 import TimeAgo from "react-timeago";
 import NotificationContextMenu from "./NotificationContextMenu";
 import RevealTextLine from "../../ui/reveal-text-line";
 import { InView } from "react-intersection-observer";
 import { useRouter } from "next/navigation";
+import { useSetAtom } from "jotai";
+import { activeSubMenuItemAtom } from "../../sidebar/sideBarAtoms";
 
 interface NotificationDetailViewProps {
   selectedNotification: {
@@ -30,6 +32,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   selectedNotification,
   onReadStatusChange,
 }) => {
+  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const router = useRouter();
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -73,16 +76,9 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
       onReadStatusChange(id, !unread);
     }
   };
+
   const handleLinkClick = (e: React.MouseEvent) => {
-    if (actionLink) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (actionLink.startsWith("BILLING")) {
-        openLinkByKey(actionLink);
-      } else {
-        router.push(actionLink);
-      }
-    }
+    handleButtonLink(e, actionLink, router, setActiveSubMenuItem);
   };
 
   return (

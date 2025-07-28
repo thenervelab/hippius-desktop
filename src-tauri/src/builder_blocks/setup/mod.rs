@@ -2,14 +2,125 @@ use tauri::{
     Builder, Manager, Wry,
 };
 use sqlx::sqlite::SqlitePool;
-use once_cell::sync::OnceCell;
 use dirs;
-use std::path::PathBuf;
-
+use sqlx::Row;
 use crate::{
     commands::node::start_ipfs_daemon,
     DB_POOL,
 };
+
+async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // Define the expected table schemas
+    const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
+        (
+            "user_profiles",
+            &[
+                ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+                ("owner", "TEXT NOT NULL"),
+                ("cid", "TEXT NOT NULL"),
+                ("file_hash", "TEXT"),
+                ("file_name", "TEXT"),
+                ("file_size_in_bytes", "INTEGER"),
+                ("is_assigned", "BOOLEAN"),
+                ("last_charged_at", "INTEGER"),
+                ("main_req_hash", "TEXT"),
+                ("selected_validator", "TEXT"),
+                ("total_replicas", "INTEGER"),
+                ("block_number", "INTEGER NOT NULL"),
+                ("processed_timestamp", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+                ("profile_cid", "TEXT"),
+                ("source", "TEXT"),
+                ("miner_ids", "TEXT"),
+                ("created_at", "INTEGER"),
+                ("type", "TEXT DEFAULT 'public'"),
+                ("is_folder", "BOOLEAN DEFAULT 0"),
+            ],
+        ),
+        (
+            "sync_folder_files",
+            &[
+                ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+                ("owner", "TEXT NOT NULL"),
+                ("cid", "TEXT NOT NULL"),
+                ("file_hash", "TEXT"),
+                ("file_name", "TEXT"),
+                ("file_size_in_bytes", "INTEGER"),
+                ("is_assigned", "BOOLEAN"),
+                ("last_charged_at", "INTEGER"),
+                ("main_req_hash", "TEXT"),
+                ("selected_validator", "TEXT"),
+                ("total_replicas", "INTEGER"),
+                ("block_number", "INTEGER NOT NULL"),
+                ("processed_timestamp", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+                ("profile_cid", "TEXT"),
+                ("source", "TEXT"),
+                ("miner_ids", "TEXT"),
+                ("type", "TEXT"),
+                ("is_folder", "BOOLEAN"),
+            ],
+        ),
+    ];
+
+    for (table_name, columns) in TABLE_SCHEMAS {
+        // Create table if it doesn't exist with basic structure
+        let create_table = format!(
+            "CREATE TABLE IF NOT EXISTS {} ({})",
+            table_name,
+            columns
+                .iter()
+                .map(|(name, typ)| format!("{} {}", name, typ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        sqlx::query(&create_table).execute(pool).await?;
+
+        // Check and add any missing columns
+        let pragma_sql = format!("PRAGMA table_info({})", table_name);
+        let columns_info = sqlx::query(&pragma_sql)
+            .fetch_all(pool)
+            .await?;
+
+        for (column_name, column_type) in *columns {
+            let column_exists = columns_info.iter().any(|row| {
+                let name: String = row.get("name");
+                name == *column_name
+            });
+
+            if !column_exists {
+                println!("[Setup] Adding column {} to table {}", column_name, table_name);
+                sqlx::query(
+                    &format!("ALTER TABLE {} ADD COLUMN {} {}", table_name, column_name, column_type)
+                )
+                .execute(pool)
+                .await?;
+            }
+        }
+    }
+
+    // Create other tables that don't need schema migration
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS encryption_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key_name TEXT NOT NULL UNIQUE,
+            key BLOB NOT NULL
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_paths (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL,
+            type TEXT NOT NULL UNIQUE,
+            timestamp INTEGER NOT NULL
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
 
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
@@ -37,77 +148,64 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             let pool = SqlitePool::connect(&db_url).await.unwrap();
             DB_POOL.set(pool.clone()).unwrap();
 
-            sqlx::query(
-                "CREATE TABLE IF NOT EXISTS user_profiles (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    owner TEXT NOT NULL,
-                    cid TEXT NOT NULL,
-                    file_hash TEXT,
-                    file_name TEXT,
-                    file_size_in_bytes INTEGER,
-                    is_assigned BOOLEAN,
-                    last_charged_at INTEGER,
-                    main_req_hash TEXT,
-                    selected_validator TEXT,
-                    total_replicas INTEGER,
-                    block_number INTEGER NOT NULL,
-                    processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    profile_cid TEXT,
-                    source TEXT,
-                    miner_ids TEXT
-                )"
-            )
-            .execute(&pool)
-            .await
-            .unwrap();
+            // Ensure all tables and columns exist
+            if let Err(e) = ensure_table_schema(&pool).await {
+                eprintln!("[Setup] Failed to ensure table schema: {}", e);
+                return;
+            }
 
-            // Add sync_folder_files table with the same fields as user_profiles
-            sqlx::query(
-                "CREATE TABLE IF NOT EXISTS sync_folder_files (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    owner TEXT NOT NULL,
-                    cid TEXT NOT NULL,
-                    file_hash TEXT,
-                    file_name TEXT,
-                    file_size_in_bytes INTEGER,
-                    is_assigned BOOLEAN,
-                    last_charged_at INTEGER,
-                    main_req_hash TEXT,
-                    selected_validator TEXT,
-                    total_replicas INTEGER,
-                    block_number INTEGER NOT NULL,
-                    processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    profile_cid TEXT,
-                    source TEXT,
-                    miner_ids TEXT
-                )"
-            )
-            .execute(&pool)
-            .await
-            .unwrap();
+            // Set default values for existing records
+            if let Err(e) = sqlx::query(
+                r#"
+                UPDATE user_profiles 
+                SET type = CASE 
+                    WHEN file_name LIKE '%.ec' OR file_name LIKE '%.ec_metadata' THEN 'private'
+                    ELSE 'public'
+                END,
+                is_folder = CASE 
+                    WHEN file_name LIKE '%.folder' OR file_name LIKE '%.folder.ec' THEN 1
+                    ELSE 0
+                END,
+                source = COALESCE(source, 'Hippius')
+                WHERE type IS NULL OR is_folder IS NULL OR source IS NULL
+                "#
+            ).execute(&pool).await {
+                eprintln!("[Setup] Failed to update type, is_folder, and source columns in user_profiles: {}", e);
+            }
 
-            sqlx::query(
-                "CREATE TABLE IF NOT EXISTS encryption_keys (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    key_name TEXT NOT NULL UNIQUE,
-                    key BLOB NOT NULL
-                )"
-            )
-            .execute(&pool)
-            .await
-            .unwrap();
+            // Set default values for sync_folder_files
+            if let Err(e) = sqlx::query(
+                r#"
+                UPDATE sync_folder_files 
+                SET type = 'public',
+                    is_folder = 0,
+                    source = 'Hippius'
+                WHERE type IS NULL OR is_folder IS NULL OR source IS NULL
+                "#
+            ).execute(&pool).await {
+                eprintln!("[Setup] Failed to update default values in sync_folder_files: {}", e);
+            }
 
-            sqlx::query(
-                "CREATE TABLE IF NOT EXISTS sync_paths (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    path TEXT NOT NULL,
-                    type TEXT NOT NULL UNIQUE, -- 'public' or 'private', only one of each
-                    timestamp INTEGER NOT NULL
-                )"
+            // Check if any encryption keys exist, create one if none found
+            let key_exists: Option<(i64,)> = sqlx::query_as(
+                "SELECT COUNT(*) as count FROM encryption_keys"
             )
-            .execute(&pool)
+            .fetch_optional(&pool)
             .await
-            .unwrap();
+            .unwrap_or(Some((0,)));
+
+            if let Some((count,)) = key_exists {
+                if count == 0 {
+                    println!("[Setup] No encryption keys found, creating initial key...");
+                    if let Err(e) = crate::utils::accounts::create_and_store_encryption_key().await {
+                        eprintln!("[Setup] Failed to create initial encryption key: {}", e);
+                    } else {
+                        println!("[Setup] Initial encryption key created successfully");
+                    }
+                } else {
+                    println!("[Setup] Found {} existing encryption key(s)", count);
+                }
+            }
 
             println!("[Setup] Database initialized successfully");
 

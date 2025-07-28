@@ -12,6 +12,7 @@ import {
     TerminalWhite,
     EC,
     File,
+    Folder2,
 } from "@/components/ui/icons";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { getFilePartsFromFileName } from './getFilePartsFromFileName';
@@ -41,7 +42,7 @@ export const getFileIcon = (fileType: FileTypes | undefined, isDir: boolean): {
     color: string;
 } => {
     if (isDir) {
-        return { icon: EC, color: "#8e24aa" };
+        return { icon: Folder2, color: "text-primary-40" };
     }
 
     switch (fileType) {
@@ -51,11 +52,11 @@ export const getFileIcon = (fileType: FileTypes | undefined, isDir: boolean): {
             return { icon: EC, color: "text-primary-40" };
         case "document":
             return { icon: File, color: "text-primary-70 fill-primary-60" };
-        case "pdfDocument":
+        case "PDF":
             return { icon: PDF, color: "text-[#ea4335]" };
-        case "presentationDocument":
+        case "PPT":
             return { icon: Presentation, color: "text-[#fbbc04]" };
-        case "spreadSheet":
+        case "XLS":
             return { icon: Sheet, color: "text-[#34a853]" };
         case "code":
             return { icon: Terminal, color: "text-[#4285F4]" };
@@ -86,11 +87,11 @@ export const getFileIconForThumbnail = (fileType: FileTypes | undefined, isDir: 
             return { icon: EC };
         case "document":
             return { icon: File, color: "fill-white" };
-        case "pdfDocument":
+        case "PDF":
             return { icon: PDF };
-        case "presentationDocument":
+        case "PPT":
             return { icon: Presentation };
-        case "spreadSheet":
+        case "XLS":
             return { icon: Sheet };
         case "code":
             return { icon: TerminalWhite };

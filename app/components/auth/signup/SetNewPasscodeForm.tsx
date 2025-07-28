@@ -5,31 +5,31 @@ import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Icons, Input, RevealTextLine } from "../ui";
-import { Eye, EyeOff, Key, OctagonAlert } from "../ui/icons";
+import { Button, Icons, Input, RevealTextLine } from "../../ui";
+import { Eye, EyeOff, Key, OctagonAlert } from "../../ui/icons";
 import { InView } from "react-intersection-observer";
 import { encryptMnemonic, hashPasscode } from "@/app/lib/helpers/crypto";
-import { saveWallet } from "@/app/lib/helpers/walletDb";
+import { clearWalletDb, saveWallet } from "@/app/lib/helpers/walletDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useAtomValue } from "jotai";
-import { phaseAtom } from "../splash-screen/atoms";
+import { phaseAtom } from "../../splash-screen/atoms";
 import {
   addNotification,
   isFirstTime,
-  listNotifications,
+  listNotifications
 } from "@/app/lib/helpers/notificationsDb";
 
 const passcodeFields = [
   {
     name: "newPassCode",
     label: "Set a Passcode",
-    placeholder: "Enter Passcode",
+    placeholder: "Enter Passcode"
   },
   {
     name: "confirmPassCode",
     label: "Confirm your Passcode",
-    placeholder: "Confirm Passcode",
-  },
+    placeholder: "Confirm Passcode"
+  }
 ];
 type PasscodeField = "newPassCode" | "confirmPassCode";
 type FieldErrorState = { [key in PasscodeField]?: string | null };
@@ -40,7 +40,7 @@ interface PassCodeFormProps {
 const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
   const [passCode, setPasscode] = useState({
     newPassCode: "",
-    confirmPassCode: "",
+    confirmPassCode: ""
   });
   const [error, setError] = useState<string | null>(null);
   const [logginIn, setLoggingIn] = useState(false);
@@ -98,6 +98,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
       return;
     }
     setLoggingIn(true);
+    await clearWalletDb();
     if (await isFirstTime()) {
       const notifications = await listNotifications(1);
       if (notifications.length === 0) {
@@ -107,7 +108,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
           notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
           notificationDescription: `🎉 Welcome to Hippius! You’re now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you’re spending. You can check your remaining credits at any time in the Wallets tab, and top up when you need more. When you’re ready, tap Check Out to launch your first storage session.`,
           notificationLinkText: "Check Out",
-          notificationLink: "/files",
+          notificationLink: "/files"
         });
       }
     }

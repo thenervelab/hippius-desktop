@@ -9,110 +9,126 @@ import { uploadProgressAtom } from "@/app/components/page-sections/files/ipfs/at
 import { toast } from "sonner";
 
 export type UploadFilesHandlers = {
-    onSuccess?: () => void;
-    onError?: (err: Error | unknown) => void;
+  onSuccess?: () => void;
+  onError?: (err: Error | unknown) => void;
 };
 
 export function useFilesUpload(handlers: UploadFilesHandlers) {
-    const { onSuccess, onError } = handlers;
-    const setProgress = useSetAtom(uploadProgressAtom);
-    const {
-        data: credits,
-    } = useUserCredits();
-    const { refetch: refetchUserFiles } = useUserIpfsFiles();
-    const { mnemonic, polkadotAddress } = useWalletAuth();
+  const { onSuccess, onError } = handlers;
+  const setProgress = useSetAtom(uploadProgressAtom);
+  const { data: credits } = useUserCredits();
+  const { refetch: refetchUserFiles } = useUserIpfsFiles();
+  const { mnemonic, polkadotAddress } = useWalletAuth();
 
+  const [requestState, setRequestState] = useState<
+    "idle" | "uploading" | "submitting"
+  >("idle");
+  const idleTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const [requestState, setRequestState] = useState<"idle" | "uploading" | "submitting">("idle");
-    const idleTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (idleTimeout.current) clearTimeout(idleTimeout.current);
+    },
+    []
+  );
 
-    useEffect(
-        () => () => {
-            if (idleTimeout.current) clearTimeout(idleTimeout.current);
-        },
-        []
+  async function upload(
+    files: FileList,
+    isPrivateView: boolean,
+    useErasureCoding: boolean = false
+  ) {
+    if (idleTimeout.current) clearTimeout(idleTimeout.current);
+
+    // start toast and progress
+    const toastId = toast.loading(
+      files.length > 1
+        ? `Uploading ${files.length} files: 0%`
+        : "Uploading file: 0%"
     );
+    setRequestState("uploading");
+    setProgress(0);
 
-    async function upload(files: FileList) {
-        if (idleTimeout.current) clearTimeout(idleTimeout.current);
+    try {
+      // check credits as before
+      if (!credits || credits <= BigInt(0)) {
+        throw new Error("Insufficient Credits. Please add credits.");
+      }
 
-        // start toast and progress
-        const toastId = toast.loading(
-            files.length > 1
-                ? `Uploading ${files.length} files: 0%`
-                : "Uploading file: 0%",
-            { position: "top-center" }
-        );
-        setRequestState("uploading");
-        setProgress(0);
+      const arr = Array.from(files);
+      const cids: string[] = [];
 
-        try {
-            // check credits as before
-            if (!credits || credits <= BigInt(0)) {
-                throw new Error("Insufficient Credits. Please add credits.");
-            }
+      // encrypt & upload each file via Tauri
+      for (let i = 0; i < arr.length; i++) {
+        const file = arr[i];
+        const arrayBuffer = await file.arrayBuffer();
+        const tempPath = `/tmp/${file.name}`;
 
-            const arr = Array.from(files);
-            const cids: string[] = [];
-
-            // encrypt & upload each file via Tauri
-            for (let i = 0; i < arr.length; i++) {
-                const file = arr[i];
-                const arrayBuffer = await file.arrayBuffer();
-                const tempPath = `/tmp/${file.name}`;
-
-                // write to disk
-                await invoke("write_file", {
-                    path: tempPath,
-                    data: Array.from(new Uint8Array(arrayBuffer)),
-                });
-
-                // encrypt & upload
-                const cid = await invoke<string>("encrypt_and_upload_file", {
-                    accountId: polkadotAddress,
-                    filePath: tempPath,
-                    seedPhrase: mnemonic,
-                });
-                cids.push(cid);
-
-                // update progress
-                const percent = Math.round(((i + 1) / arr.length) * 100);
-                setProgress(percent);
-                const msg =
-                    files.length > 1
-                        ? `Uploading ${files.length} files: ${percent}%`
-                        : `Uploading file: ${percent}%`;
-                toast.loading(msg, { id: toastId, position: "top-center" });
-            }
-
-            // finish up
-            setRequestState("idle");
-            idleTimeout.current = setTimeout(() => {
-                refetchUserFiles();
-                onSuccess?.();
-                toast.success(
-                    files.length > 1
-                        ? `${files.length} files successfully uploaded!`
-                        : `File successfully uploaded!`,
-                    { id: toastId, position: "top-center" }
-                );
-            }, 500);
-        } catch (err) {
-            setRequestState("idle");
-            setProgress(0);
-            onError?.(err);
-            console.log("error", err)
-            toast.error(
-                files.length > 1
-                    ? `${files.length} files failed to upload!`
-                    : `File failed to upload!`,
-                { id: toastId, position: "top-center" }
-            );
+        // write to disk
+        await invoke("write_file", {
+          path: tempPath,
+          data: Array.from(new Uint8Array(arrayBuffer))
+        });
+        let cid;
+        // encrypt & upload
+        if (isPrivateView) {
+          cid = await invoke<string>("encrypt_and_upload_file", {
+            accountId: polkadotAddress,
+            filePath: tempPath,
+            seedPhrase: mnemonic,
+            encryptionKey: null
+          });
+        } else if (!isPrivateView && useErasureCoding) {
+          cid = await invoke<string>("public_upload_with_erasure", {
+            accountId: polkadotAddress,
+            filePath: tempPath,
+            seedPhrase: mnemonic
+          });
+        } else {
+          cid = await invoke<string>("upload_file_public", {
+            accountId: polkadotAddress,
+            filePath: tempPath,
+            seedPhrase: mnemonic
+          });
         }
+        cids.push(cid);
+
+        // update progress
+        const percent = Math.round(((i + 1) / arr.length) * 100);
+        setProgress(percent);
+        const msg =
+          files.length > 1
+            ? `Uploading ${files.length} files: ${percent}%`
+            : `Uploading file: ${percent}%`;
+        toast.loading(msg, { id: toastId });
+      }
+
+      // finish up
+      setRequestState("idle");
+      idleTimeout.current = setTimeout(() => {
+        refetchUserFiles();
+        onSuccess?.();
+        toast.success(
+          files.length > 1
+            ? `${files.length} files successfully uploaded!`
+            : `File successfully uploaded!`,
+          { id: toastId }
+        );
+      }, 500);
+    } catch (err) {
+      setRequestState("idle");
+      setProgress(0);
+      onError?.(err);
+      console.log("error", err);
+      toast.error(
+        files.length > 1
+          ? `${files.length} files failed to upload!`
+          : `File failed to upload!`,
+        { id: toastId }
+      );
     }
+  }
 
-
-    return { upload, requestState };
+  return { upload, requestState };
 }
 
 export default useFilesUpload;

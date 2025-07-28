@@ -10,9 +10,10 @@ import { LucideLoader2 } from "lucide-react";
 
 interface AuthLayoutProps {
   children: ReactNode;
+  isVerify?: boolean;
 }
 
-const AuthLayout = ({ children }: AuthLayoutProps) => {
+const AuthLayout = ({ children, isVerify = false }: AuthLayoutProps) => {
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
@@ -49,10 +50,11 @@ const AuthLayout = ({ children }: AuthLayoutProps) => {
             <div className="flex flex-col items-start justify-center h-full ">
               <div
                 className={cn(
-                  "text-xl  font-medium text-grey-10  mb-[38px] flex gap-2 items-center",
+                  "text-xl  font-medium text-grey-10   flex gap-2 items-center",
                   inView
                     ? "opacity-100 translate-y-0"
-                    : "opacity-0 translate-y-8"
+                    : "opacity-0 translate-y-8",
+                  isVerify ? "mb-[26px]" : "mb-[38px]"
                 )}
               >
                 <HippiusLogo className="size-9 bg-primary-50 rounded text-white" />

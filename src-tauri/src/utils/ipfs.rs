@@ -8,7 +8,7 @@ use std::io::Read;
 pub fn upload_to_ipfs(
     api_url: &str,
     file_path: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let client = Client::new();
 
     // Read file data
@@ -42,17 +42,7 @@ pub fn upload_to_ipfs(
     let pin_url = format!("{}/api/v0/pin/add?arg={}", api_url, cid);
     let pin_res = client.post(&pin_url).send();
     match pin_res {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                println!("[IPFS] Successfully pinned CID: {}", cid);
-            } else {
-                println!(
-                    "[IPFS] Failed to pin CID: {} (status: {})",
-                    cid,
-                    resp.status()
-                );
-            }
-        }
+        Ok(resp) => {},
         Err(e) => {
             println!("[IPFS] Error pinning CID {}: {}", cid, e);
         }
@@ -62,7 +52,7 @@ pub fn upload_to_ipfs(
 }
 
 
-pub fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+pub fn download_from_ipfs(api_url: &str, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let client = Client::new();
 
     let res = client

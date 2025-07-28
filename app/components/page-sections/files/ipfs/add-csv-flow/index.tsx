@@ -16,6 +16,9 @@ import { generateId } from "@/lib/utils/generateId";
 import { File } from "lucide-react";
 import { Icons, CardButton } from "@/components/ui";
 import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeTextFile } from '@tauri-apps/plugin-fs';
+import { downloadDir } from '@tauri-apps/api/path';
 
 type Entry = {
   id: string;
@@ -293,21 +296,33 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
   };
 
   // Add a function to handle CSV template download
-  const handleDownloadTemplate = () => {
+  const handleDownloadTemplate = async () => {
     try {
-      // Create a link to the CSV template file in the public folder
-      const link = document.createElement('a');
-      link.href = '/ipfs-csv-template.csv';
-      link.download = 'ipfs-csv-template.csv';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const csvContent = `name,cid\nexample-file.txt,QmExampleCidForDemonstrationPurposes1234567890`;
+
+      const downloadsPath = await downloadDir();
+
+      const suggestedName = 'ipfs-csv-template.csv';
+
+      const savePath = await save({
+        defaultPath: `${downloadsPath}/${suggestedName}`,
+        filters: [{
+          name: 'CSV Files',
+          extensions: ['csv']
+        }]
+      });
+
+      if (!savePath) {
+        return;
+      }
+
+      await writeTextFile(savePath, csvContent);
 
       // Show success message
       toast.success('CSV template downloaded successfully!');
     } catch (error) {
       console.error('Error downloading CSV template:', error);
-      toast.error('Failed to download CSV template!');
+      toast.error(`Failed to download CSV template: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 

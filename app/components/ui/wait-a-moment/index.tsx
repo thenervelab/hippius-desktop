@@ -9,7 +9,7 @@ const WaitAMoment: React.FC<WaitAMomentProps> = ({ isRecentFiles = false }) => (
   <div
     className={cn("w-full p-6 flex items-center justify-center", {
       "h-[80vh]": !isRecentFiles,
-      "h-[20vh]": isRecentFiles,
+      "h-[150px]": isRecentFiles,
     })}
   >
     <div className="flex flex-col items-center justify-center">

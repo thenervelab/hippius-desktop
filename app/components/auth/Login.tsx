@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { RevealTextLine } from "../ui";
 import Link from "next/link";
 import AccessKeyForm from "./AccessKeyForm";
-import SetNewPassCodeForm from "./SetNewPasscodeForm";
+import SetNewPassCodeForm from "./signup/SetNewPasscodeForm";
 import { hasWalletRecord } from "@/app/lib/helpers/walletDb";
 import LoginWithPassCodeForm from "./LoginWithPasscodeForm";
 import AuthLayout from "./AuthLayout";

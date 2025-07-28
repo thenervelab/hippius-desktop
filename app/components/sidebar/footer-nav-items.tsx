@@ -1,6 +1,8 @@
 import cn from "@/app/lib/utils/cn";
 import { RevealTextLine } from "../ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useSetAtom } from "jotai";
+import { activeSubMenuItemAtom } from "./sideBarAtoms";
 
 interface FooterNavItemProps {
   icon: React.ReactNode;
@@ -15,9 +17,10 @@ const FooterNavItem: React.FC<FooterNavItemProps> = ({
   label,
   collapsed,
   className,
-  inView,
+  inView
 }) => {
   const { logout } = useWalletAuth();
+  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   return (
     <div
       className={cn(
@@ -25,7 +28,11 @@ const FooterNavItem: React.FC<FooterNavItemProps> = ({
         "hover:bg-gray-100 hover:text-red-500 text-error-60",
         className
       )}
-      onClick={() => logout()}
+      onClick={() => {
+        setActiveSubMenuItem("");
+
+        logout();
+      }}
     >
       <RevealTextLine
         reveal={inView}

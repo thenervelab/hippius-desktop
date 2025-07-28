@@ -11,6 +11,7 @@ const DeleteFileDialog: React.FC<{
 }> = ({ setFileToDelete, fileToDelete }) => {
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
     cid: fileToDelete?.cid || "",
+    fileToDelete
   });
 
   return (

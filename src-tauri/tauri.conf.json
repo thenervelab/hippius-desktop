@@ -25,8 +25,12 @@
     ],
 
     "security": {
+      "capabilities": ["default"],
       "csp": null,
-      "capabilities": ["default"]
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$HOME/**", "%USERPROFILE%/**", "$RESOURCE/**"]
+      }
     }
   },
   "bundle": {
