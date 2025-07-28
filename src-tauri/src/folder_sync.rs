@@ -700,19 +700,28 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
     }
 
     println!("[PrivateFolderSync] Replacing file: {}", file_name);
+    
+    // First delete the old records
+    println!("[PrivateFolderSync] Cleaning up old records for '{}' before upload...", file_name);
+    let should_delete_folder = false;
+    let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await;
+    
+    if delete_result.is_err() {
+        eprintln!("[PrivateFolderSync] Failed to delete/unpin old records for '{}', aborting upload.", file_name);
+        let mut uploading_files = UPLOADING_FILES.lock().unwrap();
+        uploading_files.remove(&path_str);
+        return;
+    }
+    
+    println!("[PrivateFolderSync] Successfully cleaned up old records for '{}', proceeding with upload...", file_name);
+    
+    // Then upload the new file
     let upload_result = upload_path(path, account_id, seed_phrase, false).await;
 
     if upload_result {
-        println!("[PrivateFolderSync] Upload successful for '{}', now cleaning up old records...", file_name);
-        let should_delete_folder = false;
-        let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await;
-        if delete_result.is_err() {
-            eprintln!("[PrivateFolderSync] Failed to delete/unpin old records for '{}', but upload succeeded.", file_name);
-        } else {
-            println!("[PrivateFolderSync] Successfully cleaned up old records for '{}'", file_name);
-        }
+        println!("[PrivateFolderSync] Upload successful for '{}'", file_name);
     } else {
-        eprintln!("[PrivateFolderSync] Upload failed for '{}', skipping delete/unpin.", file_name);
+        eprintln!("[PrivateFolderSync] Upload failed for '{}' after deleting old records", file_name);
         let mut uploading_files = UPLOADING_FILES.lock().unwrap();
         uploading_files.remove(&path_str);
     }
