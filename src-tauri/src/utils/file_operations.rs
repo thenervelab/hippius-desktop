@@ -34,9 +34,29 @@ fn sanitize_file_name(name: &str) -> String {
         name.trim_end_matches("-folder.ec_metadata").to_string()
     } else if name.ends_with(".folder.ec_metadata") {
         name.trim_end_matches(".folder.ec_metadata").to_string()
+    } else if name.ends_with(".folder") {
+        name.trim_end_matches(".folder").to_string()
     } else {
         name.to_string()
     }
+}
+
+// Helper to generate all possible file name variations
+fn get_file_name_variations(base_name: &str) -> Vec<String> {
+    let variations = vec![
+        base_name.to_string(),
+        format!("{}.ec_metadata", base_name),
+        format!("{}.ff", base_name),
+        format!("{}.ec", base_name),
+        format!("{}-folder", base_name),
+        format!("{}-folder.ec_metadata", base_name),
+        format!("{}.folder.ec_metadata", base_name),
+        format!("{}.folder", base_name),
+    ];
+    
+    // Deduplicate while preserving order
+    let mut seen = std::collections::HashSet::new();
+    variations.into_iter().filter(|v| seen.insert(v.clone())).collect()
 }
 
 fn build_storage_json(files: &[(String, String)]) -> String {
@@ -83,43 +103,57 @@ pub async fn request_file_storage(
     Ok(json_cid)
 }
 
-/// Unpins all user_profiles records with the given file name
 pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
-        // Fetch the main_req_hash for the file name
-        let hashes: Vec<(String,)> = sqlx::query_as(
-            "SELECT main_req_hash FROM user_profiles WHERE file_name = ?"
-        )
-        .bind(file_name)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("DB error (fetch): {e}"))?;
+        let variations = get_file_name_variations(file_name);
+        let mut last_error = None;
 
-        if let Some((main_req_hash,)) = hashes.first() {
-            println!("[unpin_user_file_by_name] main_req_hash for unpinning: {}", main_req_hash);
+        for variant in variations {
+            println!("[unpin_user_file_by_name] Trying variant: {}", variant);
+            
+            let hashes_result = sqlx::query_as::<_, (String,)>(
+                "SELECT main_req_hash FROM user_profiles WHERE file_name = ?"
+            )
+            .bind(&variant)
+            .fetch_all(pool)
+            .await;
 
-            // Wrap in FileHashWrapper
-            let file_hash_wrapper = FileHashWrapper {
-                file_hash: main_req_hash.as_bytes().to_vec(),
-            };
-            // Call the unpin request
-            storage_unpin_request_tauri(file_hash_wrapper, seed_phrase.to_string())
-                .await
-                .map_err(|e| format!("Unpin request error: {}", e))?;
-        } else {
-            println!(
-                "[unpin_user_file_by_name] No main_req_hash found for file '{}', nothing to unpin.",
-                file_name
-            );
+            match hashes_result {
+                Ok(hashes) if !hashes.is_empty() => {
+                    if let Some((main_req_hash,)) = hashes.first() {
+                        println!("[unpin_user_file_by_name] Found match for variant '{}' with hash: {}", variant, main_req_hash);
+                        
+                        let file_hash_wrapper = FileHashWrapper {
+                            file_hash: main_req_hash.as_bytes().to_vec(),
+                        };
+                        
+                        return storage_unpin_request_tauri(file_hash_wrapper, seed_phrase.to_string())
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| format!("Unpin request error for variant '{}': {}", variant, e));
+                    }
+                    return Err("Found empty hash result despite non-empty hashes".to_string());
+                },
+                Ok(_) => {
+                    println!("[unpin_user_file_by_name] No records found for variant '{}'", variant);
+                },
+                Err(e) => {
+                    last_error = Some(format!("DB error for variant '{}': {}", variant, e));
+                    println!("[unpin_user_file_by_name] {}", last_error.as_ref().unwrap());
+                }
+            }
         }
-        Ok(())
+
+        Err(last_error.unwrap_or_else(|| {
+            format!("No matching file found for '{}' or any of its variants", file_name)
+        }))
     } else {
         Err("DB_POOL not initialized".to_string())
     }
 }
 
-/// Deletes all user_profiles records with the given file name and unpins the file.
-/// Also deletes from sync_folder_files.
+// Deletes all user_profiles records with the given file name and unpins the file.
+// Also deletes from sync_folder_files.
 pub async fn delete_and_unpin_user_file_records_by_name(
     file_name: &str,
     seed_phrase: &str,
@@ -134,6 +168,16 @@ pub async fn delete_and_unpin_user_file_records_by_name(
 
         // Sanitize file_name
         let sanitized_file_name = sanitize_file_name(file_name);
+
+        // First, fetch the is_folder value from the database
+        let is_folder = sqlx::query_scalar::<_, bool>(
+            "SELECT is_folder FROM user_profiles WHERE file_name = ? LIMIT 1"
+        )
+        .bind(file_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
+        .unwrap_or(false);
 
         // Delete from user_profiles
         let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
@@ -150,8 +194,8 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .await
             .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
 
-        // Remove from sync folder
-        remove_file_from_sync_and_db(&sanitized_file_name, is_public, false, should_delete_folder).await;
+        // Remove from sync folder with the actual is_folder value
+        remove_file_from_sync_and_db(&sanitized_file_name, is_public, is_folder, should_delete_folder).await;
 
         // Update sync status
         {
@@ -361,6 +405,7 @@ pub async fn copy_to_sync_and_add_to_db(
         .unwrap_or(None);
 
         if exists.is_none() {
+            println!("inserted main_request_hash {:?}", request_cid);
             // Insert into user_profiles
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
@@ -745,6 +790,7 @@ pub async fn copy_to_sync_folder(
         .unwrap_or(None);
 
         if exists.is_none() {
+            println!("inserted main_request_hash {:?}", request_cid);
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -758,7 +804,7 @@ pub async fn copy_to_sync_folder(
             .bind(&requested_file_name)
             .bind(file_size_in_bytes)
             .bind(false)
-            .bind(request_cid)  // main_req_hash
+            .bind(request_cid)
             .bind("Hippius")   // source
             .bind(if is_public { "public" } else { "private" })  // type
             .bind(is_folder)
