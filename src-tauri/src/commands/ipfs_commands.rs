@@ -5,7 +5,7 @@ use crate::utils::{
     ipfs::{
         download_from_ipfs,upload_to_ipfs
     },
-    file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, request_folder_storage,
+    file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, request_folder_storage, sanitize_name,
         request_file_storage , remove_from_sync_folder, copy_to_sync_folder, delete_and_unpin_user_file_records_from_folder}
 };
 use uuid::Uuid;
@@ -48,23 +48,17 @@ fn format_file_size(size_bytes: usize) -> String {
 #[tauri::command]
 pub async fn encrypt_and_upload_file(
     account_id: String,
-    file_path: String,
+    file_data: Vec<u8>,  // Changed from file_path to file_data
+    file_name: String,  // Added file_name parameter
     seed_phrase: String,
     encryption_key: Option<Vec<u8>>,
 ) -> Result<String, String> {
-    println!("file path is {:?}", file_path.clone());    
+    println!("processing file: {:?}", file_name);    
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE; // 1MB
-    let account_id_clone = account_id.clone();
     
-    // Extract file name from file_path
-    let file_name = Path::new(&file_path)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
-
     // Check if file already exists in DB for this account
     if let Some(pool) = DB_POOL.get() {
         let row: Option<(String,)> = sqlx::query_as(
@@ -80,20 +74,18 @@ pub async fn encrypt_and_upload_file(
         }
     }
 
-    let file_path_cloned = file_path.clone();
     let api_url_cloned = api_url.to_string();
     let encryption_key_cloned = encryption_key.clone();
+    let file_data_clone = file_data.clone(); // Clone file_data for use in closure
     // Run blocking work and return file_name, metadata_cid, and chunk_pairs (filename,cid)
     let (file_name, metadata_cid, chunk_pairs) = tokio::task::spawn_blocking(move || {
-        // Read file
-        let file_data = fs::read(&file_path_cloned).map_err(|e| e.to_string())?;
         // Calculate original file hash
         let mut hasher = Sha256::new();
-        hasher.update(&file_data);
+        hasher.update(&file_data_clone);
         let original_file_hash = format!("{:x}", hasher.finalize());
 
         // Encrypt using centralized function
-        let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data, encryption_key_cloned))?;
+        let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data_clone, encryption_key_cloned))?;
         // Split into chunks
         let mut chunks = vec![];
         for i in (0..to_process.len()).step_by(chunk_size) {
@@ -158,13 +150,14 @@ pub async fn encrypt_and_upload_file(
             }
         }
         // Build metadata
-        let file_name = std::path::Path::new(&file_path_cloned).file_name().unwrap().to_string_lossy().to_string();
-        let file_extension = std::path::Path::new(&file_path_cloned).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let file_extension = Path::new(&file_name).extension()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         let encrypted_size = to_process.len();
         let metadata = Metadata {
             original_file: OriginalFileInfo {
                 name: file_name.clone(),
-                size: file_data.len(),
+                size: file_data_clone.len(),
                 hash: original_file_hash,
                 extension: file_extension,
             },
@@ -198,7 +191,12 @@ pub async fn encrypt_and_upload_file(
     let storage_result = request_erasure_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, false, false, &meta_filename).await;
+            // Create a temporary file to pass to copy_to_sync_and_add_to_db
+            let temp_dir = tempdir().map_err(|e| e.to_string())?;
+            let temp_path = temp_dir.path().join(&file_name);
+            fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
+            
+            copy_to_sync_and_add_to_db(&temp_path, &account_id, &metadata_cid, &res, false, false, &meta_filename).await;
             println!("[encrypt_and_upload_file] : {}", res);
         },
         Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
@@ -351,19 +349,13 @@ pub fn read_file(path: String) -> Result<Vec<u8>, String> {
 #[tauri::command]
 pub async fn upload_file_public(
     account_id: String,
-    file_path: String,
+    file_data: Vec<u8>,  // Changed from file_path to file_data
+    file_name: String,   // Added file_name parameter
     seed_phrase: String
 ) -> Result<String, String> {
-    use std::path::Path;
-    println!("[upload_file_public] file path is {:?}", file_path.clone());    
+    println!("[upload_file_public] processing file: {:?}", file_name);    
     let api_url = "http://127.0.0.1:5001";
     
-    // Extract file name from file_path
-    let file_name = Path::new(&file_path)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
-
     // Check if file already exists in DB for this account
     if let Some(pool) = DB_POOL.get() {
         let row: Option<(String,)> = sqlx::query_as(
@@ -379,14 +371,21 @@ pub async fn upload_file_public(
         }
     }
 
-    let file_path_cloned = file_path.clone();
     let api_url_cloned = api_url.to_string();
+    let file_data_clone = file_data.clone(); // Clone file_data for use in closure
     let file_cid = tokio::task::spawn_blocking(move || {
-        upload_to_ipfs(&api_url_cloned, &file_path_cloned)
+        // Create temporary file with the file data
+        let temp_dir = tempdir().map_err(|e| e.to_string())?;
+        let temp_path = temp_dir.path().join("upload_temp_file");
+        fs::write(&temp_path, &file_data_clone).map_err(|e| e.to_string())?;
+        
+        // Upload the temporary file to IPFS
+        let cid = upload_to_ipfs(&api_url_cloned, temp_path.to_str().unwrap())
+            .map_err(|e| e.to_string())?;
+        Ok::<String, String>(cid)
     })
     .await
-    .map_err(|e| format!("Task spawn error: {}", e))?
-    .map_err(|e| format!("Upload error: {}", e))?;
+    .map_err(|e| format!("Task spawn error: {}", e))??;
 
     println!("[upload_file_public] File CID: {}", file_cid);
 
@@ -394,7 +393,12 @@ pub async fn upload_file_public(
     let storage_result = request_file_storage(&file_name.clone(), &file_cid, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id, &file_cid, &res, true, false, &file_name).await;
+            // Create a temporary file to pass to copy_to_sync_and_add_to_db
+            let temp_dir = tempdir().map_err(|e| e.to_string())?;
+            let temp_path = temp_dir.path().join(&file_name);
+            fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
+            
+            copy_to_sync_and_add_to_db(&temp_path, &account_id, &file_cid, res, true, false, &file_name).await;
             println!("[upload_file_public] Storage request result: {}", res);
         },
         Err(e) => println!("[upload_file_public] Storage request error: {}", e),
@@ -432,20 +436,15 @@ pub async fn download_file_public(
 #[tauri::command]
 pub async fn public_upload_with_erasure(
     account_id: String,
-    file_path: String,
+    file_data: Vec<u8>,  // Changed from file_path to file_data
+    file_name: String,   // Added file_name parameter
     seed_phrase: String,
 ) -> Result<String, String> {
-    println!("[public_upload_with_erasure] file path is {:?}", file_path.clone());    
+    println!("[public_upload_with_erasure] processing file: {:?}", file_name);    
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE; // 1MB
-
-    // Extract file name from file_path
-    let file_name = Path::new(&file_path)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
 
     // Check if file already exists in DB for this account
     if let Some(pool) = DB_POOL.get() {
@@ -462,24 +461,25 @@ pub async fn public_upload_with_erasure(
         }
     }
 
-    let file_path_cloned = file_path.clone();
     let api_url_cloned = api_url.to_string();
+    let file_data_clone = file_data.clone(); // Clone file_data for use in closure
 
     // Run blocking work and return file_name, metadata_cid, original_file_cid, and chunk_pairs
     let (file_name, metadata_cid, original_file_cid, chunk_pairs) = tokio::task::spawn_blocking(move || {
-        // Read file
-        let file_data = fs::read(&file_path_cloned).map_err(|e| e.to_string())?;
         // Calculate original file hash
         let mut hasher = Sha256::new();
-        hasher.update(&file_data);
+        hasher.update(&file_data_clone);
         let original_file_hash = format!("{:x}", hasher.finalize());
 
-        // Upload original file to IPFS
-        let original_file_cid = upload_to_ipfs(&api_url_cloned, &file_path_cloned.to_string())
+        // Upload original file to IPFS (create temp file first)
+        let temp_dir = tempdir().map_err(|e| e.to_string())?;
+        let temp_path = temp_dir.path().join("original_temp_file");
+        fs::write(&temp_path, &file_data_clone).map_err(|e| e.to_string())?;
+        let original_file_cid = upload_to_ipfs(&api_url_cloned, temp_path.to_str().unwrap())
             .map_err(|e| e.to_string())?;
 
-        // DO NOT ENCRYPT: use file_data directly
-        let to_process = file_data;
+        // Use file_data_clone directly (no encryption)
+        let to_process = file_data_clone;
         // Split into chunks
         let mut chunks = vec![];
         for i in (0..to_process.len()).step_by(chunk_size) {
@@ -535,7 +535,7 @@ pub async fn public_upload_with_erasure(
                 let cid = upload_to_ipfs(&api_url_cloned, chunk_path.to_str().unwrap())
                     .map_err(|e| e.to_string())?;
                 all_chunk_info.push(ChunkInfo {
-                    name:chunk_name.clone(),
+                    name: chunk_name.clone(),
                     path: chunk_path.to_string_lossy().to_string(),
                     cid: CidInfo {
                         cid: cid.clone(),
@@ -553,8 +553,9 @@ pub async fn public_upload_with_erasure(
         }
 
         // Build metadata
-        let file_name = Path::new(&file_path_cloned).file_name().unwrap().to_string_lossy().to_string();
-        let file_extension = Path::new(&file_path_cloned).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let file_extension = Path::new(&file_name).extension()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         let encrypted_size = to_process.len();
         let metadata = Metadata {
             original_file: OriginalFileInfo {
@@ -598,8 +599,13 @@ pub async fn public_upload_with_erasure(
     let storage_result = request_erasure_storage(&meta_filename, &files_for_storage, api_url, &seed_phrase).await;
     match storage_result {
         Ok(res) => {
+            // Create a temporary file to pass to copy_to_sync_and_add_to_db
+            let temp_dir = tempdir().map_err(|e| e.to_string())?;
+            let temp_path = temp_dir.path().join(&file_name);
+            fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
+            
             copy_to_sync_and_add_to_db(
-                Path::new(&file_path),
+                &temp_path,
                 &account_id,
                 &metadata_cid,
                 &res,
@@ -1244,17 +1250,11 @@ pub async fn add_file_to_public_folder(
     account_id: String,
     folder_metadata_cid: String,
     folder_name: String,
-    file_path: String,
+    file_data: Vec<u8>,  // Changed from file_path to file_data
+    file_name: String,   // Added file_name parameter
     seed_phrase: String,
 ) -> Result<String, String> {
     let api_url = "http://127.0.0.1:5001";
-    let file_path_obj = Path::new(&file_path);
-
-    // Extract file name
-    let file_name = file_path_obj
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
 
     // Check if file already exists
     let file_entries = list_folder_contents(folder_name.clone(), folder_metadata_cid.clone()).await?;
@@ -1280,26 +1280,30 @@ pub async fn add_file_to_public_folder(
     // Process the new file and update metadata in a single blocking task
     let (new_file_entry, new_file_pairs, new_folder_metadata_cid) = tokio::task::spawn_blocking({
         let api_url = api_url.to_string();
-        let file_path_cloned = file_path.clone();
+        let file_data_cloned = file_data.clone();
         let file_name_cloned = file_name.clone();
         move || {
             // Create temporary directory inside the blocking task
             let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {}", e))?;
             let temp_dir_path = temp_dir.path().to_path_buf();
 
-            // Read and upload the new file
-            let file_data = fs::read(&file_path_cloned).map_err(|e| format!("Failed to read file {}: {}", file_path_cloned, e))?;
-            let file_size = file_data.len();
+            // Create temporary file and upload it
+            let temp_file_path = temp_dir_path.join(&file_name_cloned);
+            fs::write(&temp_file_path, &file_data_cloned)
+                .map_err(|e| format!("Failed to create temporary file: {}", e))?;
+            
+            let file_size = file_data_cloned.len();
 
             // Hash the file (for consistency, though unused)
             let _original_file_hash = {
                 let mut hasher = Sha256::new();
-                hasher.update(&file_data);
+                hasher.update(&file_data_cloned);
                 format!("{:x}", hasher.finalize())
             };
 
-            let file_cid = upload_to_ipfs(&api_url, &file_path_cloned)
+            let file_cid = upload_to_ipfs(&api_url, temp_file_path.to_str().unwrap())
                 .map_err(|e| format!("Failed to upload file to IPFS: {}", e))?;
+            
             let new_file_entry = FileEntry {
                 file_name: file_name_cloned.clone(),
                 file_size,
@@ -1318,7 +1322,6 @@ pub async fn add_file_to_public_folder(
             let new_folder_metadata_cid = upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap())
                 .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e))?;
 
-            // Temporary directory is automatically cleaned up when temp_dir goes out of scope
             Ok::<_, String>((new_file_entry, files_for_storage, new_folder_metadata_cid))
         }
     })
@@ -1360,16 +1363,21 @@ pub async fn add_file_to_public_folder(
             }
         })?;
 
+    // Create temporary file for sync folder operation
+    let temp_dir = tempdir().map_err(|e| e.to_string())?;
+    let temp_path = temp_dir.path().join(&file_name);
+    fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
+
     // Update the database with the new folder metadata
     copy_to_sync_folder(
-        &file_path_obj, // Pass the original file path
-        &folder_name, // Pass the folder name
+        &temp_path, // Use the temporary file path
+        &folder_name,
         &account_id,
         &new_folder_metadata_cid,
         &storage_result,
         true,
         false, // This is a file, not a folder
-        &file_name, // Use the actual file name
+        &file_name,
     ).await;
 
     println!("[add_file_to_public_folder] Storage request result: {}", storage_result);
@@ -1505,19 +1513,12 @@ pub async fn add_file_to_private_folder(
     account_id: String,
     folder_metadata_cid: String,
     folder_name: String,
-    file_path: String,
+    file_name: String,  
+    file_data: Vec<u8>, 
     seed_phrase: String,
     encryption_key: Option<Vec<u8>>,
 ) -> Result<String, String> {
-    use std::path::Path;
     let api_url = "http://127.0.0.1:5001";
-    let file_path_obj = Path::new(&file_path);
-
-    // Extract file name
-    let file_name = file_path_obj
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
 
     // Check if file already exists in folder
     let file_entries = list_folder_contents(folder_name.clone(), folder_metadata_cid.clone()).await?;
@@ -1543,21 +1544,20 @@ pub async fn add_file_to_private_folder(
     // Encrypt, erasure-code, and upload the file, and create .ec_metadata
     let (new_file_entry, file_meta_pair) = tokio::task::spawn_blocking({
         let api_url = api_url.to_string();
-        let file_path_cloned = file_path.clone();
         let file_name_cloned = file_name.clone();
+        let file_data_cloned = file_data.clone();
         let encryption_key_cloned = encryption_key.clone();
         move || {
             let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
-            let file_data = std::fs::read(&file_path_cloned).map_err(|e| format!("Failed to read file: {}", e))?;
-            let file_size = file_data.len();
+            let file_size = file_data_cloned.len();
 
             // Hash original file
             let mut hasher = sha2::Sha256::new();
-            hasher.update(&file_data);
+            hasher.update(&file_data_cloned);
             let original_file_hash = format!("{:x}", hasher.finalize());
 
             // Encrypt
-            let to_process = tauri::async_runtime::block_on(crate::utils::accounts::encrypt_file(&file_data, encryption_key_cloned))?;
+            let to_process = tauri::async_runtime::block_on(crate::utils::accounts::encrypt_file(&file_data_cloned, encryption_key_cloned))?;
 
             // Erasure coding
             let k = DEFAULT_K;
@@ -1571,9 +1571,12 @@ pub async fn add_file_to_private_folder(
                 }
                 chunks.push(chunk);
             }
-            let r = reed_solomon_erasure::galois_8::ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
+
+            let r = reed_solomon_erasure::galois_8::ReedSolomon::new(k, m - k)
+                .map_err(|e| format!("ReedSolomon error: {e}"))?;
             let mut all_chunk_info = vec![];
             let file_id = uuid::Uuid::new_v4().to_string();
+
             for (orig_idx, chunk) in chunks.iter().enumerate() {
                 let sub_block_size = (chunk.len() + k - 1) / k;
                 let sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
@@ -1585,18 +1588,27 @@ pub async fn add_file_to_private_folder(
                     }
                     sub_block
                 }).collect();
+
                 let mut shards: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
                 for _ in k..m {
                     shards.push(Some(vec![0u8; sub_block_size]));
                 }
-                let mut shard_refs: Vec<_> = shards.iter_mut().map(|x| x.as_mut().unwrap().as_mut_slice()).collect();
-                r.encode(&mut shard_refs).map_err(|e| format!("ReedSolomon encode error: {e}"))?;
+
+                let mut shard_refs: Vec<_> = shards
+                    .iter_mut()
+                    .map(|x| x.as_mut().unwrap().as_mut_slice())
+                    .collect();
+                r.encode(&mut shard_refs)
+                    .map_err(|e| format!("ReedSolomon encode error: {e}"))?;
+
                 for (share_idx, shard) in shard_refs.iter().enumerate() {
                     let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
                     let chunk_path = temp_dir.path().join(&chunk_name);
                     let mut f = std::fs::File::create(&chunk_path).map_err(|e| e.to_string())?;
                     f.write_all(shard).map_err(|e| e.to_string())?;
-                    let cid = crate::utils::ipfs::upload_to_ipfs(&api_url, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+                    let cid = crate::utils::ipfs::upload_to_ipfs(&api_url, chunk_path.to_str().unwrap())
+                        .map_err(|e| e.to_string())?;
+                    
                     all_chunk_info.push(ChunkInfo {
                         name: chunk_name.clone(),
                         path: chunk_path.to_string_lossy().to_string(),
@@ -1613,16 +1625,21 @@ pub async fn add_file_to_private_folder(
                     });
                 }
             }
-            let file_extension = std::path::Path::new(&file_path_cloned).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+
+            let file_extension = Path::new(&file_name_cloned)
+                .extension()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
             let encrypted_size = to_process.len();
-            let metadata = crate::commands::types::Metadata {
-                original_file: crate::commands::types::OriginalFileInfo {
+
+            let metadata = Metadata {
+                original_file: OriginalFileInfo {
                     name: file_name_cloned.clone(),
                     size: file_size,
                     hash: original_file_hash,
                     extension: file_extension,
                 },
-                erasure_coding: crate::commands::types::ErasureCodingInfo {
+                erasure_coding: ErasureCodingInfo {
                     k,
                     m,
                     chunk_size,
@@ -1633,6 +1650,7 @@ pub async fn add_file_to_private_folder(
                 chunks: all_chunk_info,
                 metadata_cid: None,
             };
+
             // Write metadata to temp file
             let meta_filename = if file_name_cloned.ends_with(".ec_metadata") {
                 file_name_cloned.clone()
@@ -1642,12 +1660,16 @@ pub async fn add_file_to_private_folder(
             let metadata_path = temp_dir.path().join(&meta_filename);
             let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
             std::fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
-            let metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
-            let file_entry = crate::commands::types::FileEntry {
+            
+            let metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, metadata_path.to_str().unwrap())
+                .map_err(|e| e.to_string())?;
+
+            let file_entry = FileEntry {
                 file_name: meta_filename.clone(), 
                 file_size,
                 cid: metadata_cid.clone(),
             };
+
             Ok::<_, String>((file_entry, (meta_filename, metadata_cid)))
         }
     })
@@ -1666,10 +1688,17 @@ pub async fn add_file_to_private_folder(
             let folder_metadata_path = temp_dir.path().join("folder_metadata.json");
             let folder_metadata = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
             std::fs::write(&folder_metadata_path, folder_metadata.as_bytes()).map_err(|e| e.to_string())?;
-            let folder_metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+            let folder_metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap())
+                .map_err(|e| e.to_string())?;
+            
             // Build files_for_storage: folder metadata + file metadata
-            let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" });
+            let meta_filename = format!(
+                "{}{}", 
+                folder_name, 
+                if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" }
+            );
             let mut files_for_storage = vec![(meta_filename, folder_metadata_cid.clone()), file_meta_pair];
+            
             Ok::<_, String>((folder_metadata_cid, files_for_storage))
         }
     })
@@ -1677,17 +1706,22 @@ pub async fn add_file_to_private_folder(
     .map_err(|e| format!("Failed to execute blocking task for folder metadata update: {}", e))??;
 
     // Submit storage request
-    let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" });
+    let meta_filename = format!(
+        "{}{}", 
+        folder_name, 
+        if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" }
+    );
     
     // clear old from user_profile and send unpin tx
     let unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
-    .map_err(|e| {
-        if e.contains("RequestAlreadyExists") {
-            format!("unpin request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
-        } else {
-            format!("Failed to request file storage: {}", e)
-        }
-    })?;
+        .map_err(|e| {
+            if e.contains("RequestAlreadyExists") {
+                format!("unpin request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+            } else {
+                format!("Failed to request file storage: {}", e)
+            }
+        })?;
+
     let storage_result = request_erasure_storage(&meta_filename, &files_for_storage, api_url, &seed_phrase).await
         .map_err(|e| {
             if e.contains("RequestAlreadyExists") {
@@ -1697,43 +1731,18 @@ pub async fn add_file_to_private_folder(
             }
         })?;
 
-    // Sanitize folder_name for local sync folder usage
-    let sanitized_folder_name = if folder_name.ends_with(".ec_metadata") {
-        folder_name.trim_end_matches(".ec_metadata").to_string()
-    } else if folder_name.ends_with(".ff") {
-        folder_name.trim_end_matches(".ff").to_string()
-    } else if folder_name.ends_with(".ec") {
-        folder_name.trim_end_matches(".ec").to_string()
-    } else if folder_name.ends_with("-folder") {
-        folder_name.trim_end_matches("-folder").to_string()
-    } else if folder_name.ends_with("-folder.ec_metadata") {
-        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
-    } else if folder_name.ends_with(".folder.ec_metadata") {
-        folder_name.trim_end_matches(".folder.ec_metadata").to_string()
-    } else {
-        folder_name.clone()
-    };
+    // Sanitize names for local sync
+    let sanitized_folder_name = sanitize_name(&folder_name);
+    let sanitized_file_name = sanitize_name(&file_name);
 
-
-    // Sanitize file_name for local sync file usage
-    let sanitized_file_name = if file_name.ends_with(".ec_metadata") {
-        file_name.trim_end_matches(".ec_metadata").to_string()
-    } else if file_name.ends_with(".ff") {
-        file_name.trim_end_matches(".ff").to_string()
-    } else if file_name.ends_with(".ec") {
-        file_name.trim_end_matches(".ec").to_string()
-    } else if file_name.ends_with("-folder") {
-        file_name.trim_end_matches("-folder").to_string()
-    } else if file_name.ends_with("-folder.ec_metadata") {
-        file_name.trim_end_matches("-folder.ec_metadata").to_string()
-    } else if file_name.ends_with(".folder.ec_metadata") {
-        file_name.trim_end_matches(".folder.ec_metadata").to_string()
-    } else {
-        file_name.clone()
-    };
     // Update the database and sync folder
+    let temp_file = tempfile::NamedTempFile::new()
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    fs::write(temp_file.path(), &file_data)
+        .map_err(|e| format!("Failed to write sync temp file: {}", e))?;
+
     copy_to_sync_folder(
-        file_path_obj,
+        temp_file.path(),
         &sanitized_folder_name,
         &account_id,
         &new_folder_metadata_cid,
@@ -1814,43 +1823,231 @@ pub async fn remove_file_from_private_folder(
                 format!("Failed to request file storage: {}", e)
             }
         })?;
-    // Sanitize folder_name for local sync folder usage
-    let sanitized_folder_name = if folder_name.ends_with(".ec_metadata") {
-        folder_name.trim_end_matches(".ec_metadata").to_string()
-    } else if folder_name.ends_with(".ff") {
-        folder_name.trim_end_matches(".ff").to_string()
-    } else if folder_name.ends_with(".ec") {
-        folder_name.trim_end_matches(".ec").to_string()
-    } else if folder_name.ends_with("-folder") {
-        folder_name.trim_end_matches("-folder").to_string()
-    } else if folder_name.ends_with("-folder.ec_metadata") {
-        folder_name.trim_end_matches("-folder.ec_metadata").to_string()
-    } else if folder_name.ends_with(".folder.ec_metadata") {
-        folder_name.trim_end_matches(".folder.ec_metadata").to_string()
-    } else {
-        folder_name.clone()
-    };
 
-
-    // Sanitize file_name for local sync file usage
-    let sanitized_file_name = if file_name.ends_with(".ec_metadata") {
-        file_name.trim_end_matches(".ec_metadata").to_string()
-    } else if file_name.ends_with(".ff") {
-        file_name.trim_end_matches(".ff").to_string()
-    } else if file_name.ends_with(".ec") {
-        file_name.trim_end_matches(".ec").to_string()
-    } else if file_name.ends_with("-folder") {
-        file_name.trim_end_matches("-folder").to_string()
-    } else if file_name.ends_with("-folder.ec_metadata") {
-        file_name.trim_end_matches("-folder.ec_metadata").to_string()
-    } else if file_name.ends_with(".folder.ec_metadata") {
-        file_name.trim_end_matches(".folder.ec_metadata").to_string()
-    } else {
-        file_name.clone()
-    };
+    // Sanitize names for local sync
+    let sanitized_folder_name = sanitize_name(&folder_name);
+    let sanitized_file_name = sanitize_name(&file_name);
 
     // Remove the file from the sync directory and DB
     remove_from_sync_folder(&file_name, &folder_name, false, false).await;
 
     Ok(new_folder_metadata_cid)
+}
+
+
+#[tauri::command]
+pub async fn encrypt_and_upload_file_sync(
+    account_id: String,
+    file_path: String,
+    seed_phrase: String,
+    encryption_key: Option<Vec<u8>>,
+) -> Result<String, String> {
+    println!("file path is {:?}", file_path.clone());    
+    let api_url = "http://127.0.0.1:5001";
+    let k = DEFAULT_K;
+    let m = DEFAULT_M;
+    let chunk_size = DEFAULT_CHUNK_SIZE; // 1MB
+    let account_id_clone = account_id.clone();
+    
+    // Extract file name from file_path
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
+
+    // Check if file already exists in DB for this account
+    if let Some(pool) = DB_POOL.get() {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+        )
+        .bind(&account_id)
+        .bind(&file_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error: {e}"))?;
+        if row.is_some() {
+            return Err(format!("File '{}' already exists for this user.", file_name));
+        }
+    }
+
+    let file_path_cloned = file_path.clone();
+    let api_url_cloned = api_url.to_string();
+    let encryption_key_cloned = encryption_key.clone();
+    // Run blocking work and return file_name, metadata_cid, and chunk_pairs (filename,cid)
+    let (file_name, metadata_cid, chunk_pairs) = tokio::task::spawn_blocking(move || {
+        // Read file
+        let file_data = fs::read(&file_path_cloned).map_err(|e| e.to_string())?;
+        // Calculate original file hash
+        let mut hasher = Sha256::new();
+        hasher.update(&file_data);
+        let original_file_hash = format!("{:x}", hasher.finalize());
+
+        // Encrypt using centralized function
+        let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data, encryption_key_cloned))?;
+        // Split into chunks
+        let mut chunks = vec![];
+        for i in (0..to_process.len()).step_by(chunk_size) {
+            let mut chunk = to_process[i..std::cmp::min(i + chunk_size, to_process.len())].to_vec();
+            if chunk.len() < chunk_size {
+                chunk.resize(chunk_size, 0);
+            }
+            chunks.push(chunk);
+        }
+        // Erasure code each chunk
+        let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
+        let temp_dir = tempdir().map_err(|e| e.to_string())?;
+        let mut all_chunk_info = vec![];
+        let mut chunk_pairs: Vec<(String,String)> = Vec::new();
+        let file_id = Uuid::new_v4().to_string();
+        for (orig_idx, chunk) in chunks.iter().enumerate() {
+            // Split chunk into k sub-blocks
+            let sub_block_size = (chunk.len() + k - 1) / k;
+            let sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
+                let start = j * sub_block_size;
+                let end = std::cmp::min(start + sub_block_size, chunk.len());
+                let mut sub_block = chunk[start..end].to_vec();
+                if sub_block.len() < sub_block_size {
+                    sub_block.resize(sub_block_size, 0);
+                }
+                sub_block
+            }).collect();
+            // Prepare m shards
+            let mut shards: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
+            for _ in k..m {
+                shards.push(Some(vec![0u8; sub_block_size]));
+            }
+            // Encode
+            let mut shard_refs: Vec<_> = shards
+                .iter_mut()
+                .map(|x| x.as_mut().unwrap().as_mut_slice())
+                .collect();
+            r.encode(&mut shard_refs)
+                .map_err(|e| format!("ReedSolomon encode error: {e}"))?;
+            // Write and upload each shard
+            for (share_idx, shard) in shard_refs.iter().enumerate() {
+                let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
+                let chunk_path = temp_dir.path().join(&chunk_name);
+                let mut f = fs::File::create(&chunk_path).map_err(|e| e.to_string())?;
+                f.write_all(shard).map_err(|e| e.to_string())?;
+                let cid = upload_to_ipfs(&api_url_cloned, chunk_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+                all_chunk_info.push(ChunkInfo {
+                    name: chunk_name.clone(),
+                    path: chunk_path.to_string_lossy().to_string(),
+                    cid: CidInfo {
+                        cid: cid.clone(),
+                        filename: chunk_name.clone(),
+                        size_bytes: shard.len(),
+                        encrypted: true,
+                        size_formatted: format_file_size(shard.len()),
+                    },
+                    original_chunk: orig_idx,
+                    share_idx,
+                    size: shard.len(),
+                });
+                chunk_pairs.push((chunk_name.clone(), cid.clone()));
+            }
+        }
+        // Build metadata
+        let file_name = std::path::Path::new(&file_path_cloned).file_name().unwrap().to_string_lossy().to_string();
+        let file_extension = std::path::Path::new(&file_path_cloned).extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let encrypted_size = to_process.len();
+        let metadata = Metadata {
+            original_file: OriginalFileInfo {
+                name: file_name.clone(),
+                size: file_data.len(),
+                hash: original_file_hash,
+                extension: file_extension,
+            },
+            erasure_coding: ErasureCodingInfo {
+                k,
+                m,
+                chunk_size,
+                encrypted: true,
+                file_id: file_id.clone(),
+                encrypted_size,
+            },
+            chunks: all_chunk_info,
+            metadata_cid: None,
+        };
+        // Write metadata to temp file
+        let metadata_path = temp_dir.path().join(format!("{}_metadata.json", file_id));
+        let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
+        fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
+        // Upload metadata
+        let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
+        Ok::<(String, String, Vec<(String,String)>), String>((file_name, metadata_cid, chunk_pairs))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Build files array: metadata entry plus chunk entries
+    let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ec_metadata") { "" } else { ".ec_metadata" });
+    let mut files_for_storage = Vec::with_capacity(chunk_pairs.len() + 1);
+    files_for_storage.push((meta_filename.clone(), metadata_cid.clone()));
+    files_for_storage.extend(chunk_pairs); // <-- add all chunk files
+    let storage_result = request_erasure_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
+    match &storage_result {
+        Ok(res) => {
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id,  &metadata_cid, &res, false, false, &meta_filename).await;
+            println!("[encrypt_and_upload_file] : {}", res);
+        },
+        Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
+    }
+
+    Ok(metadata_cid)
+}
+
+#[tauri::command]
+pub async fn upload_file_public_sync(
+    account_id: String,
+    file_path: String,
+    seed_phrase: String
+) -> Result<String, String> {
+    use std::path::Path;
+    println!("[upload_file_public] file path is {:?}", file_path.clone());    
+    let api_url = "http://127.0.0.1:5001";
+    
+    // Extract file name from file_path
+    let file_name = Path::new(&file_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
+
+    // Check if file already exists in DB for this account
+    if let Some(pool) = DB_POOL.get() {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+        )
+        .bind(&account_id)
+        .bind(&file_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error: {e}"))?;
+        if row.is_some() {
+            return Err(format!("File '{}' already exists for this user.", file_name));
+        }
+    }
+
+    let file_path_cloned = file_path.clone();
+    let api_url_cloned = api_url.to_string();
+    let file_cid = tokio::task::spawn_blocking(move || {
+        upload_to_ipfs(&api_url_cloned, &file_path_cloned)
+    })
+    .await
+    .map_err(|e| format!("Task spawn error: {}", e))?
+    .map_err(|e| format!("Upload error: {}", e))?;
+
+    println!("[upload_file_public] File CID: {}", file_cid);
+
+    // Call request_file_storage and log its returned CID
+    let storage_result = request_file_storage(&file_name.clone(), &file_cid, api_url, &seed_phrase).await;
+    match &storage_result {
+        Ok(res) => {
+            copy_to_sync_and_add_to_db(Path::new(&file_path), &account_id, &file_cid, &res, true, false, &file_name).await;
+            println!("[upload_file_public] Storage request result: {}", res);
+        },
+        Err(e) => println!("[upload_file_public] Storage request error: {}", e),
+    }
+
+    Ok(file_cid)
 }

@@ -1,4 +1,4 @@
-use crate::commands::ipfs_commands::{encrypt_and_upload_file, encrypt_and_upload_folder};
+use crate::commands::ipfs_commands::{encrypt_and_upload_file_sync, encrypt_and_upload_folder};
 use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use crate::utils::sync::get_private_sync_path;
 use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
@@ -124,7 +124,7 @@ async fn start_sync_process(
                         None,
                     ).await
                 } else {
-                    encrypt_and_upload_file(
+                    encrypt_and_upload_file_sync(
                         job.account_id.clone(),
                         job.file_path.clone(),
                         job.seed_phrase.clone(),
@@ -627,7 +627,7 @@ async fn upload_path(path: &Path, account_id: &str, seed_phrase: &str, is_folder
             None,
         ).await
     } else {
-        encrypt_and_upload_file(
+        encrypt_and_upload_file_sync(
             account_id.to_string(),
             path_str.clone(),
             seed_phrase.to_string(),

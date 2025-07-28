@@ -21,7 +21,7 @@ pub static PUBLIC_RECENTLY_UPLOADED_FOLDERS: Lazy<Arc<Mutex<std::collections::Ha
     Lazy::new(|| Arc::new(Mutex::new(std::collections::HashSet::new())));
 
 // Helper to sanitize file/folder names for DB and filesystem operations
-fn sanitize_file_name(name: &str) -> String {
+pub fn sanitize_name(name: &str) -> String {
     if name.ends_with(".ec_metadata") {
         name.trim_end_matches(".ec_metadata").to_string()
     } else if name.ends_with(".ff") {
@@ -167,7 +167,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
 
         // Sanitize file_name
-        let sanitized_file_name = sanitize_file_name(file_name);
+        let sanitized_file_name = sanitize_name(file_name);
 
         // First, fetch the is_folder value from the database
         let is_folder = sqlx::query_scalar::<_, bool>(
