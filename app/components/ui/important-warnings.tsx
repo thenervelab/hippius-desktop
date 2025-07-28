@@ -2,27 +2,34 @@ import React from "react";
 import { RevealTextLine, Icons } from ".";
 import { OctagonAlert } from "./icons";
 
+type Warning = {
+  id: number;
+  text: string | React.ReactNode;
+};
+
 interface ImportantWarningsProps {
   inView?: boolean;
   usePasscode?: boolean;
   className?: string;
+  customWarnings?: Warning[];
 }
 
 const ImportantWarnings: React.FC<ImportantWarningsProps> = ({
   inView = true,
   usePasscode = false,
   className = "",
+  customWarnings
 }) => {
   const keyWord = usePasscode ? "passcode" : "key";
 
-  const warnings = [
+  const defaultWarnings = [
     {
       id: 1,
-      text: `Store this ${keyWord} in a secure password manager`,
+      text: `Store this ${keyWord} in a secure password manager`
     },
     {
       id: 2,
-      text: "Never share it with anyone",
+      text: "Never share it with anyone"
     },
     {
       id: 3,
@@ -31,9 +38,11 @@ const ImportantWarnings: React.FC<ImportantWarningsProps> = ({
           We <b>cannot</b> help you recover your account if you lose this{" "}
           {keyWord}
         </div>
-      ),
-    },
+      )
+    }
   ];
+
+  const warnings = customWarnings || defaultWarnings;
 
   return (
     <div className={className}>

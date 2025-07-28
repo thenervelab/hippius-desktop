@@ -18,12 +18,15 @@ export const shortenCopyAbleText = (
     isTable = false,
   } = breakpoints || {};
 
+  console.log("address", address);
+  console.log("isTable", isTable);
+
   // 1) If it's a "table" layout...
   if (isTable) {
     //   – on mobile, keep 5…5
-    if (isMobile) {
-      return short(address, 5, 5);
-    }
+    // if (isMobile) {
+    //   return short(address, 5, 5);
+    // }
     //   – otherwise (tablet or larger), use 12…12
     return short(address, 12, 12);
   }

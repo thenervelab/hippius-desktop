@@ -49,7 +49,6 @@ export function useTrayInit() {
 export async function setTraySyncPercent(percent: number | null) {
   const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
   if (!menu) return;
-  console.log(syncItem, "syncItem", percent);
   const items = await menu.items();
   // Find an existing item if our reference was lost (HMR, reload, etc.)
   if (!syncItem) {

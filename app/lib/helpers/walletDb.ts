@@ -19,62 +19,113 @@ const TABLE_SCHEMA = `
 
 export async function ensureAppDirectory() {
   try {
-    // create the AppLocalData folder structure if missing
     await mkdir("", {
       baseDir: BaseDirectory.AppLocalData,
-      recursive: true, // ← allows nested dirs :contentReference[oaicite:1]{index=1}
+      recursive: true,
     });
+    return true;
   } catch (err) {
     console.error("Failed to create app directory:", err);
+    return false;
   }
 }
 
-/** Load raw bytes if the file exists */
 async function getBytes(): Promise<Uint8Array | null> {
-  if (!(await exists(DB_FILENAME, { baseDir: BaseDirectory.AppLocalData }))) {
+  try {
+    if (!(await exists(DB_FILENAME, { baseDir: BaseDirectory.AppLocalData }))) {
+      return null;
+    }
+    return await readFile(DB_FILENAME, { baseDir: BaseDirectory.AppLocalData });
+  } catch (err) {
+    console.error("Error reading database file:", err);
     return null;
   }
-  return await readFile(DB_FILENAME, { baseDir: BaseDirectory.AppLocalData });
 }
 
-/** Persist raw bytes to disk */
 export async function saveBytes(bytes: Uint8Array) {
-  await writeFile(DB_FILENAME, bytes, { baseDir: BaseDirectory.AppLocalData });
+  try {
+    await ensureAppDirectory();
+    await writeFile(DB_FILENAME, bytes, { baseDir: BaseDirectory.AppLocalData });
+    return true;
+  } catch (err) {
+    console.error("Failed to save database:", err);
+    return false;
+  }
 }
 
-/** Initialize or load the DB */
+async function createSchema(db: initSqlJsType.Database) {
+  try {
+    db.run(TABLE_SCHEMA);
+    return true;
+  } catch (err) {
+    console.error("Failed to create schema:", err);
+    return false;
+  }
+}
+
 export async function initWalletDb(): Promise<initSqlJsType.Database> {
   await ensureAppDirectory();
   const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
   const raw = await getBytes();
 
   let db: initSqlJsType.Database;
+
   if (raw) {
-    // load existing file
     db = new SQL.Database(raw);
   } else {
-    // create new DB and schema
     db = new SQL.Database();
-    db.run(TABLE_SCHEMA);
-    await saveBytes(db.export());
   }
+
+  // Always ensure the schema exists, regardless of whether we loaded an existing DB
+  await createSchema(db);
+
+  // Verify the table exists
+  try {
+    db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet'");
+  } catch (err) {
+    console.error("Failed to verify wallet table:", err);
+    throw new Error("Database initialization failed: could not verify wallet table");
+  }
+
   return db;
 }
 
-/** Insert a new wallet record */
+export async function ensureWalletTable(): Promise<boolean> {
+  try {
+    const db = await initWalletDb();
+    const result = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='wallet'");
+    if (!result.length || !result[0].values.length) {
+      await createSchema(db);
+      await saveBytes(db.export());
+    }
+    return true;
+  } catch (err) {
+    console.error("Failed to ensure wallet table:", err);
+    return false;
+  }
+}
+
 export async function saveWallet(
   encryptedMnemonic: string,
   passcodeHash: string
 ) {
-  const db = await initWalletDb();
-  db.run("INSERT INTO wallet (encryptedMnemonic, passcodeHash) VALUES (?, ?)", [
-    encryptedMnemonic,
-    passcodeHash,
-  ]);
-  await saveBytes(db.export());
+  try {
+    await ensureWalletTable();
+    const db = await initWalletDb();
+
+    db.run("INSERT INTO wallet (encryptedMnemonic, passcodeHash) VALUES (?, ?)", [
+      encryptedMnemonic,
+      passcodeHash,
+    ]);
+
+    await saveBytes(db.export());
+    return true;
+  } catch (err) {
+    console.error("Failed to save wallet:", err);
+    throw err;
+  }
 }
 
-/** Update the existing wallet record */
 export async function updateWallet(
   encryptedMnemonic: string,
   passcodeHash: string
@@ -95,21 +146,30 @@ export async function updateWallet(
   await saveBytes(db.export());
 }
 
-/** Fetch the latest wallet record */
 export async function getWalletRecord(): Promise<{
   encryptedMnemonic: string;
   passcodeHash: string;
 } | null> {
-  const db = await initWalletDb();
-  const res = db.exec(
-    "SELECT encryptedMnemonic, passcodeHash FROM wallet ORDER BY id DESC LIMIT 1"
-  );
-  if (!res[0]?.values.length) return null;
-  const [encryptedMnemonic, passcodeHash] = res[0].values[0] as string[];
-  return { encryptedMnemonic, passcodeHash };
+  try {
+    await ensureWalletTable();
+    const db = await initWalletDb();
+
+    const res = db.exec(
+      "SELECT encryptedMnemonic, passcodeHash FROM wallet ORDER BY id DESC LIMIT 1"
+    );
+
+    if (!res.length || !res[0]?.values.length) {
+      return null;
+    }
+
+    const [encryptedMnemonic, passcodeHash] = res[0].values[0] as string[];
+    return { encryptedMnemonic, passcodeHash };
+  } catch (err) {
+    console.error("Error fetching wallet record:", err);
+    return null;
+  }
 }
 
-/** Check if any record exists */
 export async function hasWalletRecord(): Promise<boolean> {
   const raw = await getBytes();
   if (!raw) return false;
@@ -119,7 +179,6 @@ export async function hasWalletRecord(): Promise<boolean> {
   return rows.length > 0 && rows[0].values.length > 0;
 }
 
-/** Wipe the DB (recreate empty schema) */
 export async function clearWalletDb() {
   const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
   const db = new SQL.Database();

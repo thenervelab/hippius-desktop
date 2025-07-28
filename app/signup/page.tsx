@@ -2,7 +2,7 @@
 
 import React from "react";
 import { Graphsheet } from "../components/ui";
-import SignUp from "../components/auth/Signup";
+import SignUp from "../components/auth/signup";
 
 const SignUpPage = () => {
   return (
@@ -12,12 +12,12 @@ const SignUpPage = () => {
           majorCell={{
             lineColor: [31, 80, 189, 1.0],
             lineWidth: 2,
-            cellDim: 150,
+            cellDim: 150
           }}
           minorCell={{
             lineColor: [49, 103, 211, 1.0],
             lineWidth: 1,
-            cellDim: 15,
+            cellDim: 15
           }}
           className="absolute w-full left-0 h-full duration-500"
         />

@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [
+tauri = { version = "2", features = [ "protocol-asset",
     'tray-icon',
     'image-ico',
     'image-png'
@@ -50,3 +50,4 @@ notify = "6.1"
 tauri-plugin-dialog = "2"
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 chrono = "0.4.41"
+rand = "0.8"

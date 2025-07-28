@@ -4,11 +4,14 @@ import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
-import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
-import { getNextViewableFile, getPrevViewableFile } from "@/app/lib/utils/mediaNavigation";
+import {
+  getNextViewableFile,
+  getPrevViewableFile
+} from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
@@ -32,11 +35,14 @@ const VideoDialog: React.FC<{
   allFiles: FormattedUserIpfsFile[];
   onCloseClicked: () => void;
   onNavigate: (file: FormattedUserIpfsFile) => void;
-}> = ({ file, allFiles, onCloseClicked, onNavigate }) => {
+  handleFileDownload: (
+    file: FormattedUserIpfsFile,
+    polkadotAddress: string
+  ) => void;
+}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
   const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
   const { polkadotAddress } = useWalletAuth();
-
 
   useEffect(() => {
     if (!file) return;
@@ -78,7 +84,14 @@ const VideoDialog: React.FC<{
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [file, nextFile, prevFile]);
+  if (!file) return null;
+  const isHippius = file.source === "Hippius";
+  const normalised = file.source?.replace(/\\/g, "/");
+  const videoUrl = isHippius
+    ? `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
+    : convertFileSrc(normalised ?? "");
 
+  const { fileFormat } = getFilePartsFromFileName(file.name);
   return (
     <Dialog.Root
       open={!!file}
@@ -93,9 +106,6 @@ const VideoDialog: React.FC<{
           <Dialog.Content className="h-full max-w-screen-1.5xl max-h-[90vh] text-grey-10 w-full flex flex-col">
             {(() => {
               if (file) {
-                const videoUrl = `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`;
-                const { fileFormat } = getFilePartsFromFileName(file.name);
-
                 return (
                   <>
                     <div className="absolute flex justify-center top-4 px-2 sm:px-6 animate-fade-in-0.3 left-0 right-0">
@@ -115,23 +125,31 @@ const VideoDialog: React.FC<{
                         <div className="flex gap-x-4 items-center">
                           <button
                             onClick={() => {
-                              downloadIpfsFile(file, polkadotAddress ?? "");
+                              handleFileDownload(file, polkadotAddress ?? "");
                             }}
                             className="flex duration-300 text-sm font-medium gap-x-2 items-center bg-white whitespace-nowrap rounded border border-grey-80 p-2"
                           >
                             <Icons.DocumentDownload className="size-4 min-w-4" />
-                            <span className="max-sm:hidden text-grey-10 text-sm">Download File</span>
+                            <span className="max-sm:hidden text-grey-10 text-sm">
+                              Download File
+                            </span>
                           </button>
-                          <button
-                            onClick={() => {
-                              navigator.clipboard.writeText(videoUrl).then(() => {
-                                toast.success("Copied to clipboard successfully!");
-                              });
-                            }}
-                            className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"
-                          >
-                            <Icons.Link className="size-5 [&>path]:stroke-2" />
-                          </button>
+                          {isHippius && (
+                            <button
+                              onClick={() => {
+                                navigator.clipboard
+                                  .writeText(videoUrl)
+                                  .then(() => {
+                                    toast.success(
+                                      "Copied to clipboard successfully!"
+                                    );
+                                  });
+                              }}
+                              className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"
+                            >
+                              <Icons.Link className="size-5 [&>path]:stroke-2" />
+                            </button>
+                          )}
                           <button
                             className="duration-300"
                             onClick={onCloseClicked}
@@ -165,8 +183,10 @@ const VideoDialog: React.FC<{
                     <div className="animate-scale-in-95-0.4 shadow-dialo bottom-0 grow flex w-full h-full flex-col top-8 rounded overflow-hidden relative data-[state=open]:animate-scale-in-95-0.4">
                       <VideoPlayer
                         videoUrl={videoUrl}
+                        isHippius={isHippius}
                         fileFormat={fileFormat}
                         file={file}
+                        handleFileDownload={handleFileDownload}
                       />
                     </div>
                   </>

@@ -1,7 +1,9 @@
 import React from "react";
 import * as Menubar from "@radix-ui/react-menubar";
+import * as Checkbox from "@radix-ui/react-checkbox";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { Check } from "lucide-react";
 import {
   Document,
   Video,
@@ -11,8 +13,8 @@ import {
   Sheet,
   SVG,
   Terminal,
-  EC,
   File,
+  Folder2
 } from "@/components/ui/icons";
 import { FileTypes } from "@/lib/types/fileTypes";
 
@@ -28,20 +30,20 @@ const fileTypes: Array<{
       type: "document",
       label: "Unknown",
       icon: File,
-      color: "text-primary-70 fill-primary-60",
+      color: "text-primary-70 fill-primary-60"
     },
-    { type: "pdfDocument", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
+    { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
     {
-      type: "presentationDocument",
+      type: "PPT",
       label: "PPT",
       icon: Presentation,
-      color: "text-[#fbbc04]",
+      color: "text-[#fbbc04]"
     },
-    { type: "spreadSheet", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
+    { type: "XLS", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
     { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
     { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
     { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
-    { type: "ec", label: "Folder", icon: EC, color: "text-primary-40" },
+    { type: "folder", label: "Folder", icon: Folder2, color: "text-primary-40" }
   ];
 
 interface FileTypeSelectorProps {
@@ -51,7 +53,7 @@ interface FileTypeSelectorProps {
 
 const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
   selectedTypes = [],
-  onTypesSelect,
+  onTypesSelect
 }) => {
   const handleTypeToggle = (type: FileTypes) => {
     const newSelectedTypes = selectedTypes.includes(type)
@@ -111,19 +113,22 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
                 handleTypeToggle(fileType.type);
               }}
             >
-              <input
-                type="checkbox"
+              <Checkbox.Root
+                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors"
                 checked={selectedTypes.includes(fileType.type)}
-                readOnly
-                className="w-4 h-4 text-primary-60 bg-grey-90 border-grey-70 rounded focus:ring-primary-60 focus:ring-2 pointer-events-none"
-              />
-              <div className="flex gap-1.5">
+                onCheckedChange={() => handleTypeToggle(fileType.type)}
+              >
+                <Checkbox.Indicator>
+                  <Check className="h-3.5 w-3.5 text-white" />
+                </Checkbox.Indicator>
+              </Checkbox.Root>
+              <div className="flex gap-1.5 items-center">
                 <div className="flex justify-center items-center p-0.5">
-                  <fileType.icon
-                    className={cn("size-[13px]", fileType.color)}
-                  />
+                  <fileType.icon className={cn("size-4", fileType.color)} />
                 </div>
-                <span className="flex-1">{fileType.label}</span>
+                <span className="flex-1 font-medium text-xs">
+                  {fileType.label}
+                </span>
               </div>
             </Menubar.Item>
           ))}

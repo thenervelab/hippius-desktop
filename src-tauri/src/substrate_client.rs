@@ -12,12 +12,16 @@ const MAX_RETRIES: usize = 10;
 const RETRY_DELAY_SECS: u64 = 5;
 
 pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
-    {
+    // Check if we have an existing client
+    let existing_client = {
         let client = SUBSTRATE_CLIENT.read().unwrap();
-        if let Some(client) = &*client {
-            return Ok(client.clone());
-        }
+        client.clone()
+    };
+    
+    if let Some(client) = existing_client {
+        return Ok(client);
     }
+    
     let mut attempt = 0;
     loop {
         attempt += 1;

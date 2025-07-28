@@ -1,10 +1,10 @@
 import React, { useEffect } from "react";
 import { Icons, RevealTextLine } from "../../ui";
 import TabList, { TabOption } from "../../ui/tabs/tab-list";
-import ChangePasscode from "./ChangePasscode";
-import ExportEncryptedSeed from "./ExportEncryptedSeed";
+import ChangePasscode from "./change-passcode";
+import BackupAppData from "./BackupAppData";
 import { InView } from "react-intersection-observer";
-import AccountActionButtons from "./AccountActionButtons";
+import ResetAppData from "./ResetAppData";
 import UpdateSyncFolder from "./UpdateSyncFolder";
 import SubAccounts from "./sub-accounts";
 import NotificationSettings from "./NotificationSettings";
@@ -12,6 +12,7 @@ import { useAtom } from "jotai";
 import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
+import EncryptionKey from "./encryption-key";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -38,12 +39,20 @@ const SettingsDialogContent: React.FC = () => {
       icon: <Icons.Notification className="size-4" />
     },
     {
-      tabName: "Remove Account",
-      icon: <Icons.Trash className="size-4" />
-    },
-    {
       tabName: "File Settings",
       icon: <Icons.File2 className="size-4" />
+    },
+    {
+      tabName: "Encryption Key",
+      icon: <Icons.Key className="size-4" />
+    },
+    {
+      tabName: "Backup App Data",
+      icon: <Icons.Wallet className="size-4" />
+    },
+    {
+      tabName: "Reset App Data",
+      icon: <Icons.Trash className="size-4" />
     }
   ];
 
@@ -68,24 +77,13 @@ const SettingsDialogContent: React.FC = () => {
           >
             {activeTab === "Change Passcode" && (
               <>
-                <div className="flex gap-[18px] w-full">
-                  <RevealTextLine
-                    rotate
-                    reveal={inView}
-                    parentClassName="w-[70.4%]"
-                    className="delay-300 w-full"
-                  >
-                    <ChangePasscode />
-                  </RevealTextLine>
-                  <RevealTextLine
-                    rotate
-                    reveal={inView}
-                    parentClassName="w-[29.6%]"
-                    className="delay-300 w-full"
-                  >
-                    <ExportEncryptedSeed />
-                  </RevealTextLine>
-                </div>
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                >
+                  <ChangePasscode />
+                </RevealTextLine>
               </>
             )}
 
@@ -109,13 +107,13 @@ const SettingsDialogContent: React.FC = () => {
               </RevealTextLine>
             )}
 
-            {activeTab === "Remove Account" && (
+            {activeTab === "Reset App Data" && (
               <RevealTextLine
                 rotate
                 reveal={inView}
                 className="delay-300 w-full"
               >
-                <AccountActionButtons />
+                <ResetAppData />
               </RevealTextLine>
             )}
 
@@ -126,6 +124,27 @@ const SettingsDialogContent: React.FC = () => {
                 className="delay-300 w-full flex"
               >
                 <UpdateSyncFolder />
+              </RevealTextLine>
+            )}
+            {activeTab === "Backup App Data" && (
+              <>
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                >
+                  <BackupAppData />
+                </RevealTextLine>
+              </>
+            )}
+
+            {activeTab === "Encryption Key" && (
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 w-full flex"
+              >
+                <EncryptionKey />
               </RevealTextLine>
             )}
           </div>

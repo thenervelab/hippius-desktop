@@ -5,23 +5,29 @@ mod builder_blocks;
 mod commands;
 mod constants;
 mod folder_sync;
+mod public_folder_sync;
 mod substrate_client;
 mod user_profile_sync;
+mod sync_shared;
 mod utils;
 mod ipfs;
-use crate::folder_sync::{get_sync_status, start_folder_sync_tauri,app_close};
-use crate::user_profile_sync::get_user_synced_files;
+use crate::sync_shared::{get_sync_status,app_close};
+use crate::folder_sync::{start_folder_sync_tauri};
+use crate::public_folder_sync::start_public_folder_sync_tauri;
+use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size};
 use crate::user_profile_sync::start_user_profile_sync_tauri;
 use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
+    upload_file_public, download_file_public, public_download_with_erasure, public_upload_with_erasure ,
+    encrypt_and_upload_folder , download_and_decrypt_folder, public_download_folder, public_upload_folder,list_folder_contents,
+    remove_file_from_public_folder, add_file_to_public_folder, remove_file_from_private_folder,  add_file_to_private_folder
 };
-use commands::accounts::{create_encryption_key, get_encryption_keys };
+use commands::accounts::{create_encryption_key, get_encryption_keys, import_key};
 use utils::file_operations::delete_and_unpin_file_by_name;
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
 use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_tauri};
-use dirs;
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Manager};
@@ -41,12 +47,15 @@ fn main() {
             get_current_setup_phase,
             encrypt_and_upload_file,
             download_and_decrypt_file,
+            upload_file_public,
+            download_file_public,
             write_file,
             read_file,
             get_sync_path,
             set_sync_path,
             start_user_profile_sync_tauri,
             start_folder_sync_tauri,
+            start_public_folder_sync_tauri,
             get_user_synced_files,
             get_sync_status,
             get_ipfs_node_info,
@@ -54,9 +63,22 @@ fn main() {
             get_ipfs_peers,
             app_close,
             delete_and_unpin_file_by_name,
+            public_download_with_erasure,
+            public_upload_with_erasure,
+            public_upload_folder,
+            public_download_folder,
+            encrypt_and_upload_folder,
+            list_folder_contents,
+            download_and_decrypt_folder,
+            remove_file_from_public_folder,
+            add_file_to_public_folder,
+            remove_file_from_private_folder,
+            add_file_to_private_folder,
             create_encryption_key,
             get_encryption_keys,
+            import_key,
             transfer_balance_tauri,
+            get_user_total_file_size,
         ]);
 
     let builder = setup(builder);

@@ -1,4 +1,12 @@
 import { Icons } from "../ui";
+import { LockKeyhole, LockKeyholeOpen } from "lucide-react";
+
+export interface SubMenuItemData {
+  label: string;
+  path: string;
+  icon?: React.ReactNode;
+  comingSoon?: boolean;
+}
 
 export interface NavItemData {
   label: string;
@@ -6,7 +14,9 @@ export interface NavItemData {
   icon: React.ReactNode;
   isActive?: boolean;
   comingSoon?: boolean;
+  subMenuItems?: SubMenuItemData[];
 }
+
 export interface FooterNavItemData {
   label: string;
   icon: React.ReactNode;
@@ -17,34 +27,45 @@ export const navItems: NavItemData[] = [
     label: "Home",
     path: "/",
     icon: <Icons.Home />,
-    isActive: true,
+    isActive: true
   },
   {
     label: "Files",
     path: "/files",
     icon: <Icons.DocumentText />,
-    // comingSoon: true,
+    subMenuItems: [
+      {
+        label: "Private",
+        path: "/files",
+        icon: <LockKeyhole className="size-4" />
+      },
+      {
+        label: "Public",
+        path: "/files",
+        icon: <LockKeyholeOpen className="size-4" />
+      }
+    ]
   },
   {
     label: "Wallet",
     path: "/wallet",
-    icon: <Icons.Wallet />,
+    icon: <Icons.Wallet />
   },
   {
     label: "Notifications",
     path: "/notifications",
-    icon: <Icons.Notification />,
+    icon: <Icons.Notification />
   },
   {
     label: "Settings",
     path: "/settings",
-    icon: <Icons.Setting />,
-  },
+    icon: <Icons.Setting />
+  }
 ];
 
 export const footerNavItems: FooterNavItemData[] = [
   {
     label: "Logout",
-    icon: <Icons.Logout />,
-  },
+    icon: <Icons.Logout />
+  }
 ];

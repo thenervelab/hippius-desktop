@@ -1,10 +1,10 @@
 "use client";
 
 import React from "react";
-import { RevealTextLine } from "../ui";
+import { RevealTextLine } from "@/components/ui";
 import Link from "next/link";
 import RestoreBackupForm from "./RestoreBackupForm";
-import AuthLayout from "./AuthLayout";
+import AuthLayout from "../AuthLayout";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 const RestoreBackup = () => {

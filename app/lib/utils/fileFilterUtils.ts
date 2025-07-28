@@ -45,7 +45,7 @@ export function filterFiles(
     if (criteria.searchTerm.trim()) {
         const search = criteria.searchTerm.toLowerCase().trim();
         result = result.filter(file =>
-            file.name.toLowerCase().includes(search)
+            file.name.toLowerCase().includes(search) || file.cid.toLowerCase().includes(search)
         );
     }
 
@@ -53,7 +53,10 @@ export function filterFiles(
     if (criteria.fileTypes.length > 0) {
         result = result.filter(file => {
             const { fileFormat } = getFilePartsFromFileName(file.name);
-            const fileType = getFileTypeFromExtension(fileFormat || null);
+            let fileType = getFileTypeFromExtension(fileFormat || null);
+            if (file.isFolder) {
+                fileType = "folder";
+            }
             return criteria.fileTypes.includes(fileType as FileTypes);
         });
     }

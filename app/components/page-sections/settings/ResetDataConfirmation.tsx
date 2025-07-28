@@ -1,26 +1,25 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React, { useState } from "react";
 import { ArrowLeft } from "lucide-react";
-
 import DialogContainer from "../../ui/dialog-container";
 import { CardButton, Graphsheet, Icons } from "../../ui";
 import { exportWalletAsZip } from "../../../lib/helpers/exportWallet";
 import { toast } from "sonner";
 
-export interface DeleteAccountConfirmationProps {
+export interface ResetDataConfirmationProps {
   open: boolean;
   onClose: () => void;
-  onDelete: () => void;
+  onConfirm: () => void;
   onBack: () => void;
   loading?: boolean;
 }
 
-const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
+const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
   open,
   onClose,
-  onDelete,
+  onConfirm,
   onBack,
-  loading = false,
+  loading = false
 }) => {
   const [isBackingUp, setIsBackingUp] = useState(false);
 
@@ -29,9 +28,7 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
     try {
       const success = await exportWalletAsZip();
       if (success) {
-        toast.success("Backup file exported successfully", {
-          duration: 3000,
-        });
+        toast.success("Backup exported successfully.", { duration: 3000 });
       }
     } catch (error) {
       console.error("Backup export failed:", error);
@@ -42,12 +39,10 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
 
   return (
     <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContainer
-        className="md:inset-0 md:m-auto
-    md:w-[90vw] md:max-w-[428px] h-fit"
-      >
-        <Dialog.Title className="sr-only">Delete Account</Dialog.Title>
-        {/* Top accent bar (only mobile) */}
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
+        <Dialog.Title className="sr-only">Reset App Data</Dialog.Title>
+
+        {/* Top accent bar (mobile only) */}
         <div className="h-4 bg-primary-50 md:hidden block" />
 
         <div className="px-4">
@@ -58,12 +53,12 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
                 majorCell={{
                   lineColor: [31, 80, 189, 1.0],
                   lineWidth: 2,
-                  cellDim: 200,
+                  cellDim: 200
                 }}
                 minorCell={{
                   lineColor: [49, 103, 211, 1.0],
                   lineWidth: 1,
-                  cellDim: 20,
+                  cellDim: 20
                 }}
                 className="absolute w-full h-full duration-500 opacity-30 z-0"
               />
@@ -73,7 +68,7 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
               </div>
             </div>
             <span className="text-center text-2xl text-grey-10 font-medium">
-              Are you sure you want to delete your account?
+              Reset app data on this device?
             </span>
           </div>
 
@@ -83,7 +78,7 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
               <ArrowLeft className="size-6 text-grey-10" />
             </button>
             <div className="text-lg font-medium relative">
-              <span className="capitalize">Delete Account</span>
+              <span className="capitalize">Reset App Data</span>
             </div>
             <button onClick={onClose}>
               <Icons.CloseCircle className="size-6 relative" />
@@ -91,8 +86,11 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
           </div>
 
           {/* Message */}
-          <div className="font-medium text-base text-grey-20  mb-4 text-center ">
-            Deleting your account will erase all Hippius data stored on this device. It won’t affect your on-chain account or data. Make sure you back up encrypted seed before you proceed.
+          <div className="font-medium text-base text-grey-20 mb-4 text-center">
+            This clears all Hippius data stored on this device. This includes
+            your encrypted seed, sub‑account seeds, and notifications. On‑chain
+            data and IPFS files stay intact and can be restored. Back up before
+            you proceed.
           </div>
 
           {/* Backup Button */}
@@ -104,30 +102,29 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
           >
             <div className="flex items-center gap-2">
               <Icons.Backup className="size-5" />
-              {isBackingUp ? "Backing up..." : "Back up your Data"}
+              {isBackingUp ? "Backing up..." : "Back up app data"}
             </div>
           </CardButton>
 
-          {/* Delete Button */}
+          {/* Action Buttons */}
           <div className="flex gap-4 mb-6">
             <CardButton
-              className="bg-primary-50 hover:bg-primary-40 transition text-white w-full font-medium"
-              variant={"dialog"}
-              onClick={onDelete}
+              className="text-base w-full"
+              variant="error"
+              onClick={onConfirm}
               disabled={loading}
               loading={loading}
             >
-              {loading ? "Deleting..." : "Delete Account"}
+              {loading ? "Resetting..." : "Reset Now"}
             </CardButton>
 
-            {/* Go Back Button */}
             <CardButton
               className="w-full"
               variant="secondary"
               onClick={onBack}
               disabled={loading}
             >
-              Go Back
+              Cancel
             </CardButton>
           </div>
         </div>
@@ -136,4 +133,4 @@ const DeleteAccountConfirmation: React.FC<DeleteAccountConfirmationProps> = ({
   );
 };
 
-export default DeleteAccountConfirmation;
+export default ResetDataConfirmation;

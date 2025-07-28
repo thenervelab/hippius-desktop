@@ -10,7 +10,7 @@ import { useAtom, useSetAtom } from "jotai";
 import {
   settingsDialogOpenAtom,
   sidebarCollapsedAtom,
-  activeSettingsTabAtom,
+  activeSettingsTabAtom
 } from "@/app/components/sidebar/sideBarAtoms";
 import { InView } from "react-intersection-observer";
 import FooterNavItem from "./footer-nav-items";
@@ -49,7 +49,7 @@ const Sidebar: React.FC = () => {
           <div
             ref={ref}
             className={cn(
-              "fixed top-0 left-0 bottom-0 bg-white flex flex-col ml-4 my-4 border border-grey-80 rounded transition-all duration-300 ease-in-out overflow-hidden",
+              "fixed top-0 left-0 bottom-0 bg-white flex flex-col ml-4 my-4 border border-grey-80 rounded transition-all duration-300 ease-in-out z-50",
               collapsed ? "w-[48px]" : "w-[165px]"
             )}
           >
@@ -118,6 +118,7 @@ const Sidebar: React.FC = () => {
                   active={pathname === item.path}
                   comingSoon={item?.comingSoon}
                   collapsed={collapsed}
+                  subMenuItems={item?.subMenuItems}
                   onClick={
                     item.label === "Settings"
                       ? openSettingsWithDefaultTab

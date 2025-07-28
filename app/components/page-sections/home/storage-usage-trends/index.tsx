@@ -144,8 +144,8 @@ const StorageUsageTrends: React.FC<{
     const baseYear =
       chartData && chartData.length
         ? new Date(
-            chartData[chartData.length - 1].processed_timestamp
-          ).getFullYear()
+          chartData[chartData.length - 1].processed_timestamp
+        ).getFullYear()
         : new Date().getFullYear();
     const now = new Date();
     const currentYear = now.getFullYear();
@@ -262,11 +262,6 @@ const StorageUsageTrends: React.FC<{
                         // Format y-axis tick labels as file sizes
                         const num = Number(v);
                         if (num === 0) return "0 B";
-                        console.log(
-                          formatBytes(num, 1),
-                          num,
-                          "num in yAxisProps"
-                        );
                         return num > 1 ? formatBytes(num, 1) : num.toString();
                       },
                       tickLabelProps: () => ({
