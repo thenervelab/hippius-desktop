@@ -1,4 +1,4 @@
-use crate::commands::ipfs_commands::{encrypt_and_upload_file_sync, encrypt_and_upload_folder};
+use crate::commands::ipfs_commands::{encrypt_and_upload_file_sync, encrypt_and_upload_folder_sync};
 use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use crate::utils::sync::get_private_sync_path;
 use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
@@ -117,7 +117,7 @@ async fn start_sync_process(
                 }
 
                 let result = if job.is_folder {
-                    encrypt_and_upload_folder(
+                    encrypt_and_upload_folder_sync(
                         job.account_id.clone(),
                         job.file_path.clone(),
                         job.seed_phrase.clone(),
@@ -196,7 +196,7 @@ async fn start_sync_process(
             for (db_path, _is_folder) in &db_paths {
                 if !dir_paths.contains(db_path) {
                     println!("[PrivateStartup] Path deleted from sync folder: {} (is_folder: {})", db_path, _is_folder);
-                    let should_delete_folder = true;
+                    let should_delete_folder = false;
                     let delete_result = delete_and_unpin_user_file_records_by_name(&db_path, &startup_seed_phrase, false, should_delete_folder).await;
                     if delete_result.is_ok() {
                         let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
@@ -334,7 +334,7 @@ fn spawn_watcher_thread(
                 watcher = Some(new_watcher);
             }
 
-            thread::sleep(Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(2));
         }
     });
 }
@@ -369,7 +369,7 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
         EventKind::Create(CreateKind::File) | EventKind::Create(CreateKind::Folder) => {
             let mut folder_paths = HashSet::new();
             let mut file_paths = HashSet::new();
-
+            println!("[PrivateWatcher][Create] Detected new paths: {:?}", filtered_paths);
             for path in filtered_paths.iter() {
                 let path_str = path.to_string_lossy().to_string();
                 {
@@ -483,50 +483,208 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                 });
             }
         }
-        EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Name(_)) => {
+        EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::To)) => {            
+            // ***************************************************************
+            // **** REPLACE THE ENTIRE CONTENTS OF THIS BLOCK WITH THE NEW LOGIC BELOW ****
+            // ***************************************************************
+            
+            let mut paths_to_batch = HashSet::new(); // Use a HashSet to auto-deduplicate paths
+
             for path in filtered_paths {
                 let path_str = path.to_string_lossy().to_string();
                 {
+                    // Skip if recently uploaded or already uploading
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&path_str) {
                         println!("[PrivateWatcher][Modify] Skipping recently uploaded: {}", path_str);
                         continue;
                     }
-                }
-                {
                     let uploading_files = UPLOADING_FILES.lock().unwrap();
                     if uploading_files.contains(&path_str) {
                         println!("[PrivateWatcher][Modify] Path {} is already being uploaded, skipping.", path_str);
                         continue;
                     }
                 }
+                
+                // Determine the top-level path to re-sync.
+                // If the path is a top-level file/folder, use it.
+                // If it's a child, find its top-level parent folder.
+                let top_level_path = if path.parent() == Some(sync_path) {
+                    path.clone()
+                } else if let Some(top_level_folder) = find_top_level_folder(&path, sync_path) {
+                    top_level_folder
+                } else {
+                    println!("[PrivateWatcher][Modify] Path {} is not in a top-level folder or file, skipping.", path_str);
+                    continue;
+                };
+
+                paths_to_batch.insert(top_level_path);
+            }
+            
+            // Now, add the collected paths to the global create batch
+            if !paths_to_batch.is_empty() {
+                {
+                    let mut batch = CREATE_BATCH.lock().unwrap();
+                    for path in paths_to_batch {
+                        println!("[PrivateWatcher][Modify] Adding to batch: {} (re-sync)", path.to_string_lossy());
+                        batch.push(path);
+                    }
+                }
+
+                // Trigger the debounced batch processor if it's not already running
+                // This is the exact same logic from the Create handler.
+                if !CREATE_BATCH_TIMER_RUNNING.swap(true, Ordering::SeqCst) {
+                    let account_id = account_id.to_string();
+                    let seed_phrase = seed_phrase.to_string();
+                
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                
+                        // 1. Drain the global batch into a local variable and release the lock immediately.
+                        let paths_to_process: Vec<PathBuf>;
+                        {
+                            // This scope ensures the MutexGuard is dropped right after we're done with it.
+                            let mut batch = CREATE_BATCH.lock().unwrap();
+                            paths_to_process = batch.drain(..).collect();
+                        } // <- The lock on CREATE_BATCH is released here.
+                
+                        // 2. Now that the lock is released, we can safely loop and use .await.
+                        // We use a HashSet to handle any duplicate paths that might have been added.
+                        let mut final_paths_to_upload = Vec::new();
+                        let mut unique_paths = HashSet::new();
+                
+                        for path in paths_to_process {
+                            if unique_paths.insert(path.clone()) {
+                                // This path is unique, let's process it.
+                
+                                // Perform cleanup for this path before re-uploading.
+                                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                                    println!("[PrivateWatcher][Debounced] Cleaning up old records for '{}' before re-sync.", file_name);
+                                    // This await is now safe because no locks are held.
+                                    let _ = delete_and_unpin_user_file_records_by_name(file_name, &seed_phrase, false, false).await;
+                                }
+                
+                                // Perform stability checks (copied from your Create handler).
+                                if !path.exists() {
+                                    println!("[PrivateWatcher][Debounced] Path {} no longer exists, skipping.", path.to_string_lossy());
+                                    continue;
+                                }
+                
+                                if path.is_file() {
+                                    let mut last_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                                    let stable = (0..10).all(|_| {
+                                        std::thread::sleep(Duration::from_millis(100));
+                                        let new_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                                        let is_stable = new_size == last_size;
+                                        last_size = new_size;
+                                        is_stable
+                                    });
+                                    if stable {
+                                        final_paths_to_upload.push((path.clone(), false));
+                                    }
+                                } else if path.is_dir() {
+                                    final_paths_to_upload.push((path.clone(), true));
+                                }
+                            }
+                        }
+                        
+                        println!("[PrivateWatcher][Debounced] Paths to upload after debounce: {:?}", final_paths_to_upload);
+                
+                        // 3. Enqueue the final, processed paths for upload.
+                        if !final_paths_to_upload.is_empty() {
+                            {
+                                let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
+                                status.total_files = final_paths_to_upload.len();
+                                status.synced_files = 0;
+                                status.in_progress = true;
+                            }
+                            if let Some(sender) = UPLOAD_SENDER.get() {
+                                for (path, is_folder) in final_paths_to_upload {
+                                    let path_str = path.to_string_lossy().to_string();
+                                    println!("[PrivateWatcher][Debounced] Enqueuing for upload: {} (is_folder: {})", path_str, is_folder);
+                                    sender
+                                        .send(UploadJob {
+                                            account_id: account_id.clone(),
+                                            seed_phrase: seed_phrase.clone(),
+                                            file_path: path_str,
+                                            is_folder,
+                                        })
+                                        .unwrap();
+                                }
+                            }
+                        }
+                        CREATE_BATCH_TIMER_RUNNING.store(false, Ordering::SeqCst);
+                    });
+                }
+            }
+        }
+        EventKind::Remove(RemoveKind::File) | EventKind::Remove(RemoveKind::Folder) | EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::From)) => {
+            for path in filtered_paths {
+                let file_name = path.file_name().and_then(|s| s.to_str());
+                if let Some(file_name) = file_name {
+                    println!("[PrivateWatcher][Remove] Path deleted from sync folder: {} (is_folder: {})", file_name, path.is_dir());
+                    let should_delete_folder = false;
+                    let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await;
+                    if delete_result.is_ok() {
+                        if let Some(pool) = crate::DB_POOL.get() {
+                            let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
+                                .bind(account_id)
+                                .bind(file_name)
+                                .execute(pool)
+                                .await;
+                            println!("[PrivateWatcher][Remove] Successfully deleted records for '{}'", file_name);
+                        }
+                    } else {
+                        eprintln!("[PrivateWatcher][Remove] Failed to delete/unpin records for '{}'", file_name);
+                    }
+                }
+            }
+        }
+        EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)) => {
+            for path in filtered_paths {
+                let path_str = path.to_string_lossy().to_string();
+                {
+                    let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+                    if recently_uploaded.contains(&path_str) {
+                        println!("[PrivateWatcher][Rename] Skipping recently uploaded: {}", path_str);
+                        continue;
+                    }
+                }
+                {
+                    let uploading_files = UPLOADING_FILES.lock().unwrap();
+                    if uploading_files.contains(&path_str) {
+                        println!("[PrivateWatcher][Rename] Path {} is already being uploaded, skipping.", path_str);
+                        continue;
+                    }
+                }
+
+                let file_name = match path.file_name().and_then(|s| s.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => {
+                        eprintln!("[PrivateWatcher][Rename] Could not extract file name from path: {}", path_str);
+                        continue;
+                    }
+                };
 
                 if path.parent() == Some(sync_path) {
                     if path.is_file() {
-                        println!("[PrivateWatcher][Modify] Detected modification to top-level file: {}", path_str);
+                        println!("[PrivateWatcher][Rename] Detected rename of top-level file: {}", path_str);
                         replace_path_and_db_records(&path, account_id, seed_phrase).await;
                     } else if path.is_dir() {
-                        let folder_name = match path.file_name().and_then(|s| s.to_str()) {
-                            Some(name) => name.to_string(),
-                            None => {
-                                eprintln!("[PrivateWatcher][Modify] Could not extract folder name from path: {}", path_str);
-                                continue;
-                            }
-                        };
-                        println!("[PrivateWatcher][Modify] Detected modification to top-level folder: {}", folder_name);
+                        println!("[PrivateWatcher][Rename] Detected rename of top-level folder: {}", file_name);
                         let should_delete_folder = false;
-                        let delete_result = delete_and_unpin_user_file_records_by_name(&folder_name, seed_phrase, false, should_delete_folder).await;
+                        let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await;
                         if delete_result.is_ok() {
                             if let Some(pool) = crate::DB_POOL.get() {
                                 let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
                                     .bind(account_id)
-                                    .bind(&folder_name)
+                                    .bind(&file_name)
                                     .execute(pool)
                                     .await;
-                                println!("[PrivateWatcher][Modify] Successfully deleted old records for folder '{}'", folder_name);
+                                println!("[PrivateWatcher][Rename] Successfully deleted old records for folder '{}'", file_name);
                             }
                         } else {
-                            eprintln!("[PrivateWatcher][Modify] Failed to delete/unpin old records for folder '{}'", folder_name);
+                            eprintln!("[PrivateWatcher][Rename] Failed to delete/unpin old records for folder '{}'", file_name);
                             continue;
                         }
                         if let Some(sender) = UPLOAD_SENDER.get() {
@@ -538,7 +696,7 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                                     is_folder: true,
                                 })
                                 .unwrap();
-                            println!("[PrivateWatcher][Modify] Enqueued folder for upload: {}", path_str);
+                            println!("[PrivateWatcher][Rename] Enqueued folder for upload: {}", path_str);
                         }
                     }
                 } else {
@@ -547,11 +705,11 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         let folder_name = match top_level_folder.file_name().and_then(|s| s.to_str()) {
                             Some(name) => name.to_string(),
                             None => {
-                                eprintln!("[PrivateWatcher][Modify] Could not extract folder name from path: {}", folder_str);
+                                eprintln!("[PrivateWatcher][Rename] Could not extract folder name from path: {}", folder_str);
                                 continue;
                             }
                         };
-                        println!("[PrivateWatcher][Modify] Path {} affects folder {}, re-uploading folder", path_str, folder_str);
+                        println!("[PrivateWatcher][Rename] Path {} affects folder {}, re-uploading folder", path_str, folder_str);
                         let should_delete_folder = false;
                         let delete_result = delete_and_unpin_user_file_records_by_name(&folder_name, seed_phrase, false, should_delete_folder).await;
                         if delete_result.is_ok() {
@@ -561,10 +719,10 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                                     .bind(&folder_name)
                                     .execute(pool)
                                     .await;
-                                println!("[PrivateWatcher][Modify] Successfully deleted old records for folder '{}'", folder_name);
+                                println!("[PrivateWatcher][Rename] Successfully deleted old records for folder '{}'", folder_name);
                             }
                         } else {
-                            eprintln!("[PrivateWatcher][Modify] Failed to delete/unpin old records for folder '{}'", folder_name);
+                            eprintln!("[PrivateWatcher][Rename] Failed to delete/unpin old records for folder '{}'", folder_name);
                             continue;
                         }
                         if let Some(sender) = UPLOAD_SENDER.get() {
@@ -576,34 +734,17 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                                     is_folder: true,
                                 })
                                 .unwrap();
-                            println!("[PrivateWatcher][Modify] Enqueued folder for upload: {}", folder_str);
+                            println!("[PrivateWatcher][Rename] Enqueued folder for upload: {}", folder_str);
                         }
                     } else {
-                        println!("[PrivateWatcher][Modify] Path {} is not in a top-level folder or file, skipping.", path_str);
+                        println!("[PrivateWatcher][Rename] Path {} is not in a top-level folder or file, skipping.", path_str);
                     }
                 }
             }
         }
-        EventKind::Remove(RemoveKind::File) | EventKind::Remove(RemoveKind::Folder) => {
-            for path in filtered_paths {
-                let file_name = path.file_name().and_then(|s| s.to_str());
-                if let Some(file_name) = file_name {
-                    println!("[PrivateWatcher] Path deleted from sync folder: {} (is_folder: {})", file_name, path.is_dir());
-                    let should_delete_folder = true;
-                    let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await;
-                    if delete_result.is_ok() {
-                        if let Some(pool) = crate::DB_POOL.get() {
-                            let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'")
-                                .bind(account_id)
-                                .bind(file_name)
-                                .execute(pool)
-                                .await;
-                        }
-                    }
-                }
-            }
+        _ => {
+            println!("[PrivateWatcher] Unhandled event kind: {:?}", event.kind);
         }
-        _ => {}
     }
 }
 
@@ -620,7 +761,7 @@ async fn upload_path(path: &Path, account_id: &str, seed_phrase: &str, is_folder
 
     let _guard = UPLOAD_LOCK.lock().unwrap();
     let result = if is_folder {
-        encrypt_and_upload_folder(
+        encrypt_and_upload_folder_sync(
             account_id.to_string(),
             path_str.clone(),
             seed_phrase.to_string(),
@@ -701,30 +842,29 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
 
     println!("[PrivateFolderSync] Replacing file: {}", file_name);
     
-    // First delete the old records
-    println!("[PrivateFolderSync] Cleaning up old records for '{}' before upload...", file_name);
+    // First attempt to delete the old records, but continue regardless of result
+    println!("[PrivateFolderSync] Attempting to clean up old records for '{}' before upload...", file_name);
     let should_delete_folder = false;
     let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await;
     
     if delete_result.is_err() {
-        eprintln!("[PrivateFolderSync] Failed to delete/unpin old records for '{}', aborting upload.", file_name);
-        let mut uploading_files = UPLOADING_FILES.lock().unwrap();
-        uploading_files.remove(&path_str);
-        return;
+        eprintln!("[PrivateFolderSync] Warning: Failed to delete/unpin old records for '{}', proceeding with upload anyway.", file_name);
+    } else {
+        println!("[PrivateFolderSync] Successfully cleaned up old records for '{}'", file_name);
     }
     
-    println!("[PrivateFolderSync] Successfully cleaned up old records for '{}', proceeding with upload...", file_name);
-    
-    // Then upload the new file
+    // Proceed with upload regardless of delete result
     let upload_result = upload_path(path, account_id, seed_phrase, false).await;
 
     if upload_result {
         println!("[PrivateFolderSync] Upload successful for '{}'", file_name);
     } else {
-        eprintln!("[PrivateFolderSync] Upload failed for '{}' after deleting old records", file_name);
-        let mut uploading_files = UPLOADING_FILES.lock().unwrap();
-        uploading_files.remove(&path_str);
+        eprintln!("[PrivateFolderSync] Upload failed for '{}'", file_name);
     }
+    
+    // Always remove from uploading_files when done
+    let mut uploading_files = UPLOADING_FILES.lock().unwrap();
+    uploading_files.remove(&path_str);
 }
 
 #[tauri::command]

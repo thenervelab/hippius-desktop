@@ -109,7 +109,6 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
         let mut last_error = None;
 
         for variant in variations {
-            println!("[unpin_user_file_by_name] Trying variant: {}", variant);
             
             let hashes_result = sqlx::query_as::<_, (String,)>(
                 "SELECT main_req_hash FROM user_profiles WHERE file_name = ?"
@@ -135,11 +134,9 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
                     return Err("Found empty hash result despite non-empty hashes".to_string());
                 },
                 Ok(_) => {
-                    println!("[unpin_user_file_by_name] No records found for variant '{}'", variant);
                 },
                 Err(e) => {
                     last_error = Some(format!("DB error for variant '{}': {}", variant, e));
-                    println!("[unpin_user_file_by_name] {}", last_error.as_ref().unwrap());
                 }
             }
         }
@@ -161,17 +158,18 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     should_delete_folder: bool,
 ) -> Result<u64, String> {
     if let Some(pool) = DB_POOL.get() {
-        // Call unpin_user_file_by_name
-        unpin_user_file_by_name(file_name, seed_phrase)
-            .await
-            .map_err(|e| format!("Unpin failed for '{}': {}", file_name, e))?;
+        if let Err(e) = unpin_user_file_by_name(file_name, seed_phrase).await {
+            println!(
+                "[DB Cleanup] Warning: could not unpin '{}': {}. Proceeding with DB record deletion.",
+                file_name, e
+            );
+        }
 
-        // Sanitize file_name
+        // Sanitize file_name to ensure it matches what's in sync_folder_files
         let sanitized_file_name = sanitize_name(file_name);
 
-        // First, fetch the is_folder value from the database
         let is_folder = sqlx::query_scalar::<_, bool>(
-            "SELECT is_folder FROM user_profiles WHERE file_name = ? LIMIT 1"
+            "SELECT is_folder FROM user_profiles WHERE file_name = ? LIMIT 1",
         )
         .bind(file_name)
         .fetch_optional(pool)
@@ -179,14 +177,14 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
         .unwrap_or(false);
 
-        // Delete from user_profiles
+        // Delete from user_profiles. This will not error if no rows are found.
         let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
             .bind(file_name)
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
 
-        // Delete from sync_folder_files
+        // Delete from sync_folder_files. This will also not error if no rows are found.
         let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
             .bind(&sanitized_file_name)
             .bind(if is_public { "public" } else { "private" })
@@ -194,7 +192,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             .await
             .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
 
-        // Remove from sync folder with the actual is_folder value
+        // Remove from sync folder with the fetched is_folder value
         remove_file_from_sync_and_db(&sanitized_file_name, is_public, is_folder, should_delete_folder).await;
 
         // Update sync status
@@ -215,7 +213,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             }
         }
 
-        // Calculate total rows affected
+        // Calculate total rows affected and return success
         let total_deleted = result1.rows_affected() + result2.rows_affected();
         Ok(total_deleted)
     } else {
@@ -279,6 +277,7 @@ pub async fn copy_to_sync_and_add_to_db(
     is_public: bool,
     is_folder: bool,
     requested_file_name: &str,
+    should_copy_folder: bool,
 ) {
     // Choose sync folder path based on is_public
     let sync_folder = if is_public {
@@ -432,20 +431,22 @@ pub async fn copy_to_sync_and_add_to_db(
         insert_file_if_not_exists(pool, &original_path, account_id, is_public, is_folder).await;
     }
 
-    // Copy to sync folder
-    if is_folder {
-        if !dest_path.exists() {
-            if let Err(e) = std::fs::create_dir_all(&dest_path) {
-                eprintln!("Failed to create sync folder: {}", e);
-                return;
+    // Only copy files if should_copy_folder is true
+    if should_copy_folder {
+        if is_folder {
+            if !dest_path.exists() {
+                if let Err(e) = std::fs::create_dir_all(&dest_path) {
+                    eprintln!("Failed to create sync folder: {}", e);
+                    return;
+                }
             }
-        }
-        copy_dir(original_path, &dest_path);
-    } else {
-        if !dest_path.exists() {
-            if let Err(e) = fs::copy(original_path, &dest_path) {
-                eprintln!("Failed to copy file to sync folder: {}", e);
-                return;
+            copy_dir(original_path, &dest_path);
+        } else {
+            if !dest_path.exists() {
+                if let Err(e) = fs::copy(original_path, &dest_path) {
+                    eprintln!("Failed to copy file to sync folder: {}", e);
+                    return;
+                }
             }
         }
     }

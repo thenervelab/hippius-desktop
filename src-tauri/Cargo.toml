@@ -52,3 +52,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 chrono = "0.4.41"
 rand = "0.8"
+# Directory Traversal
+walkdir = "2.5"
+# Ergonomic Error Handling
+anyhow = "1.0"
