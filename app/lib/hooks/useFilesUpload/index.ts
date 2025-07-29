@@ -1,4 +1,3 @@
-// src/lib/hooks/useFilesUpload.ts
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
@@ -11,6 +10,19 @@ import { toast } from "sonner";
 export type UploadFilesHandlers = {
   onSuccess?: () => void;
   onError?: (err: Error | unknown) => void;
+};
+
+export const readFileAsArrayBuffer = (file: File): Promise<number[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result as ArrayBuffer;
+      const uint8Array = new Uint8Array(arrayBuffer);
+      resolve(Array.from(uint8Array));
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsArrayBuffer(file);
+  });
 };
 
 export function useFilesUpload(handlers: UploadFilesHandlers) {
@@ -60,33 +72,31 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       // encrypt & upload each file via Tauri
       for (let i = 0; i < arr.length; i++) {
         const file = arr[i];
-        const arrayBuffer = await file.arrayBuffer();
-        const tempPath = `/tmp/${file.name}`;
 
-        // write to disk
-        await invoke("write_file", {
-          path: tempPath,
-          data: Array.from(new Uint8Array(arrayBuffer))
-        });
+        const fileData = await readFileAsArrayBuffer(file);
+
         let cid;
         // encrypt & upload
         if (isPrivateView) {
           cid = await invoke<string>("encrypt_and_upload_file", {
             accountId: polkadotAddress,
-            filePath: tempPath,
+            fileData: fileData,
+            fileName: file.name,
             seedPhrase: mnemonic,
             encryptionKey: null
           });
         } else if (!isPrivateView && useErasureCoding) {
           cid = await invoke<string>("public_upload_with_erasure", {
             accountId: polkadotAddress,
-            filePath: tempPath,
+            fileData: fileData,
+            fileName: file.name,
             seedPhrase: mnemonic
           });
         } else {
           cid = await invoke<string>("upload_file_public", {
             accountId: polkadotAddress,
-            filePath: tempPath,
+            fileData: fileData,
+            fileName: file.name,
             seedPhrase: mnemonic
           });
         }
