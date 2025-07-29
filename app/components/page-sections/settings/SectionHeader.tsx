@@ -1,19 +1,22 @@
 import React from "react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { IconComponent } from "@/app/lib/types";
+import InfoTooltip from "./InfoTooltip";
 
 interface SectionHeaderProps {
   Icon: IconComponent;
   title: string;
   subtitle: string;
   iconSize?: "small" | "large";
+  info?: string;
 }
 
 const SectionHeader: React.FC<SectionHeaderProps> = ({
   Icon,
   title,
   subtitle,
-  iconSize = "large", // Default to large
+  iconSize = "large",
+  info = ""
 }) => {
   const wrapperSize = iconSize === "small" ? "size-8" : "size-8 sm:size-10";
   const iconSizeClass = iconSize === "small" ? "size-4" : "size-5 sm:size-6";
@@ -24,7 +27,16 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
         <Icon className={`absolute ${iconSizeClass} text-primary-50`} />
       </AbstractIconWrapper>
       <div className="flex flex-col">
-        <h2 className="text-lg leading-6 text-grey-10 font-medium">{title}</h2>
+        <div className="flex gap-2">
+          <h2 className="text-lg leading-6 text-grey-10 font-medium">
+            {title}
+          </h2>
+          {info && (
+            <div className="size-6  flex items-center justify-center">
+              <InfoTooltip iconColor="text-grey-60">{info}</InfoTooltip>
+            </div>
+          )}
+        </div>
         <div className="text-sm text-grey-60">{subtitle}</div>
       </div>
     </div>

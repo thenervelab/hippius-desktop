@@ -316,6 +316,7 @@ const SubAccounts: React.FC = () => {
           <SectionHeader
             Icon={Icons.KeySquare}
             title="Sub Accounts"
+            info="Sub-accounts let you assign upload and delete rights while using their own seed. All files still belong to your main account, providing secure collaboration without compromising control."
             subtitle="Manage your sub accounts for delegated access and permissions."
           />
           <button

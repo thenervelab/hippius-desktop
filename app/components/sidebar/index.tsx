@@ -30,7 +30,7 @@ const Sidebar: React.FC = () => {
   };
 
   const openSettingsWithDefaultTab = () => {
-    setActiveSettingsTab("Change Passcode");
+    setActiveSettingsTab("File Settings");
     setSettingsDialogOpen(true);
   };
 

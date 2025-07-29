@@ -526,7 +526,6 @@ pub fn start_user_sync(account_id: &str) {
                                     continue;
                                 }
                                 if seen_files.insert(file_key) {
-                                    println!("Inserting file: {}, type: {}", file_name, file_type);
                                     records_to_insert.push(UserProfileFile {
                                         owner: owner_ss58,
                                         cid: file_hash.clone(),

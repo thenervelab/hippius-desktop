@@ -51,6 +51,7 @@ const ResetAppData = () => {
               Icon={Icons.Trash}
               title="Reset App Data"
               subtitle="This will erase all Hippius data stored on this device. On‑chain data and IPFS files stay intact and can be restored."
+              info="Use this option if you're experiencing issues or want to start fresh. Your blockchain data and files stored on the decentralized network remain secure and accessible after reset."
             />
           </RevealTextLine>
 
