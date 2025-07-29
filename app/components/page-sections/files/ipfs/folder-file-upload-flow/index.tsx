@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Icons, CardButton } from "@/components/ui";
 import FileDropzone from "../upload-files-flow/FileDropzone";
+import { readFileAsArrayBuffer } from "@/app/lib/hooks/useFilesUpload";
 
 interface FolderFileUploadFlowProps {
     folderCid: string;
@@ -103,17 +104,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     : `Adding file to folder: ${percent}%`;
                 toast.loading(msg, { id: toastId });
 
-                // Convert file to ArrayBuffer
-                const arrayBuffer = await file.arrayBuffer();
-
-                // Create a temporary file path
-                const tempPath = `/tmp/${file.name}`;
-
-                // Write file to disk using Tauri's API
-                await invoke("write_file", {
-                    path: tempPath,
-                    data: Array.from(new Uint8Array(arrayBuffer))
-                });
+                const fileData = await readFileAsArrayBuffer(file);
 
                 // Now add the file to the folder using the temp path
                 const functionName = isPrivateFolder
@@ -126,7 +117,8 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     accountId: polkadotAddress,
                     folderMetadataCid: folderCid,
                     folderName,
-                    filePath: tempPath,
+                    fileName: file.name,
+                    fileData: fileData,
                     seedPhrase: mnemonic,
                     ...(isPrivateFolder ? { encryptionKey: null } : {})
                 };
