@@ -2,8 +2,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from '@tauri-apps/api/core';
 import { useState } from 'react';
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+
 const UploadFileComponent = () => {
   const [status, setStatus] = useState<string>('');
+  const [folderContents, setFolderContents] = useState<any[]>([]);
   const { polkadotAddress, mnemonic } = useWalletAuth();
   const accountId = polkadotAddress;
   const seedPhrase = mnemonic;
@@ -37,10 +39,56 @@ const UploadFileComponent = () => {
     }
   };
 
+  const testListFolderContents = async () => {
+    try {
+      setStatus('Fetching folder contents...');
+      const folderName = 'test-folder'; // You can make this dynamic if needed
+      const folderMetadataCid = 'bafkreiclfqhwzmhtcjlbju4yn3h23pqckpd24mo3fn6erxhjrphe2epemm';
+      
+      const contents = await invoke('list_folder_contents', {
+        folderName: folderName,
+        folderMetadataCid: folderMetadataCid
+      });
+      
+      setFolderContents(contents as any[]);
+      setStatus(`Found ${(contents as any[]).length} items in folder`);
+    } catch (error) {
+      setStatus(`Error listing folder contents: ${error}`);
+      console.error('Error listing folder:', error);
+    }
+  };
+
   return (
-    <div>
-      <button onClick={handleFileUpload}>Select and Upload File</button>
-      <p>{status}</p>
+    <div style={{ padding: '20px' }}>
+      <div style={{ marginBottom: '20px' }}>
+        <h3>File Upload</h3>
+        <button onClick={handleFileUpload} style={{ marginRight: '10px' }}>Select and Upload File</button>
+      </div>
+      
+      <div style={{ marginTop: '20px' }}>
+        <h3>Test Folder Listing</h3>
+        <button onClick={testListFolderContents} style={{ marginBottom: '10px' }}>
+          Test List Folder Contents
+        </button>
+        
+        {folderContents.length > 0 && (
+          <div style={{ marginTop: '10px' }}>
+            <h4>Folder Contents:</h4>
+            <ul>
+              {folderContents.map((item, index) => (
+                <li key={index}>
+                  {item.file_name} (Size: {item.file_size} bytes)
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+      
+      <div style={{ marginTop: '20px' }}>
+        <h4>Status:</h4>
+        <p>{status}</p>
+      </div>
     </div>
   );
 };
