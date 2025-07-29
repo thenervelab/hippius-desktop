@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from '@tauri-apps/api/core';
 import { useState } from 'react';
@@ -44,12 +45,12 @@ const UploadFileComponent = () => {
       setStatus('Fetching folder contents...');
       const folderName = 'test-folder'; // You can make this dynamic if needed
       const folderMetadataCid = 'bafkreiclfqhwzmhtcjlbju4yn3h23pqckpd24mo3fn6erxhjrphe2epemm';
-      
+
       const contents = await invoke('list_folder_contents', {
         folderName: folderName,
         folderMetadataCid: folderMetadataCid
       });
-      
+
       setFolderContents(contents as any[]);
       setStatus(`Found ${(contents as any[]).length} items in folder`);
     } catch (error) {
@@ -64,13 +65,13 @@ const UploadFileComponent = () => {
         <h3>File Upload</h3>
         <button onClick={handleFileUpload} style={{ marginRight: '10px' }}>Select and Upload File</button>
       </div>
-      
+
       <div style={{ marginTop: '20px' }}>
         <h3>Test Folder Listing</h3>
         <button onClick={testListFolderContents} style={{ marginBottom: '10px' }}>
           Test List Folder Contents
         </button>
-        
+
         {folderContents.length > 0 && (
           <div style={{ marginTop: '10px' }}>
             <h4>Folder Contents:</h4>
@@ -84,7 +85,7 @@ const UploadFileComponent = () => {
           </div>
         )}
       </div>
-      
+
       <div style={{ marginTop: '20px' }}>
         <h4>Status:</h4>
         <p>{status}</p>

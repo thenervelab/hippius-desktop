@@ -1,9 +1,10 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Trash2 } from "lucide-react";
+import { AlertCircle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { Icons, CardButton } from "@/components/ui";
+import { Icons, CardButton, Input } from "@/components/ui";
+import { Label } from "@/components/ui/label";
 import FileDropzone from "../upload-files-flow/FileDropzone";
 import { readFileAsArrayBuffer } from "@/app/lib/hooks/useFilesUpload";
 
@@ -15,6 +16,12 @@ interface FolderFileUploadFlowProps {
     onSuccess: () => void;
     onCancel: () => void;
 }
+
+interface EncryptionKey {
+    id: number;
+    key: string;
+}
+
 
 const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     folderCid,
@@ -29,6 +36,10 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     const [isUploading, setIsUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
     const { polkadotAddress, mnemonic } = useWalletAuth();
+    const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(
+        null
+    );
+    const [encryptionKey, setEncryptionKey] = useState("");
 
     // Handle initial files if provided
     useEffect(() => {
@@ -81,6 +92,27 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
             return;
         }
 
+
+        if (encryptionKey) {
+            try {
+                const savedKeys: EncryptionKey[] = await invoke<EncryptionKey[]>(
+                    "get_encryption_keys"
+                );
+
+                const keyExists: boolean = savedKeys.some((k) => k.key === encryptionKey);
+
+                if (!keyExists) {
+                    setEncryptionKeyError(
+                        "Incorrect encryption key. Please try again with a correct one."
+                    );
+                    return;
+                }
+            } catch (error) {
+                console.error("Error validating encryption key:", error);
+                toast.error("Failed to validate encryption key");
+                return;
+            }
+        }
         setIsUploading(true);
         setUploadProgress(0);
 
@@ -120,7 +152,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     fileName: file.name,
                     fileData: fileData,
                     seedPhrase: mnemonic,
-                    ...(isPrivateFolder ? { encryptionKey: null } : {})
+                    ...(isPrivateFolder ? { encryptionKey: encryptionKey || null } : {})
                 };
                 console.log("params for adding file:", params);
 
@@ -222,6 +254,45 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     <div className="mt-1 text-center text-sm text-grey-40">
                         {uploadProgress}% complete
                     </div>
+                </div>
+            )}
+
+            {isPrivateFolder && (
+                <div className="space-y-1 mt-4">
+                    <Label
+                        htmlFor="encryptionKey"
+                        className="text-sm font-medium text-grey-70"
+                    >
+                        Encryption Key (optional)
+                    </Label>
+                    <div className="relative flex items-start w-full">
+                        <Icons.ShieldSecurity className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
+                        <Input
+                            id="encryptionKey"
+                            placeholder="Enter encryption key"
+                            value={encryptionKey}
+                            onChange={(e) => {
+                                setEncryptionKey(e.target.value);
+                                setEncryptionKeyError(null);
+                            }}
+                            className={`pl-11 border-grey-80 h-14 text-grey-30 w-full
+                        bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none 
+                        hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus
+                        ${encryptionKeyError ? "border-error-50 focus:border-error-50" : ""}`}
+                        />
+                    </div>
+                    <p className="text-xs text-grey-70">
+                        {encryptionKey.trim()
+                            ? `Using custom encryption key.`
+                            : "Default encryption key will be used if left empty."}
+                    </p>
+
+                    {encryptionKeyError && (
+                        <div className="flex text-error-70 text-sm font-medium items-center gap-2">
+                            <AlertCircle className="size-4 !relative" />
+                            <span>{encryptionKeyError}</span>
+                        </div>
+                    )}
                 </div>
             )}
 
