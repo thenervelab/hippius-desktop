@@ -969,20 +969,22 @@ pub async fn list_folder_contents(
     folder_metadata_cid: String,
 ) -> Result<Vec<FileDetail>, String> {
     let api_url = "http://127.0.0.1:5001";
-    let folder_metadata_cid_cloned = folder_metadata_cid.clone();
     
-    // Run the blocking download_from_ipfs in a spawn_blocking task
-    let metadata_bytes = tokio::task::spawn_blocking(move || {
-        download_from_ipfs(api_url, &folder_metadata_cid_cloned)
-            .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid_cloned, e))
+    // First download the initial metadata
+    let metadata_bytes = tokio::task::spawn_blocking({
+        let folder_metadata_cid = folder_metadata_cid.clone();
+        move || download_from_ipfs(api_url, &folder_metadata_cid)
+            .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))
     })
     .await
     .map_err(|e| format!("Failed to execute blocking task for CID {}: {}", folder_metadata_cid, e))??;
 
-    // Parse the metadata into Vec<FileEntry>
-    let file_entries: Vec<FolderFileEntry> = serde_json::from_slice(&metadata_bytes)
-        .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
-    
+    // Try to parse as both possible formats
+    let file_entries = match parse_folder_metadata(&metadata_bytes, &folder_metadata_cid) {
+        Ok(entries) => entries,
+        Err(e) => return Err(e),
+    };
+
     // Get database pool
     let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
         
@@ -1007,17 +1009,12 @@ pub async fn list_folder_contents(
     // For each file from IPFS, create file detail
     let mut files_in_folder = Vec::new();
     
-    // Create a vector to store file entries that need size lookup
-    let mut files_needing_size = Vec::new();
-    
-    // First pass: create initial file details and identify files needing size lookup
-    for (idx, file_entry) in file_entries.into_iter().enumerate() {
-        let needs_size = file_entry.file_size.map_or(true, |size| size == 0);
+    for file_entry in file_entries {
         let file_detail = if let Some(row) = &folder_record {
             // Use folder's DB info for all files
             FileDetail {
                 file_name: file_entry.file_name.clone(),
-                cid: file_entry.cid.clone(),
+                cid: file_entry.cid,
                 source: row.get::<Option<String>, _>("source").unwrap_or_default(),
                 file_hash: String::new(),
                 miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
@@ -1029,7 +1026,7 @@ pub async fn list_folder_contents(
             // No folder record found, use defaults
             FileDetail {
                 file_name: file_entry.file_name.clone(),
-                cid: file_entry.cid.clone(),
+                cid: file_entry.cid,
                 source: String::new(),
                 file_hash: String::new(),
                 miner_ids: String::new(),
@@ -1039,74 +1036,52 @@ pub async fn list_folder_contents(
             }
         };
         
-        if needs_size {
-            files_needing_size.push((idx, file_entry.cid));
-        }
-        
+        // Clean file name at the end
+        let mut file_detail = file_detail;
+        file_detail.file_name = clean_file_name(&file_detail.file_name);
+            
         files_in_folder.push(file_detail);
     }
-    
-    // If we have files that need size lookup, fetch them in parallel
-    if !files_needing_size.is_empty() {
-        let api_url = api_url.to_string();
-        let size_futures: Vec<_> = files_needing_size.into_iter()
-            .map(|(idx, cid)| {
-                let api_url = api_url.clone();
-                async move {
-                    let size = get_ipfs_file_size(&api_url, &cid).await.ok();
-                    (idx, size)
-                }
-            })
-            .collect();
-            
-        let sizes = futures::future::join_all(size_futures).await;
-        
-        // Update file details with fetched sizes
-        for (idx, size) in sizes {
-            if let Some(size) = size {
-                if let Some(file_detail) = files_in_folder.get_mut(idx) {
-                    file_detail.file_size = size;
-                }
-            }
-        }
-    }
-    
-    // Clean up file names
-    for file_detail in &mut files_in_folder {
-        file_detail.file_name = file_detail.file_name
-            .trim_end_matches(".ec_metadata")
-            .trim_end_matches(".ff")
-            .trim_end_matches(".ec")
-            .trim_end_matches("-folder")
-            .trim_end_matches("-folder.ec_metadata")
-            .trim_end_matches(".folder.ec_metadata")
-            .to_string();
-    }
-    
     Ok(files_in_folder)
 }
 
-async fn get_ipfs_file_size(api_url: &str, cid: &str) -> Result<usize, String> {
-    let client = reqwest::Client::new();
-    let url = format!("{}api/v0/object/stat/{}", api_url, cid);
-    
-    let response = client.post(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch IPFS object stat: {}", e))?;
-        
-    if !response.status().is_success() {
-        return Err(format!("IPFS API error: {}", response.status()));
+fn parse_folder_metadata(bytes: &[u8], original_cid: &str) -> Result<Vec<FolderFileEntry>, String> {
+    // First try to parse as direct file list
+    if let Ok(entries) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
+        return Ok(entries);
     }
-    
-    let stats: serde_json::Value = response.json()
-        .await
-        .map_err(|e| format!("Failed to parse IPFS object stat: {}", e))?;
-    
-    stats.get("DataSize")
-        .and_then(|v| v.as_u64())
-        .map(|size| size as usize)
-        .ok_or_else(|| "Invalid DataSize in IPFS object stat".to_string())
+
+    // If that fails, try to parse as folder reference structure
+    if let Ok(folder_refs) = serde_json::from_slice::<Vec<FolderReference>>(bytes) {
+        // Find the actual folder metadata reference
+        if let Some(folder_metadata) = folder_refs.iter().find(|f| {
+            f.file_name.ends_with(".folder") || 
+            f.file_name.ends_with("-folder") ||
+            f.file_name.ends_with(".folder.ec_metadata") ||
+            f.file_name.ends_with("-folder.ec_metadata")
+        }) {
+            // Download the actual folder metadata
+            let api_url = "http://127.0.0.1:5001";
+            let metadata_bytes = download_from_ipfs(api_url, &folder_metadata.cid)
+                .map_err(|e| format!("Failed to download actual folder metadata from CID {}: {}", folder_metadata.cid, e))?;
+
+            // Parse as direct file list
+            return serde_json::from_slice(&metadata_bytes)
+                .map_err(|e| format!("Failed to parse actual folder metadata from CID {}: {}", folder_metadata.cid, e));
+        }
+    }
+
+    Err(format!("Unknown folder metadata format for CID {}", original_cid))
+}
+
+fn clean_file_name(name: &str) -> String {
+    name.trim_end_matches(".ec_metadata")
+        .trim_end_matches(".ff")
+        .trim_end_matches(".ec")
+        .trim_end_matches("-folder")
+        .trim_end_matches(".folder.ec_metadata")
+        .trim_end_matches("-folder.ec_metadata")
+        .to_string()
 }
 
 #[tauri::command]
@@ -1308,6 +1283,7 @@ pub async fn add_file_to_public_folder(
     seed_phrase: String,
 ) -> Result<String, String> {
     let api_url = "http://127.0.0.1:5001";
+
     // Check if file already exists
     let file_entries = list_folder_contents(folder_name.clone(), folder_metadata_cid.clone()).await?;
     if file_entries.iter().any(|entry| entry.file_name == file_name) {
@@ -1740,10 +1716,9 @@ pub async fn add_file_to_private_folder(
             let folder_metadata_path = temp_dir.path().join("folder_metadata.json");
             let folder_metadata = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
             std::fs::write(&folder_metadata_path, folder_metadata.as_bytes()).map_err(|e| e.to_string())?;
-
             let folder_metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap())
                 .map_err(|e| e.to_string())?;
-
+            
             // Build files_for_storage: folder metadata + file metadata
             let meta_filename = format!(
                 "{}{}", 
@@ -1788,7 +1763,7 @@ pub async fn add_file_to_private_folder(
     let sanitized_folder_name = sanitize_name(&folder_name);
     let sanitized_file_name = sanitize_name(&file_name);
 
-    // Update the database with the new folder metadata
+    // Update the database and sync folder
     let temp_file = tempfile::NamedTempFile::new()
         .map_err(|e| format!("Failed to create temp file: {}", e))?;
     fs::write(temp_file.path(), &file_data)
@@ -1850,11 +1825,7 @@ pub async fn remove_file_from_private_folder(
             let folder_metadata_path = temp_dir.path().join("folder_metadata.json");
             let folder_metadata = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
             std::fs::write(&folder_metadata_path, folder_metadata.as_bytes()).map_err(|e| e.to_string())?;
-
-            let folder_metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap())
-                .map_err(|e| e.to_string())?;
-
-            // Temporary directory is automatically cleaned up when temp_dir goes out of scope
+            let folder_metadata_cid = crate::utils::ipfs::upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
             Ok::<_, String>(folder_metadata_cid)
         }
     })
@@ -1930,7 +1901,6 @@ pub async fn encrypt_and_upload_file_sync(
     let file_path_cloned = file_path.clone();
     let api_url_cloned = api_url.to_string();
     let encryption_key_cloned = encryption_key.clone();
-
     // Run blocking work and return file_name, metadata_cid, and chunk_pairs (filename,cid)
     let (file_name, metadata_cid, chunk_pairs) = tokio::task::spawn_blocking(move || {
         // Read file

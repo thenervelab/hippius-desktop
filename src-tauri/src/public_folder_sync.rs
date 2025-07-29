@@ -252,88 +252,92 @@ fn spawn_watcher_thread(
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime for watcher");
         let current_path = sync_path.to_string_lossy().to_string();
-        let mut watcher: Option<RecommendedWatcher> = None;
-
-        loop {
-            if cancel_token.load(Ordering::SeqCst) {
-                if let Some(w) = watcher.take() {
-                    drop(w);
-                    println!("[PublicFolderSync] Stopped watching path: {}", current_path);
+        
+        // Create a channel for path changes
+        let (tx, rx) = std::sync::mpsc::channel();
+        
+        // Create the watcher with the recommended API
+        let mut watcher = match notify::recommended_watcher(move |res| {
+            match res {
+                Ok(event) => {
+                    println!("[Watcher] Raw event: {:?}", event);
+                    if let Err(e) = tx.send(event) {
+                        eprintln!("[Watcher] Error sending event: {}", e);
+                    }
                 }
-                println!("[PublicFolderSync] Watcher thread cancelled for account {}", account_id);
+                Err(e) => eprintln!("[Watcher] Error: {}", e),
+            }
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[PublicFolderSync] Failed to create watcher: {}", e);
+                return;
+            }
+        };
+
+        // Watch the sync path recursively
+        if let Err(e) = watcher.watch(&sync_path, RecursiveMode::Recursive) {
+            eprintln!("[PublicFolderSync] Failed to watch path {}: {}", current_path, e);
+            return;
+        }
+
+        println!("[PublicFolderSync] Started watching public path: {}", current_path);
+
+        // Main event loop
+        'outer: loop {
+            if cancel_token.load(Ordering::SeqCst) {
+                println!("[PublicFolderSync] Stopped watching path: {}", current_path);
                 break;
             }
 
-            let latest_sync_path = match rt.block_on(get_public_sync_path()) {
-                Ok(path) => PathBuf::from(path),
+            // Check for path changes
+            match rt.block_on(get_public_sync_path()) {
+                Ok(latest_path) => {
+                    let latest_path = PathBuf::from(latest_path);
+                    if latest_path != sync_path {
+                        if let Ok(latest_path_str) = latest_path.into_os_string().into_string() {
+                            if rt.block_on(path_change_tx.send(latest_path_str.clone())).is_ok() {
+                                println!("[PublicFolderSync] Sent path change notification: {}", latest_path_str);
+                            } else {
+                                eprintln!("[PublicFolderSync] Failed to send path change notification");
+                            }
+                            break 'outer;
+                        }
+                    }
+                }
                 Err(e) => {
                     eprintln!("[PublicFolderSync] Failed to get public sync path: {}", e);
                     thread::sleep(Duration::from_secs(5));
                     continue;
                 }
-            };
-
-            let latest_sync_path_str = latest_sync_path.to_string_lossy().to_string();
-            if latest_sync_path_str != current_path {
-                if rt.block_on(path_change_tx.send(latest_sync_path_str.clone())).is_ok() {
-                    println!("[PublicFolderSync] Sent path change notification: {}", latest_sync_path_str);
-                } else {
-                    eprintln!("[PublicFolderSync] Failed to send path change notification");
-                }
-                break;
             }
 
-            println!("[PublicFolderSync] Periodic check: scanning for unsynced paths...");
-            let mut paths_to_check = Vec::new();
-            collect_paths_recursively(&sync_path, &mut paths_to_check);
-
-            for path in paths_to_check {
-                let path_str = path.to_string_lossy().to_string();
-                {
-                    let uploading_files = UPLOADING_FILES.lock().unwrap();
-                    if uploading_files.contains(&path_str) {
-                        println!("[PublicFolderSync] Path {:?} is being uploaded, skipping periodic check.", path);
-                        continue;
+            // Process file system events with a timeout
+            match rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(event) => {
+                    rt.block_on(handle_event(event, &account_id, &seed_phrase, &sync_path));
+                    // Process any additional events that came in while we were handling this one
+                    while let Ok(event) = rx.try_recv() {
+                        rt.block_on(handle_event(event, &account_id, &seed_phrase, &sync_path));
                     }
                 }
-                {
-                    let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
-                    if recently_uploaded.contains(&path_str) {
-                        println!("[PublicFolderSync] Path {:?} was recently uploaded, skipping periodic check.", path);
-                        continue;
-                    }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // No events, continue the loop
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!("[PublicFolderSync] Error receiving event: {}", e);
+                    break 'outer;
                 }
             }
-
-            if watcher.is_none() && sync_path.exists() {
-                let (tx, rx) = channel();
-                let mut new_watcher: RecommendedWatcher = Watcher::new(tx, notify::Config::default())
-                    .expect("[PublicFolderSync] Failed to create watcher");
-
-                new_watcher
-                    .watch(&sync_path, RecursiveMode::Recursive)
-                    .expect("[PublicFolderSync] Failed to watch sync directory");
-
-                let _watcher_account_id = account_id.clone();
-                let _watcher_seed_phrase = seed_phrase.clone();
-                let _sync_path = sync_path.clone();
-
-                thread::spawn(move || {
-                    let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime for watcher handler");
-                    for res in rx {
-                        match res {
-                            Ok(event) => rt.block_on(handle_event(event, &_watcher_account_id, &_watcher_seed_phrase, &_sync_path)),
-                            Err(e) => eprintln!("[PublicFolderSync] Watch error: {:?}", e),
-                        }
-                    }
-                });
-
-                println!("[PublicFolderSync] Started watching public path: {}", current_path);
-                watcher = Some(new_watcher);
-            }
-
-            thread::sleep(Duration::from_secs(5));
         }
+        
+        // Clean up the watcher
+        if let Err(e) = watcher.unwatch(&sync_path) {
+            eprintln!("[PublicFolderSync] Error unwatching path: {}", e);
+        }
+        
+        println!("[PublicFolderSync] Watcher thread exiting for account {}", account_id);
     });
 }
 
@@ -558,7 +562,6 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                                     .bind(&folder_name)
                                     .execute(pool)
                                     .await;
-                                println!("[PublicWatcher][Modify] Successfully deleted old records for folder '{}'", folder_name);
                             }
                         } else {
                             eprintln!("[PublicWatcher][Modify] Failed to delete/unpin old records for folder '{}'", folder_name);
@@ -583,18 +586,77 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
         }
         EventKind::Remove(RemoveKind::File) | EventKind::Remove(RemoveKind::Folder) => {
             for path in event.paths {
-                let file_name = path.file_name().and_then(|s| s.to_str());
-                if let Some(file_name) = file_name {
-                    println!("[PublicWatcher] Path deleted from sync folder: {}", file_name);
-                    let should_delete_folder = true;
-                    let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, true, should_delete_folder).await;
-                    if delete_result.is_ok() {
-                        if let Some(pool) = crate::DB_POOL.get() {
-                            let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'")
-                                .bind(account_id)
-                                .bind(file_name)
-                                .execute(pool)
-                                .await;
+                let path_str = path.to_string_lossy().to_string();
+                println!("[PublicWatcher][Remove] Raw event path: {}", path_str);
+                
+                // Normalize paths for comparison
+                let sync_path = sync_path.canonicalize().unwrap_or_else(|_| sync_path.to_path_buf());
+                let parent = path.parent().map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+                
+                // Check if the path is directly in the sync directory
+                if let Some(parent) = parent {
+                    if parent == sync_path {
+                        // This is a top-level file/folder deletion
+                        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                            println!("[PublicWatcher][Remove] Detected deletion of top-level item: {}", path_str);
+                            let should_delete_folder = true;
+                            match delete_and_unpin_user_file_records_by_name(
+                                file_name, 
+                                seed_phrase, 
+                                true, 
+                                should_delete_folder
+                            ).await {
+                                Ok(count) => {
+                                    println!("[PublicWatcher][Remove] Deleted {} records for: {}", count, file_name);
+                                    if let Some(pool) = crate::DB_POOL.get() {
+                                        let _ = sqlx::query(
+                                            "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
+                                        )
+                                        .bind(account_id)
+                                        .bind(file_name)
+                                        .execute(pool)
+                                        .await;
+                                    }
+                                },
+                                Err(e) => eprintln!("[PublicWatcher][Remove] Error deleting records for {}: {}", file_name, e),
+                            }
+                        }
+                    } else {
+                        // This is a nested file/folder deletion - find the top-level folder
+                        if let Some(top_level_folder) = find_top_level_folder(&path, &sync_path) {
+                            if let Some(folder_name) = top_level_folder.file_name().and_then(|s| s.to_str()) {
+                                println!("[PublicWatcher][Remove] Parent folder to re-upload: {}", folder_name);
+                                
+                                // Mark the folder for re-upload since its contents changed
+                                let should_delete_folder = false;
+                                if let Ok(_) = delete_and_unpin_user_file_records_by_name(
+                                    folder_name, 
+                                    seed_phrase, 
+                                    true, 
+                                    should_delete_folder
+                                ).await {
+                                    if let Some(pool) = crate::DB_POOL.get() {
+                                        let _ = sqlx::query(
+                                            "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
+                                        )
+                                        .bind(account_id)
+                                        .bind(folder_name)
+                                        .execute(pool)
+                                        .await;
+                                    }
+                                    
+                                    // Queue the folder for re-upload
+                                    if let Some(sender) = UPLOAD_SENDER.get() {
+                                        let _ = sender.send(UploadJob {
+                                            account_id: account_id.to_string(),
+                                            seed_phrase: seed_phrase.to_string(),
+                                            file_path: top_level_folder.to_string_lossy().to_string(),
+                                            is_folder: true,
+                                        });
+                                        println!("[PublicWatcher][Remove] Enqueued folder for re-upload: {}", folder_name);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
