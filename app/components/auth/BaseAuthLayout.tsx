@@ -12,7 +12,7 @@ interface BaseAuthLayoutProps {
 
 const BaseAuthLayout = ({
   children,
-  onboardingCompleted
+  onboardingCompleted = true
 }: BaseAuthLayoutProps) => {
   return (
     <InView triggerOnce>

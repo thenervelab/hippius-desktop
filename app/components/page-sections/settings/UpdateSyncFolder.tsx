@@ -105,6 +105,7 @@ const UpdateSyncFolder: React.FC = () => {
                     Icon={Icons.File2}
                     title="Change your sync folder"
                     subtitle="Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
+                    info="Sync folders connect your local storage with our decentralized network, providing both convenience and blockchain-backed security for your files."
                   />
                   <div className="flex justify-between p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
                     {selectedPrivateFolderName ? (

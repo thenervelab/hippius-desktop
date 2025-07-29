@@ -12,7 +12,7 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({
   children,
   className = "",
   iconSize = 4,
-  iconColor = "text-grey-50",
+  iconColor = "text-grey-50"
 }) => {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const iconRef = useRef<HTMLDivElement>(null);
@@ -38,13 +38,13 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({
       // Calculate horizontal position
       const newTooltipStyle: React.CSSProperties = {
         maxWidth: "260px",
-        width: "max-content",
+        width: "max-content"
       };
 
       const newArrowStyle: React.CSSProperties = {
         position: "absolute",
         width: 0,
-        height: 0,
+        height: 0
       };
 
       // Vertical positioning - check if there's enough space on top
@@ -121,7 +121,7 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({
       observer.observe(containerRef.current, {
         childList: true,
         subtree: true,
-        attributes: true,
+        attributes: true
       });
     }
 

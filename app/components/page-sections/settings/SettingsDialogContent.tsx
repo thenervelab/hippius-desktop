@@ -27,6 +27,10 @@ const SettingsDialogContent: React.FC = () => {
 
   const tabs: TabOption[] = [
     {
+      tabName: "File Settings",
+      icon: <Icons.File2 className="size-4" />
+    },
+    {
       tabName: "Change Passcode",
       icon: <Icons.WalletAdd className="size-4" />
     },
@@ -35,16 +39,12 @@ const SettingsDialogContent: React.FC = () => {
       icon: <Icons.KeySquare className="size-4" />
     },
     {
-      tabName: "Notifications",
-      icon: <Icons.Notification className="size-4" />
-    },
-    {
-      tabName: "File Settings",
-      icon: <Icons.File2 className="size-4" />
-    },
-    {
       tabName: "Encryption Key",
       icon: <Icons.Key className="size-4" />
+    },
+    {
+      tabName: "Notifications",
+      icon: <Icons.Notification className="size-4" />
     },
     {
       tabName: "Backup App Data",
