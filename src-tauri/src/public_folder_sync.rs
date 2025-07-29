@@ -350,25 +350,12 @@ fn collect_paths_recursively(dir: &Path, paths: &mut Vec<PathBuf>) {
 }
 
 async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_path: &Path) {
-    let filtered_paths = event.paths.into_iter().filter(|path| {
-        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-            !file_name.starts_with('.') && !file_name.contains("goutputstream")
-        } else {
-            false
-        }
-    }).collect::<Vec<_>>();
-
-    if filtered_paths.is_empty() {
-        println!("[PublicWatcher] Skipping event with only temporary or invalid paths.");
-        return;
-    }
-
     match event.kind {
         EventKind::Create(CreateKind::File) | EventKind::Create(CreateKind::Folder) => {
             let mut folder_paths = HashSet::new();
             let mut file_paths = HashSet::new();
 
-            for path in filtered_paths.iter() {
+            for path in event.paths.iter() {
                 let path_str = path.to_string_lossy().to_string();
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
@@ -482,6 +469,18 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
             }
         }
         EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Name(_)) => {
+            let filtered_paths = event.paths.into_iter().filter(|path| {
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    !file_name.starts_with('.') && !file_name.contains("goutputstream")
+                } else {
+                    false
+                }
+            }).collect::<Vec<_>>();
+        
+            if filtered_paths.is_empty() {
+                println!("[PublicWatcher] Skipping event with only temporary or invalid paths.");
+                return;
+            }        
             for path in filtered_paths {
                 let path_str = path.to_string_lossy().to_string();
                 {
@@ -583,10 +582,10 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
             }
         }
         EventKind::Remove(RemoveKind::File) | EventKind::Remove(RemoveKind::Folder) => {
-            for path in filtered_paths {
+            for path in event.paths {
                 let file_name = path.file_name().and_then(|s| s.to_str());
                 if let Some(file_name) = file_name {
-                    println!("[PublicWatcher] Path deleted from sync folder: {} (is_folder: {})", file_name, path.is_dir());
+                    println!("[PublicWatcher] Path deleted from sync folder: {}", file_name);
                     let should_delete_folder = true;
                     let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, true, should_delete_folder).await;
                     if delete_result.is_ok() {

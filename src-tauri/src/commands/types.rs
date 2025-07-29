@@ -56,6 +56,15 @@ pub struct FileEntry {
     pub cid: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FolderFileEntry {
+    #[serde(alias = "filename", alias = "file_name")]
+    pub file_name: String,
+    #[serde(default)]
+    pub file_size: Option<usize>,
+    pub cid: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileDetail {
     pub file_name: String,
