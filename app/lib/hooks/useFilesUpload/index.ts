@@ -47,7 +47,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   async function upload(
     files: FileList,
     isPrivateView: boolean,
-    useErasureCoding: boolean = false
+    useErasureCoding: boolean = false,
+    encryptionKey?: string
   ) {
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
@@ -83,7 +84,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
             fileData: fileData,
             fileName: file.name,
             seedPhrase: mnemonic,
-            encryptionKey: null
+            encryptionKey: encryptionKey || null
           });
         } else if (!isPrivateView && useErasureCoding) {
           cid = await invoke<string>("public_upload_with_erasure", {
