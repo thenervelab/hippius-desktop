@@ -29,9 +29,19 @@ export const formatDisplayName = (rawName: string): string => {
     let name = isDirectory(rawName) ? rawName.slice(0, -DIRECTORY_SUFFIX.length) : rawName;
 
     const { fileName, fileFormat } = getFilePartsFromFileName(name);
-    if (fileName.length > 20) {
-        name = `${fileName.slice(0, 10)}...${fileName.slice(-6)}.${fileFormat.length > 6 ? fileFormat.slice(0, 3) + "..." : fileFormat
-            }`;
+    if (name.length > 20) {
+        const extIndex = name.lastIndexOf(".");
+        if (extIndex !== -1 && extIndex !== 0 && extIndex !== name.length - 1) {
+            const base = name.slice(0, extIndex);
+            const ext = name.slice(extIndex); // includes the dot
+            if (base.length > 20) {
+                name = `${base.slice(0, 10)}...${base.slice(-7)}${ext}`;
+            } else {
+                name = `${base}${ext}`;
+            }
+        } else {
+            name = `${name.slice(0, 10)}...${name.slice(-7)}`;
+        }
     }
 
     return name;

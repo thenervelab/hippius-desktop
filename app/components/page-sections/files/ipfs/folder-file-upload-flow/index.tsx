@@ -74,12 +74,15 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     const removeFile = useCallback((idx: number) => {
         if (!files) return;
         const arr = Array.from(files).filter((_, i) => i !== idx);
-        if (!arr.length) return void setFiles(null);
+        if (!arr.length) {
+            setFiles(null);
+            return;
+        }
         const dt = new DataTransfer();
         arr.forEach(f => dt.items.add(f));
         setFiles(dt.files);
         if (arr.length === 1) setRevealFiles(false);
-    }, []);
+    }, [files]);
 
     const handleAddFilesToFolder = async () => {
         if (!folderCid || !files?.length) {
