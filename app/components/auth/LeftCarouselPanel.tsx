@@ -36,7 +36,7 @@ const LeftCarouselPanel = () => {
               modules={[Pagination, Autoplay]}
               pagination={{ clickable: true }}
               autoplay={{
-                delay: 5000,
+                delay: 6000,
                 disableOnInteraction: true,
                 pauseOnMouseEnter: true
               }}
