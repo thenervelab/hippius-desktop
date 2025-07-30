@@ -34,8 +34,6 @@ export const downloadIpfsFile = async (
   isPrivateView: boolean,
   encryptionKey?: string | null
 ) => {
-  const { source } = file;
-
   if (file.isFolder) {
     console.log("isFolder", file)
     const result = await downloadIpfsFolder({
