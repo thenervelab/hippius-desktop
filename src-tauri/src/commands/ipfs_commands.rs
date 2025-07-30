@@ -51,13 +51,21 @@ pub async fn encrypt_and_upload_file(
     file_data: Vec<u8>,
     file_name: String,
     seed_phrase: String,
-    encryption_key: Option<Vec<u8>>,
+    encryption_key: Option<String>,
 ) -> Result<String, String> {
     println!("Processing file: {:?}", file_name);
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE; // 1MB
+    // Convert string key to Vec<u8> if provided
+    let encryption_key_bytes = if let Some(key_b64) = encryption_key {
+        let decoded_key = base64::decode(&key_b64)
+            .map_err(|e| format!("Failed to decode base64 key: {}", e))?;
+        Some(decoded_key)
+    } else {
+        None
+    };
 
     // Check if file already exists in DB for this account
     if let Some(pool) = DB_POOL.get() {
@@ -75,7 +83,7 @@ pub async fn encrypt_and_upload_file(
     }
 
     let api_url_cloned = api_url.to_string();
-    let encryption_key_cloned = encryption_key.clone();
+    let encryption_key_cloned = encryption_key_bytes.clone();
     let file_data_clone = file_data.clone();
     let (file_name, metadata_cid, chunk_pairs) = tokio::task::spawn_blocking(move || {
         // Calculate original file hash
@@ -225,21 +233,16 @@ pub async fn download_and_decrypt_file(
     let api_url = "http://127.0.0.1:5001";
 
     let final_encryption_key = if let Some(key_b64) = encryption_key {
-        println!("Received base64 encryption key: {}", key_b64);
         let decoded_key = base64::decode(&key_b64)
             .map_err(|e| format!("Failed to decode base64 key: {}", e))?;
-        println!("Decoded key bytes: {:?}", decoded_key);
         Some(decoded_key)
     } else {
-        println!("No encryption key provided, will fetch from DB if needed.");
         None
     };
 
     tokio::task::spawn_blocking(move || {
-        println!("Downloading metadata CID: {}", metadata_cid);
         let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
         let metadata: Metadata = serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
-        println!("Metadata loaded: original size {}, encrypted size {}", metadata.original_file.size, metadata.erasure_coding.encrypted_size);
 
         let k = metadata.erasure_coding.k;
         let m = metadata.erasure_coding.m;
@@ -718,7 +721,7 @@ pub async fn encrypt_and_upload_folder(
     account_id: String,
     folder_path: String,
     seed_phrase: String,
-    encryption_key: Option<Vec<u8>>,
+    encryption_key: Option<String>,
 ) -> Result<String, String> {
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
@@ -729,6 +732,15 @@ pub async fn encrypt_and_upload_folder(
     if !folder_path.is_dir() {
         return Err("Provided path is not a directory".to_string());
     }
+
+    // Convert string key to Vec<u8> if provided
+    let encryption_key_bytes = if let Some(key_b64) = encryption_key {
+        let decoded_key = base64::decode(&key_b64)
+            .map_err(|e| format!("Failed to decode base64 key: {}", e))?;
+        Some(decoded_key)
+    } else {
+        None
+    };
 
     let folder_name = folder_path
         .file_name()
@@ -750,16 +762,15 @@ pub async fn encrypt_and_upload_folder(
         }
     }
 
-    // Clone seed_phrase to avoid move issues
     let seed_phrase_cloned = seed_phrase.clone();
     let folder_path_cloned = folder_path.to_path_buf();
     let api_url_cloned = api_url.to_string();
-    let encryption_key_cloned = encryption_key.clone();
+    let encryption_key_cloned = encryption_key_bytes.clone();
 
     let (folder_name, folder_metadata_cid, all_files_for_storage) = tokio::task::spawn_blocking(move || {
         let mut file_entries = Vec::new();
         let mut files = Vec::new();
-        let mut all_files_for_storage: Vec<(String, String)> = Vec::new(); // (filename, cid) for all metadata and chunks
+        let mut all_files_for_storage: Vec<(String, String)> = Vec::new();
         let _ = collect_files_recursively(&folder_path_cloned, &mut files);
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
 
@@ -775,14 +786,18 @@ pub async fn encrypt_and_upload_folder(
             let mut hasher = Sha256::new();
             hasher.update(&file_data);
             let original_file_hash = format!("{:x}", hasher.finalize());
+            println!("[encrypt_and_upload_folder] File {}: original size {}, hash {}", relative_path, file_data.len(), original_file_hash);
 
             // Encrypt using centralized function
             let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data, encryption_key_cloned.clone()))?;
+            println!("[encrypt_and_upload_folder] File {}: encrypted size {}", relative_path, to_process.len());
+
             // Split into chunks
             let mut chunks = vec![];
             for i in (0..to_process.len()).step_by(chunk_size) {
                 let mut chunk = to_process[i..std::cmp::min(i + chunk_size, to_process.len())].to_vec();
                 if chunk.len() < chunk_size {
+                    println!("[encrypt_and_upload_folder] File {}: padded chunk {} from {} to {}", relative_path, chunks.len(), chunk.len(), chunk_size);
                     chunk.resize(chunk_size, 0);
                 }
                 chunks.push(chunk);
@@ -795,7 +810,6 @@ pub async fn encrypt_and_upload_folder(
             let mut chunk_pairs: Vec<(String, String)> = Vec::new();
 
             for (orig_idx, chunk) in chunks.iter().enumerate() {
-                // Split chunk into k sub-blocks
                 let sub_block_size = (chunk.len() + k - 1) / k;
                 let sub_blocks: Vec<Vec<u8>> = (0..k)
                     .map(|j| {
@@ -809,13 +823,11 @@ pub async fn encrypt_and_upload_folder(
                     })
                     .collect();
 
-                // Prepare m shards
                 let mut shards: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
                 for _ in k..m {
                     shards.push(Some(vec![0u8; sub_block_size]));
                 }
 
-                // Encode
                 let mut shard_refs: Vec<_> = shards
                     .iter_mut()
                     .map(|x| x.as_mut().unwrap().as_mut_slice())
@@ -823,7 +835,6 @@ pub async fn encrypt_and_upload_folder(
                 r.encode(&mut shard_refs)
                     .map_err(|e| format!("ReedSolomon encode error: {e}"))?;
 
-                // Write and upload each shard
                 for (share_idx, shard) in shard_refs.iter().enumerate() {
                     let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
                     let chunk_path = temp_dir.path().join(&chunk_name);
@@ -849,10 +860,10 @@ pub async fn encrypt_and_upload_folder(
                 }
             }
 
-            // Build file metadata
             let file_name = file_path.file_name().unwrap().to_string_lossy().to_string();
             let file_extension = file_path.extension().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
             let encrypted_size = to_process.len();
+            println!("[encrypt_and_upload_folder] File {}: stored original size {}, encrypted size {}", relative_path, file_data.len(), encrypted_size);
             let metadata = Metadata {
                 original_file: OriginalFileInfo {
                     name: file_name.clone(),
@@ -872,38 +883,31 @@ pub async fn encrypt_and_upload_folder(
                 metadata_cid: None,
             };
 
-            // Write metadata to temp file
             let metadata_path = temp_dir.path().join(format!("{}_metadata.json", file_id));
             let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
             fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
 
-            // Upload metadata
             let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap())
                 .map_err(|e| e.to_string())?;
 
-            // Store metadata CID for this file in folder metadata
             file_entries.push(FileEntry {
                 file_name: relative_path.clone(),
                 file_size: file_data.len(),
                 cid: metadata_cid.clone(),
             });
 
-            // Add file metadata CID and chunk CIDs to all_files_for_storage
-            let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ff.ec_metadata") { "" } else { ".ff..ec_metadata" });
+            let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ff.ec_metadata") { "" } else { ".ff.ec_metadata" });
             all_files_for_storage.push((meta_filename.clone(), metadata_cid.clone()));
             all_files_for_storage.extend(chunk_pairs);
         }
 
-        // Write folder metadata
         let folder_metadata_path = temp_dir.path().join("folder_metadata.json");
         let folder_metadata = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
         fs::write(&folder_metadata_path, folder_metadata.as_bytes()).map_err(|e| e.to_string())?;
 
-        // Upload folder metadata
         let folder_metadata_cid = upload_to_ipfs(&api_url_cloned, folder_metadata_path.to_str().unwrap())
             .map_err(|e| e.to_string())?;
 
-        // Add folder metadata CID to all_files_for_storage
         let meta_folder_name = format!(
             "{}{}",
             folder_name,
@@ -916,7 +920,6 @@ pub async fn encrypt_and_upload_folder(
     .await
     .map_err(|e| e.to_string())??;
 
-    // Request storage for folder metadata, file metadata, and all chunks
     let meta_folder_name = format!(
         "{}{}",
         folder_name,
@@ -934,7 +937,7 @@ pub async fn encrypt_and_upload_folder(
                 false,
                 true,
                 &meta_folder_name,
-                true
+                true,
             )
             .await;
             println!("[encrypt_and_upload_folder] Storage request result: {}", res);
@@ -943,116 +946,6 @@ pub async fn encrypt_and_upload_folder(
     }
 
     Ok(folder_metadata_cid)
-}
-
-#[tauri::command]
-pub async fn list_folder_contents(
-    folder_name: String,
-    folder_metadata_cid: String,
-) -> Result<Vec<FileDetail>, String> {
-    let api_url = "http://127.0.0.1:5001";
-
-    // Download the initial metadata asynchronously
-    let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata_cid)
-        .await
-        .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))?;
-    // Parse the metadata - now async
-    let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
-
-    // Get database pool
-    let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
-
-    // Get folder record from database
-    let folder_record = sqlx::query(
-        r#"
-        SELECT 
-            source, 
-            miner_ids, 
-            created_at, 
-            last_charged_at
-        FROM user_profiles 
-        WHERE file_name = ?
-        LIMIT 1
-        "#
-    )
-    .bind(&folder_name)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("DB query failed for folder {}: {}", folder_name, e))?;
-
-    // Create file details, excluding .ec files
-    let files_in_folder: Vec<FileDetail> = file_entries
-        .into_iter()
-        .filter(|entry| !entry.file_name.ends_with(".ec"))
-        .map(|file_entry| {
-            let mut file_detail = if let Some(row) = &folder_record {
-                FileDetail {
-                    file_name: file_entry.file_name.clone(),
-                    cid: file_entry.cid,
-                    source: row.get::<Option<String>, _>("source").unwrap_or_default(),
-                    file_hash: String::new(),
-                    miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
-                    file_size: file_entry.file_size.unwrap_or(0),
-                    created_at: row.get::<Option<i64>, _>("created_at").unwrap_or(0).to_string(),
-                    last_charged_at: row.get::<Option<i64>, _>("last_charged_at").unwrap_or(0).to_string(),
-                }
-            } else {
-                FileDetail {
-                    file_name: file_entry.file_name.clone(),
-                    cid: file_entry.cid,
-                    source: String::new(),
-                    file_hash: String::new(),
-                    miner_ids: String::new(),
-                    file_size: file_entry.file_size.unwrap_or(0),
-                    created_at: 0.to_string(),
-                    last_charged_at: 0.to_string(),
-                }
-            };
-            file_detail.file_name = clean_file_name(&file_detail.file_name);
-            file_detail
-        })
-        .collect();
-
-    Ok(files_in_folder)
-}
-
-async fn parse_folder_metadata(bytes: &[u8], original_cid: &str) -> Result<Vec<FolderFileEntry>, String> {
-    // First try to parse as direct file list
-    // if let Ok(entries) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
-    //     return Ok(entries);
-    // }
-
-    // If that fails, try to parse as folder reference structure
-    if let Ok(folder_refs) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
-        if let Some(folder_metadata) = folder_refs.iter().find(|f| {
-            f.file_name.ends_with(".folder") || 
-            f.file_name.ends_with("-folder") ||
-            f.file_name.ends_with(".folder.ec_metadata") ||
-            f.file_name.ends_with("-folder.ec_metadata")
-        }) {
-            let api_url = "http://127.0.0.1:5001";
-            let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata.cid)
-                .await
-                .map_err(|e| format!("Failed to download actual folder metadata from CID {}: {}", folder_metadata.cid, e))?;
-            return serde_json::from_slice(&metadata_bytes)
-                .map_err(|e| format!("Failed to parse actual folder metadata from CID {}: {}", folder_metadata.cid, e));
-        }else {
-            return Ok(folder_refs)
-        }
-    }
-
-    Err(format!("Unknown folder metadata format for CID {}", original_cid))
-}
-
-fn clean_file_name(name: &str) -> String {
-    name.trim_end_matches(".ec_metadata")
-        .trim_end_matches(".ff")
-        .trim_end_matches(".ec")
-        .trim_end_matches("-folder")
-        .trim_end_matches(".folder.ec_metadata")
-        .trim_end_matches("-folder.ec_metadata")
-        .trim_end_matches(".ff.ec.metadata")
-        .to_string()
 }
 
 #[tauri::command]
@@ -1515,9 +1408,17 @@ pub async fn add_file_to_private_folder(
     file_name: String,  
     file_data: Vec<u8>, 
     seed_phrase: String,
-    encryption_key: Option<Vec<u8>>,
+    encryption_key: Option<String>,
 ) -> Result<String, String> {
     let api_url = "http://127.0.0.1:5001";
+    // Convert string key to Vec<u8> if provided
+    let encryption_key_bytes = if let Some(key_b64) = encryption_key {
+        let decoded_key = base64::decode(&key_b64)
+            .map_err(|e| format!("Failed to decode base64 key: {}", e))?;
+        Some(decoded_key)
+    } else {
+        None
+    };
 
     // Check if file already exists in folder
     let file_entries = list_folder_contents(folder_name.clone(), folder_metadata_cid.clone()).await?;
@@ -1546,7 +1447,7 @@ pub async fn add_file_to_private_folder(
         let file_name_cloned = format!("{}{}", file_name.clone(), if file_name.clone().ends_with(".ff.ec.metadata") { "" } else { ".ff.ec.metadata" });
 
         let file_data_cloned = file_data.clone();
-        let encryption_key_cloned = encryption_key.clone();
+        let encryption_key_cloned = encryption_key_bytes.clone();
         move || {
             let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
             let file_size = file_data_cloned.len();
@@ -1834,7 +1735,6 @@ pub async fn remove_file_from_private_folder(
     Ok(new_folder_metadata_cid)
 }
 
-
 #[tauri::command]
 pub async fn encrypt_and_upload_file_sync(
     account_id: String,
@@ -2051,7 +1951,6 @@ pub async fn upload_file_public_sync(
 
     Ok(file_cid)
 }
-
 
 #[tauri::command]
 pub async fn encrypt_and_upload_folder_sync(
@@ -2286,7 +2185,6 @@ pub async fn encrypt_and_upload_folder_sync(
     Ok(folder_metadata_cid)
 }
 
-
 #[tauri::command]
 pub async fn public_upload_folder_sync(
     account_id: String,
@@ -2390,4 +2288,114 @@ pub async fn public_upload_folder_sync(
         Err(e) => println!("[public_upload_folder_sync] Storage request error: {}", e),
     }
     Ok(folder_metadata_cid)
+}
+
+#[tauri::command]
+pub async fn list_folder_contents(
+    folder_name: String,
+    folder_metadata_cid: String,
+) -> Result<Vec<FileDetail>, String> {
+    let api_url = "http://127.0.0.1:5001";
+
+    // Download the initial metadata asynchronously
+    let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata_cid)
+        .await
+        .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+    // Parse the metadata - now async
+    let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
+
+    // Get database pool
+    let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
+
+    // Get folder record from database
+    let folder_record = sqlx::query(
+        r#"
+        SELECT 
+            source, 
+            miner_ids, 
+            created_at, 
+            last_charged_at
+        FROM user_profiles 
+        WHERE file_name = ?
+        LIMIT 1
+        "#
+    )
+    .bind(&folder_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("DB query failed for folder {}: {}", folder_name, e))?;
+
+    // Create file details, excluding .ec files
+    let files_in_folder: Vec<FileDetail> = file_entries
+        .into_iter()
+        .filter(|entry| !entry.file_name.ends_with(".ec"))
+        .map(|file_entry| {
+            let mut file_detail = if let Some(row) = &folder_record {
+                FileDetail {
+                    file_name: file_entry.file_name.clone(),
+                    cid: file_entry.cid,
+                    source: row.get::<Option<String>, _>("source").unwrap_or_default(),
+                    file_hash: String::new(),
+                    miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
+                    file_size: file_entry.file_size.unwrap_or(0),
+                    created_at: row.get::<Option<i64>, _>("created_at").unwrap_or(0).to_string(),
+                    last_charged_at: row.get::<Option<i64>, _>("last_charged_at").unwrap_or(0).to_string(),
+                }
+            } else {
+                FileDetail {
+                    file_name: file_entry.file_name.clone(),
+                    cid: file_entry.cid,
+                    source: String::new(),
+                    file_hash: String::new(),
+                    miner_ids: String::new(),
+                    file_size: file_entry.file_size.unwrap_or(0),
+                    created_at: 0.to_string(),
+                    last_charged_at: 0.to_string(),
+                }
+            };
+            file_detail.file_name = clean_file_name(&file_detail.file_name);
+            file_detail
+        })
+        .collect();
+
+    Ok(files_in_folder)
+}
+
+async fn parse_folder_metadata(bytes: &[u8], original_cid: &str) -> Result<Vec<FolderFileEntry>, String> {
+    // First try to parse as direct file list
+    // if let Ok(entries) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
+    //     return Ok(entries);
+    // }
+
+    // If that fails, try to parse as folder reference structure
+    if let Ok(folder_refs) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
+        if let Some(folder_metadata) = folder_refs.iter().find(|f| {
+            f.file_name.ends_with(".folder") || 
+            f.file_name.ends_with("-folder") ||
+            f.file_name.ends_with(".folder.ec_metadata") ||
+            f.file_name.ends_with("-folder.ec_metadata")
+        }) {
+            let api_url = "http://127.0.0.1:5001";
+            let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata.cid)
+                .await
+                .map_err(|e| format!("Failed to download actual folder metadata from CID {}: {}", folder_metadata.cid, e))?;
+            return serde_json::from_slice(&metadata_bytes)
+                .map_err(|e| format!("Failed to parse actual folder metadata from CID {}: {}", folder_metadata.cid, e));
+        }else {
+            return Ok(folder_refs)
+        }
+    }
+
+    Err(format!("Unknown folder metadata format for CID {}", original_cid))
+}
+
+fn clean_file_name(name: &str) -> String {
+    name.trim_end_matches(".ec_metadata")
+        .trim_end_matches(".ff")
+        .trim_end_matches(".ec")
+        .trim_end_matches("-folder")
+        .trim_end_matches(".folder.ec_metadata")
+        .trim_end_matches("-folder.ec_metadata")
+        .trim_end_matches(".ff.ec.metadata")
+        .to_string()
 }

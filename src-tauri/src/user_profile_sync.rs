@@ -205,7 +205,7 @@ pub fn start_user_sync(account_id: &str) {
                 while ipfs_retry_count < max_ipfs_retries && !profile_fetched {
                     match client.get(&ipfs_url).send().await {
                         Ok(resp) => {
-                            println!("resp was {:?}", resp);
+
                             if resp.status().is_success() {
                                 match resp.text().await {
                                     Ok(data) => {
@@ -706,7 +706,8 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                     let type_ = row.get::<String, _>("type");
                     let is_folder = row.get::<bool, _>("is_folder");
 
-                    let base_file_name = if file_name.ends_with(".ec_metadata") {
+                    // Use the full file_name for both files and folders, adjusting for folder suffixes if needed
+                    let base_name = if file_name.ends_with(".ec_metadata") {
                         file_name.trim_end_matches(".ec_metadata").to_string()
                     } else if file_name.ends_with(".folder.ec_metadata") {
                         file_name.trim_end_matches(".folder.ec_metadata").to_string()
@@ -722,14 +723,26 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
 
                     let mut source = "Hippius".to_string();
                     if type_ == "public" && public_sync_path.is_some() {
-                        let public_path = format!("{}/{}", public_sync_path.as_ref().unwrap(), base_file_name);
-                        if Path::new(&public_path).exists() {
-                            source = public_path;
+                        let full_path = if is_folder {
+                            // For folders, use the base_name directly as the folder name
+                            format!("{}/{}", public_sync_path.as_ref().unwrap(), base_name)
+                        } else {
+                            // For files, use the base_name as the file name
+                            format!("{}/{}", public_sync_path.as_ref().unwrap(), base_name)
+                        };
+                        if Path::new(&full_path).exists() {
+                            source = full_path;
                         }
                     } else if type_ == "private" && private_sync_path.is_some() {
-                        let private_path = format!("{}/{}", private_sync_path.as_ref().unwrap(), base_file_name);
-                        if Path::new(&private_path).exists() {
-                            source = private_path;
+                        let full_path = if is_folder {
+                            // For folders, use the base_name directly as the folder name
+                            format!("{}/{}", private_sync_path.as_ref().unwrap(), base_name)
+                        } else {
+                            // For files, use the base_name as the file name
+                            format!("{}/{}", private_sync_path.as_ref().unwrap(), base_name)
+                        };
+                        if Path::new(&full_path).exists() {
+                            source = full_path;
                         }
                     }
 

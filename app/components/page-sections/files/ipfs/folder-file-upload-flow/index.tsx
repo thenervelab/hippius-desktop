@@ -120,7 +120,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     fileName: file.name,
                     fileData: fileData,
                     seedPhrase: mnemonic,
-                    ...(isPrivateFolder ? { encryptionKey: null } : {})
+                    ...(isPrivateFolder ? { encryptionKey: "o7GhN00iAFJY8clDDG66BhcgxVf8TYqIc+be4rUfkKc=" } : {})
                 };
                 console.log("params for adding file:", params);
 
@@ -139,7 +139,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
 
             onSuccess();
         } catch (error) {
-            console.error("Failed to add files to folder:", error);
+            console.error("Failed to add files to folder:", error, "  ", folderName);
             toast.error(
                 `Failed to add files: ${error instanceof Error ? error.message : String(error)}`,
                 { id: toastId }
