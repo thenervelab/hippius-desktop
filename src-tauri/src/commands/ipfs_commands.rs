@@ -3,7 +3,7 @@ use crate::utils::{
         encrypt_file, decrypt_file
     },
     ipfs::{
-        download_from_ipfs,upload_to_ipfs
+        download_from_ipfs, download_from_ipfs_async,upload_to_ipfs
     },
     file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, request_folder_storage, sanitize_name,
         request_file_storage , remove_from_sync_folder, copy_to_sync_folder, delete_and_unpin_user_file_records_from_folder}
@@ -908,7 +908,7 @@ pub async fn encrypt_and_upload_folder(
             });
 
             // Add file metadata CID and chunk CIDs to all_files_for_storage
-            let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ec_metadata") { "" } else { ".ec_metadata" });
+            let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ff.ec_metadata") { "" } else { ".ff..ec_metadata" });
             all_files_for_storage.push((meta_filename.clone(), metadata_cid.clone()));
             all_files_for_storage.extend(chunk_pairs);
         }
@@ -970,25 +970,17 @@ pub async fn list_folder_contents(
     folder_metadata_cid: String,
 ) -> Result<Vec<FileDetail>, String> {
     let api_url = "http://127.0.0.1:5001";
-    
-    // First download the initial metadata
-    let metadata_bytes = tokio::task::spawn_blocking({
-        let folder_metadata_cid = folder_metadata_cid.clone();
-        move || download_from_ipfs(api_url, &folder_metadata_cid)
-            .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))
-    })
-    .await
-    .map_err(|e| format!("Failed to execute blocking task for CID {}: {}", folder_metadata_cid, e))??;
 
-    // Try to parse as both possible formats
-    let file_entries = match parse_folder_metadata(&metadata_bytes, &folder_metadata_cid) {
-        Ok(entries) => entries,
-        Err(e) => return Err(e),
-    };
+    // Download the initial metadata asynchronously
+    let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata_cid)
+        .await
+        .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+    // Parse the metadata - now async
+    let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
 
     // Get database pool
     let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
-        
+
     // Get folder record from database
     let folder_record = sqlx::query(
         r#"
@@ -1007,68 +999,64 @@ pub async fn list_folder_contents(
     .await
     .map_err(|e| format!("DB query failed for folder {}: {}", folder_name, e))?;
 
-    // For each file from IPFS, create file detail
-    let mut files_in_folder = Vec::new();
-    
-    for file_entry in file_entries {
-        let file_detail = if let Some(row) = &folder_record {
-            // Use folder's DB info for all files
-            FileDetail {
-                file_name: file_entry.file_name.clone(),
-                cid: file_entry.cid,
-                source: row.get::<Option<String>, _>("source").unwrap_or_default(),
-                file_hash: String::new(),
-                miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
-                file_size: file_entry.file_size.unwrap_or(0),
-                created_at: row.get::<Option<i64>, _>("created_at").unwrap_or(0).to_string(),
-                last_charged_at: row.get::<Option<i64>, _>("last_charged_at").unwrap_or(0).to_string(),
-            }
-        } else {
-            // No folder record found, use defaults
-            FileDetail {
-                file_name: file_entry.file_name.clone(),
-                cid: file_entry.cid,
-                source: String::new(),
-                file_hash: String::new(),
-                miner_ids: String::new(),
-                file_size: file_entry.file_size.unwrap_or(0),
-                created_at: 0.to_string(),
-                last_charged_at: 0.to_string(),
-            }
-        };
-        
-        // Clean file name at the end
-        let mut file_detail = file_detail;
-        file_detail.file_name = clean_file_name(&file_detail.file_name);
-            
-        files_in_folder.push(file_detail);
-    }
+    // Create file details, excluding .ec files
+    let files_in_folder: Vec<FileDetail> = file_entries
+        .into_iter()
+        .filter(|entry| !entry.file_name.ends_with(".ec"))
+        .map(|file_entry| {
+            let mut file_detail = if let Some(row) = &folder_record {
+                FileDetail {
+                    file_name: file_entry.file_name.clone(),
+                    cid: file_entry.cid,
+                    source: row.get::<Option<String>, _>("source").unwrap_or_default(),
+                    file_hash: String::new(),
+                    miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
+                    file_size: file_entry.file_size.unwrap_or(0),
+                    created_at: row.get::<Option<i64>, _>("created_at").unwrap_or(0).to_string(),
+                    last_charged_at: row.get::<Option<i64>, _>("last_charged_at").unwrap_or(0).to_string(),
+                }
+            } else {
+                FileDetail {
+                    file_name: file_entry.file_name.clone(),
+                    cid: file_entry.cid,
+                    source: String::new(),
+                    file_hash: String::new(),
+                    miner_ids: String::new(),
+                    file_size: file_entry.file_size.unwrap_or(0),
+                    created_at: 0.to_string(),
+                    last_charged_at: 0.to_string(),
+                }
+            };
+            file_detail.file_name = clean_file_name(&file_detail.file_name);
+            file_detail
+        })
+        .collect();
+
     Ok(files_in_folder)
 }
 
-fn parse_folder_metadata(bytes: &[u8], original_cid: &str) -> Result<Vec<FolderFileEntry>, String> {
+async fn parse_folder_metadata(bytes: &[u8], original_cid: &str) -> Result<Vec<FolderFileEntry>, String> {
     // First try to parse as direct file list
-    if let Ok(entries) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
-        return Ok(entries);
-    }
+    // if let Ok(entries) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
+    //     return Ok(entries);
+    // }
 
     // If that fails, try to parse as folder reference structure
-    if let Ok(folder_refs) = serde_json::from_slice::<Vec<FolderReference>>(bytes) {
-        // Find the actual folder metadata reference
+    if let Ok(folder_refs) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
         if let Some(folder_metadata) = folder_refs.iter().find(|f| {
             f.file_name.ends_with(".folder") || 
             f.file_name.ends_with("-folder") ||
             f.file_name.ends_with(".folder.ec_metadata") ||
             f.file_name.ends_with("-folder.ec_metadata")
         }) {
-            // Download the actual folder metadata
             let api_url = "http://127.0.0.1:5001";
-            let metadata_bytes = download_from_ipfs(api_url, &folder_metadata.cid)
+            let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata.cid)
+                .await
                 .map_err(|e| format!("Failed to download actual folder metadata from CID {}: {}", folder_metadata.cid, e))?;
-
-            // Parse as direct file list
             return serde_json::from_slice(&metadata_bytes)
                 .map_err(|e| format!("Failed to parse actual folder metadata from CID {}: {}", folder_metadata.cid, e));
+        }else {
+            return Ok(folder_refs)
         }
     }
 
@@ -1082,6 +1070,7 @@ fn clean_file_name(name: &str) -> String {
         .trim_end_matches("-folder")
         .trim_end_matches(".folder.ec_metadata")
         .trim_end_matches("-folder.ec_metadata")
+        .trim_end_matches(".ff.ec.metadata")
         .to_string()
 }
 
@@ -1310,7 +1299,7 @@ pub async fn add_file_to_public_folder(
     let (new_file_entry, new_file_pairs, new_folder_metadata_cid) = tokio::task::spawn_blocking({
         let api_url = api_url.to_string();
         let file_data_cloned = file_data.clone();
-        let file_name_cloned = file_name.clone();
+        let file_name_cloned = format!("{}{}", file_name.clone(), if file_name.clone().ends_with(".ff") { "" } else { ".ff" });
         move || {
             // Create temporary directory inside the blocking task
             let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {}", e))?;
@@ -1573,7 +1562,8 @@ pub async fn add_file_to_private_folder(
     // Encrypt, erasure-code, and upload the file, and create .ec_metadata
     let (new_file_entry, file_meta_pair) = tokio::task::spawn_blocking({
         let api_url = api_url.to_string();
-        let file_name_cloned = file_name.clone();
+        let file_name_cloned = format!("{}{}", file_name.clone(), if file_name.clone().ends_with(".ff.ec.metadata") { "" } else { ".ff.ec.metadata" });
+
         let file_data_cloned = file_data.clone();
         let encryption_key_cloned = encryption_key.clone();
         move || {

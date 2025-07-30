@@ -34,6 +34,8 @@ pub fn sanitize_name(name: &str) -> String {
         name.trim_end_matches("-folder.ec_metadata").to_string()
     } else if name.ends_with(".folder.ec_metadata") {
         name.trim_end_matches(".folder.ec_metadata").to_string()
+    } else if name.ends_with(".ff.ec_metadata") {
+        name.trim_end_matches(".ff.ec_metadata").to_string()
     } else if name.ends_with(".folder") {
         name.trim_end_matches(".folder").to_string()
     } else {

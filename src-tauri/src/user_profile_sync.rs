@@ -178,6 +178,7 @@ pub fn start_user_sync(account_id: &str) {
 
             let mut records_to_insert: Vec<UserProfileFile> = Vec::new();
             let mut seen_files: HashSet<(String, String)> = HashSet::new();
+            let mut profile_parsed_successfully = false;
 
             // Step 1: Fetch and parse user profile data
             let profile_res = storage
@@ -196,13 +197,14 @@ pub fn start_user_sync(account_id: &str) {
                     continue;
                 }
             };
-
+            println!("profile cid : {}", profile_cid);
             if !profile_cid.is_empty() {
                 let ipfs_url = format!("https://get.hippius.network/ipfs/{}", profile_cid);
                 match client.get(&ipfs_url).send().await {
                     Ok(resp) => {
                         if let Ok(data) = resp.text().await {
                             if let Ok(profile_data) = serde_json::from_str::<serde_json::Value>(&data) {
+                                profile_parsed_successfully = true;
                                 if let Some(files) = profile_data.as_array() {
                                     for file in files {
                                         let file_hash = if let Some(v) = file.get("file_hash") {
@@ -339,6 +341,8 @@ pub fn start_user_sync(account_id: &str) {
                             } else {
                                 eprintln!("[UserSync] Invalid JSON for CID {}: {}", profile_cid, data);
                             }
+                        }else {
+                            println!("failed to parse user profile");
                         }
                     }
                     Err(e) => {
@@ -555,56 +559,61 @@ pub fn start_user_sync(account_id: &str) {
                 }
             }
 
-            // Step 3: Clear the entire user_profiles table and insert records
+            // Step 3: Clear the entire user_profiles table and insert records only if profile was parsed successfully and there is more than one record
             if let Some(pool) = DB_POOL.get() {
-                match sqlx::query("DELETE FROM user_profiles")
-                    .execute(pool)
-                    .await
-                {
-                    Ok(_) => println!("[UserSync] Cleared user_profiles table"),
-                    Err(e) => {
-                        eprintln!("[UserSync] Failed to clear user_profiles table: {e}");
-                        time::sleep(Duration::from_secs(120)).await;
-                        continue;
+                if  records_to_insert.len() > 1 {
+                    match sqlx::query("DELETE FROM user_profiles")
+                        .execute(pool)
+                        .await
+                    {
+                        Ok(_) => println!("[UserSync] Cleared user_profiles table"),
+                        Err(e) => {
+                            eprintln!("[UserSync] Failed to clear user_profiles table: {e}");
+                            time::sleep(Duration::from_secs(120)).await;
+                            continue;
+                        }
                     }
-                }
 
-                println!("[UserSync] Total records inserted: {}", records_to_insert.len());
-                for record in records_to_insert {
-                    let insert_result = sqlx::query(
-                        "INSERT INTO user_profiles (
-                            owner, cid, file_hash, file_name, file_size_in_bytes,
-                            is_assigned, last_charged_at, main_req_hash,
-                            selected_validator, total_replicas, block_number, profile_cid, source, 
-                            miner_ids, created_at, type, is_folder
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                    )
-                    .bind(&record.owner)
-                    .bind(&record.cid)
-                    .bind(&record.file_hash)
-                    .bind(&record.file_name)
-                    .bind(record.file_size_in_bytes)
-                    .bind(record.is_assigned)
-                    .bind(record.last_charged_at)
-                    .bind(&record.main_req_hash)
-                    .bind(&record.selected_validator)
-                    .bind(record.total_replicas)
-                    .bind(record.block_number)
-                    .bind(&record.profile_cid)
-                    .bind(&record.source)
-                    .bind(&record.miner_ids)
-                    .bind(record.created_at)
-                    .bind(&record.file_type)
-                    .bind(record.is_folder)
-                    .execute(pool)
-                    .await;
+                    println!("[UserSync] Total records inserted: {}", records_to_insert.len());
+                    for record in records_to_insert {
+                        let insert_result = sqlx::query(
+                            "INSERT INTO user_profiles (
+                                owner, cid, file_hash, file_name, file_size_in_bytes,
+                                is_assigned, last_charged_at, main_req_hash,
+                                selected_validator, total_replicas, block_number, profile_cid, source, 
+                                miner_ids, created_at, type, is_folder
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        )
+                        .bind(&record.owner)
+                        .bind(&record.cid)
+                        .bind(&record.file_hash)
+                        .bind(&record.file_name)
+                        .bind(record.file_size_in_bytes)
+                        .bind(record.is_assigned)
+                        .bind(record.last_charged_at)
+                        .bind(&record.main_req_hash)
+                        .bind(&record.selected_validator)
+                        .bind(record.total_replicas)
+                        .bind(record.block_number)
+                        .bind(&record.profile_cid)
+                        .bind(&record.source)
+                        .bind(&record.miner_ids)
+                        .bind(record.created_at)
+                        .bind(&record.file_type)
+                        .bind(record.is_folder)
+                        .execute(pool)
+                        .await;
 
-                    if let Err(e) = insert_result {
-                        eprintln!(
-                            "[UserSync] Failed to insert record for file '{}': {e}",
-                            record.file_name
-                        );
+                        if let Err(e) = insert_result {
+                            eprintln!(
+                                "[UserSync] Failed to insert record for file '{}': {e}",
+                                record.file_name
+                            );
+                        }
                     }
+                } else {
+                    println!("[UserSync] Skipping user_profiles table clear: profile_parsed_successfully={}, records_to_insert.len()={}", 
+                        profile_parsed_successfully, records_to_insert.len());
                 }
             }
 
