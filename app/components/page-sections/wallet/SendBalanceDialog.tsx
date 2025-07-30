@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import DialogContainer from "../../ui/dialog-container";
 import { AbstractIconWrapper, CardButton, Icons, Input } from "../../ui";
 import { AlertCircle } from "lucide-react";
+import AddressSelect from "./AddressSelect";
 
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
@@ -29,7 +30,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   availableBalance,
   mnemonic,
   refetchBalance,
-  polkadotAddress,
+  polkadotAddress
 }) => {
   const [address, setAddress] = useState("");
   const [amount, setAmount] = useState("");
@@ -128,15 +129,13 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       await invoke<string>("transfer_balance_tauri", {
         senderSeed: mnemonic,
         recipientAddress: address,
-        amount: planckAmount,
+        amount: planckAmount
       });
 
       toast.success("Transfer successful!", { duration: 3000 });
 
-      // Refresh balance so UI is up to date
       refetchBalance?.();
 
-      // Reset form & close
       onClose();
       setAddress("");
       setAmount("");
@@ -145,15 +144,15 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     } catch (e: any) {
       toast.error("Transfer failed", {
         description: e.toString(),
-        duration: 5000,
+        duration: 5000
       });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setAddress(e.target.value);
+  const handleAddressChange = (value: string) => {
+    setAddress(value);
     if (errors.address) setErrors((prev) => ({ ...prev, address: undefined }));
   };
 
@@ -201,14 +200,12 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                 >
                   Recipient Address
                 </Label>
-                <Input
-                  id="address"
-                  placeholder="Enter Address"
-                  type="text"
+                <AddressSelect
                   value={address}
                   onChange={handleAddressChange}
-                  className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${errors.address ? "border-error-50" : ""}`}
+                  error={errors.address}
                   disabled={loading}
+                  placeholder="Enter or choose from address book"
                 />
                 {errors.address && (
                   <div className="flex items-center gap-2 text-error-70 text-sm font-medium mt-1">
@@ -233,7 +230,9 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                     type="text"
                     value={amount}
                     onChange={handleAmountChange}
-                    className={`pr-24 border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${errors.amount ? "border-error-50" : ""}`}
+                    className={`pr-24 border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${
+                      errors.amount ? "border-error-50" : ""
+                    }`}
                     disabled={loading}
                   />
                   <div className="absolute right-3 top-[29px] -translate-y-1/2 flex items-center gap-2 text-base font-medium">
