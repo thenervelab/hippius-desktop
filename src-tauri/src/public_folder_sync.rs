@@ -146,7 +146,7 @@ async fn start_sync_process(
                     }
                     let path_str_clone = path_str.clone();
                     tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        tokio::time::sleep(Duration::from_secs(300)).await;
                         let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                         recently_uploaded.remove(&path_str_clone);
                     });
@@ -781,7 +781,7 @@ async fn upload_path(path: &Path, account_id: &str, seed_phrase: &str, is_folder
             recently_uploaded.insert(path_str.clone());
             let path_str_clone = path_str.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(2)).await;
+                tokio::time::sleep(Duration::from_secs(300)).await;
                 let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                 recently_uploaded.remove(&path_str_clone);
             });

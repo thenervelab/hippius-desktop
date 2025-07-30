@@ -363,7 +363,7 @@ pub async fn copy_to_sync_and_add_to_db(
         })
         .collect::<Vec<String>>();
     tokio::spawn(async move {
-        sleep(Duration::from_secs(30)).await;
+        sleep(Duration::from_secs(300)).await;
         let mut recently_uploaded = if is_public {
             PUBLIC_RECENTLY_UPLOADED.lock().unwrap()
         } else {

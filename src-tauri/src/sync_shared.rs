@@ -93,54 +93,6 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     let file_name = file_path.file_name().unwrap().to_string_lossy();
     let file_type = if is_public { "public" } else { "private" };
 
-    if is_folder {
-        let mut files = Vec::new();
-        match collect_files_recursively(&file_path, &mut files) {
-            Ok(_) => {
-                for file in &files {
-                    let file_name = file.file_name().unwrap().to_string_lossy();
-                    let exists: Option<(String,)> = sqlx::query_as(
-                        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?"
-                    )
-                    .bind(&file_name)
-                    .bind(owner)
-                    .bind(file_type)
-                    .fetch_optional(pool)
-                    .await
-                    .unwrap();
-                    if exists.is_none() {
-                        sqlx::query(
-                            "INSERT INTO sync_folder_files (
-                                file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                        )
-                        .bind(&file_name)
-                        .bind(owner)
-                        .bind("")
-                        .bind("")
-                        .bind(0)
-                        .bind(false)
-                        .bind(0)
-                        .bind("")
-                        .bind("")
-                        .bind(0)
-                        .bind(0)
-                        .bind("")
-                        .bind("")
-                        .bind("")
-                        .bind(file_type)
-                        .bind(false)
-                        .execute(pool)
-                        .await
-                        .unwrap();
-                    }
-                }
-            },
-            Err(e) => {
-                eprintln!("Failed to read directory: {}", e);
-            }
-        }
-    }
     let exists: Option<(String,)> = sqlx::query_as(
         "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?"
     )
