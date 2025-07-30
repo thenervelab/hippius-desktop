@@ -48,17 +48,17 @@ fn format_file_size(size_bytes: usize) -> String {
 #[tauri::command]
 pub async fn encrypt_and_upload_file(
     account_id: String,
-    file_data: Vec<u8>,  // Changed from file_path to file_data
-    file_name: String,  // Added file_name parameter
+    file_data: Vec<u8>,
+    file_name: String,
     seed_phrase: String,
     encryption_key: Option<Vec<u8>>,
 ) -> Result<String, String> {
-    println!("processing file: {:?}", file_name);    
+    println!("Processing file: {:?}", file_name);
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE; // 1MB
-    
+
     // Check if file already exists in DB for this account
     if let Some(pool) = DB_POOL.get() {
         let row: Option<(String,)> = sqlx::query_as(
@@ -76,31 +76,36 @@ pub async fn encrypt_and_upload_file(
 
     let api_url_cloned = api_url.to_string();
     let encryption_key_cloned = encryption_key.clone();
-    let file_data_clone = file_data.clone(); // Clone file_data for use in closure
-    // Run blocking work and return file_name, metadata_cid, and chunk_pairs (filename,cid)
+    let file_data_clone = file_data.clone();
     let (file_name, metadata_cid, chunk_pairs) = tokio::task::spawn_blocking(move || {
         // Calculate original file hash
         let mut hasher = Sha256::new();
         hasher.update(&file_data_clone);
         let original_file_hash = format!("{:x}", hasher.finalize());
+        println!("Original file size: {}, hash: {}", file_data_clone.len(), original_file_hash);
 
         // Encrypt using centralized function
         let to_process = tauri::async_runtime::block_on(encrypt_file(&file_data_clone, encryption_key_cloned))?;
+        println!("Encrypted data size: {}", to_process.len());
+
         // Split into chunks
         let mut chunks = vec![];
         for i in (0..to_process.len()).step_by(chunk_size) {
             let mut chunk = to_process[i..std::cmp::min(i + chunk_size, to_process.len())].to_vec();
             if chunk.len() < chunk_size {
                 chunk.resize(chunk_size, 0);
+                println!("Padded chunk {} to size {}", chunks.len(), chunk.len());
             }
             chunks.push(chunk);
         }
+
         // Erasure code each chunk
         let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
         let mut all_chunk_info = vec![];
-        let mut chunk_pairs: Vec<(String,String)> = Vec::new();
+        let mut chunk_pairs: Vec<(String, String)> = Vec::new();
         let file_id = Uuid::new_v4().to_string();
+
         for (orig_idx, chunk) in chunks.iter().enumerate() {
             // Split chunk into k sub-blocks
             let sub_block_size = (chunk.len() + k - 1) / k;
@@ -113,11 +118,13 @@ pub async fn encrypt_and_upload_file(
                 }
                 sub_block
             }).collect();
+
             // Prepare m shards
             let mut shards: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
             for _ in k..m {
                 shards.push(Some(vec![0u8; sub_block_size]));
             }
+
             // Encode
             let mut shard_refs: Vec<_> = shards
                 .iter_mut()
@@ -125,6 +132,7 @@ pub async fn encrypt_and_upload_file(
                 .collect();
             r.encode(&mut shard_refs)
                 .map_err(|e| format!("ReedSolomon encode error: {e}"))?;
+
             // Write and upload each shard
             for (share_idx, shard) in shard_refs.iter().enumerate() {
                 let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
@@ -149,6 +157,7 @@ pub async fn encrypt_and_upload_file(
                 chunk_pairs.push((chunk_name.clone(), cid.clone()));
             }
         }
+
         // Build metadata
         let file_extension = Path::new(&file_name).extension()
             .map(|s| s.to_string_lossy().to_string())
@@ -172,13 +181,15 @@ pub async fn encrypt_and_upload_file(
             chunks: all_chunk_info,
             metadata_cid: None,
         };
+
         // Write metadata to temp file
         let metadata_path = temp_dir.path().join(format!("{}_metadata.json", file_id));
         let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
         fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
+
         // Upload metadata
         let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap()).map_err(|e| e.to_string())?;
-        Ok::<(String, String, Vec<(String,String)>), String>((file_name, metadata_cid, chunk_pairs))
+        Ok::<(String, String, Vec<(String, String)>), String>((file_name, metadata_cid, chunk_pairs))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -187,11 +198,11 @@ pub async fn encrypt_and_upload_file(
     let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ec_metadata") { "" } else { ".ec_metadata" });
     let mut files_for_storage = Vec::with_capacity(chunk_pairs.len() + 1);
     files_for_storage.push((meta_filename.clone(), metadata_cid.clone()));
-    files_for_storage.extend(chunk_pairs); // <-- add all chunk files
-    let storage_result = request_erasure_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
+    files_for_storage.extend(chunk_pairs);
+
+    let storage_result = request_erasure_storage(&meta_filename, &files_for_storage, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
-            // Create a temporary file to pass to copy_to_sync_and_add_to_db
             let temp_dir = tempdir().map_err(|e| e.to_string())?;
             let temp_path = temp_dir.path().join(&file_name);
             fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
@@ -211,12 +222,11 @@ pub async fn download_and_decrypt_file(
     output_file: String,
     encryption_key: Option<String>,
 ) -> Result<(), String> {
-    // Define the API URL inside the function
     let api_url = "http://127.0.0.1:5001";
-    
+
     let final_encryption_key = if let Some(key_b64) = encryption_key {
         println!("Received base64 encryption key: {}", key_b64);
-        let decoded_key = decode(&key_b64)
+        let decoded_key = base64::decode(&key_b64)
             .map_err(|e| format!("Failed to decode base64 key: {}", e))?;
         println!("Decoded key bytes: {:?}", decoded_key);
         Some(decoded_key)
@@ -226,20 +236,18 @@ pub async fn download_and_decrypt_file(
     };
 
     tokio::task::spawn_blocking(move || {
-        println!("metadata_cid is {}", metadata_cid);
-        // Download metadata
-        let metadata_bytes =
-            download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
-        let metadata: Metadata =
-            serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
+        println!("Downloading metadata CID: {}", metadata_cid);
+        let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
+        let metadata: Metadata = serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
+        println!("Metadata loaded: original size {}, encrypted size {}", metadata.original_file.size, metadata.erasure_coding.encrypted_size);
 
         let k = metadata.erasure_coding.k;
         let m = metadata.erasure_coding.m;
         let chunk_size = metadata.erasure_coding.chunk_size;
         let file_hash = &metadata.original_file.hash;
+
         // Group chunks by original chunk index
-        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> =
-            std::collections::HashMap::new();
+        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
         for chunk in &metadata.chunks {
             chunk_map
                 .entry(chunk.original_chunk)
@@ -251,14 +259,12 @@ pub async fn download_and_decrypt_file(
 
         for orig_idx in 0..chunk_map.len() {
             let available_chunks = chunk_map.get(&orig_idx).ok_or("Missing chunk info")?;
-            // Download shards into Vec<Option<Vec<u8>>>
             let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
             for chunk in available_chunks {
                 let data = download_from_ipfs(&api_url, &chunk.cid.cid).map_err(|e| e.to_string())?;
                 shards[chunk.share_idx] = Some(data);
             }
 
-            // Check if we have enough
             let available_count = shards.iter().filter(|s| s.is_some()).count();
             if available_count < k {
                 return Err(format!(
@@ -267,28 +273,23 @@ pub async fn download_and_decrypt_file(
                 ));
             }
 
-            // Reconstruct
             let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
             r.reconstruct_data(&mut shards)
                 .map_err(|e| format!("Reconstruction failed: {e}"))?;
 
-            // Calculate how many bytes to take for this chunk
             let is_last_chunk = orig_idx == chunk_map.len() - 1;
-            let encrypted_size = metadata.erasure_coding.encrypted_size;
             let chunk_bytes_needed = if !is_last_chunk {
                 chunk_size
             } else {
-                // For the last chunk, only take the remaining bytes needed
                 let total_bytes_so_far: usize = chunk_size * orig_idx;
-                encrypted_size.saturating_sub(total_bytes_so_far)
+                metadata.erasure_coding.encrypted_size.saturating_sub(total_bytes_so_far)
             };
 
             let mut chunk_data = Vec::with_capacity(chunk_bytes_needed);
             let mut bytes_collected = 0;
             for i in 0..k {
                 if let Some(ref shard) = shards[i] {
-                    let bytes_to_take =
-                        std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
+                    let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
                     chunk_data.extend_from_slice(&shard[..bytes_to_take]);
                     bytes_collected += bytes_to_take;
                     if bytes_collected == chunk_bytes_needed {
@@ -296,6 +297,7 @@ pub async fn download_and_decrypt_file(
                     }
                 }
             }
+            println!("Chunk {}: reconstructed size {}, expected {}", orig_idx, chunk_data.len(), chunk_bytes_needed);
             reconstructed_chunks.push(chunk_data);
         }
 
@@ -304,16 +306,14 @@ pub async fn download_and_decrypt_file(
         for chunk in reconstructed_chunks {
             encrypted_data.extend_from_slice(&chunk);
         }
-        // Truncate to expected total
-        let encrypted_size = metadata.erasure_coding.encrypted_size;
-        if encrypted_data.len() > encrypted_size {
-            encrypted_data.truncate(encrypted_size);
-        }
-        // Decrypt using centralized function
+        println!("Combined encrypted data size: {}, expected: {}", encrypted_data.len(), metadata.erasure_coding.encrypted_size);
+
+        // Decrypt
         let decrypted_data = tauri::async_runtime::block_on(decrypt_file(
             &encrypted_data,
             final_encryption_key.clone(),
         ))?;
+        println!("Decrypted data size: {}, expected original size: {}", decrypted_data.len(), metadata.original_file.size);
 
         // Hash check
         let mut hasher = Sha256::new();
@@ -325,14 +325,14 @@ pub async fn download_and_decrypt_file(
                 file_hash, actual_hash
             ));
         }
+
         // Save
-        std::fs::write(output_file.clone(), decrypted_data).map_err(|e| e.to_string())?;
-        let mut hasher = Sha256::new();
-        hasher.update(&encrypted_data);
+        std::fs::write(&output_file, &decrypted_data).map_err(|e| format!("Failed to write output file: {}", e))?;
+        println!("File written to {} with size {}", output_file, decrypted_data.len());
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("Spawn blocking error: {}", e))?
 }
 
 #[tauri::command]
@@ -435,11 +435,11 @@ pub async fn download_file_public(
 #[tauri::command]
 pub async fn public_upload_with_erasure(
     account_id: String,
-    file_data: Vec<u8>,  // Changed from file_path to file_data
-    file_name: String,   // Added file_name parameter
+    file_data: Vec<u8>,
+    file_name: String,
     seed_phrase: String,
 ) -> Result<String, String> {
-    println!("[public_upload_with_erasure] processing file: {:?}", file_name);    
+    println!("[public_upload_with_erasure] Processing file: {:?}", file_name);
     let api_url = "http://127.0.0.1:5001";
     let k = DEFAULT_K;
     let m = DEFAULT_M;
@@ -461,16 +461,16 @@ pub async fn public_upload_with_erasure(
     }
 
     let api_url_cloned = api_url.to_string();
-    let file_data_clone = file_data.clone(); // Clone file_data for use in closure
+    let file_data_clone = file_data.clone();
 
-    // Run blocking work and return file_name, metadata_cid, original_file_cid, and chunk_pairs
     let (file_name, metadata_cid, original_file_cid, chunk_pairs) = tokio::task::spawn_blocking(move || {
         // Calculate original file hash
         let mut hasher = Sha256::new();
         hasher.update(&file_data_clone);
         let original_file_hash = format!("{:x}", hasher.finalize());
+        println!("Original file size: {}, hash: {}", file_data_clone.len(), original_file_hash);
 
-        // Upload original file to IPFS (create temp file first)
+        // Upload original file to IPFS
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
         let temp_path = temp_dir.path().join("original_temp_file");
         fs::write(&temp_path, &file_data_clone).map_err(|e| e.to_string())?;
@@ -479,11 +479,14 @@ pub async fn public_upload_with_erasure(
 
         // Use file_data_clone directly (no encryption)
         let to_process = file_data_clone;
+        println!("Data to process size: {}", to_process.len());
+
         // Split into chunks
         let mut chunks = vec![];
         for i in (0..to_process.len()).step_by(chunk_size) {
             let mut chunk = to_process[i..std::cmp::min(i + chunk_size, to_process.len())].to_vec();
             if chunk.len() < chunk_size {
+                println!("Padded chunk {} from {} to {}", chunks.len(), chunk.len(), chunk_size);
                 chunk.resize(chunk_size, 0);
             }
             chunks.push(chunk);
@@ -497,7 +500,6 @@ pub async fn public_upload_with_erasure(
         let file_id = Uuid::new_v4().to_string();
 
         for (orig_idx, chunk) in chunks.iter().enumerate() {
-            // Split chunk into k sub-blocks
             let sub_block_size = (chunk.len() + k - 1) / k;
             let sub_blocks: Vec<Vec<u8>> = (0..k)
                 .map(|j| {
@@ -511,21 +513,18 @@ pub async fn public_upload_with_erasure(
                 })
                 .collect();
 
-            // Prepare m shards
             let mut shards: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
             for _ in k..m {
                 shards.push(Some(vec![0u8; sub_block_size]));
             }
 
-            // Encode
             let mut shard_refs: Vec<_> = shards
                 .iter_mut()
                 .map(|x| x.as_mut().unwrap().as_mut_slice())
                 .collect();
             r.encode(&mut shard_refs)
-                .map_err(|e| format!("ReedSolomon encode error: {}",e))?;
+                .map_err(|e| format!("ReedSolomon encode error: {e}"))?;
 
-            // Write and upload each shard
             for (share_idx, shard) in shard_refs.iter().enumerate() {
                 let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
                 let chunk_path = temp_dir.path().join(&chunk_name);
@@ -551,15 +550,14 @@ pub async fn public_upload_with_erasure(
             }
         }
 
-        // Build metadata
         let file_extension = Path::new(&file_name).extension()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        let encrypted_size = to_process.len();
+        let file_size = to_process.len();
         let metadata = Metadata {
             original_file: OriginalFileInfo {
                 name: file_name.clone(),
-                size: to_process.len(),
+                size: file_size,
                 hash: original_file_hash,
                 extension: file_extension,
             },
@@ -569,18 +567,16 @@ pub async fn public_upload_with_erasure(
                 chunk_size,
                 encrypted: false,
                 file_id: file_id.clone(),
-                encrypted_size,
+                encrypted_size: file_size,
             },
             chunks: all_chunk_info,
             metadata_cid: None,
         };
 
-        // Write metadata to temp file
         let metadata_path = temp_dir.path().join(format!("{}_metadata.json", file_id));
         let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
         fs::write(&metadata_path, metadata_json.as_bytes()).map_err(|e| e.to_string())?;
 
-        // Upload metadata
         let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap())
             .map_err(|e| e.to_string())?;
 
@@ -589,20 +585,17 @@ pub async fn public_upload_with_erasure(
     .await
     .map_err(|e| e.to_string())??;
 
-    // Build files array: original file + metadata + chunks
     let meta_filename = format!("{}{}", file_name, if file_name.ends_with(".ec_metadata") { "" } else { ".ec_metadata" });
     let mut files_for_storage = Vec::with_capacity(chunk_pairs.len() + 2);
-    files_for_storage.push((meta_filename.clone(), metadata_cid.clone())); // Metadata CID
-    files_for_storage.extend(chunk_pairs); // Chunk CIDs
+    files_for_storage.push((meta_filename.clone(), metadata_cid.clone()));
+    files_for_storage.extend(chunk_pairs);
 
     let storage_result = request_erasure_storage(&meta_filename, &files_for_storage, api_url, &seed_phrase).await;
     match storage_result {
         Ok(res) => {
-            // Create a temporary file to pass to copy_to_sync_and_add_to_db
             let temp_dir = tempdir().map_err(|e| e.to_string())?;
             let temp_path = temp_dir.path().join(&file_name);
             fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
-            
             copy_to_sync_and_add_to_db(
                 &temp_path,
                 &account_id,
@@ -611,7 +604,7 @@ pub async fn public_upload_with_erasure(
                 true,
                 false,
                 &meta_filename,
-                true
+                true,
             )
             .await;
             println!("[public_upload_with_erasure] Storage request result: {}", res);
@@ -628,23 +621,20 @@ pub async fn public_download_with_erasure(
     metadata_cid: String,
     output_file: String,
 ) -> Result<(), String> {
-    // Define the API URL inside the function
     let api_url = "http://127.0.0.1:5001";
-    
+
     tokio::task::spawn_blocking(move || {
-        // Download metadata
-        let metadata_bytes =
-            download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
-        let metadata: Metadata =
-            serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
+        println!("Downloading metadata CID: {}", metadata_cid);
+        let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
+        let metadata: Metadata = serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
+        println!("Metadata loaded: original size {}, stored size {}", metadata.original_file.size, metadata.erasure_coding.encrypted_size);
 
         let k = metadata.erasure_coding.k;
         let m = metadata.erasure_coding.m;
         let chunk_size = metadata.erasure_coding.chunk_size;
         let file_hash = &metadata.original_file.hash;
-        // Group chunks by original chunk index
-        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> =
-            std::collections::HashMap::new();
+
+        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
         for chunk in &metadata.chunks {
             chunk_map
                 .entry(chunk.original_chunk)
@@ -656,14 +646,12 @@ pub async fn public_download_with_erasure(
 
         for orig_idx in 0..chunk_map.len() {
             let available_chunks = chunk_map.get(&orig_idx).ok_or("Missing chunk info")?;
-            // Download shards into Vec<Option<Vec<u8>>>
             let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
             for chunk in available_chunks {
                 let data = download_from_ipfs(&api_url, &chunk.cid.cid).map_err(|e| e.to_string())?;
                 shards[chunk.share_idx] = Some(data);
             }
 
-            // Check if we have enough
             let available_count = shards.iter().filter(|s| s.is_some()).count();
             if available_count < k {
                 return Err(format!(
@@ -672,28 +660,24 @@ pub async fn public_download_with_erasure(
                 ));
             }
 
-            // Reconstruct
             let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
             r.reconstruct_data(&mut shards)
                 .map_err(|e| format!("Reconstruction failed: {e}"))?;
 
-            // Calculate how many bytes to take for this chunk
             let is_last_chunk = orig_idx == chunk_map.len() - 1;
-            let encrypted_size = metadata.erasure_coding.encrypted_size;
+            let file_size = metadata.original_file.size;
             let chunk_bytes_needed = if !is_last_chunk {
                 chunk_size
             } else {
-                // For the last chunk, only take the remaining bytes needed
                 let total_bytes_so_far: usize = chunk_size * orig_idx;
-                encrypted_size.saturating_sub(total_bytes_so_far)
+                file_size.saturating_sub(total_bytes_so_far)
             };
 
             let mut chunk_data = Vec::with_capacity(chunk_bytes_needed);
             let mut bytes_collected = 0;
             for i in 0..k {
                 if let Some(ref shard) = shards[i] {
-                    let bytes_to_take =
-                        std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
+                    let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
                     chunk_data.extend_from_slice(&shard[..bytes_to_take]);
                     bytes_collected += bytes_to_take;
                     if bytes_collected == chunk_bytes_needed {
@@ -701,20 +685,16 @@ pub async fn public_download_with_erasure(
                     }
                 }
             }
+            println!("Chunk {}: reconstructed size {}, expected {}", orig_idx, chunk_data.len(), chunk_bytes_needed);
             reconstructed_chunks.push(chunk_data);
         }
 
-        // Combine chunks
         let mut reconstructed_data = Vec::new();
         for chunk in reconstructed_chunks {
             reconstructed_data.extend_from_slice(&chunk);
         }
-        // Truncate to expected total
-        let encrypted_size = metadata.erasure_coding.encrypted_size;
-        if reconstructed_data.len() > encrypted_size {
-            reconstructed_data.truncate(encrypted_size);
-        }
-        // Hash check
+        println!("Combined reconstructed data size: {}, expected: {}", reconstructed_data.len(), metadata.original_file.size);
+
         let mut hasher = Sha256::new();
         hasher.update(&reconstructed_data);
         let actual_hash = format!("{:x}", hasher.finalize());
@@ -724,12 +704,13 @@ pub async fn public_download_with_erasure(
                 file_hash, actual_hash
             ));
         }
-        // Save
-        std::fs::write(output_file.clone(), reconstructed_data).map_err(|e| e.to_string())?;
+
+        std::fs::write(&output_file, &reconstructed_data).map_err(|e| format!("Failed to write output file: {}", e))?;
+        println!("File written to {} with size {}", output_file, reconstructed_data.len());
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("Spawn blocking error: {}", e))?
 }
 
 #[tauri::command]
