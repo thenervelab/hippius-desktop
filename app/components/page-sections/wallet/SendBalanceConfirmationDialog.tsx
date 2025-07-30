@@ -51,7 +51,12 @@ const SendBalanceConfirmationDialog: React.FC<
               <div className="flex justify-between items-start">
                 <span className="text-grey-50 font-semibold">Recipient:</span>
                 <span className=" text-grey-10 text-right max-w-[250px] break-all">
-                  {`${recipientAddress.substring(0, 20)}...${recipientAddress.substring(recipientAddress.length - 3)}`}
+                  {`${recipientAddress.substring(
+                    0,
+                    12
+                  )}...${recipientAddress.substring(
+                    recipientAddress.length - 12
+                  )}`}
                 </span>
               </div>
             </div>
