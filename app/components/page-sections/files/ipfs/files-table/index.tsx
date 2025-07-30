@@ -310,7 +310,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
       id: "date_uploaded",
       cell: (cell) => {
         const createdAt = cell.row.original.createdAt;
-        return <BlockTimestamp blockNumber={createdAt} />;
+        return createdAt === 0 ? "Unknown" : <BlockTimestamp blockNumber={createdAt} />;
       }
     }),
     columnHelper.display({

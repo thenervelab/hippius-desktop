@@ -30,6 +30,8 @@ export const downloadIpfsFolder = async ({
         }
     }
 
+    console.log("selectedOutputDir", selectedOutputDir)
+
     const toastId = toast.info("Downloading folder...", { duration: Infinity });
 
     try {
@@ -73,6 +75,7 @@ export const downloadIpfsFolder = async ({
         return { success: true };
     } catch (error) {
         toast.dismiss(toastId);
+        console.log("Download failed:", error);
         return {
             success: false,
             error: "DOWNLOAD_FAILED",
