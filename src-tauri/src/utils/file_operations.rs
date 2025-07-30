@@ -34,6 +34,8 @@ pub fn sanitize_name(name: &str) -> String {
         name.trim_end_matches("-folder.ec_metadata").to_string()
     } else if name.ends_with(".folder.ec_metadata") {
         name.trim_end_matches(".folder.ec_metadata").to_string()
+    } else if name.ends_with(".ff.ec_metadata") {
+        name.trim_end_matches(".ff.ec_metadata").to_string()
     } else if name.ends_with(".folder") {
         name.trim_end_matches(".folder").to_string()
     } else {
@@ -157,6 +159,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     is_public: bool,
     should_delete_folder: bool,
 ) -> Result<u64, String> {
+    println!("[delete_and_unpin_file_by_name] Deleting seed_phrase: {}", seed_phrase);
     if let Some(pool) = DB_POOL.get() {
         if let Err(e) = unpin_user_file_by_name(file_name, seed_phrase).await {
             println!(
@@ -226,6 +229,7 @@ pub async fn delete_and_unpin_file_by_name(
     file_name: String,
     seed_phrase: String,
 ) -> Result<u64, String> {
+    println!("[delete_and_unpin_file_by_name] Deleting seed_phrase: {}", seed_phrase);
     let mut is_public = false;
     if let Some(pool) = DB_POOL.get() {
         let row: Option<(String,)> = sqlx::query_as(

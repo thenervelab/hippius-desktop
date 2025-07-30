@@ -174,7 +174,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
 
             onSuccess();
         } catch (error) {
-            console.error("Failed to add files to folder:", error);
+            console.error("Failed to add files to folder:", error, "  ", folderName);
             toast.error(
                 `Failed to add files: ${error instanceof Error ? error.message : String(error)}`,
                 { id: toastId }
