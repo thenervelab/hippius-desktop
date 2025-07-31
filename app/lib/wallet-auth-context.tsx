@@ -8,7 +8,6 @@ import React, {
   useEffect,
   useRef,
   useCallback
-  useCallback
 } from "react";
 import { Keyring } from "@polkadot/keyring";
 import { getWalletRecord, clearWalletDb } from "./helpers/walletDb";
@@ -37,7 +36,6 @@ const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
 export function WalletAuthProvider({
-  children
   children
 }: {
   children: React.ReactNode;
@@ -140,23 +138,6 @@ export function WalletAuthProvider({
 
       if (!syncInitialized.current) {
         console.log("[WalletAuth] Starting sync for account:", pair.address);
-        try {
-          invoke("start_user_profile_sync_tauri", {
-            accountId: pair.address
-          });
-          invoke("start_folder_sync_tauri", {
-            accountId: pair.address,
-            seedPhrase: inputMnemonic
-          });
-          invoke("start_public_folder_sync_tauri", {
-            accountId: pair.address,
-            seedPhrase: inputMnemonic
-          });
-          syncInitialized.current = true;
-          console.log("[WalletAuth] Sync commands started successfully");
-        } catch (error) {
-          console.error("[WalletAuth] Failed to start sync commands:", error);
-        }
         await invoke("start_user_profile_sync_tauri", {
           accountId: pair.address
         });
@@ -198,7 +179,6 @@ export function WalletAuthProvider({
 
     return () => clearInterval(id);
   }, []);
-
   useTrayInit();
 
   return (
