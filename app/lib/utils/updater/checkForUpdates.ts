@@ -22,8 +22,8 @@ export async function checkForUpdatesOnce() {
     const already = await updateAlreadyNotified(version);
     if (!already) {
       await addUpdateAvailableNotification({
-        version: "0.8.2",
-        currentVersion: "0.8.1",
+        version: version,
+        currentVersion: update.currentVersion,
         releaseNotesUrl: "https://example.com/hippius/0.8.2-notes",
         downloadPageUrl: "https://example.com/hippius/downloads"
       });
