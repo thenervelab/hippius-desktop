@@ -531,28 +531,51 @@ pub async fn download_and_decrypt_folder(
             let encryption_key_clone = encryption_key_bytes.as_ref().map(Arc::clone);
 
             async move {
-                let output_file_path = output_root_clone.join(&entry.file_name);
-                println!("[i] Processing file: {}", entry.file_name);
+                // Download the file metadata to get the original extension
+                let file_metadata_bytes = match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        eprintln!("[!] Failed to download metadata for {} (CID: {}): {}", entry.file_name, entry.cid, e);
+                        return;
+                    }
+                };
+
+                let metadata: Metadata = match serde_json::from_slice(&file_metadata_bytes) {
+                    Ok(meta) => meta,
+                    Err(e) => {
+                        eprintln!("[!] Failed to parse metadata for {} (CID: {}): {}", entry.file_name, entry.cid, e);
+                        return;
+                    }
+                };
+
+                // Strip .ff and .ff.ec_metadata extension and use original extension from metadata
+                let file_name1 = entry.file_name.strip_suffix(".ff").unwrap_or(&entry.file_name);
+                let file_name = file_name1.strip_suffix(".ff.ec_metadata").unwrap_or(&file_name1);
+                let original_extension = metadata.original_file.extension;
+                let final_file_name = if original_extension.is_empty() {
+                    file_name.to_string()
+                } else {
+                    format!("{}.{}", file_name, original_extension)
+                };
+
+                let output_file_path = output_root_clone.join(&final_file_name);
+                println!("[i] Processing file: {}", final_file_name);
 
                 if let Some(parent) = output_file_path.parent() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        eprintln!("[!] Failed to create directory for {}: {}", entry.file_name, e);
+                        eprintln!("[!] Failed to create directory for {}: {}", final_file_name, e);
                         return;
                     }
                 }
-                
-                match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
-                    Ok(file_metadata_bytes) => {
-                        if let Err(e) = reconstruct_and_decrypt_single_file(
-                            file_metadata_bytes,
-                            output_file_path,
-                            api_url_clone,
-                            encryption_key_clone,
-                        ).await {
-                            eprintln!("[!] Failed to download/decrypt {}: {}", entry.file_name, e);
-                        }
-                    },
-                    Err(e) => eprintln!("[!] Failed to download metadata for {} (CID: {}): {}", entry.file_name, entry.cid, e),
+
+                match reconstruct_and_decrypt_single_file(
+                    file_metadata_bytes,
+                    output_file_path.clone(),
+                    api_url_clone,
+                    encryption_key_clone,
+                ).await {
+                    Ok(()) => println!("[✔] Successfully downloaded and decrypted {}", final_file_name),
+                    Err(e) => eprintln!("[!] Failed to download/decrypt {}: {}", final_file_name, e),
                 }
             }
         }).await;
@@ -1469,7 +1492,10 @@ pub async fn public_download_folder(
     }
 
     for entry in file_entries {
-        let output_file_path = output_path.join(&entry.file_name);
+        // Strip .ff extension from file name
+        let file_name1 = entry.file_name.strip_suffix(".ff").unwrap_or(&entry.file_name);
+        let file_name = file_name1.strip_suffix(".ff.ec_metadata").unwrap_or(&file_name1);
+        let output_file_path = output_path.join(file_name);
         if let Some(parent) = output_file_path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
