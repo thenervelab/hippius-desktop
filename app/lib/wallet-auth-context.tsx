@@ -16,7 +16,6 @@ import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
-import { checkForUpdatesOnce } from "./utils/updater/checkForUpdates";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -170,15 +169,6 @@ export function WalletAuthProvider({
     logout();
   };
 
-  useEffect(() => {
-    checkForUpdatesOnce(); // first run
-
-    const id = setInterval(() => {
-      checkForUpdatesOnce();
-    }, 2 * 1000); // every 6 hours
-
-    return () => clearInterval(id);
-  }, []);
   useTrayInit();
 
   return (

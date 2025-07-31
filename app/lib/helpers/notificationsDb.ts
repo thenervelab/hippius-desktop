@@ -314,13 +314,7 @@ export async function addUpdateAvailableNotification({
         notificationDescription, notificationLinkText, notificationLink,
         isUnread, notificationCreationTime)
      VALUES ('Hippius', ?, ?, ?, ?, ?, 1, strftime('%s','now')*1000)`,
-    [
-      version, // subtype (used for de-dupe)
-      title,
-      description,
-      linkText,
-      link
-    ]
+    [version, title, description, linkText, link]
   );
 
   await saveBytes(db.export());
