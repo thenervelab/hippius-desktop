@@ -122,3 +122,25 @@ pub async fn pin_json_to_ipfs_local(json_string: &str, api_url: &str) -> Result<
         Err("No CID found in response".to_string())
     }
 }
+
+// You will need a new helper function to upload bytes directly
+pub async fn upload_bytes_to_ipfs(api_url: &str, data: Vec<u8>, filename: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let form = reqwest::multipart::Form::new()
+        .part("file", reqwest::multipart::Part::bytes(data).file_name(filename.to_owned()));
+
+    let res = client
+        .post(&format!("{}/api/v0/add", api_url))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let body = res.text().await.map_err(|e| e.to_string())?;
+    let ipfs_res: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+
+    ipfs_res["Hash"]
+        .as_str()
+        .ok_or_else(|| "Failed to parse CID from IPFS response".to_string())
+        .map(|s| s.to_string())
+}

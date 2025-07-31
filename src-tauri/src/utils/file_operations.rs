@@ -44,11 +44,12 @@ pub fn sanitize_name(name: &str) -> String {
 }
 
 // Helper to generate all possible file name variations
-fn get_file_name_variations(base_name: &str) -> Vec<String> {
+pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
     let variations = vec![
         base_name.to_string(),
         format!("{}.ec_metadata", base_name),
         format!("{}.ff", base_name),
+        format!("{}.ff_ec_metadata", base_name),
         format!("{}.ec", base_name),
         format!("{}-folder", base_name),
         format!("{}-folder.ec_metadata", base_name),
@@ -662,7 +663,7 @@ pub async fn copy_to_sync_folder(
     request_cid: &str,
     is_public: bool,
     is_folder: bool,
-    requested_file_name: &str,
+    meta_folder_name: &str,
 ) {
     // Choose sync folder path
     let sync_folder = if is_public {
@@ -783,19 +784,45 @@ pub async fn copy_to_sync_folder(
             0
         }
     };
-
+    println!("setting to user profile on add where folder_name {:?} , request_cid {:?}",meta_folder_name, request_cid);
     if let Some(pool) = DB_POOL.get() {
+        // Check if folder record already exists
         let exists: Option<(String,)> = sqlx::query_as(
             "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
         )
         .bind(account_id)
-        .bind(&requested_file_name)
+        .bind(folder_name)
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
 
-        if exists.is_none() {
-            println!("inserted main_request_hash {:?}", request_cid);
+        if let Some(_) = exists {
+            // Update existing record
+            println!("Updating record for folder {} with request_cid: {}", folder_name, request_cid);
+            let _ = sqlx::query(
+                "UPDATE user_profiles SET 
+                    cid = ?, 
+                    file_hash = ?, 
+                    file_size_in_bytes = ?, 
+                    main_req_hash = ?,
+                    type = ?,
+                    is_folder = ?,
+                    processed_timestamp = CURRENT_TIMESTAMP
+                WHERE owner = ? AND file_name = ?"
+            )
+            .bind(metadata_cid)
+            .bind(&file_hash)
+            .bind(file_size_in_bytes)
+            .bind(request_cid)
+            .bind(if is_public { "public" } else { "private" })
+            .bind(true)
+            .bind(account_id)
+            .bind(meta_folder_name)
+            .execute(pool)
+            .await;
+        } else {
+            // Insert new record
+            println!("Inserting new record for folder {} with request_cid: {}", folder_name, request_cid);
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -804,15 +831,15 @@ pub async fn copy_to_sync_folder(
                 ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?)"
             )
             .bind(account_id)
-            .bind(request_cid)
+            .bind(metadata_cid)
             .bind(&file_hash)
-            .bind(&requested_file_name)
+            .bind(meta_folder_name)
             .bind(file_size_in_bytes)
             .bind(false)
             .bind(request_cid)
-            .bind("Hippius")   // source
-            .bind(if is_public { "public" } else { "private" })  // type
-            .bind(is_folder)
+            .bind("Hippius")
+            .bind(if is_public { "public" } else { "private" })
+            .bind(true)
             .execute(pool)
             .await;
         }
@@ -852,7 +879,16 @@ pub async fn copy_to_sync_folder(
     }
 }
 
-pub async fn remove_from_sync_folder(file_name: &str, folder_name: &str, is_public: bool, is_folder: bool) {
+pub async fn remove_from_sync_folder(
+    file_name: &str,
+    folder_name: &str,
+    is_public: bool,
+    is_folder: bool,
+    meta_folder_name: &str,
+    folder_manifest_cid: &str,
+    account_id: &str,
+    requested_cid: &str
+) {
     let sync_folder = if is_public {
         match get_public_sync_path().await {
             Ok(path) => PathBuf::from(path),
@@ -898,7 +934,7 @@ pub async fn remove_from_sync_folder(file_name: &str, folder_name: &str, is_publ
 
         if let Some(pool) = DB_POOL.get() {
             for file in &files {
-                if let Some(file_name_inner) = file.file_name().and_then(|s| s.to_str()) {
+                if let Some(_file_name_inner) = file.file_name().and_then(|s| s.to_str()) {
                     let relative_path = file.strip_prefix(&sync_folder).unwrap_or(file);
                     let relative_path_str = relative_path.to_string_lossy().to_string();
                     if let Err(e) = sqlx::query(
@@ -962,6 +998,69 @@ pub async fn remove_from_sync_folder(file_name: &str, folder_name: &str, is_publ
         }
     }
 
+    let cid_vec = folder_manifest_cid.as_bytes().to_vec();
+    let file_hash = hex::encode(cid_vec);
+    println!("setting to user profile on remove where folder_name {:?} request_cid {:?}",meta_folder_name, folder_manifest_cid);
+    if let Some(pool) = DB_POOL.get() {
+        // Check if folder record already exists
+        let exists: Option<(String,)> = sqlx::query_as(
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+        )
+        .bind(account_id)
+        .bind(meta_folder_name)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+        if let Some(_) = exists {
+            // Update existing record
+            println!("Updating record for folder {} with request_cid: {}", folder_name, folder_manifest_cid);
+            let _ = sqlx::query(
+                "UPDATE user_profiles SET 
+                    cid = ?, 
+                    file_hash = ?, 
+                    file_size_in_bytes = ?, 
+                    main_req_hash = ?,
+                    type = ?,
+                    is_folder = ?,
+                    processed_timestamp = CURRENT_TIMESTAMP
+                WHERE owner = ? AND file_name = ?"
+            )
+            .bind(folder_manifest_cid)
+            .bind(&file_hash)
+            .bind(0)
+            .bind(requested_cid)
+            .bind(if is_public { "public" } else { "private" })
+            .bind(true)
+            .bind(account_id)
+            .bind(meta_folder_name)
+            .execute(pool)
+            .await;
+        } else {
+            // Insert new record
+            println!("Inserting new record for folder {} with request_cid: {}", folder_name, folder_manifest_cid);
+            let _ = sqlx::query(
+                "INSERT INTO user_profiles (
+                    owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
+                    main_req_hash, selected_validator, total_replicas, block_number, processed_timestamp, profile_cid, 
+                    source, miner_ids, created_at, type, is_folder
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?)"
+            )
+            .bind(account_id)
+            .bind(folder_manifest_cid)
+            .bind(&file_hash)
+            .bind(meta_folder_name)
+            .bind(0)
+            .bind(false)
+            .bind(requested_cid)
+            .bind("Hippius")
+            .bind(if is_public { "public" } else { "private" })
+            .bind(true)
+            .execute(pool)
+            .await;
+        }
+    }
+
     // Remove from recently uploaded
     {
         let mut recently_uploaded = if is_public {
@@ -978,6 +1077,7 @@ pub async fn remove_from_sync_folder(file_name: &str, folder_name: &str, is_publ
         recently_uploaded_folders.remove(&sync_file_path.to_string_lossy().to_string());
     }
 }
+
 
 pub async fn insert_file_if_not_exists_in_folder(
     pool: &sqlx::Pool<sqlx::Sqlite>,
