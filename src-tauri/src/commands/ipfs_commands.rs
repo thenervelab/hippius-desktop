@@ -1350,7 +1350,12 @@ pub async fn public_upload_folder(
     .await
     .map_err(|e| e.to_string())??;
     let meta_folder_name = format!("{}{}", folder_name, if folder_name.ends_with(".folder") { "" } else { ".folder" });
-    let storage_result = request_file_storage(&meta_folder_name.clone(), &folder_metadata_cid, api_url, &seed_phrase).await;
+    // Build files array: folder metadata + all file CIDs
+    let mut files_for_storage = Vec::with_capacity(file_cid_pairs.len() + 1);
+    files_for_storage.push((meta_folder_name.clone(), folder_metadata_cid.clone()));
+    files_for_storage.extend(file_cid_pairs);
+    // Submit storage request
+    let storage_result = request_folder_storage(&meta_folder_name.clone(), &files_for_storage, api_url, &seed_phrase).await;
     match &storage_result {
         Ok(res) => {
             copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id, &folder_metadata_cid, &res, true, true, &meta_folder_name.clone(), true).await;
@@ -1495,32 +1500,29 @@ pub async fn add_file_to_public_folder(
         }
     })?;
 
-    let storage_result = request_file_storage(&meta_filename, &new_folder_metadata_cid, api_url, &seed_phrase).await
-        .map_err(|e| {
-            if e.contains("RequestAlreadyExists") {
-                format!("Storage request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
-            } else {
-                format!("Failed to request file storage: {}", e)
-            }
-        })?;
-
-    let temp_dir = tempdir().map_err(|e| e.to_string())?;
-    let temp_path = temp_dir.path().join(&file_name);
-    fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
-
-    copy_to_sync_folder(
-        &temp_path,
-        &folder_name,
-        &account_id,
-        &new_folder_metadata_cid,
-        &storage_result,
-        true,
-        false,
-        &meta_filename,
-    ).await;
-
-    println!("[add_file_to_public_folder] Storage request result: {}", storage_result);
-    println!("[add_file_to_public_folder] New folder metadata CID: {}", new_folder_metadata_cid);
+    // Submit storage request
+    let storage_result = request_folder_storage(&meta_filename.clone(), &files_for_storage, api_url, &seed_phrase).await;
+    match &storage_result {
+        Ok(res) => {
+            let temp_dir = tempdir().map_err(|e| e.to_string())?;
+            let temp_path = temp_dir.path().join(&file_name);
+            fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
+            copy_to_sync_folder(
+                &temp_path,
+                &folder_name,
+                &account_id,
+                &new_folder_metadata_cid,
+                &res,
+                true,
+                false,
+                &meta_filename,
+            ).await;
+        
+            println!("[add_file_to_public_folder] Storage request result: {}", res);
+            println!("[add_file_to_public_folder] New folder metadata CID: {}", new_folder_metadata_cid);        
+        },
+        Err(e) => println!("[public_upload_folder] Storage request error: {}", e),
+    }
 
     Ok(new_folder_metadata_cid)
 }
@@ -1536,6 +1538,7 @@ pub async fn remove_file_from_public_folder(
     let api_url = "http://127.0.0.1:5001";
     let folder_metadata_cid_for_log = folder_metadata_cid.clone();
 
+    // Step 1: Download metadata
     let metadata_bytes = tokio::task::spawn_blocking({
         let api_url = api_url.to_string();
         let folder_metadata_cid_cloned = folder_metadata_cid.clone();
@@ -1551,11 +1554,8 @@ pub async fn remove_file_from_public_folder(
         .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
 
     let initial_len = file_entries.len();
-
-    // Generate all possible variations of the file name
     let file_name_variations = get_file_name_variations(&file_name);
 
-    // Retain entries that do not match any of the file name variations
     file_entries.retain(|entry| !file_name_variations.contains(&entry.file_name));
     println!("file_name {:?}, folder_name {:?}", file_name, folder_name);
 
@@ -1563,62 +1563,76 @@ pub async fn remove_file_from_public_folder(
         return Err(format!("File '{}' (or its variations) not found in folder '{}'.", file_name, folder_name));
     }
 
-    let new_folder_metadata_cid = tokio::task::spawn_blocking({
+    // Step 2: Create new folder metadata and upload to IPFS
+    let (new_folder_metadata_cid, file_cid_pairs) = tokio::task::spawn_blocking({
         let api_url = api_url.to_string();
+        let file_entries_clone = file_entries.clone();
         move || {
-            let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {}", e))?;
-            let temp_dir_path = temp_dir.path().to_path_buf();
+            let temp_dir = tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+            let metadata_path = temp_dir.path().join("folder_metadata.json");
 
-            let folder_metadata_path = temp_dir_path.join("folder_metadata.json");
-            let folder_metadata = serde_json::to_string_pretty(&file_entries)
+            let metadata_json = serde_json::to_string_pretty(&file_entries_clone)
                 .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
-            fs::write(&folder_metadata_path, folder_metadata.as_bytes())
-                .map_err(|e| format!("Failed to write folder metadata to {}: {}", folder_metadata_path.display(), e))?;
+            fs::write(&metadata_path, metadata_json.as_bytes())
+                .map_err(|e| format!("Failed to write metadata file: {}", e))?;
 
-            let new_folder_metadata_cid = upload_to_ipfs(&api_url, folder_metadata_path.to_str().unwrap())
-                .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e))?;
+            let metadata_cid = upload_to_ipfs(&api_url, metadata_path.to_str().unwrap())
+                .map_err(|e| format!("Failed to upload folder metadata: {}", e))?;
 
-            Ok::<_, String>(new_folder_metadata_cid)
+            let pairs = file_entries_clone
+                .iter()
+                .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
+                .collect::<Vec<(String, String)>>();
+
+            Ok::<_, String>((metadata_cid, pairs))
         }
     })
     .await
-    .map_err(|e| format!("Failed to execute blocking task for metadata update: {}", e))??;
+    .map_err(|e| format!("Failed to spawn task for folder metadata update: {}", e))??;
 
     let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder") { "" } else { ".folder" });
 
     println!(
-        "[remove_file_from_public_folder] Submitting storage request for updated folder metadata: {}",
+        "[remove_file_from_public_folder] Submitting storage request for folder '{}'",
         meta_filename
     );
 
+    // Step 3: Unpin old version
     let _unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
         .map_err(|e| {
             if e.contains("RequestAlreadyExists") {
-                format!("unpin request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
+                format!("Unpin request already exists for '{}'", folder_name)
             } else {
-                format!("Failed to request file storage: {}", e)
+                format!("Failed to unpin previous files: {}", e)
             }
         })?;
 
-    let storage_result = request_file_storage(&meta_filename, &new_folder_metadata_cid, api_url, &seed_phrase).await
-        .map_err(|e| {
-            if e.contains("RequestAlreadyExists") {
-                format!("Storage request already exists for folder '{}'. Please try again later or update the existing request.", folder_name)
-            } else {
-                format!("Failed to request file storage: {}", e)
-            }
-        })?;
+    // Step 4: Submit updated storage request with remaining files + metadata
+    let mut files_for_storage = file_cid_pairs;
+    files_for_storage.push((meta_filename.clone(), new_folder_metadata_cid.clone()));
 
-    remove_from_sync_folder(&file_name, &folder_name, true, false, &meta_filename, &new_folder_metadata_cid, &account_id, &storage_result).await;
+    let storage_result = request_folder_storage(&meta_filename, &files_for_storage, api_url, &seed_phrase)
+        .await
+        .map_err(|e| format!("Failed to request folder storage: {}", e))?;
 
-    println!("[remove_file_from_public_folder] Storage request result: {}", storage_result);
-    println!(
-        "[remove_file_from_public_folder] New folder metadata CID: {}",
-        new_folder_metadata_cid
-    );
+    // Step 5: Remove file from sync folder
+    remove_from_sync_folder(
+        &file_name,
+        &folder_name,
+        true,
+        false,
+        &meta_filename,
+        &new_folder_metadata_cid,
+        &account_id,
+        &storage_result,
+    )
+    .await;
+
+    println!("[remove_file_from_public_folder] ✅ Updated folder CID: {}", new_folder_metadata_cid);
 
     Ok(new_folder_metadata_cid)
 }
+
 
 #[tauri::command]
 pub async fn encrypt_and_upload_file_sync(
