@@ -110,7 +110,9 @@ export function WalletAuthProvider({
 
       return true;
     } catch (err) {
-      console.error("[unlockWithPasscode] ", err);
+      if (err instanceof Error && err.message !== "Incorrect passcode") {
+        console.error("[unlockWithPasscode] ", err);
+      }
       return false;
     } finally {
       setIsLoading(false);
