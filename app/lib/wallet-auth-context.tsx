@@ -15,6 +15,7 @@ import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
+import { cryptoWaitReady } from "@polkadot/util-crypto";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -99,7 +100,7 @@ export function WalletAuthProvider({
 
       if (hashPasscode(passcode) !== record.passcodeHash)
         throw new Error("Incorrect passcode");
-
+      await cryptoWaitReady();
       const mnemonic = decryptMnemonic(record.encryptedMnemonic, passcode);
       if (!isMnemonicValid(mnemonic)) throw new Error("Decryption failed");
 

@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { isOnboardingDone } from "@/app/lib/helpers/onboardingDb";
 import OnboardingPage from "@/app/components/auth/onboarding/onBoardingPage";
-import { toast } from "sonner";
 
 export default function OnBoardingGuard({
   children
@@ -19,9 +18,6 @@ export default function OnBoardingGuard({
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
-      toast.error(
-        "Authentication Failed: You need to log in to access this page."
-      );
       router.replace("/login");
     }
   }, [isAuthenticated, isLoading, router]);
