@@ -216,6 +216,10 @@ const downloadEncryptedIpfsFile = async (
     }
 
     console.error("Encrypted download failed:", err);
+    toast.error(
+      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
+      }`
+    );
     return { success: false, error: "DOWNLOAD_FAILED", message: errorMsg };
   }
 };
