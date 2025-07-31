@@ -17,7 +17,9 @@ export default function OnBoardingGuard({
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) router.replace("/login");
+    if (!isLoading && !isAuthenticated) {
+      router.replace("/login");
+    }
   }, [isAuthenticated, isLoading, router]);
 
   useEffect(() => {

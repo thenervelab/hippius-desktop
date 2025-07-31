@@ -341,7 +341,7 @@ export default function FolderView({
     }, []);
 
     return (
-        <div className="container mx-auto py-8 px-4">
+        <div className="w-full relative mt-6">
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2">
                     <Link

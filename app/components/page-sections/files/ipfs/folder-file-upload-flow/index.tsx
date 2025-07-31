@@ -116,6 +116,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                 return;
             }
         }
+        onCancel();
         setIsUploading(true);
         setUploadProgress(0);
 
@@ -131,7 +132,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
                 const percent = Math.round(((i + 1) / files.length) * 100);
-                setUploadProgress(percent);
+
 
                 // Update toast with progress
                 const msg = files.length > 1
@@ -157,12 +158,12 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     seedPhrase: mnemonic,
                     ...(isPrivateFolder ? { encryptionKey: encryptionKey || null } : {})
                 };
-                console.log("params for adding file:", params);
 
                 await invoke<string>(functionName, params);
 
                 // Small delay to make progress visible when adding multiple small files
                 if (files.length > 1) await new Promise(r => setTimeout(r, 300));
+                setUploadProgress(percent);
             }
 
             toast.success(
