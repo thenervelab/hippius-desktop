@@ -8,6 +8,7 @@ import React, {
   useEffect,
   useRef,
   useCallback
+  useCallback
 } from "react";
 import { Keyring } from "@polkadot/keyring";
 import { getWalletRecord, clearWalletDb } from "./helpers/walletDb";
@@ -15,6 +16,7 @@ import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
+import { cryptoWaitReady } from "@polkadot/util-crypto";
 import { checkForUpdatesOnce } from "./utils/updater/checkForUpdates";
 
 interface WalletContextType {
@@ -35,6 +37,7 @@ const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
 export function WalletAuthProvider({
+  children
   children
 }: {
   children: React.ReactNode;
@@ -92,21 +95,49 @@ export function WalletAuthProvider({
     };
   }, [isAuthenticated, resetLogoutTimer]);
 
-  // Set session
-  const setSession = async (inputMnemonic: string) => {
+  const unlockWithPasscode = async (passcode: string): Promise<boolean> => {
+    setIsLoading(true);
     try {
-      if (!isMnemonicValid(inputMnemonic)) return false;
+      const record = await getWalletRecord();
+      if (!record) throw new Error("No wallet record found");
+
+      if (hashPasscode(passcode) !== record.passcodeHash)
+        throw new Error("Incorrect passcode");
+      await cryptoWaitReady();
+      const mnemonic = decryptMnemonic(record.encryptedMnemonic, passcode);
+      if (!isMnemonicValid(mnemonic)) throw new Error("Decryption failed");
+
+      // check that session actually initialized
+      const sessionOk = await setSession(mnemonic);
+      if (!sessionOk) throw new Error("Session setup failed");
+
+      return true;
+    } catch (err) {
+      if (err instanceof Error && err.message !== "Incorrect passcode") {
+        console.error("[unlockWithPasscode] ", err);
+      }
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const setSession = async (inputMnemonic: string): Promise<boolean> => {
+    if (!isMnemonicValid(inputMnemonic)) {
+      console.error("[setSession] Invalid mnemonic");
+      return false;
+    }
+
+    try {
       const keyring = new Keyring({ type: "sr25519" });
       const pair = keyring.addFromMnemonic(inputMnemonic);
 
       console.log("[WalletAuth] Signature verified");
       setMnemonic(inputMnemonic);
       setPolkadotAddress(pair.address);
-
       setWalletManager({ polkadotPair: pair });
       setIsAuthenticated(true);
 
-      // Start sync commands only once when authentication succeeds
       if (!syncInitialized.current) {
         console.log("[WalletAuth] Starting sync for account:", pair.address);
         try {
@@ -126,40 +157,28 @@ export function WalletAuthProvider({
         } catch (error) {
           console.error("[WalletAuth] Failed to start sync commands:", error);
         }
+        await invoke("start_user_profile_sync_tauri", {
+          accountId: pair.address
+        });
+        await invoke("start_folder_sync_tauri", {
+          accountId: pair.address,
+          seedPhrase: inputMnemonic
+        });
+        await invoke("start_public_folder_sync_tauri", {
+          accountId: pair.address,
+          seedPhrase: inputMnemonic
+        });
+        syncInitialized.current = true;
+        console.log("[WalletAuth] Sync commands started successfully");
       }
 
       return true;
-    } catch {
-      setMnemonic(null);
-      setPolkadotAddress(null);
-      setWalletManager(null);
-
-      setIsAuthenticated(false);
-      return false;
-    }
-  };
-
-  // Unlock wallet with passcode
-  const unlockWithPasscode = async (passcode: string) => {
-    setIsLoading(true);
-    try {
-      const record = await getWalletRecord();
-      if (!record) throw new Error("No wallet record found");
-      if (hashPasscode(passcode) !== record.passcodeHash)
-        throw new Error("Incorrect passcode");
-      const mnemonic = decryptMnemonic(record.encryptedMnemonic, passcode);
-      if (!isMnemonicValid(mnemonic)) throw new Error("Decryption failed");
-
-      await setSession(mnemonic);
-      setIsLoading(false);
-      return true;
-    } catch {
+    } catch (err) {
+      console.error("[setSession] ", err);
       setMnemonic(null);
       setPolkadotAddress(null);
       setWalletManager(null);
       setIsAuthenticated(false);
-      setIsLoading(false);
-
       return false;
     }
   };

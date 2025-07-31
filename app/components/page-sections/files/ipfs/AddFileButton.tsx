@@ -251,7 +251,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           }}
         >
           <Dialog.Portal>
-            <Dialog.Overlay className="bg-white/70 fixed p-4 z-30 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
+            <Dialog.Overlay className="bg-white/60 fixed p-4 z-30 top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
               <Dialog.Content className="border shadow-dialog bg-white flex flex-col max-w-[428px] border-grey-80 bg-background-1 rounded-[8px] overflow-hidden w-full relative data-[state=open]:animate-scale-in-95-0.2">
                 <Dialog.Title className="hidden">{title}</Dialog.Title>
 

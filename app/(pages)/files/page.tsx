@@ -10,7 +10,6 @@ const FilesPage: FC = () => {
     const params = useSearchParams();
     const folderCid = params.get("folderCid");
     const folderName = params.get("folderName") || "Folder";
-    console.log("Folder Name:", folderName);
 
     if (folderCid) {
         return (

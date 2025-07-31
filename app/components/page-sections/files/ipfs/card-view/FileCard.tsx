@@ -154,7 +154,7 @@ const FileCard: React.FC<FileCardProps> = ({
           };
 
           video.onerror = (error) => {
-            console.error(`Video load error for ${file.name}:`, error);
+            console.warn(`Video load error for ${file.name}:`, error);
             handleError();
           };
         }

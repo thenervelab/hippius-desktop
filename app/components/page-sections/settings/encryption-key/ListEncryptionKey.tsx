@@ -100,6 +100,7 @@ const ListEncryptionKey: React.FC<ListEncryptionKeyProps> = ({
             Icon={Icons.ShieldSecurity}
             title="Encryption Key"
             subtitle="This encryption key is used to securely save your files."
+            info="Your unique encryption key protects data integrity and access. Keep it safe—only you can regenerate or use it to secure your files on our decentralized storage network."
           />
           <div className="flex gap-4 h-[42px]">
             <CardButton

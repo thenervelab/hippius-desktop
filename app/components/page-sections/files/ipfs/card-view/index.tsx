@@ -253,7 +253,7 @@ const CardView: FC<CardViewProps> = ({
                           },
                           {
                             icon: <Icons.InfoCircle className="size-4" />,
-                            itemTitle: "File Details",
+                            itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
                             onItemClick: () => {
                               localHandleShowFileDetails(file);
                             }
@@ -301,7 +301,7 @@ const CardView: FC<CardViewProps> = ({
 
       {!sharedState && localIsFileDetailsOpen && (
         <SidebarDialog
-          heading="File Details"
+          heading={`${localFileDetailsFile?.isFolder ? "Folder" : "File"} Details`}
           open={localIsFileDetailsOpen}
           onOpenChange={setLocalIsFileDetailsOpen}
         >

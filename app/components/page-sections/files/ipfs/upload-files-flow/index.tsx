@@ -1,17 +1,26 @@
 // src/app/components/page-sections/files/ipfs/UploadFilesFlow.tsx
 import { FC, useState, useEffect, useCallback } from "react";
 import useFilesUpload from "@/lib/hooks/useFilesUpload";
-import { Icons, CardButton } from "@/components/ui";
+import { Icons, CardButton, Input } from "@/components/ui";
+import { Label } from "@/components/ui/label";
 import FileDropzone from "./FileDropzone";
 import { useSetAtom } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "../atoms/query-atoms";
-import { Trash2, Check } from "lucide-react";
+import { Trash2, Check, AlertCircle } from "lucide-react";
 import * as Checkbox from "@radix-ui/react-checkbox";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
+
 
 interface UploadFilesFlowProps {
   reset: () => void;
   initialFiles?: FileList | null;
   isPrivateView: boolean;
+}
+
+interface EncryptionKey {
+  id: number;
+  key: string;
 }
 
 const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
@@ -23,6 +32,12 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
   const [files, setFiles] = useState<FileList | null>(null);
   const [erasureCoding, setErasureCoding] = useState(false);
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
+  const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(
+    null
+  );
+  const [encryptionKey, setEncryptionKey] = useState("");
+
+
 
   const { upload } = useFilesUpload({
     onError(err) {
@@ -76,6 +91,32 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
     },
     [files]
   );
+
+  const uploadFiles = async (files: FileList): Promise<void> => {
+    // Validate encryption key if provided
+    if (encryptionKey) {
+      try {
+        const savedKeys: EncryptionKey[] = await invoke<EncryptionKey[]>(
+          "get_encryption_keys"
+        );
+
+        const keyExists: boolean = savedKeys.some((k) => k.key === encryptionKey);
+
+        if (!keyExists) {
+          setEncryptionKeyError(
+            "Incorrect encryption key. Please try again with a correct one."
+          );
+          return;
+        }
+      } catch (error) {
+        console.error("Error validating encryption key:", error);
+        toast.error("Failed to validate encryption key");
+        return;
+      }
+    }
+    reset();
+    upload(files, isPrivateView, erasureCoding, encryptionKey);
+  };
 
   return (
     <div className="w-full">
@@ -160,12 +201,50 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
         </div>
       )}
 
+      {isPrivateView && (
+        <div className="space-y-1 mt-4">
+          <Label
+            htmlFor="encryptionKey"
+            className="text-sm font-medium text-grey-70"
+          >
+            Encryption Key (optional)
+          </Label>
+          <div className="relative flex items-start w-full">
+            <Icons.ShieldSecurity className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
+            <Input
+              id="encryptionKey"
+              placeholder="Enter encryption key"
+              value={encryptionKey}
+              onChange={(e) => {
+                setEncryptionKey(e.target.value);
+                setEncryptionKeyError(null);
+              }}
+              className={`pl-11 border-grey-80 h-14 text-grey-30 w-full
+                bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none 
+                hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus
+                ${encryptionKeyError ? "border-error-50 focus:border-error-50" : ""}`}
+            />
+          </div>
+          <p className="text-xs text-grey-70">
+            {encryptionKey.trim()
+              ? `Using custom encryption key.`
+              : "Default encryption key will be used if left empty."}
+          </p>
+
+          {encryptionKeyError && (
+            <div className="flex text-error-70 text-sm font-medium items-center gap-2">
+              <AlertCircle className="size-4 !relative" />
+              <span>{encryptionKeyError}</span>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="mt-3 flex flex-col gap-y-3">
         <CardButton
           onClick={() => {
             if (files) {
-              reset();
-              upload(files, isPrivateView, erasureCoding);
+              uploadFiles(files)
             }
           }}
           disabled={!files?.length}

@@ -10,6 +10,7 @@ export type FileDetail = {
 
 export type FormattedUserIpfsFile = {
   name: string;
+  actualFileName?: string;
   size?: number;
   createdAt: number;
   cid: string;
@@ -26,6 +27,8 @@ export type FormattedUserIpfsFile = {
   isFolder?: boolean;
   type?: string;
   isErasureCoded: boolean;
+  parentFolderId?: string;
+  parentFolderName?: string;
 };
 
 // Updated to include file size breakdown
@@ -129,12 +132,23 @@ export const useUserIpfsFiles = () => {
         // Format the data to match what the UI expects
         const formattedFiles = dbFiles.map(
           (file): FormattedUserIpfsFile & { isErasureCoded: boolean } => {
-            const isErasureCoded = file.fileName.endsWith(".ec_metadata");
-            const displayName = isErasureCoded
-              ? file.fileName.slice(0, -".ec_metadata".length)
-              : file.fileName;
+            const isErasureCodedFolder = file.fileName.endsWith(".folder.ec_metadata");
+            const isErasureCoded = !isErasureCodedFolder && file.fileName.endsWith(".ec_metadata");
+            const isFolder = !isErasureCodedFolder && file.fileName.endsWith(".folder");
+
+            let displayName = file.fileName;
+            if (isErasureCodedFolder) {
+              displayName = file.fileName.slice(0, -".folder.ec_metadata".length);
+            } else if (isErasureCoded) {
+              displayName = file.fileName.slice(0, -".ec_metadata".length);
+            } else if (isFolder) {
+              displayName = file.fileName.slice(0, -".folder".length);
+            }
+
+
             return {
               name: displayName || "Unnamed File",
+              actualFileName: file.fileName,
               size: file.fileSizeInBytes,
               createdAt: file.lastChargedAt,
               cid: hexToCid(file.fileHash) ?? "",

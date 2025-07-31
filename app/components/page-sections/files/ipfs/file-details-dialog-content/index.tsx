@@ -76,6 +76,8 @@ interface FileDetailsDialogContentProps {
 const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
   file
 }) => {
+  const isPrivateView = useIsPrivateView();
+
   const minerIds = file
     ? Array.isArray(file.minerIds)
       ? file.minerIds
@@ -85,7 +87,6 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
     : [];
 
   const { uniqueLocations, isLoading } = useNodeLocations(minerIds);
-  const isPrivateView = useIsPrivateView();
 
   if (!file) return null;
 

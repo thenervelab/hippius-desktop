@@ -35,6 +35,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { HardDrive } from "lucide-react";
 import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
 import { cn } from "@/lib/utils";
+import { invoke } from "@tauri-apps/api/core";
 
 interface FilesContentProps {
     isRecentFiles?: boolean;
@@ -213,7 +214,7 @@ const FilesContent: FC<FilesContentProps> = ({
         file: FormattedUserIpfsFile,
         polkadotAddress: string
     ) => {
-        if (isPrivateView && file.source !== "Hippius") {
+        if (isPrivateView) {
             setFileToDownload(file);
             setEncryptionKeyError(null);
             setIsEncryptionDialogOpen(true);
@@ -224,6 +225,28 @@ const FilesContent: FC<FilesContentProps> = ({
 
     const handleEncryptedDownload = async (encryptionKey: string | null) => {
         if (!fileToDownload || !polkadotAddress) return;
+
+        // Validate encryption key if provided
+        if (encryptionKey) {
+            try {
+                const savedKeys = await invoke<Array<{ id: number; key: string }>>(
+                    "get_encryption_keys"
+                );
+
+                const keyExists = savedKeys.some((k) => k.key === encryptionKey);
+
+                if (!keyExists) {
+                    setEncryptionKeyError(
+                        "Incorrect encryption key. Please try again with a correct one."
+                    );
+                    return;
+                }
+            } catch (error) {
+                console.error("Error validating encryption key:", error);
+                toast.error("Failed to validate encryption key");
+                return;
+            }
+        }
 
         const result = await downloadIpfsFile(
             fileToDownload,
@@ -357,22 +380,22 @@ const FilesContent: FC<FilesContentProps> = ({
                 }}
                 onDelete={() => {
                     setOpenDeleteModal(false);
-                    toast.success("Deleting file...");
+                    const toastId = toast.loading(`Deleting ${fileToDelete?.isFolder ? "folder" : "file"}...`);
 
                     deleteFile()
                         .then(() => {
-                            toast.success("Request submitted. File will be deleted!");
+                            toast.success(fileToDelete?.source === "Hippius" ? "Request submitted. File will be deleted!" : `${fileToDelete?.isFolder ? "Folder" : "File"} removed.`, { id: toastId });
                             setFileToDelete(null);
                         })
                         .catch((error) => {
                             console.error("Delete error:", error);
-                            toast.error(error.message || "Failed to delete file");
+                            toast.error(error.message || `Failed to delete ${fileToDelete?.isFolder ? "folder" : "file"}`, { id: toastId });
                         });
                 }}
-                button={isDeleting ? "Deleting..." : "Delete File"}
+                button={isDeleting ? "Deleting..." : `Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`}
                 text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""
                     }`}
-                heading="Delete File"
+                heading={`Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`}
                 disableButton={isDeleting}
             />
 
@@ -418,7 +441,7 @@ const FilesContent: FC<FilesContentProps> = ({
                     onNavigate={setSelectedFile}
                 />
             )}
-            {selectedFileType === "pdfDocument" && (
+            {selectedFileType === "PDF" && (
                 <PdfDialog
                     onCloseClicked={() => setSelectedFile(null)}
                     handleFileDownload={handleFileDownload}
@@ -439,7 +462,7 @@ const FilesContent: FC<FilesContentProps> = ({
             <UploadStatusWidget />
 
             <SidebarDialog
-                heading="File Details"
+                heading={`${fileDetailsFile?.isFolder ? "Folder" : "File"} Details`}
                 open={isFileDetailsOpen}
                 onOpenChange={setIsFileDetailsOpen}
             >
@@ -469,6 +492,7 @@ const FilesContent: FC<FilesContentProps> = ({
                 }}
                 onDownload={handleEncryptedDownload}
                 keyError={encryptionKeyError}
+                file={fileToDownload}
             />
         </>
     );

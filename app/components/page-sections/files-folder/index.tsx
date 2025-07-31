@@ -25,7 +25,7 @@ import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import EncryptionKeyDialog from "@/components/page-sections/files/ipfs/EncryptionKeyDialog";
 import { downloadIpfsFolder } from "@/lib/utils/downloadIpfsFolder";
-import AddButton from "@/components/page-sections/files/ipfs/AddFileButton";
+import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFileToFolderButton";
 
 interface FileEntry {
     file_name: string;
@@ -58,9 +58,6 @@ export default function FolderView({
     const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(
         null
     );
-    const [selectedOutputDir, setSelectedOutputDir] = useState<string | null>(
-        null
-    );
     const isPrivateFolder = activeSubMenuItem === "Private";
     const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
 
@@ -81,6 +78,7 @@ export default function FolderView({
             fileSize: selectedFileSize
         });
     }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+
 
     useEffect(() => {
         const newActiveFilters = generateActiveFilters(
@@ -110,6 +108,8 @@ export default function FolderView({
                 folderMetadataCid: folderCid
             });
 
+            console.log("Fetched folder contents:", fileEntries);
+
             const formattedFiles = fileEntries.map(
                 (entry): FormattedUserIpfsFile => {
                     const isErasureCoded = entry.file_name.endsWith(".ec_metadata");
@@ -127,7 +127,9 @@ export default function FolderView({
                         createdAt: Number(entry.created_at),
                         minerIds: parseMinerIds(entry.miner_ids),
                         lastChargedAt: Number(entry.last_charged_at),
-                        isErasureCoded
+                        isErasureCoded,
+                        parentFolderId: folderCid,
+                        parentFolderName: folderName
                     };
                 }
             );
@@ -135,6 +137,9 @@ export default function FolderView({
             setFiles(formattedFiles);
         } catch (error) {
             console.error("Error loading folder contents:", error);
+            // toast.error(
+            //     `Failed to load folder contents: ${error instanceof Error ? error.message : String(error)}`
+            // );
         } finally {
             if (showLoading) {
                 setIsLoading(false);
@@ -160,23 +165,71 @@ export default function FolderView({
         if (!folderCid) return;
 
         try {
-            const outputDir = (await open({
-                directory: true,
-                multiple: false
-            })) as string | null;
-
-            if (!outputDir) {
-                return;
-            }
-
-            setSelectedOutputDir(outputDir);
-
+            // For private folders, show encryption dialog first
             if (isPrivateFolder) {
                 setEncryptionKeyError(null);
                 setIsEncryptionDialogOpen(true);
             } else {
+                // For public folders, directly ask for output directory
+                const outputDir = await open({
+                    directory: true,
+                    multiple: false
+                }) as string | null;
+
+                if (!outputDir) {
+                    return; // User canceled directory selection
+                }
+
+                // Download public folder directly
                 await downloadFolder(outputDir, null);
             }
+        } catch (error) {
+            console.error("Error initiating folder download:", error);
+            toast.error(
+                `Failed to initiate download: ${error instanceof Error ? error.message : String(error)}`
+            );
+        }
+    };
+
+    const handleEncryptedDownload = async (encryptionKey: string | null) => {
+        // Validate encryption key if provided
+        if (encryptionKey) {
+            try {
+                const savedKeys = await invoke<Array<{ id: number; key: string }>>(
+                    "get_encryption_keys"
+                );
+
+                const keyExists = savedKeys.some((k) => k.key === encryptionKey);
+
+                if (!keyExists) {
+                    setEncryptionKeyError(
+                        "Incorrect encryption key. Please try again with a correct one."
+                    );
+                    return;
+                }
+            } catch (error) {
+                console.error("Error validating encryption key:", error);
+                toast.error("Failed to validate encryption key");
+                return;
+            }
+        }
+
+        setIsEncryptionDialogOpen(false);
+
+
+        // After handling the encryption key, prompt for output directory
+        try {
+            const outputDir = await open({
+                directory: true,
+                multiple: false
+            }) as string | null;
+
+            if (!outputDir) {
+                return; // User canceled directory selection
+            }
+
+            // Now download with the previously obtained encryption key
+            await downloadFolder(outputDir, encryptionKey);
         } catch (error) {
             console.error("Error selecting download location:", error);
             toast.error(
@@ -216,28 +269,14 @@ export default function FolderView({
             toast.error(
                 `Failed to download folder: ${result.message || "Unknown error"}`
             );
-        } else if (result && result.success) {
-            setIsEncryptionDialogOpen(false);
         }
+
         setIsDownloading(false);
-    };
 
-    const handleEncryptedDownload = async (encryptionKey: string | null) => {
-        if (!selectedOutputDir) return;
-        if (encryptionKey) {
-            const savedKeys = await invoke<Array<{ id: number; key: string }>>(
-                "get_encryption_keys"
-            );
-
-            const keyExists = savedKeys.some((k) => k.key === encryptionKey);
-
-            if (!keyExists) {
-                return setEncryptionKeyError(
-                    "Incorrect encryption key. Please try again with a correct one."
-                );
-            }
+        // Show success message if download completed
+        if (result && result.success) {
+            toast.success(`Folder downloaded successfully to ${outputDir}`);
         }
-        await downloadFolder(selectedOutputDir, encryptionKey);
     };
 
     const handleApplyFilters = useCallback(
@@ -302,7 +341,7 @@ export default function FolderView({
     }, []);
 
     return (
-        <div className="container mx-auto py-8 px-4">
+        <div className="w-full relative mt-6">
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2">
                     <Link
@@ -371,6 +410,15 @@ export default function FolderView({
                         </button>
                     </div>
 
+                    <AddFileToFolderButton
+                        ref={addButtonRef}
+                        className="h-9"
+                        folderCid={folderCid}
+                        folderName={folderName}
+                        isPrivateFolder={isPrivateFolder}
+                        onFileAdded={handleRefresh}
+                    />
+
                     <button
                         onClick={initiateDownloadFolder}
                         disabled={isDownloading}
@@ -386,8 +434,6 @@ export default function FolderView({
                         )}
                         Download Folder
                     </button>
-                    <AddButton ref={addButtonRef} className="h-9" />
-
                 </div>
             </div>
 
@@ -408,12 +454,14 @@ export default function FolderView({
             ) : (
                 <>
                     {files.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-16 bg-grey-95 rounded-lg">
-                            <Icons.Folder className="size-12 text-grey-60 mb-4" />
-                            <h3 className="text-lg font-medium text-grey-30 mb-1">
+                        <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
+                            <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
+                                <Icons.Folder className="size-7 text-primary-50" />
+                            </div>
+                            <h3 className="text-lg font-medium text-grey-10 mb-1">
                                 Empty Folder
                             </h3>
-                            <p className="text-grey-50 text-sm">
+                            <p className="text-grey-50 text-sm max-w-[270px] text-center">
                                 This folder does not contain any files.
                             </p>
                         </div>
@@ -451,10 +499,10 @@ export default function FolderView({
                 onClose={() => {
                     setIsEncryptionDialogOpen(false);
                     setEncryptionKeyError(null);
-                    setSelectedOutputDir(null);
                 }}
                 onDownload={handleEncryptedDownload}
                 keyError={encryptionKeyError}
+                isFolder
             />
         </div>
     );

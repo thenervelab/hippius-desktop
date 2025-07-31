@@ -16,7 +16,7 @@ interface NotificationOptionSelectProps {
 const NotificationOptionSelect: React.FC<NotificationOptionSelectProps> = ({
   options,
   value,
-  onChange,
+  onChange
 }) => {
   const selected = options.find((opt) => opt.value === value);
 
@@ -41,7 +41,7 @@ const NotificationOptionSelect: React.FC<NotificationOptionSelectProps> = ({
           <Menubar.Content
             align="start"
             sideOffset={8}
-            className="min-w-[160px] bg-white shadow-menu rounded-lg border border-grey-80 z-50"
+            className="min-w-[160px] bg-white shadow-menu rounded-lg border border-grey-80 z-50 overflow-hidden"
           >
             {options.map((opt) => (
               <Menubar.Item

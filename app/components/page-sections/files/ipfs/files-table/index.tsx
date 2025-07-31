@@ -203,7 +203,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
       },
       {
         icon: <Icons.InfoCircle className="size-4" />,
-        itemTitle: "File Details",
+        itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
         onItemClick: () => localHandleShowFileDetails(file)
       },
       ...(file.isAssigned
@@ -310,7 +310,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
       id: "date_uploaded",
       cell: (cell) => {
         const createdAt = cell.row.original.createdAt;
-        return <BlockTimestamp blockNumber={createdAt} />;
+        return createdAt === 0 ? "Unknown" : <BlockTimestamp blockNumber={createdAt} />;
       }
     }),
     columnHelper.display({
@@ -336,7 +336,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
             </div>
             {original.source !== "Hippius" && (
               <div
-                className="text-grey-70 text-xs truncate max-w-[250px]"
+                className="text-grey-70 text-xs truncate max-w-[250px] xl:max-w-[100%]"
                 title={original.source}
               >
                 {original.source}
@@ -361,7 +361,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
         const menuItems = createTableItems(file, fileType, decodedCid);
 
         return (
-          <div className="flex justify-center items-center w-10">
+          <div className="flex justify-center items-center">
             <TableActionMenu
               dropdownTitle="IPFS Options"
               items={menuItems}
@@ -432,7 +432,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
           {row.getVisibleCells().map((cell) => (
             <TableModule.Td
               className={cn(
-                cell.column.id === "actions" && "w-8",
+                cell.column.id === "actions" && "",
                 cell.column.id === "name" && "p-0",
                 cell.column.id === "cid" && "p-0"
               )}
@@ -460,7 +460,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
     if (sharedState || !localIsFileDetailsOpen) return null;
     return (
       <SidebarDialog
-        heading="File Details"
+        heading={`${localFileDetailsFile?.isFolder ? "Folder" : "File"} Details`}
         open={localIsFileDetailsOpen}
         onOpenChange={setLocalIsFileDetailsOpen}
       >

@@ -123,7 +123,7 @@ export { default as TrendDown } from "./TrendDown";
 export { default as MaximizeCircle } from "./MaximizeCircle";
 export { default as PlayCircle } from "./PlayCircle";
 export { default as BoxSimple2 } from "./BoxSimple2";
-export { default as Link } from "./Link";
+export { default as Link } from "./LinkIcon";
 export { default as Video } from "./Video";
 export { default as Image } from "./Image";
 export { default as ImageWhite } from "./ImageWhite";

@@ -15,16 +15,16 @@ export const metadata = appMetadata;
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
-  display: "swap",
+  display: "swap"
 });
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
-  subsets: ["latin"],
+  subsets: ["latin"]
 });
 
 export default async function RootLayout({
-  children,
+  children
 }: Readonly<{
   children: React.ReactNode;
 }>) {
@@ -33,17 +33,17 @@ export default async function RootLayout({
       <body
         className={`${digitalFonts.className} ${geistSans.className} ${geistSans.variable} bg-grey-100 text-grey-10 antialiased font-sans`}
       >
-        <Suspense fallback={<PageLoader />}>
-          <Providers>
-            <WalletAuthProvider>
-              <NextTopLoader color="#3167DD" showSpinner={false} />
+        <Providers>
+          <WalletAuthProvider>
+            <NextTopLoader color="#3167DD" showSpinner={false} />
+            <Suspense fallback={<PageLoader />}>
               <SplashWrapper skipSplash={false}>
                 <div className="flex min-h-screen h-screen">{children}</div>
               </SplashWrapper>
-              <Toaster />
-            </WalletAuthProvider>
-          </Providers>
-        </Suspense>
+            </Suspense>
+            <Toaster />
+          </WalletAuthProvider>
+        </Providers>
       </body>
     </html>
   );

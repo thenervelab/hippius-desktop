@@ -1,4 +1,3 @@
-// src/lib/hooks/useFilesUpload.ts
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
@@ -11,6 +10,19 @@ import { toast } from "sonner";
 export type UploadFilesHandlers = {
   onSuccess?: () => void;
   onError?: (err: Error | unknown) => void;
+};
+
+export const readFileAsArrayBuffer = (file: File): Promise<number[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result as ArrayBuffer;
+      const uint8Array = new Uint8Array(arrayBuffer);
+      resolve(Array.from(uint8Array));
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsArrayBuffer(file);
+  });
 };
 
 export function useFilesUpload(handlers: UploadFilesHandlers) {
@@ -35,7 +47,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   async function upload(
     files: FileList,
     isPrivateView: boolean,
-    useErasureCoding: boolean = false
+    useErasureCoding: boolean = false,
+    encryptionKey?: string
   ) {
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
@@ -43,8 +56,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     const toastId = toast.loading(
       files.length > 1
         ? `Uploading ${files.length} files: 0%`
-        : "Uploading file: 0%",
-      { position: "top-center" }
+        : "Uploading file: 0%"
     );
     setRequestState("uploading");
     setProgress(0);
@@ -61,33 +73,31 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       // encrypt & upload each file via Tauri
       for (let i = 0; i < arr.length; i++) {
         const file = arr[i];
-        const arrayBuffer = await file.arrayBuffer();
-        const tempPath = `/tmp/${file.name}`;
 
-        // write to disk
-        await invoke("write_file", {
-          path: tempPath,
-          data: Array.from(new Uint8Array(arrayBuffer))
-        });
+        const fileData = await readFileAsArrayBuffer(file);
+
         let cid;
         // encrypt & upload
         if (isPrivateView) {
           cid = await invoke<string>("encrypt_and_upload_file", {
             accountId: polkadotAddress,
-            filePath: tempPath,
+            fileData: fileData,
+            fileName: file.name,
             seedPhrase: mnemonic,
-            encryptionKey: null
+            encryptionKey: encryptionKey || null
           });
         } else if (!isPrivateView && useErasureCoding) {
           cid = await invoke<string>("public_upload_with_erasure", {
             accountId: polkadotAddress,
-            filePath: tempPath,
+            fileData: fileData,
+            fileName: file.name,
             seedPhrase: mnemonic
           });
         } else {
           cid = await invoke<string>("upload_file_public", {
             accountId: polkadotAddress,
-            filePath: tempPath,
+            fileData: fileData,
+            fileName: file.name,
             seedPhrase: mnemonic
           });
         }
@@ -100,7 +110,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           files.length > 1
             ? `Uploading ${files.length} files: ${percent}%`
             : `Uploading file: ${percent}%`;
-        toast.loading(msg, { id: toastId, position: "top-center" });
+        toast.loading(msg, { id: toastId });
       }
 
       // finish up
@@ -112,7 +122,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           files.length > 1
             ? `${files.length} files successfully uploaded!`
             : `File successfully uploaded!`,
-          { id: toastId, position: "top-center" }
+          { id: toastId }
         );
       }, 500);
     } catch (err) {
@@ -124,7 +134,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         files.length > 1
           ? `${files.length} files failed to upload!`
           : `File failed to upload!`,
-        { id: toastId, position: "top-center" }
+        { id: toastId }
       );
     }
   }

@@ -77,6 +77,7 @@ const NotificationSettings: React.FC = () => {
               title="Email Notification Preferences"
               subtitle="Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you."
               iconSize="small"
+              info="Customize which events trigger notifications to stay informed about activity relevant to you. Your preferences can be updated anytime."
             />
           </RevealTextLine>
 

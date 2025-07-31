@@ -15,6 +15,7 @@ pub struct EncryptionKeyInfo {
 #[tauri::command]
 pub async fn get_encryption_keys() -> Result<Vec<EncryptionKeyInfo>, String> {
     let keys = list_encryption_keys().await?;
+    println!("keys : {:?}", keys);
     Ok(keys.into_iter().map(|(key, id)| EncryptionKeyInfo {
         id,
         key,

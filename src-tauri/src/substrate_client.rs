@@ -53,4 +53,5 @@ pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>,
 pub fn clear_substrate_client() {
     let mut client = SUBSTRATE_CLIENT.write().unwrap();
     *client = None;
+    println!("[Substrate] Cleared substrate client");
 }

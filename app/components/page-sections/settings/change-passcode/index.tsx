@@ -200,6 +200,7 @@ const ChangePasscode = ({ className }: { className?: string }) => {
           <SectionHeader
             Icon={Icons.WalletAdd}
             title="Change Passcode"
+            info="Your passcode encrypts your access key and secures your data. Only you can change it, keeping you in complete control of your account security. Choose a strong passcode that you don't use elsewhere."
             subtitle="Set a new passcode for your account security"
           />
 

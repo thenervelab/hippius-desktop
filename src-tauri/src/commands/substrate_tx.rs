@@ -230,12 +230,8 @@ pub async fn get_sync_path_internal(is_public: bool) -> Result<SyncPathResult, S
         let path = if let Some(row) = rec {
             row.get::<String, _>("path")
         } else {
-            // fallback to constant
-            if is_public {
-                crate::constants::substrate::SYNC_PATH.to_string()
-            } else {
-                crate::constants::substrate::SYNC_PATH_PRIVATE.to_string()
-            }
+            // Return error instead of fallback to constant
+            return Err(format!("Sync path for {} not set yet. Please configure encryption key first.", path_type));
         };
         Ok(SyncPathResult { path, is_public })
     } else {
