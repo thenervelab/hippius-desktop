@@ -122,9 +122,7 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 
             match hashes_result {
                 Ok(hashes) if !hashes.is_empty() => {
-                    if let Some((main_req_hash,)) = hashes.first() {
-                        println!("[unpin_user_file_by_name] Found match for variant '{}' with hash: {}", variant, main_req_hash);
-                        
+                    if let Some((main_req_hash,)) = hashes.first() {                        
                         let file_hash_wrapper = FileHashWrapper {
                             file_hash: main_req_hash.as_bytes().to_vec(),
                         };
@@ -160,7 +158,6 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     is_public: bool,
     should_delete_folder: bool,
 ) -> Result<u64, String> {
-    println!("[delete_and_unpin_file_by_name] Deleting seed_phrase: {}", seed_phrase);
     if let Some(pool) = DB_POOL.get() {
         if let Err(e) = unpin_user_file_by_name(file_name, seed_phrase).await {
             println!(
@@ -230,7 +227,6 @@ pub async fn delete_and_unpin_file_by_name(
     file_name: String,
     seed_phrase: String,
 ) -> Result<u64, String> {
-    println!("[delete_and_unpin_file_by_name] Deleting seed_phrase: {}", seed_phrase);
     let mut is_public = false;
     if let Some(pool) = DB_POOL.get() {
         let row: Option<(String,)> = sqlx::query_as(

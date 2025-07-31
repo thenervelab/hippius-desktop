@@ -30,6 +30,7 @@ pub static CREATE_BATCH: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec
 pub static CREATE_BATCH_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
 
 pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
+    let mut is_initial_startup = true;
     loop {
         {
             let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
@@ -52,6 +53,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
                 sync_path,
                 Arc::clone(&cancel_token),
                 path_change_tx.clone(),
+                is_initial_startup,
             ).await;
         } else {
             eprintln!("[PublicFolderSync] Failed to get public sync path: {:?}", sync_path_result.err());
@@ -88,6 +90,9 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             }
         });
 
+        // Set to false after the first startup
+        is_initial_startup = false;
+
         while !cancel_token.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -100,6 +105,7 @@ async fn start_sync_process(
     sync_path: String,
     cancel_token: Arc<AtomicBool>,
     path_change_tx: mpsc::Sender<String>,
+    is_initial_startup: bool,
 ) {
     if UPLOAD_SENDER.get().is_none() {
         let (tx, mut rx) = mpsc::unbounded_channel::<UploadJob>();
@@ -159,11 +165,19 @@ async fn start_sync_process(
         });
     }
 
-    let startup_account_id = account_id.clone();
-    let startup_seed_phrase = seed_phrase.clone();
-    let sync_path_cloned = sync_path.clone();
-    tokio::spawn(async move {
-        if let Some(pool) = crate::DB_POOL.get() {
+    if is_initial_startup {
+        let startup_account_id = account_id.clone();
+        let startup_seed_phrase = seed_phrase.clone();
+        let sync_path_cloned = sync_path.clone();
+        tokio::spawn(async move {
+            let pool = match crate::DB_POOL.get() {
+                Some(pool) => pool,
+                None => {
+                    eprintln!("[PublicStartup] DB_POOL not initialized, cannot proceed with sync.");
+                    return;
+                }
+            };
+
             let sync_path_buf = PathBuf::from(&sync_path_cloned);
             let mut paths = Vec::new();
             collect_paths_recursively(&sync_path_buf, &mut paths);
@@ -183,45 +197,85 @@ async fn start_sync_process(
                 .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()))
                 .collect();
 
-            let db_paths: Vec<(String, bool)> = sqlx::query_as(
+            // Fetch all paths from sync_folder_files
+            let db_paths: Vec<(String, bool)> = match sqlx::query_as(
                 "SELECT file_name, is_folder FROM sync_folder_files WHERE owner = ? AND type = 'public'"
             )
             .bind(&startup_account_id)
             .fetch_all(pool)
             .await
-            .unwrap_or_default();
+            {
+                Ok(paths) => paths,
+                Err(e) => {
+                    eprintln!("[PublicStartup] Failed to fetch sync_folder_files: {}", e);
+                    Vec::new()
+                }
+            };
 
-            for (db_path, _is_folder) in &db_paths {
+            // Delete paths that no longer exist in the sync directory
+            for (db_path, is_folder) in &db_paths {
                 if !dir_paths.contains(db_path) {
-                    println!("[PublicStartup] Path deleted from sync folder: {} (is_folder: {})", db_path, _is_folder);
+                    println!("[PublicStartup] Path deleted from sync folder: {} (is_folder: {})", db_path, is_folder);
                     let should_delete_folder = false;
-                    let delete_result = delete_and_unpin_user_file_records_by_name(&db_path, &startup_seed_phrase, true, should_delete_folder).await;
-                    if delete_result.is_ok() {
-                        let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'")
-                            .bind(&startup_account_id)
-                            .bind(db_path)
-                            .execute(pool)
-                            .await;
+                    match delete_and_unpin_user_file_records_by_name(db_path, &startup_seed_phrase, true, should_delete_folder).await {
+                        Ok(_) => {
+                            if let Err(e) = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'")
+                                .bind(&startup_account_id)
+                                .bind(db_path)
+                                .execute(pool)
+                                .await
+                            {
+                                eprintln!("[PublicStartup] Failed to delete sync_folder_files record for '{}': {}", db_path, e);
+                            } else {
+                                println!("[PublicStartup] Successfully deleted sync_folder_files record for '{}'", db_path);
+                            }
+                        }
+                        Err(e) => eprintln!("[PublicStartup] Failed to delete/unpin records for '{}': {}", db_path, e),
                     }
                 }
             }
 
             let mut new_paths_to_upload = Vec::new();
             for path in folder_paths.into_iter().chain(file_paths.into_iter()) {
-                let file_name = path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string());
-                if let Some(file_name) = file_name {
-                    if !db_paths.iter().any(|(name, _)| name == &file_name) {
-                        println!("[PublicStartup] New path detected in sync folder: {} (is_folder: {})", file_name, path.is_dir());
-                        if let Some(sender) = UPLOAD_SENDER.get() {
-                            sender
-                                .send(UploadJob {
-                                    account_id: startup_account_id.clone(),
-                                    seed_phrase: startup_seed_phrase.clone(),
-                                    file_path: path.to_string_lossy().to_string(),
-                                    is_folder: path.is_dir(),
-                                })
-                                .unwrap();
-                        }
+                let file_name = match path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()) {
+                    Some(name) => name,
+                    None => {
+                        eprintln!("[PublicStartup] Could not extract file name from path: {}", path.to_string_lossy());
+                        continue;
+                    }
+                };
+
+                // Check if path is already in sync_folder_files
+                let is_synced: Option<(i32,)> = match sqlx::query_as(
+                    "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public' LIMIT 1"
+                )
+                .bind(&startup_account_id)
+                .bind(&file_name)
+                .fetch_optional(pool)
+                .await
+                {
+                    Ok(result) => result,
+                    Err(e) => {
+                        eprintln!("[PublicStartup] DB error while checking sync status for '{}': {}", file_name, e);
+                        None
+                    }
+                };
+
+                if is_synced.is_some() {
+                    println!("[PublicStartup] Path '{}' is already in sync DB, skipping.", file_name);
+                    continue;
+                }
+
+                println!("[PublicStartup] New path detected in sync folder: {} (is_folder: {})", file_name, path.is_dir());
+                if let Some(sender) = UPLOAD_SENDER.get() {
+                    if let Err(e) = sender.send(UploadJob {
+                        account_id: startup_account_id.clone(),
+                        seed_phrase: startup_seed_phrase.clone(),
+                        file_path: path.to_string_lossy().to_string(),
+                        is_folder: path.is_dir(),
+                    }) {
+                        eprintln!("[PublicStartup] Failed to enqueue upload for '{}': {}", file_name, e);
+                    } else {
                         new_paths_to_upload.push(path.clone());
                     }
                 }
@@ -236,8 +290,108 @@ async fn start_sync_process(
                 let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
                 status.in_progress = false;
             }
-        }
-    });
+        });
+    } else {
+        // Handle sync path change: clean up sync_folder_files and upload new files/folders
+        let sync_account_id = account_id.clone();
+        let sync_seed_phrase = seed_phrase.clone();
+        let sync_path_cloned = sync_path.clone();
+        tokio::spawn(async move {
+            let pool = match crate::DB_POOL.get() {
+                Some(pool) => pool,
+                None => {
+                    eprintln!("[PublicSyncPathChange] DB_POOL not initialized, cannot proceed with sync.");
+                    return;
+                }
+            };
+
+            // Delete all public sync_folder_files records with a single query
+            println!("[PublicSyncPathChange] Deleting all public sync_folder_files records for account {}", sync_account_id);
+            match sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND type = 'public'")
+                .bind(&sync_account_id)
+                .execute(pool)
+                .await
+            {
+                Ok(result) => {
+                    println!("[PublicSyncPathChange] Successfully deleted {} public sync_folder_files records", result.rows_affected());
+                }
+                Err(e) => {
+                    eprintln!("[PublicSyncPathChange] Failed to delete public sync_folder_files records: {}", e);
+                }
+            }
+
+            // Scan new sync path for files/folders to upload
+            let sync_path_buf = PathBuf::from(&sync_path_cloned);
+            let mut paths = Vec::new();
+            collect_paths_recursively(&sync_path_buf, &mut paths);
+            let mut folder_paths = HashSet::new();
+            let mut file_paths = Vec::new();
+
+            for path in paths {
+                if path.is_dir() {
+                    folder_paths.insert(path.clone());
+                } else if !folder_paths.iter().any(|folder| path.starts_with(folder)) {
+                    file_paths.push(path);
+                }
+            }
+
+            let mut new_paths_to_upload = Vec::new();
+            for path in folder_paths.into_iter().chain(file_paths.into_iter()) {
+                let file_name = match path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()) {
+                    Some(name) => name,
+                    None => {
+                        eprintln!("[PublicSyncPathChange] Could not extract file name from path: {}", path.to_string_lossy());
+                        continue;
+                    }
+                };
+
+                // Check if path is already in sync_folder_files (should be empty due to prior deletion, but check for safety)
+                let is_synced: Option<(i32,)> = match sqlx::query_as(
+                    "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public' LIMIT 1"
+                )
+                .bind(&sync_account_id)
+                .bind(&file_name)
+                .fetch_optional(pool)
+                .await
+                {
+                    Ok(result) => result,
+                    Err(e) => {
+                        eprintln!("[PublicSyncPathChange] DB error while checking sync status for '{}': {}", file_name, e);
+                        None
+                    }
+                };
+
+                if is_synced.is_some() {
+                    println!("[PublicSyncPathChange] Path '{}' is already in sync DB, skipping.", file_name);
+                    continue;
+                }
+
+                println!("[PublicSyncPathChange] New path detected in new sync folder: {} (is_folder: {})", file_name, path.is_dir());
+                if let Some(sender) = UPLOAD_SENDER.get() {
+                    if let Err(e) = sender.send(UploadJob {
+                        account_id: sync_account_id.clone(),
+                        seed_phrase: sync_seed_phrase.clone(),
+                        file_path: path.to_string_lossy().to_string(),
+                        is_folder: path.is_dir(),
+                    }) {
+                        eprintln!("[PublicSyncPathChange] Failed to enqueue upload for '{}': {}", file_name, e);
+                    } else {
+                        new_paths_to_upload.push(path.clone());
+                    }
+                }
+            }
+
+            if !new_paths_to_upload.is_empty() {
+                let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
+                status.total_files = new_paths_to_upload.len();
+                status.synced_files = 0;
+                status.in_progress = true;
+            } else {
+                let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
+                status.in_progress = false;
+            }
+        });
+    }
 
     spawn_watcher_thread(account_id, seed_phrase, PathBuf::from(sync_path), cancel_token, path_change_tx);
 }
@@ -299,7 +453,7 @@ fn spawn_watcher_thread(
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&path_str) {
-                        println!("[PublicFolderSync] Path {:?} was recently uploaded, skipping periodic check.", path);
+                        // Suppress repetitive logging unless necessary
                         continue;
                     }
                 }
@@ -368,145 +522,186 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
             let mut folder_paths = HashSet::new();
             let mut file_paths = HashSet::new();
             println!("[PublicWatcher][Create] Detected new paths: {:?}", filtered_paths);
-            for path in filtered_paths.iter() {
-                let path_str = path.to_string_lossy().to_string();
-                {
-                    let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
-                    if recently_uploaded.contains(&path_str) {
-                        println!("[PublicWatcher][Create] Skipping recently uploaded: {}", path_str);
-                        continue;
-                    }
-                }
-                {
-                    let uploading_files = UPLOADING_FILES.lock().unwrap();
-                    if uploading_files.contains(&path_str) {
-                        println!("[PublicWatcher][Create] Path {} is already being uploaded, skipping.", path_str);
-                        continue;
-                    }
-                }
-                if path.is_dir() {
-                    folder_paths.insert(path.clone());
-                } else if path.is_file() {
-                    file_paths.insert(path.clone());
-                }
-                println!("[PublicWatcher][Create] Detected new path: {}", path_str);
-            }
 
-            let filtered_paths: Vec<(PathBuf, bool)> = folder_paths.clone()
-                .into_iter()
-                .map(|path| (path, true))
-                .chain(
-                    file_paths.into_iter().filter(|file_path| {
-                        !folder_paths.iter().any(|folder_path| {
-                            file_path.starts_with(folder_path) && file_path != folder_path
-                        })
-                    }).map(|path| (path, false))
-                )
-                .collect();
+            // Check sync_folder_files database for each path
+            if let Some(pool) = crate::DB_POOL.get() {
+                for path in filtered_paths.iter() {
+                    let path_str = path.to_string_lossy().to_string();
+                    let file_name = match path.file_name().and_then(|s| s.to_str()) {
+                        Some(name) => name.to_string(),
+                        None => {
+                            println!("[PublicWatcher][Create] Could not extract file name from path: {}", path_str);
+                            continue;
+                        }
+                    };
 
-            {
-                let mut batch = CREATE_BATCH.lock().unwrap();
-                for (path, is_folder) in &filtered_paths {
-                    println!("[PublicWatcher][Create] Adding to batch: {} (is_folder: {})", path.to_string_lossy(), is_folder);
-                    batch.push(path.clone());
-                }
-            }
-
-            if !CREATE_BATCH_TIMER_RUNNING.swap(true, Ordering::SeqCst) {
-                let account_id = account_id.to_string();
-                let seed_phrase = seed_phrase.to_string();
-                let sync_path = sync_path.to_path_buf();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                    let mut paths = Vec::new();
+                    // Check if path is already in sync_folder_files
+                    let is_synced: Option<(i32,)> = match sqlx::query_as(
+                        "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public' LIMIT 1"
+                    )
+                    .bind(account_id)
+                    .bind(&file_name)
+                    .fetch_optional(pool)
+                    .await
                     {
-                        let mut batch = CREATE_BATCH.lock().unwrap();
-                        for path in batch.drain(..) {
-                            println!("[PublicWatcher][Create] Processing batch path: {}", path.to_string_lossy());
-                            let mut retries = 20;
-                            while retries > 0 && !path.exists() {
-                                std::thread::sleep(Duration::from_millis(100));
-                                retries -= 1;
-                            }
-                            if path.exists() {
-                                if path.is_file() {
-                                    let mut last_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                                    let stable = (0..10).all(|_| {
-                                        std::thread::sleep(Duration::from_millis(100));
-                                        let new_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                                        let is_stable = new_size == last_size;
-                                        last_size = new_size;
-                                        is_stable
-                                    });
-                                    if stable {
-                                        let is_inside_folder = paths.iter().any(|(p, is_folder)| {
-                                            *is_folder && path.starts_with(p) && path != *p
-                                        });
-                                        if !is_inside_folder {
-                                            paths.push((path.clone(), false));
-                                        }
-                                    }
-                                } else if path.is_dir() {
-                                    paths.push((path.clone(), true));
-                                }
-                            } else {
-                                println!("[PublicWatcher][Create] Path {} no longer exists, skipping.", path.to_string_lossy());
-                            }
+                        Ok(result) => result,
+                        Err(e) => {
+                            eprintln!("[PublicWatcher][Create] DB error while checking sync status for '{}': {}", file_name, e);
+                            None
+                        }
+                    };
+
+                    if is_synced.is_some() {
+                        println!("[PublicWatcher][Create] Path '{}' is already in sync DB, skipping.", file_name);
+                        continue;
+                    }
+
+                    // Additional checks for recently uploaded or uploading files
+                    {
+                        let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+                        if recently_uploaded.contains(&path_str) {
+                            println!("[PublicWatcher][Create] Skipping recently uploaded: {}", path_str);
+                            continue;
                         }
                     }
-                    println!("[PublicWatcher][Create] Paths to upload after debounce: {:?}", paths);
-                    if !paths.is_empty() {
-                        {
-                            let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
-                            status.total_files = paths.len();
-                            status.synced_files = 0;
-                            status.in_progress = true;
+                    {
+                        let uploading_files = UPLOADING_FILES.lock().unwrap();
+                        if uploading_files.contains(&path_str) {
+                            println!("[PublicWatcher][Create] Path {} is already being uploaded, skipping.", path_str);
+                            continue;
                         }
-                        if let Some(sender) = UPLOAD_SENDER.get() {
-                            for (path, is_folder) in paths {
-                                let path_str = path.to_string_lossy().to_string();
-                                println!("[PublicWatcher][Create] Enqueuing for upload: {} (is_folder: {})", path_str, is_folder);
-                                sender
-                                    .send(UploadJob {
+                    }
+
+                    if path.is_dir() {
+                        folder_paths.insert(path.clone());
+                    } else if path.is_file() {
+                        file_paths.insert(path.clone());
+                    }
+                    println!("[PublicWatcher][Create] Detected new path: {}", path_str);
+                }
+
+                let filtered_paths: Vec<(PathBuf, bool)> = folder_paths.clone()
+                    .into_iter()
+                    .map(|path| (path, true))
+                    .chain(
+                        file_paths.into_iter().filter(|file_path| {
+                            !folder_paths.iter().any(|folder_path| {
+                                file_path.starts_with(folder_path) && file_path != folder_path
+                            })
+                        }).map(|path| (path, false))
+                    )
+                    .collect();
+
+                {
+                    let mut batch = CREATE_BATCH.lock().unwrap();
+                    for (path, is_folder) in &filtered_paths {
+                        println!("[PublicWatcher][Create] Adding to batch: {} (is_folder: {})", path.to_string_lossy(), is_folder);
+                        batch.push(path.clone());
+                    }
+                }
+
+                if !CREATE_BATCH_TIMER_RUNNING.swap(true, Ordering::SeqCst) {
+                    let account_id = account_id.to_string();
+                    let seed_phrase = seed_phrase.to_string();
+                    let sync_path = sync_path.to_path_buf();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        let mut paths = Vec::new();
+                        {
+                            let mut batch = CREATE_BATCH.lock().unwrap();
+                            for path in batch.drain(..) {
+                                println!("[PublicWatcher][Create] Processing batch path: {}", path.to_string_lossy());
+                                let mut retries = 20;
+                                while retries > 0 && !path.exists() {
+                                    std::thread::sleep(Duration::from_millis(100));
+                                    retries -= 1;
+                                }
+                                if path.exists() {
+                                    if path.is_file() {
+                                        let mut last_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                                        let stable = (0..10).all(|_| {
+                                            std::thread::sleep(Duration::from_millis(100));
+                                            let new_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                                            let is_stable = new_size == last_size;
+                                            last_size = new_size;
+                                            is_stable
+                                        });
+                                        if stable {
+                                            let is_inside_folder = paths.iter().any(|(p, is_folder)| {
+                                                *is_folder && path.starts_with(p) && path != *p
+                                            });
+                                            if !is_inside_folder {
+                                                paths.push((path.clone(), false));
+                                            }
+                                        }
+                                    } else if path.is_dir() {
+                                        paths.push((path.clone(), true));
+                                    }
+                                } else {
+                                    println!("[PublicWatcher][Create] Path {} no longer exists, skipping.", path.to_string_lossy());
+                                }
+                            }
+                        }
+                        println!("[PublicWatcher][Create] Paths to upload after debounce: {:?}", paths);
+                        if !paths.is_empty() {
+                            {
+                                let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
+                                status.total_files = paths.len();
+                                status.synced_files = 0;
+                                status.in_progress = true;
+                            }
+                            if let Some(sender) = UPLOAD_SENDER.get() {
+                                for (path, is_folder) in paths {
+                                    let path_str = path.to_string_lossy().to_string();
+                                    println!("[PublicWatcher][Create] Enqueuing for upload: {} (is_folder: {})", path_str, is_folder);
+                                    if let Err(e) = sender.send(UploadJob {
                                         account_id: account_id.clone(),
                                         seed_phrase: seed_phrase.clone(),
                                         file_path: path_str,
                                         is_folder,
-                                    })
-                                    .unwrap();
+                                    }) {
+                                        eprintln!("[PublicWatcher][Create] Failed to enqueue upload for '{}': {}", path.to_string_lossy(), e);
+                                    }
+                                }
                             }
                         }
-                    }
-                    CREATE_BATCH_TIMER_RUNNING.store(false, Ordering::SeqCst);
-                });
+                        CREATE_BATCH_TIMER_RUNNING.store(false, Ordering::SeqCst);
+                    });
+                }
+            } else {
+                eprintln!("[PublicWatcher][Create] DB_POOL not initialized, cannot check sync status.");
             }
         }
-        EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::To)) => {            
-            // ***************************************************************
-            // **** REPLACE THE ENTIRE CONTENTS OF THIS BLOCK WITH THE NEW LOGIC BELOW ****
-            // ***************************************************************
-            
-            let mut paths_to_batch = HashSet::new(); // Use a HashSet to auto-deduplicate paths
+        EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::To)) => {
+            let mut paths_to_batch = HashSet::new();
 
             for path in filtered_paths {
                 let path_str = path.to_string_lossy().to_string();
+                let file_name = match path.file_name().and_then(|s| s.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => {
+                        println!("[PublicWatcher][Modify] Could not extract file name from path: {}", path_str);
+                        continue;
+                    }
+                };
+
+                // Skip if recently uploaded or already uploading
                 {
-                    // Skip if recently uploaded or already uploading
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&path_str) {
                         println!("[PublicWatcher][Modify] Skipping recently uploaded: {}", path_str);
                         continue;
                     }
+                }
+                {
                     let uploading_files = UPLOADING_FILES.lock().unwrap();
                     if uploading_files.contains(&path_str) {
                         println!("[PublicWatcher][Modify] Path {} is already being uploaded, skipping.", path_str);
                         continue;
                     }
                 }
-                
-                // Determine the top-level path to re-sync.
-                // If the path is a top-level file/folder, use it.
-                // If it's a child, find its top-level parent folder.
+
+                // Determine the top-level path to re-sync
                 let top_level_path = if path.parent() == Some(sync_path) {
                     path.clone()
                 } else if let Some(top_level_folder) = find_top_level_folder(&path, sync_path) {
@@ -516,10 +711,52 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                     continue;
                 };
 
+                // Skip if top-level path is recently uploaded
+                let top_level_path_str = top_level_path.to_string_lossy().to_string();
+                {
+                    let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+                    if recently_uploaded.contains(&top_level_path_str) {
+                        println!("[PublicWatcher][Modify] Skipping recently uploaded top-level path: {}", top_level_path_str);
+                        continue;
+                    }
+                }
+
+                // Check if path is already in sync_folder_files
+                if let Some(pool) = crate::DB_POOL.get() {
+                    let is_synced: Option<(i32,)> = match sqlx::query_as(
+                        "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public' LIMIT 1"
+                    )
+                    .bind(account_id)
+                    .bind(&file_name)
+                    .fetch_optional(pool)
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(e) => {
+                            eprintln!("[PublicWatcher][Modify] DB error while checking sync status for '{}': {}", file_name, e);
+                            None
+                        }
+                    };
+
+                    if is_synced.is_some() {
+                        // Path exists in sync DB, delete old records before re-uploading
+                        println!("[PublicWatcher][Modify] Path '{}' exists in sync DB, cleaning up before re-sync.", file_name);
+                        let should_delete_folder = false;
+                        let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, true, should_delete_folder).await;
+                        if delete_result.is_err() {
+                            eprintln!("[PublicWatcher][Modify] Warning: Failed to delete/unpin old records for '{}', proceeding with upload anyway.", file_name);
+                        } else {
+                            println!("[PublicWatcher][Modify] Successfully cleaned up old records for '{}'", file_name);
+                        }
+                    }
+                } else {
+                    eprintln!("[PublicWatcher][Modify] DB_POOL not initialized, cannot check sync status.");
+                }
+
                 paths_to_batch.insert(top_level_path);
             }
-            
-            // Now, add the collected paths to the global create batch
+
+            // Add to batch and trigger debounced processor
             if !paths_to_batch.is_empty() {
                 {
                     let mut batch = CREATE_BATCH.lock().unwrap();
@@ -529,45 +766,35 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                     }
                 }
 
-                // Trigger the debounced batch processor if it's not already running
-                // This is the exact same logic from the Create handler.
                 if !CREATE_BATCH_TIMER_RUNNING.swap(true, Ordering::SeqCst) {
                     let account_id = account_id.to_string();
                     let seed_phrase = seed_phrase.to_string();
-                
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(200)).await;
-                
-                        // 1. Drain the global batch into a local variable and release the lock immediately.
                         let paths_to_process: Vec<PathBuf>;
                         {
-                            // This scope ensures the MutexGuard is dropped right after we're done with it.
                             let mut batch = CREATE_BATCH.lock().unwrap();
                             paths_to_process = batch.drain(..).collect();
-                        } // <- The lock on CREATE_BATCH is released here.
-                
-                        // 2. Now that the lock is released, we can safely loop and use .await.
-                        // We use a HashSet to handle any duplicate paths that might have been added.
+                        }
+
                         let mut final_paths_to_upload = Vec::new();
                         let mut unique_paths = HashSet::new();
-                
+
                         for path in paths_to_process {
                             if unique_paths.insert(path.clone()) {
-                                // This path is unique, let's process it.
-                
-                                // Perform cleanup for this path before re-uploading.
-                                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                                    println!("[PublicWatcher][Debounced] Cleaning up old records for '{}' before re-sync.", file_name);
-                                    // This await is now safe because no locks are held.
-                                    let _ = delete_and_unpin_user_file_records_by_name(file_name, &seed_phrase, true, false).await;
-                                }
-                
-                                // Perform stability checks (copied from your Create handler).
+                                let file_name = match path.file_name().and_then(|s| s.to_str()) {
+                                    Some(name) => name.to_string(),
+                                    None => {
+                                        println!("[PublicWatcher][Debounced] Could not extract file name from path: {}", path.to_string_lossy());
+                                        continue;
+                                    }
+                                };
+
                                 if !path.exists() {
                                     println!("[PublicWatcher][Debounced] Path {} no longer exists, skipping.", path.to_string_lossy());
                                     continue;
                                 }
-                
+
                                 if path.is_file() {
                                     let mut last_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                                     let stable = (0..10).all(|_| {
@@ -585,10 +812,9 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                                 }
                             }
                         }
-                        
+
                         println!("[PublicWatcher][Debounced] Paths to upload after debounce: {:?}", final_paths_to_upload);
-                
-                        // 3. Enqueue the final, processed paths for upload.
+
                         if !final_paths_to_upload.is_empty() {
                             {
                                 let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
@@ -600,14 +826,14 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                                 for (path, is_folder) in final_paths_to_upload {
                                     let path_str = path.to_string_lossy().to_string();
                                     println!("[PublicWatcher][Debounced] Enqueuing for upload: {} (is_folder: {})", path_str, is_folder);
-                                    sender
-                                        .send(UploadJob {
-                                            account_id: account_id.clone(),
-                                            seed_phrase: seed_phrase.clone(),
-                                            file_path: path_str,
-                                            is_folder,
-                                        })
-                                        .unwrap();
+                                    if let Err(e) = sender.send(UploadJob {
+                                        account_id: account_id.clone(),
+                                        seed_phrase: seed_phrase.clone(),
+                                        file_path: path_str,
+                                        is_folder,
+                                    }) {
+                                        eprintln!("[PublicWatcher][Debounced] Failed to enqueue upload for '{}': {}", path.to_string_lossy(), e);
+                                    }
                                 }
                             }
                         }
@@ -622,18 +848,11 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                 if let Some(file_name) = file_name {
                     println!("[PublicWatcher][Remove] Path deleted from sync folder: {} (is_folder: {})", file_name, path.is_dir());
                     let should_delete_folder = false;
-                    let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, true, should_delete_folder).await;
+                    let delete_result = delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, true, should_delete_folder).await;
                     if delete_result.is_ok() {
-                        if let Some(pool) = crate::DB_POOL.get() {
-                            let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'")
-                                .bind(account_id)
-                                .bind(file_name)
-                                .execute(pool)
-                                .await;
-                            println!("[PublicWatcher][Remove] Successfully deleted records for '{}'", file_name);
-                        }
+                        println!("[PublicWatcher][Remove] Successfully deleted records for '{}'", file_name);
                     } else {
-                        eprintln!("[PublicWatcher][Remove] Failed to delete/unpin records for '{}'", file_name);
+                        eprintln!("[PublicWatcher][Remove] Failed to delete/unpin records for '{}': {:?}", file_name, delete_result.err());
                     }
                 }
             }
@@ -673,28 +892,22 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         let should_delete_folder = false;
                         let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, true, should_delete_folder).await;
                         if delete_result.is_ok() {
-                            if let Some(pool) = crate::DB_POOL.get() {
-                                let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'")
-                                    .bind(account_id)
-                                    .bind(&file_name)
-                                    .execute(pool)
-                                    .await;
-                                println!("[PublicWatcher][Rename] Successfully deleted old records for folder '{}'", file_name);
-                            }
+                            println!("[PublicWatcher][Rename] Successfully deleted old records for folder '{}'", file_name);
                         } else {
                             eprintln!("[PublicWatcher][Rename] Failed to delete/unpin old records for folder '{}'", file_name);
                             continue;
                         }
                         if let Some(sender) = UPLOAD_SENDER.get() {
-                            sender
-                                .send(UploadJob {
-                                    account_id: account_id.to_string(),
-                                    seed_phrase: seed_phrase.to_string(),
-                                    file_path: path_str.clone(),
-                                    is_folder: true,
-                                })
-                                .unwrap();
-                            println!("[PublicWatcher][Rename] Enqueued folder for upload: {}", path_str);
+                            if let Err(e) = sender.send(UploadJob {
+                                account_id: account_id.to_string(),
+                                seed_phrase: seed_phrase.to_string(),
+                                file_path: path_str.clone(),
+                                is_folder: true,
+                            }) {
+                                eprintln!("[PublicWatcher][Rename] Failed to enqueue upload for '{}': {}", path_str, e);
+                            } else {
+                                println!("[PublicWatcher][Rename] Enqueued folder for upload: {}", path_str);
+                            }
                         }
                     }
                 } else {
@@ -711,28 +924,22 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         let should_delete_folder = false;
                         let delete_result = delete_and_unpin_user_file_records_by_name(&folder_name, seed_phrase, true, should_delete_folder).await;
                         if delete_result.is_ok() {
-                            if let Some(pool) = crate::DB_POOL.get() {
-                                let _ = sqlx::query("DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'")
-                                    .bind(account_id)
-                                    .bind(&folder_name)
-                                    .execute(pool)
-                                    .await;
-                                println!("[PublicWatcher][Rename] Successfully deleted old records for folder '{}'", folder_name);
-                            }
+                            println!("[PublicWatcher][Rename] Successfully deleted old records for folder '{}'", folder_name);
                         } else {
                             eprintln!("[PublicWatcher][Rename] Failed to delete/unpin old records for folder '{}'", folder_name);
                             continue;
                         }
                         if let Some(sender) = UPLOAD_SENDER.get() {
-                            sender
-                                .send(UploadJob {
-                                    account_id: account_id.to_string(),
-                                    seed_phrase: seed_phrase.to_string(),
-                                    file_path: folder_str.clone(),
-                                    is_folder: true,
-                                })
-                                .unwrap();
-                            println!("[PublicWatcher][Rename] Enqueued folder for upload: {}", folder_str);
+                            if let Err(e) = sender.send(UploadJob {
+                                account_id: account_id.to_string(),
+                                seed_phrase: seed_phrase.to_string(),
+                                file_path: folder_str.clone(),
+                                is_folder: true,
+                            }) {
+                                eprintln!("[PublicWatcher][Rename] Failed to enqueue upload for '{}': {}", folder_str, e);
+                            } else {
+                                println!("[PublicWatcher][Rename] Enqueued folder for upload: {}", folder_str);
+                            }
                         }
                     } else {
                         println!("[PublicWatcher][Rename] Path {} is not in a top-level folder or file, skipping.", path_str);
