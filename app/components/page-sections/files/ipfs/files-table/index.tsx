@@ -339,7 +339,9 @@ const FilesTable: FC<FilesTableProps> = memo(({
                 className="text-grey-70 text-xs truncate max-w-[250px] xl:max-w-[100%]"
                 title={original.source}
               >
-                {original.source}
+                {original.source && original.source.length > 53
+                  ? original.source.slice(0, 40) + "..." + original.source.slice(-10)
+                  : original.source ?? ""}
               </div>
             )}
           </div>

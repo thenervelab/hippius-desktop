@@ -133,13 +133,6 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                 const file = files[i];
                 const percent = Math.round(((i + 1) / files.length) * 100);
 
-
-                // Update toast with progress
-                const msg = files.length > 1
-                    ? `Adding ${files.length} files to folder: ${percent}%`
-                    : `Adding file to folder: ${percent}%`;
-                toast.loading(msg, { id: toastId });
-
                 const fileData = await readFileAsArrayBuffer(file);
 
                 // Now add the file to the folder using the temp path
@@ -164,6 +157,11 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                 // Small delay to make progress visible when adding multiple small files
                 if (files.length > 1) await new Promise(r => setTimeout(r, 300));
                 setUploadProgress(percent);
+                // Update toast with progress
+                const msg = files.length > 1
+                    ? `Adding ${files.length} files to folder: ${percent}%`
+                    : `Adding file to folder: ${percent}%`;
+                toast.loading(msg, { id: toastId });
             }
 
             toast.success(
