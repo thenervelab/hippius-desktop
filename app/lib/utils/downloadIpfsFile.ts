@@ -51,6 +51,7 @@ export const downloadIpfsFile = async (
     }
     return;
   } else if (isPrivateView && file.isErasureCoded) {
+    console.log("downloadEncryptedIpfsFile", downloadEncryptedIpfsFile)
     return downloadEncryptedIpfsFile(
       file,
       polkadotAddress ?? "",

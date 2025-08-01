@@ -86,6 +86,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
             seedPhrase: mnemonic,
             encryptionKey: encryptionKey || null
           });
+          console.log("cid", cid)
         } else if (!isPrivateView && useErasureCoding) {
           cid = await invoke<string>("public_upload_with_erasure", {
             accountId: polkadotAddress,
