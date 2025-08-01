@@ -32,13 +32,16 @@ pub fn get_sync_status() -> SyncStatusResponse {
     let public_status = PUBLIC_SYNC_STATUS.lock().unwrap();
 
     let total_files = private_status.total_files + public_status.total_files;
+    let processed_files = private_status.processed_files + public_status.processed_files;
     let synced_files = private_status.synced_files + public_status.synced_files;
     let in_progress = private_status.in_progress || public_status.in_progress;
 
     let percent = if total_files > 0 {
-        (synced_files as f32 / total_files as f32) * 100.0
-    } else {
+        (processed_files as f32 / total_files as f32) * 100.0
+    } else if in_progress {
         0.0
+    } else {
+        100.0
     };
 
     SyncStatusResponse {
@@ -68,6 +71,12 @@ pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::i
 }
 
 pub fn find_top_level_folder(path: &Path, sync_path: &Path) -> Option<PathBuf> {
+    // If the path is already a direct child of sync_path, return it
+    if path.parent().map(|p| p == sync_path).unwrap_or(false) {
+        return Some(path.to_path_buf());
+    }
+    
+    // Otherwise walk up the tree to find the first child of sync_path
     let mut current = path;
     while let Some(parent) = current.parent() {
         if parent == sync_path {

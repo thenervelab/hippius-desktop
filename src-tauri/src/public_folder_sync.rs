@@ -1,4 +1,4 @@
-use crate::commands::ipfs_commands::{upload_file_public_sync, public_upload_folder};
+use crate::commands::ipfs_commands::{upload_file_public_sync, public_upload_folder_sync};
 use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use crate::utils::sync::get_public_sync_path;
 use crate::utils::file_operations::delete_and_unpin_user_file_records_by_name;
@@ -75,9 +75,23 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
                     let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
                     syncing_accounts.remove(&(account_id_clone, "public"));
                 }
-                // Reset sync status on path change
-                let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
-                *status = SyncStatus::default();
+                // Clear pending upload jobs and reset state
+                if let Some(sender) = UPLOAD_SENDER.get() {
+                    drop(sender); // Close the sender to clear the channel
+                    UPLOAD_SENDER.set(mpsc::unbounded_channel().0).ok();
+                }
+                {
+                    let mut uploading_files = UPLOADING_FILES.lock().unwrap();
+                    uploading_files.clear();
+                }
+                {
+                    let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+                    recently_uploaded.clear();
+                }
+                {
+                    let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
+                    *status = SyncStatus::default();
+                }
             } else {
                 println!("[PublicFolderSync] Path change channel closed, stopping sync for account {}.", account_id_clone);
                 cancel_token_clone.store(true, Ordering::SeqCst);
@@ -117,50 +131,105 @@ async fn start_sync_process(
                     let mut uploading_files = UPLOADING_FILES.lock().unwrap();
                     if uploading_files.contains(&path_str) {
                         println!("[PublicUploadWorker] Path {} is already uploading, skipping.", path_str);
+                        // Increment processed_files even for skipped uploads
+                        let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
+                        status.processed_files += 1;
+                        if status.processed_files >= status.total_files && status.total_files > 0 {
+                            status.in_progress = false;
+                            println!("[PublicFolderSync] Sync completed. Processed {} out of {} files.", status.processed_files, status.total_files);
+                        }
                         continue;
                     }
                     uploading_files.insert(path_str.clone());
                 }
 
-                let result = if job.is_folder {
-                    public_upload_folder(
-                        job.account_id.clone(),
-                        job.file_path.clone(),
-                        job.seed_phrase.clone()
-                    ).await
-                } else {
-                    upload_file_public_sync(
-                        job.account_id.clone(),
-                        job.file_path.clone(),
-                        job.seed_phrase.clone()
-                    ).await
-                };
+                // Retry logic for failed uploads
+                const MAX_RETRIES: usize = 3;
+                let mut success = false;
+                let mut last_error = None;
+                for attempt in 1..=MAX_RETRIES {
+                    // Check if file/folder already exists in DB to avoid unnecessary uploads
+                    if let Some(pool) = crate::DB_POOL.get() {
+                        let file_name = Path::new(&job.file_path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        let is_synced: Option<(i32,)> = match sqlx::query_as(
+                            "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public' LIMIT 1"
+                        )
+                        .bind(&job.account_id)
+                        .bind(file_name)
+                        .fetch_optional(pool)
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(e) => {
+                                eprintln!("[PublicUploadWorker] DB error while checking sync status for '{}': {}", file_name, e);
+                                None
+                            }
+                        };
+                        if is_synced.is_some() {
+                            println!("[PublicUploadWorker] Path '{}' already exists in sync DB, marking as successful.", file_name);
+                            success = true;
+                            break;
+                        }
+                    }
+
+                    let result = if job.is_folder {
+                        public_upload_folder_sync(
+                            job.account_id.clone(),
+                            job.file_path.clone(),
+                            job.seed_phrase.clone()
+                        ).await
+                    } else {
+                        upload_file_public_sync(
+                            job.account_id.clone(),
+                            job.file_path.clone(),
+                            job.seed_phrase.clone(),
+                        ).await
+                    };
+
+                    if result.is_ok() {
+                        success = true;
+                        break;
+                    } else {
+                        last_error = Some(result.err().unwrap());
+                        eprintln!("[PublicUploadWorker] Upload attempt {} failed for {}: {:?}", attempt, path_str, last_error);
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                }
 
                 {
                     let mut uploading_files = UPLOADING_FILES.lock().unwrap();
                     uploading_files.remove(&path_str);
                 }
 
-                if result.is_ok() {
-                    let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
-                    recently_uploaded.insert(path_str.clone());
+                {
                     let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
-                    status.synced_files += 1;
-                    println!("[PublicFolderSync] Synced paths: {} / {}", status.synced_files, status.total_files);
-                    if status.synced_files >= status.total_files && status.total_files > 0 {
-                        status.in_progress = false;
+                    status.processed_files += 1; // Always increment processed_files
+                    if success {
+                        status.synced_files += 1;
+                        println!("[PublicFolderSync] Synced paths: {} / {} (Processed: {})", status.synced_files, status.total_files, status.processed_files);
+                        let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+                        recently_uploaded.insert(path_str.clone());
+                    } else {
+                        eprintln!("[PublicUploadWorker] Gave up upload after {} attempts for {}: {:?}", MAX_RETRIES, path_str, last_error);
                     }
+
+                    if status.processed_files >= status.total_files && status.total_files > 0 {
+                        status.in_progress = false;
+                        println!("[PublicFolderSync] Sync completed. Processed {} out of {} files.", status.processed_files, status.total_files);
+                    }
+                }
+
+                if success {
                     let path_str_clone = path_str.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_secs(300)).await;
                         let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                         recently_uploaded.remove(&path_str_clone);
                     });
-                } else {
-                    eprintln!("[PublicUploadWorker] Upload failed for {}: {:?}", path_str, result.err());
                 }
-
-                tokio::time::sleep(Duration::from_secs(1)).await; // Reduced delay for faster processing
             }
         });
     }
@@ -187,12 +256,13 @@ async fn start_sync_process(
             for path in paths {
                 if path.is_dir() {
                     folder_paths.insert(path.clone());
-                } else if !folder_paths.iter().any(|folder| path.starts_with(folder)) {
+                } else if !folder_paths.iter().any(|folder| path.starts_with(folder) && path != *folder) {
                     file_paths.push(path);
                 }
             }
 
-            let dir_paths: HashSet<String> = folder_paths.iter()
+            let dir_paths: HashSet<String> = folder_paths
+                .iter()
                 .chain(file_paths.iter())
                 .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()))
                 .collect();
@@ -212,7 +282,7 @@ async fn start_sync_process(
                 }
             };
 
-            // Delete paths that no longer exist in the sync directory
+            // Delete paths that no longer exist
             for (db_path, is_folder) in &db_paths {
                 if !dir_paths.contains(db_path) {
                     println!("[PublicStartup] Path deleted from sync folder: {} (is_folder: {})", db_path, is_folder);
@@ -236,6 +306,7 @@ async fn start_sync_process(
             }
 
             let mut new_paths_to_upload = Vec::new();
+            let mut unique_paths = HashSet::new();
             for path in folder_paths.into_iter().chain(file_paths.into_iter()) {
                 let file_name = match path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()) {
                     Some(name) => name,
@@ -245,7 +316,13 @@ async fn start_sync_process(
                     }
                 };
 
-                // Check if path is already in sync_folder_files
+                let path_str = path.to_string_lossy().to_string();
+                if !unique_paths.insert(path_str.clone()) {
+                    println!("[PublicStartup] Duplicate path detected, skipping: {}", path_str);
+                    continue;
+                }
+
+                // Skip if already in sync DB
                 let is_synced: Option<(i32,)> = match sqlx::query_as(
                     "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public' LIMIT 1"
                 )
@@ -262,8 +339,38 @@ async fn start_sync_process(
                 };
 
                 if is_synced.is_some() {
-                    println!("[PublicStartup] Path '{}' is already in sync DB, skipping.", file_name);
+                    println!("[PublicStartup] Path '{}' is already in sync DB, marking as processed.", file_name);
+                    let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
+                    status.processed_files += 1;
+                    status.synced_files += 1;
+                    if status.processed_files >= status.total_files && status.total_files > 0 {
+                        status.in_progress = false;
+                        println!("[PublicFolderSync] Sync completed. Processed {} out of {} files.", status.processed_files, status.total_files);
+                    }
                     continue;
+                }
+
+                // Skip if recently uploaded or uploading
+                {
+                    let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+                    if recently_uploaded.contains(&path_str) {
+                        println!("[PublicStartup] Skipping recently uploaded: {}", path_str);
+                        let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
+                        status.processed_files += 1;
+                        status.synced_files += 1;
+                        if status.processed_files >= status.total_files && status.total_files > 0 {
+                            status.in_progress = false;
+                            println!("[PublicFolderSync] Sync completed. Processed {} out of {} files.", status.processed_files, status.total_files);
+                        }
+                        continue;
+                    }
+                }
+                {
+                    let uploading_files = UPLOADING_FILES.lock().unwrap();
+                    if uploading_files.contains(&path_str) {
+                        println!("[PublicStartup] Path {} is already being uploaded, skipping.", path_str);
+                        continue;
+                    }
                 }
 
                 println!("[PublicStartup] New path detected in sync folder: {} (is_folder: {})", file_name, path.is_dir());
@@ -271,10 +378,17 @@ async fn start_sync_process(
                     if let Err(e) = sender.send(UploadJob {
                         account_id: startup_account_id.clone(),
                         seed_phrase: startup_seed_phrase.clone(),
-                        file_path: path.to_string_lossy().to_string(),
+                        file_path: path_str,
                         is_folder: path.is_dir(),
                     }) {
                         eprintln!("[PublicStartup] Failed to enqueue upload for '{}': {}", file_name, e);
+                        // Increment processed_files on enqueue failure
+                        let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
+                        status.processed_files += 1;
+                        if status.processed_files >= status.total_files && status.total_files > 0 {
+                            status.in_progress = false;
+                            println!("[PublicFolderSync] Sync completed. Processed {} out of {} files.", status.processed_files, status.total_files);
+                        }
                     } else {
                         new_paths_to_upload.push(path.clone());
                     }
@@ -285,13 +399,20 @@ async fn start_sync_process(
                 let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
                 status.total_files = new_paths_to_upload.len();
                 status.synced_files = 0;
+                status.processed_files = 0;
                 status.in_progress = true;
+                println!("[PublicStartup] Set total_files to {} for new paths", status.total_files);
             } else {
                 let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
                 status.in_progress = false;
+                status.total_files = 0;
+                status.processed_files = 0;
+                status.synced_files = 0;
+                println!("[PublicStartup] No new paths to upload, sync complete.");
             }
         });
-    } else {
+    }
+    else {
         // Handle sync path change: clean up sync_folder_files and upload new files/folders
         let sync_account_id = account_id.clone();
         let sync_seed_phrase = seed_phrase.clone();
@@ -385,6 +506,7 @@ async fn start_sync_process(
                 let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
                 status.total_files = new_paths_to_upload.len();
                 status.synced_files = 0;
+                status.processed_files = 0;
                 status.in_progress = true;
             } else {
                 let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
@@ -392,7 +514,6 @@ async fn start_sync_process(
             }
         });
     }
-
     spawn_watcher_thread(account_id, seed_phrase, PathBuf::from(sync_path), cancel_token, path_change_tx);
 }
 
@@ -495,22 +616,36 @@ fn collect_paths_recursively(dir: &Path, paths: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            paths.push(path.clone());
-            if path.is_dir() {
-                collect_paths_recursively(&path, paths);
+            // Only add direct children of the sync directory
+            if path.parent().map(|p| p == dir).unwrap_or(false) {
+                paths.push(path.clone());
+                // Don't recurse into directories - we only want top-level items
             }
         }
     }
 }
 
 async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_path: &Path) {
-    let filtered_paths = event.paths.into_iter().filter(|path| {
+    let filtered_paths = event.paths.into_iter()
+    .filter(|path| {
+        // First filter out temp files
         if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-            !file_name.starts_with('.') && !file_name.contains("goutputstream")
-        } else {
-            false
+            if file_name.starts_with('.') || file_name.contains("goutputstream") {
+                // Mark filtered files as processed
+                let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
+                status.processed_files += 1;
+                if status.processed_files >= status.total_files && status.total_files > 0 {
+                    status.in_progress = false;
+                    println!("[PublicFolderSync] Filtered path marked as processed: {}", path.display());
+                }
+                return false;
+            }
         }
-    }).collect::<Vec<_>>();
+        
+        // Then check if it's a direct child of the sync directory
+        path.parent().map(|p| p == sync_path).unwrap_or(false)
+    })
+    .collect::<Vec<_>>();
 
     if filtered_paths.is_empty() {
         println!("[PublicWatcher] Skipping event with only temporary or invalid paths.");
@@ -646,8 +781,8 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         if !paths.is_empty() {
                             {
                                 let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
-                                status.total_files = paths.len();
-                                status.synced_files = 0;
+                                status.total_files += paths.len(); 
+                                // status.synced_files = 0;
                                 status.in_progress = true;
                             }
                             if let Some(sender) = UPLOAD_SENDER.get() {
@@ -818,8 +953,8 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         if !final_paths_to_upload.is_empty() {
                             {
                                 let mut status = PUBLIC_SYNC_STATUS.lock().unwrap();
-                                status.total_files = final_paths_to_upload.len();
-                                status.synced_files = 0;
+                                status.total_files += final_paths_to_upload.len();
+                                // status.synced_files = 0;
                                 status.in_progress = true;
                             }
                             if let Some(sender) = UPLOAD_SENDER.get() {
@@ -966,7 +1101,7 @@ async fn upload_path(path: &Path, account_id: &str, seed_phrase: &str, is_folder
 
     let _guard = UPLOAD_LOCK.lock().unwrap();
     let result = if is_folder {
-        public_upload_folder(
+        public_upload_folder_sync(
             account_id.to_string(),
             path_str.clone(),
             seed_phrase.to_string()

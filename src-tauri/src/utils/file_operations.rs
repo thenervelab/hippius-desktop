@@ -150,8 +150,6 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
     }
 }
 
-// Deletes all user_profiles records with the given file name and unpins the file.
-// Also deletes from sync_folder_files.
 pub async fn delete_and_unpin_user_file_records_by_name(
     file_name: &str,
     seed_phrase: &str,
@@ -166,7 +164,6 @@ pub async fn delete_and_unpin_user_file_records_by_name(
             );
         }
 
-        // Sanitize file_name to ensure it matches what's in sync_folder_files
         let sanitized_file_name = sanitize_name(file_name);
 
         let is_folder = sqlx::query_scalar::<_, bool>(
@@ -178,23 +175,18 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
         .unwrap_or(false);
 
-        // Delete from user_profiles. This will not error if no rows are found.
         let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
             .bind(file_name)
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
 
-        // Delete from sync_folder_files. This will also not error if no rows are found.
         let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
             .bind(&sanitized_file_name)
             .bind(if is_public { "public" } else { "private" })
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
-
-        // Remove from sync folder with the fetched is_folder value
-        remove_file_from_sync_and_db(&sanitized_file_name, is_public, is_folder, should_delete_folder).await;
 
         // Update sync status
         {
@@ -207,14 +199,23 @@ pub async fn delete_and_unpin_user_file_records_by_name(
                 sync_status.total_files -= 1;
                 if sync_status.synced_files > sync_status.total_files {
                     sync_status.synced_files = sync_status.total_files;
+                    sync_status.processed_files = sync_status.total_files;
                 }
                 if sync_status.total_files == 0 {
                     sync_status.in_progress = false;
+                    sync_status.processed_files = 0;
+                    sync_status.synced_files = 0;
                 }
+                println!(
+                    "[DB Cleanup] Updated sync status: total_files={}, processed_files={}, synced_files={}",
+                    sync_status.total_files, sync_status.processed_files, sync_status.synced_files
+                );
             }
         }
 
-        // Calculate total rows affected and return success
+        // Remove from sync folder
+        remove_file_from_sync_and_db(&sanitized_file_name, is_public, is_folder, should_delete_folder).await;
+
         let total_deleted = result1.rows_affected() + result2.rows_affected();
         Ok(total_deleted)
     } else {
@@ -458,6 +459,7 @@ pub async fn copy_to_sync_and_add_to_db(
             PRIVATE_SYNC_STATUS.lock().unwrap()
         };
         sync_status.synced_files += 1;
+        sync_status.processed_files += 1;
         if sync_status.synced_files >= sync_status.total_files && sync_status.total_files > 0 {
             sync_status.in_progress = false;
         }
@@ -497,6 +499,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
             sync_status.total_files -= 1;
             if sync_status.synced_files > sync_status.total_files {
                 sync_status.synced_files = sync_status.total_files;
+                sync_status.processed_files = sync_status.total_files;
             }
             if sync_status.total_files == 0 {
                 sync_status.in_progress = false;
@@ -866,6 +869,7 @@ pub async fn copy_to_sync_folder(
             PRIVATE_SYNC_STATUS.lock().unwrap()
         };
         sync_status.synced_files += 1;
+        sync_status.processed_files += 1;
         if sync_status.synced_files >= sync_status.total_files && sync_status.total_files > 0 {
             sync_status.in_progress = false;
         }
@@ -914,6 +918,7 @@ pub async fn remove_from_sync_folder(
             sync_status.total_files -= 1;
             if sync_status.synced_files > sync_status.total_files {
                 sync_status.synced_files = sync_status.total_files;
+                sync_status.processed_files = sync_status.total_files;
             }
             if sync_status.total_files == 0 {
                 sync_status.in_progress = false;
