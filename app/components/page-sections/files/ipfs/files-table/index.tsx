@@ -236,6 +236,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
             >
               <NameCell
                 rawName={info.getValue()}
+                actualName={info.row.original.actualFileName}
                 cid={info.row.original.cid}
                 isAssigned={info.row.original.isAssigned}
                 fileType={fileType}
@@ -251,6 +252,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
             >
               <NameCell
                 rawName={info.getValue()}
+                actualName={info.row.original.actualFileName}
                 cid={info.row.original.cid}
                 isAssigned={info.row.original.isAssigned}
                 fileType={fileType}
@@ -266,6 +268,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
             >
               <NameCell
                 rawName={info.getValue()}
+                actualName={info.row.original.actualFileName}
                 cid={info.row.original.cid}
                 isAssigned={info.row.original.isAssigned}
                 fileType={fileType}
@@ -279,6 +282,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
           <NameCell
             className="px-4 py-[22px]"
             rawName={info.getValue()}
+            actualName={info.row.original.actualFileName}
             cid={info.row.original.cid}
             isAssigned={info.row.original.isAssigned}
             fileType={fileType || "document"}
