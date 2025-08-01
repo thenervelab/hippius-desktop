@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Icons, RevealTextLine } from "../ui";
+import { AppVersion, Icons, RevealTextLine } from "../ui";
 import cn from "@/app/lib/utils/cn";
 import NavItem from "./nav-item";
 import { navItems, footerNavItems } from "./nav-data";
@@ -149,11 +149,11 @@ const Sidebar: React.FC = () => {
             >
               <>
                 <span className={cn(collapsed ? "text-[10px]" : "")}>
-                  {!collapsed ? "VER" : "0.1.10"}
+                  {!collapsed ? "VER" : <AppVersion />}
                 </span>
                 {!collapsed && (
                   <span className="whitespace-nowrap ml-1.5 overflow-hidden">
-                    0.1.10
+                    <AppVersion />
                   </span>
                 )}
               </>

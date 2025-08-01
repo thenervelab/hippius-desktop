@@ -168,6 +168,7 @@ export function WalletAuthProvider({
     await clearWalletDb();
     logout();
   };
+
   useTrayInit();
 
   return (

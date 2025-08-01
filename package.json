@@ -1,7 +1,7 @@
 {
   "name": "hippius",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "next dev",
@@ -37,6 +37,8 @@
     "@tauri-apps/plugin-fs": "~2.4.0",
     "@tauri-apps/plugin-http": "~2.5.0",
     "@tauri-apps/plugin-opener": "^2.4.0",
+    "@tauri-apps/plugin-process": "~2",
+    "@tauri-apps/plugin-updater": "~2",
     "@types/three": "^0.176.0",
     "@vidstack/react": "^1.12.13",
     "@visx/responsive": "2.4.1",

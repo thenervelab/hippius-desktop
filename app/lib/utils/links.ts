@@ -2,6 +2,7 @@
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import { checkForUpdates } from "./updater/checkForUpdates";
 
 // Centralized object containing all application links
 export const APP_LINKS: any = {
@@ -43,7 +44,9 @@ export const handleButtonLink = (
   if (buttonLink) {
     e.preventDefault();
     e.stopPropagation();
-    if (buttonLink.includes("BILLING")) {
+    if (buttonLink.includes("Install")) {
+      checkForUpdates();
+    } else if (buttonLink.includes("BILLING")) {
       openLinkByKey(buttonLink);
     } else {
       if (buttonLink.includes("/files") && setActiveSubMenuItem) {

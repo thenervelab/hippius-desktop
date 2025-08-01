@@ -4,15 +4,19 @@ import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
+import {
+  checkForUpdates,
+  getAvailableUpdate
+} from "../utils/updater/checkForUpdates";
 
 const TRAY_ID = "hippius-tray";
 const QUIT_ID = "quit";
 const SYNC_ID = "sync";
+const INSTALL_UPDATE = "install-update";
 
 // singletons kept across React reloads
 let menuPromise: Promise<Menu> | null = null;
 let syncItem: MenuItem | null = null;
-
 /* ─ Create tray once ───────────────────────────────────────────── */
 export function useTrayInit() {
   useEffect(() => {
@@ -20,15 +24,38 @@ export function useTrayInit() {
 
     menuPromise = (async () => {
       const iconPath = await resolveResource("icons/trayIcon.png");
+
+      // Quit menu item
       const quit = await MenuItem.new({
         id: QUIT_ID,
         text: "Quit Hippius",
         action: async () => {
           await invoke("app_close");
-        },
+        }
       });
 
-      const menu = await Menu.new({ items: [quit] });
+      // Update menu item (if available)
+      const update = await getAvailableUpdate();
+      let installUpdateMenuItem;
+      if (update) {
+        installUpdateMenuItem = await MenuItem.new({
+          id: INSTALL_UPDATE,
+          text: "Install Update",
+          action: async () => {
+            await checkForUpdates();
+          }
+        });
+      }
+
+      // Build menu items array
+      const menuItems = [
+        ...(installUpdateMenuItem ? [installUpdateMenuItem] : []),
+        quit
+      ];
+
+      const menu = await Menu.new({
+        items: menuItems
+      });
 
       await TrayIcon.new({
         id: TRAY_ID,
@@ -36,7 +63,7 @@ export function useTrayInit() {
         iconAsTemplate: false,
         tooltip: "Hippius Cloud",
         menu,
-        menuOnLeftClick: true,
+        menuOnLeftClick: true
       });
 
       return menu;
@@ -44,7 +71,6 @@ export function useTrayInit() {
   }, []);
 }
 
-/* ─ Update label or remove it ─────────────────────────────────── */
 /* ─ Update label or remove it ─────────────────────────────────── */
 export async function setTraySyncPercent(percent: number | null) {
   const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
@@ -67,13 +93,14 @@ export async function setTraySyncPercent(percent: number | null) {
   // ── Build label ───────────────────────────────────────────────
   const label =
     percent >= 100 ? "Sync: Completed" : `Sync: ${Math.round(percent)} %`;
+  const update = await getAvailableUpdate();
 
   // ── Insert once, then only update text ────────────────────────
-  if (!syncItem && items.length < 2) {
+  if (!syncItem && (items.length < 2 || (update && items.length < 3))) {
     syncItem = await MenuItem.new({
       id: SYNC_ID,
       text: label,
-      enabled: false,
+      enabled: false
     });
     await menu.insert(syncItem, 0); // one‑time insert
   } else {
