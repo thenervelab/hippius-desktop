@@ -9,7 +9,6 @@ import { hasWalletRecord } from "@/app/lib/helpers/walletDb";
 import LoginWithPassCodeForm from "./LoginWithPasscodeForm";
 import AuthLayout from "./AuthLayout";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { checkForUpdates } from "@/app/lib/utils/updater/checkForUpdates";
 
 const Login = () => {
   const [showPasscodeFields, setShowPasscodeFields] = useState(false);
@@ -35,15 +34,6 @@ const Login = () => {
       console.error("Failed to open Privacy Policy:", error);
     }
   };
-
-  const handleCheckUpdates = async () => {
-    try {
-      await checkForUpdates();
-    } catch (error) {
-      console.error("Failed to check for updates:", error);
-    }
-  };
-
   return (
     <AuthLayout>
       <>
@@ -97,12 +87,6 @@ const Login = () => {
             <span>
               Version <AppVersion />
             </span>
-            <button
-              onClick={handleCheckUpdates}
-              className="text-primary-50 hover:text-[#0052ff]/90 hover:underline text-xs"
-            >
-              Check for Updates
-            </button>
           </div>
         </RevealTextLine>
       </>
