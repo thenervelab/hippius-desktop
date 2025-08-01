@@ -27,7 +27,7 @@ use commands::ipfs_commands::{
 use commands::accounts::{create_encryption_key, get_encryption_keys, import_key};
 use utils::file_operations::delete_and_unpin_file_by_name;
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
-use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_tauri};
+use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_tauri, get_wss_endpoint, update_wss_endpoint_command, test_wss_endpoint_command};
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Manager};
@@ -79,6 +79,9 @@ fn main() {
             import_key,
             transfer_balance_tauri,
             get_user_total_file_size,
+            get_wss_endpoint,
+            update_wss_endpoint_command,
+            test_wss_endpoint_command
         ]);
 
     let builder = setup(builder);
