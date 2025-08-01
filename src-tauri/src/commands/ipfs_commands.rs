@@ -435,7 +435,8 @@ pub async fn encrypt_and_upload_folder(
 
     for result in final_results {
         all_files_for_storage.extend(result.chunk_pairs);
-        all_files_for_storage.push((result.file_entry.file_name.clone(), result.file_entry.cid.clone()));
+        let storage_filename = format!("{}{}", result.file_entry.file_name, ".ec_metadata");
+        all_files_for_storage.push((storage_filename.clone(), result.file_entry.cid.clone()));
         file_manifest_entries.push(result.file_entry);
     }
 
@@ -450,7 +451,7 @@ pub async fn encrypt_and_upload_folder(
 
     let meta_folder_name = format!("{}{}", folder_name, ".folder.ec_metadata");
     all_files_for_storage.push((meta_folder_name.clone(), folder_manifest_cid.clone()));
-
+    println!("folder_manifest_cid for encrypted folder: {}", folder_manifest_cid);
     let storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, &api_url, &seed_phrase).await;
     match storage_result {
         Ok(res) => {
@@ -492,7 +493,7 @@ async fn process_single_file_for_folder_upload(
     
     let file_metadata = Metadata {
         original_file: OriginalFileInfo {
-            name: file_name.clone(),
+            name: format!("{}{}", file_name, ".ec_metadata"),
             size: file_data.len(),
             hash: original_file_hash,
             extension: file_path.extension().and_then(|s| s.to_str()).unwrap_or_default().to_string(),
@@ -514,7 +515,7 @@ async fn process_single_file_for_folder_upload(
 
     let result = FileProcessingResult {
         file_entry: FileEntry {
-            file_name: relative_path,
+            file_name: format!("{}{}", relative_path, ".ec_metadata"),
             file_size: file_data.len(),
             cid: metadata_cid,
         },
@@ -2655,11 +2656,11 @@ pub async fn list_folder_contents(
     folder_metadata_cid: String,
 ) -> Result<Vec<FileDetail>, String> {
     let api_url = "http://127.0.0.1:5001";
-
+    println!("[list_folder_contents] Downloading folder folder_name: {} for CID: {}", folder_name, folder_metadata_cid);
     let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata_cid)
         .await
         .map_err(|e| format!("Failed to download folder manifest for CID {}: {}", folder_metadata_cid, e))?;
-        let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
+    let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
 
     let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
 
@@ -2707,7 +2708,7 @@ pub async fn list_folder_contents(
                     last_charged_at: 0.to_string(),
                 }
             };
-            file_detail.file_name = clean_file_name(&file_detail.file_name);
+            file_detail.file_name = file_detail.file_name;
             file_detail
         })
         .collect();
