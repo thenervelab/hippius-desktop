@@ -560,12 +560,15 @@ pub async fn download_and_decrypt_folder(
             let encryption_key_clone = encryption_key_bytes.as_ref().map(Arc::clone);
 
             async move {
-                println!("[download_and_decrypt_folder] Downloading file with CID: {} to: {:?}", entry.cid, output_root_clone.join(&entry.file_name));
-                // Download the file metadata to get the original extension
+                println!("[download_and_decrypt_folder] Downloading file with CID: {} to: {:?}", 
+                    entry.cid, output_root_clone.join(&entry.file_name));
+                
+                // Download the file metadata
                 let file_metadata_bytes = match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
                     Ok(bytes) => bytes,
                     Err(e) => {
-                        eprintln!("[!] Failed to download metadata for {} (CID: {}): {}", entry.file_name, entry.cid, e);
+                        eprintln!("[!] Failed to download metadata for {} (CID: {}): {}", 
+                            entry.file_name, entry.cid, e);
                         return;
                     }
                 };
@@ -573,30 +576,39 @@ pub async fn download_and_decrypt_folder(
                 let metadata: Metadata = match serde_json::from_slice(&file_metadata_bytes) {
                     Ok(meta) => meta,
                     Err(e) => {
-                        eprintln!("[!] Failed to parse metadata for {} (CID: {}): {}", entry.file_name, entry.cid, e);
+                        eprintln!("[!] Failed to parse metadata for {} (CID: {}): {}", 
+                            entry.file_name, entry.cid, e);
                         return;
                     }
                 };
 
-                // Strip .ff and .ff.ec_metadata extension and use original extension from metadata
-                let file_name1 = entry.file_name.strip_suffix(".ff").unwrap_or(&entry.file_name);
-                let file_name = file_name1.strip_suffix(".ff.ec_metadata").unwrap_or(&file_name1);
-                let original_extension = metadata.original_file.extension;
-                let final_file_name = if original_extension.is_empty() {
-                    file_name.to_string()
+                // Handle the .ec_metadata extension and get original filename
+                let original_file_name = if entry.file_name.ends_with(".ec_metadata") {
+                    entry.file_name.trim_end_matches(".ec_metadata")
+                } else if entry.file_name.ends_with(".ff") {
+                    entry.file_name.trim_end_matches(".ff")
                 } else {
-                    format!("{}.{}", file_name, original_extension)
+                    &entry.file_name
+                };
+
+                // Use original extension from metadata if available
+                let final_file_name = if !metadata.original_file.extension.is_empty() {
+                    format!("{}.{}", original_file_name, metadata.original_file.extension)
+                } else {
+                    original_file_name.to_string()
                 };
 
                 let output_file_path = output_root_clone.join(&final_file_name);
                 println!("[i] Processing file: {}", final_file_name);
 
+                // Create parent directories if needed
                 if let Some(parent) = output_file_path.parent() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
                         eprintln!("[!] Failed to create directory for {}: {}", final_file_name, e);
                         return;
                     }
                 }
+                
 
                 match reconstruct_and_decrypt_single_file(
                     file_metadata_bytes,
@@ -2455,16 +2467,15 @@ async fn process_single_file_for_sync(
     let metadata_filename = format!("{}_metadata.json", file_id);
     let metadata_cid = upload_bytes_to_ipfs(&api_url, metadata_json.as_bytes().to_vec(), &metadata_filename).await?;
 
-    let relative_path = file_path.strip_prefix(&base_folder_path).unwrap().to_str().unwrap().to_string();
     let meta_filename_for_storage = format!("{}{}", file_name_str, ".ec_metadata");
 
     let result = FileProcessingResultSync {
         file_entry: FileEntry {
-            file_name: relative_path,
+            file_name: meta_filename_for_storage.clone(),
             file_size: file_data.len(),
             cid: metadata_cid.clone(),
         },
-        meta_filename: meta_filename_for_storage,
+        meta_filename: meta_filename_for_storage.clone(),
         metadata_cid,
         chunk_pairs: Arc::try_unwrap(chunk_pairs).unwrap().into_inner(),
     };

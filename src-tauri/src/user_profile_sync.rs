@@ -552,10 +552,14 @@ pub fn start_user_sync(account_id: &str) {
                                                         match serde_json::from_str::<serde_json::Value>(&json_str) {
                                                             Ok(json_value) => {
                                                                 if let Some(files) = json_value.as_array() {
-                                                                    let target_extension = if file_name.ends_with(".folder.ec_metadata") || file_name.ends_with("-folder.ec_metadata") {
-                                                                        ".ec_metadata"
-                                                                    } else if file_name.ends_with(".folder") || file_name.ends_with("-folder") {
+                                                                    let target_extension = if file_name.ends_with(".folder.ec_metadata") {
+                                                                        ".folder.ec_metadata"
+                                                                    } else if file_name.ends_with("-folder.ec_metadata") {
+                                                                        "-folder.ec_metadata"
+                                                                    } else if file_name.ends_with(".folder") {
                                                                         ".folder"
+                                                                    } else if file_name.ends_with("-folder") {
+                                                                        "-folder"
                                                                     } else {
                                                                         ""
                                                                     };
