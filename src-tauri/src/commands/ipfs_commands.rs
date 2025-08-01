@@ -220,7 +220,8 @@ pub async fn download_and_decrypt_file(
     output_file: String,
     encryption_key: Option<String>,
 ) -> Result<(), String> {
-    let api_url = "http://127.0.0.1:5001";
+    println!("[download_and_decrypt_file] Downloading file with CID: {} to: {}", metadata_cid, output_file);
+    let api_url = "http://127.0.0.1:5001".to_string(); // Convert to owned String
 
     let final_encryption_key = if let Some(key_b64) = encryption_key {
         let decoded_key = general_purpose::STANDARD.decode(&key_b64)
@@ -230,10 +231,37 @@ pub async fn download_and_decrypt_file(
         None
     };
 
-    tokio::task::spawn_blocking(move || {
-        let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
-        let metadata: Metadata = serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
+    // First try to download as folder file metadata
+    if let Ok(metadata_bytes) = download_from_ipfs_async(&api_url, &metadata_cid).await
+        .map_err(|e| format!("Failed to download metadata: {}", e)) 
+    {
+        if let Ok(file_entry) = serde_json::from_slice::<FileEntry>(&metadata_bytes) {
+            // This is a file from a folder, get the actual metadata
+            let actual_metadata_bytes = download_from_ipfs_async(&api_url, &file_entry.cid).await
+                .map_err(|e| format!("Failed to download file metadata: {}", e))?;
+            let metadata: Metadata = serde_json::from_slice(&actual_metadata_bytes)
+                .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
+            
+            return reconstruct_and_decrypt_file(metadata, output_file, final_encryption_key, api_url).await;
+        }
+    }
 
+    // If not a folder file, proceed with direct download
+    let metadata_bytes = download_from_ipfs_async(&api_url, &metadata_cid).await
+        .map_err(|e| format!("Failed to download metadata: {}", e))?;
+    let metadata: Metadata = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
+
+    reconstruct_and_decrypt_file(metadata, output_file, final_encryption_key, api_url).await
+}
+
+async fn reconstruct_and_decrypt_file(
+    metadata: Metadata,
+    output_path: String,
+    encryption_key: Option<Vec<u8>>,
+    api_url: String, // Changed to owned String
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
         let k = metadata.erasure_coding.k;
         let m = metadata.erasure_coding.m;
         let chunk_size = metadata.erasure_coding.chunk_size;
@@ -301,7 +329,7 @@ pub async fn download_and_decrypt_file(
 
         let decrypted_data = tauri::async_runtime::block_on(decrypt_file(
             &encrypted_data,
-            final_encryption_key.clone(),
+            encryption_key,
         ))?;
         println!("Decrypted data size: {}, expected original size: {}", decrypted_data.len(), metadata.original_file.size);
 
@@ -315,8 +343,8 @@ pub async fn download_and_decrypt_file(
             ));
         }
 
-        std::fs::write(&output_file, &decrypted_data).map_err(|e| format!("Failed to write output file: {}", e))?;
-        println!("File written to {} with size {}", output_file, decrypted_data.len());
+        std::fs::write(&output_path, &decrypted_data).map_err(|e| format!("Failed to write output file: {}", e))?;
+        println!("File written to {} with size {}", output_path, decrypted_data.len());
         Ok(())
     })
     .await
@@ -531,6 +559,7 @@ pub async fn download_and_decrypt_folder(
             let encryption_key_clone = encryption_key_bytes.as_ref().map(Arc::clone);
 
             async move {
+                println!("[download_and_decrypt_folder] Downloading file with CID: {} to: {:?}", entry.cid, output_root_clone.join(&entry.file_name));
                 // Download the file metadata to get the original extension
                 let file_metadata_bytes = match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
                     Ok(bytes) => bytes,
@@ -2629,8 +2658,8 @@ pub async fn list_folder_contents(
 
     let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata_cid)
         .await
-        .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))?;
-    let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
+        .map_err(|e| format!("Failed to download folder manifest for CID {}: {}", folder_metadata_cid, e))?;
+        let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
 
     let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
 

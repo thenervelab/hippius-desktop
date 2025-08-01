@@ -15,7 +15,6 @@ export default function DirectStorageRequestDemo({
   const [downloadedUrl, setDownloadedUrl] = useState<string>("");
   const [status, setStatus] = useState<string>("");
 
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFile(e.target.files?.[0] || null);
   };
