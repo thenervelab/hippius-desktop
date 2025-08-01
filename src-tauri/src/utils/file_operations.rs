@@ -392,7 +392,6 @@ pub async fn copy_to_sync_and_add_to_db(
             0
         }
     };
-
     if let Some(pool) = DB_POOL.get() {
         // Check if file already exists in user_profiles
         let exists: Option<(String,)> = sqlx::query_as(
@@ -406,7 +405,6 @@ pub async fn copy_to_sync_and_add_to_db(
 
         if exists.is_none() {
             println!("inserted main_request_hash {:?}", request_cid);
-            // Insert into user_profiles
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -415,7 +413,7 @@ pub async fn copy_to_sync_and_add_to_db(
                 ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?)"
             )
             .bind(account_id)
-            .bind(request_cid)
+            .bind(metadata_cid)
             .bind(&file_hash)
             .bind(&requested_file_name)
             .bind(file_size_in_bytes)
@@ -794,7 +792,6 @@ pub async fn copy_to_sync_folder(
 
         if let Some(_) = exists {
             // Update existing record
-            println!("Updating record for folder {} with request_cid: {}", folder_name, request_cid);
             let _ = sqlx::query(
                 "UPDATE user_profiles SET 
                     cid = ?, 

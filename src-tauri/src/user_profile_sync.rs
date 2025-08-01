@@ -505,7 +505,93 @@ pub fn start_user_sync(account_id: &str) {
                                         source = private_path;
                                     }
                                 }
+                                let ipfs_api_url = "http://127.0.0.1:5001";
+                                // Handle IPFS content fetching for non-folder files
+                                if !file_name.ends_with("-folder") && !file_name.ends_with(".folder")
+                                    && !file_name.ends_with(".folder.ec_metadata") && !file_name.ends_with("-folder.ec_metadata") {
+                                    if decoded_hash != "Invalid file hash" {
+                                        match crate::utils::ipfs::download_content_from_ipfs(&ipfs_api_url, &decoded_hash).await {
+                                            Ok(json_bytes) => {
+                                                match String::from_utf8(json_bytes) {
+                                                    Ok(json_str) => {
+                                                        match serde_json::from_str::<serde_json::Value>(&json_str) {
+                                                            Ok(json_value) => {
+                                                                if let Some(array) = json_value.as_array() {
+                                                                    if let Some(file_obj) = array.get(0) {
+                                                                        if let Some(cid) = file_obj.get("cid").and_then(|v| v.as_str()) {
+                                                                            let cid_vec = cid.to_string().as_bytes().to_vec();
+                                                                            file_hash = hex::encode(cid_vec);
+                                                                        } else {
+                                                                            eprintln!("[UserSync] CID not found in JSON for decoded hash: {}", decoded_hash);
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!("[UserSync] Failed to parse JSON from IPFS for {}: {}", decoded_hash, e);
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("[UserSync] Failed to convert IPFS bytes to string for {}: {}", decoded_hash, e);
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("[UserSync] Failed to download IPFS content for {}: {}", decoded_hash, e);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Handle folder or folder metadata
+                                    if decoded_hash != "Invalid file hash" {
+                                        match crate::utils::ipfs::download_content_from_ipfs(&ipfs_api_url, &decoded_hash).await {
+                                            Ok(json_bytes) => {
+                                                match String::from_utf8(json_bytes) {
+                                                    Ok(json_str) => {
+                                                        match serde_json::from_str::<serde_json::Value>(&json_str) {
+                                                            Ok(json_value) => {
+                                                                if let Some(files) = json_value.as_array() {
+                                                                    let target_extension = if file_name.ends_with(".folder.ec_metadata") || file_name.ends_with("-folder.ec_metadata") {
+                                                                        ".ec_metadata"
+                                                                    } else if file_name.ends_with(".folder") || file_name.ends_with("-folder") {
+                                                                        ".folder"
+                                                                    } else {
+                                                                        ""
+                                                                    };
 
+                                                                    if !target_extension.is_empty() {
+                                                                        for file in files {
+                                                                            if let Some(filename) = file.get("filename").and_then(|v| v.as_str()) {
+                                                                                if filename.ends_with(target_extension) {
+                                                                                    if let Some(cid) = file.get("cid").and_then(|v| v.as_str()) {
+                                                                                        let cid_vec = cid.to_string().as_bytes().to_vec();
+                                                                                        file_hash = hex::encode(cid_vec);
+                                                                                        break;
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                eprintln!("[UserSync] Failed to parse folder JSON from IPFS for {}: {}", decoded_hash, e);
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("[UserSync] Failed to convert folder IPFS bytes to string for {}: {}", decoded_hash, e);
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("[UserSync] Failed to download folder IPFS content for {}: {}", decoded_hash, e);
+                                            }
+                                        }
+                                    }
+                                }
+                                println!("[UserSync] File hash for storage request : {}, main req hash is : {}", file_hash, decoded_hash);
                                 let file_key = (file_hash.clone(), file_name.clone());
                                 if seen_files.insert(file_key) {
                                     records_to_insert.push(UserProfileFile {
