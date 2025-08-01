@@ -19,7 +19,7 @@
         "installMode": "passive"
       },
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwNzAxNTdDOEIxRDUxNzIKUldSeVVSMkxmQlZ3ME5BQXVHbFdaVHNOdlBNMUp3M2dUYXM2SGZYL2w1a0tVUkZBM3NhSHpDTkEK",
-      "endpoints": ["http://127.0.0.1:8000/latest.json"],
+      "endpoints": ["https://hippius.com/downloads/latest.json"],
       "dangerousInsecureTransportProtocol": true
     }
   },
