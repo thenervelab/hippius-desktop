@@ -16,12 +16,12 @@ const LeftCarouselPanel = () => {
           majorCell={{
             lineColor: [255, 255, 255, 1.0],
             lineWidth: 2,
-            cellDim: 150,
+            cellDim: 150
           }}
           minorCell={{
             lineColor: [255, 255, 255, 1.0],
             lineWidth: 1,
-            cellDim: 15,
+            cellDim: 15
           }}
           className="absolute w-full left-0 h-full min-h-full max-h-full duration-500"
         />
@@ -35,7 +35,11 @@ const LeftCarouselPanel = () => {
             <Swiper
               modules={[Pagination, Autoplay]}
               pagination={{ clickable: true }}
-              autoplay={{ delay: 3000, disableOnInteraction: false }}
+              autoplay={{
+                delay: 6000,
+                disableOnInteraction: true,
+                pauseOnMouseEnter: true
+              }}
               className="w-full h-full"
             >
               {SWIPE_CONTENT.map((item) => (

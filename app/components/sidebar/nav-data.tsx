@@ -1,5 +1,5 @@
 import { Icons } from "../ui";
-import { LockKeyhole, LockKeyholeOpen } from "lucide-react";
+import { LockKeyhole, LockKeyholeOpen, Share2Icon } from "lucide-react";
 
 export interface SubMenuItemData {
   label: string;
@@ -55,6 +55,11 @@ export const navItems: NavItemData[] = [
     label: "Notifications",
     path: "/notifications",
     icon: <Icons.Notification />
+  },
+  {
+    label: "Referrals",
+    path: "/referrals",
+    icon: <Share2Icon className="size-4" />
   },
   {
     label: "Settings",

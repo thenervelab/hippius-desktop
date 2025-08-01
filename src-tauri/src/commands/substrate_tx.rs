@@ -1,6 +1,6 @@
 use subxt::tx::PairSigner;
 use sp_core::{Pair, sr25519};
-use crate::substrate_client::get_substrate_client;
+use crate::substrate_client::{get_substrate_client, get_current_wss_endpoint, update_wss_endpoint, test_wss_endpoint};
 use serde::Deserialize;
 use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
@@ -239,8 +239,23 @@ pub async fn get_sync_path_internal(is_public: bool) -> Result<SyncPathResult, S
     }
 }
 
-// Tauri command just calls the internal function
 #[tauri::command]
 pub async fn get_sync_path(is_public: bool) -> Result<SyncPathResult, String> {
     get_sync_path_internal(is_public).await
+}
+
+#[tauri::command]
+pub async fn get_wss_endpoint() -> Result<String, String> {
+    get_current_wss_endpoint().await
+}
+
+#[tauri::command]
+pub async fn update_wss_endpoint_command(endpoint: String) -> Result<String, String> {
+    update_wss_endpoint(endpoint.clone()).await?;
+    Ok(format!("WSS endpoint updated to: {}", endpoint))
+}
+
+#[tauri::command]
+pub async fn test_wss_endpoint_command(endpoint: String) -> Result<bool, String> {
+    test_wss_endpoint(endpoint).await
 }

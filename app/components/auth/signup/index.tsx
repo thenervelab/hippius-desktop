@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { RevealTextLine } from "../../ui";
+import { AppVersion, RevealTextLine } from "../../ui";
 import Link from "next/link";
 import CreateAccountForm from "./CreateAccountForm";
 import PassCodeForm from "./SetNewPasscodeForm";
@@ -101,7 +101,7 @@ const SignUp = () => {
         </RevealTextLine>
         <RevealTextLine rotate reveal={true} className="delay-500">
           <div className="text-grey-70 text-xs font-medium mt-2">
-            Version 0.4.1.3
+            Version <AppVersion />
           </div>
         </RevealTextLine>
       </>

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct CidInfo {
     pub cid: String,
     pub filename: String,
@@ -9,7 +9,7 @@ pub struct CidInfo {
     pub size_formatted: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ChunkInfo {
     pub name: String,
     pub path: String,
@@ -27,7 +27,7 @@ pub struct Metadata {
     pub metadata_cid: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct OriginalFileInfo {
     pub name: String,
     pub size: usize,
@@ -35,7 +35,7 @@ pub struct OriginalFileInfo {
     pub extension: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize,Clone)]
 pub struct ErasureCodingInfo {
     pub k: usize,
     pub m: usize,
@@ -56,6 +56,22 @@ pub struct FileEntry {
     pub cid: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FolderReference {
+    pub cid: String,
+    #[serde(alias = "filename", alias = "file_name")]
+    pub file_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FolderFileEntry {
+    #[serde(alias = "filename", alias = "file_name")]
+    pub file_name: String,
+    #[serde(default)]
+    pub file_size: Option<usize>,
+    pub cid: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileDetail {
     pub file_name: String,
@@ -66,4 +82,28 @@ pub struct FileDetail {
     pub file_size: usize,
     pub created_at: String,
     pub last_charged_at: String,
+}
+
+// A helper struct to hold the results from processing each file
+#[derive(Debug)]
+pub struct FileProcessingResult {
+    pub file_entry: FileEntry,
+    pub chunk_pairs: Vec<(String, String)>,
+}
+
+#[derive(Debug)]
+pub struct FileProcessingResultSync {
+    pub file_entry: FileEntry,
+    pub meta_filename: String,
+    pub metadata_cid: String,
+    pub chunk_pairs: Vec<(String, String)>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct FolderMetadata {
+    version: u32,
+    files: Vec<FileEntry>,
+    erasure_info: Option<ErasureCodingInfo>, // Only for encrypted folders
+    encrypted: bool,
+    original_folder_name: String,
 }

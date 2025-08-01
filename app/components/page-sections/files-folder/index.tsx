@@ -108,6 +108,8 @@ export default function FolderView({
                 folderMetadataCid: folderCid
             });
 
+            console.log("Fetched folder contents:", fileEntries);
+
             const formattedFiles = fileEntries.map(
                 (entry): FormattedUserIpfsFile => {
                     const isErasureCoded = entry.file_name.endsWith(".ec_metadata");
@@ -135,9 +137,9 @@ export default function FolderView({
             setFiles(formattedFiles);
         } catch (error) {
             console.error("Error loading folder contents:", error);
-            toast.error(
-                `Failed to load folder contents: ${error instanceof Error ? error.message : String(error)}`
-            );
+            // toast.error(
+            //     `Failed to load folder contents: ${error instanceof Error ? error.message : String(error)}`
+            // );
         } finally {
             if (showLoading) {
                 setIsLoading(false);
@@ -339,7 +341,7 @@ export default function FolderView({
     }, []);
 
     return (
-        <div className="container mx-auto py-8 px-4">
+        <div className="w-full relative mt-6">
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2">
                     <Link
@@ -452,12 +454,14 @@ export default function FolderView({
             ) : (
                 <>
                     {files.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center py-16 bg-grey-95 rounded-lg">
-                            <Icons.Folder className="size-12 text-grey-60 mb-4" />
-                            <h3 className="text-lg font-medium text-grey-30 mb-1">
+                        <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
+                            <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
+                                <Icons.Folder className="size-7 text-primary-50" />
+                            </div>
+                            <h3 className="text-lg font-medium text-grey-10 mb-1">
                                 Empty Folder
                             </h3>
-                            <p className="text-grey-50 text-sm">
+                            <p className="text-grey-50 text-sm max-w-[270px] text-center">
                                 This folder does not contain any files.
                             </p>
                         </div>

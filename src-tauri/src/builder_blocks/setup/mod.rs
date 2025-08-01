@@ -7,6 +7,7 @@ use sqlx::Row;
 use crate::{
     commands::node::start_ipfs_daemon,
     DB_POOL,
+    constants::substrate::WSS_ENDPOINT,
 };
 
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -119,6 +120,16 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS wss_endpoint (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            endpoint TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )"
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -204,6 +215,32 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     }
                 } else {
                     println!("[Setup] Found {} existing encryption key(s)", count);
+                }
+            }
+
+            // Initialize WSS endpoint if it doesn't exist
+            let endpoint_exists: Option<(i64,)> = sqlx::query_as(
+                "SELECT COUNT(*) as count FROM wss_endpoint"
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap_or(Some((0,)));
+
+            if let Some((count,)) = endpoint_exists {
+                if count == 0 {
+                    println!("[Setup] No WSS endpoint found, creating default endpoint...");
+                    if let Err(e) = sqlx::query(
+                        "INSERT INTO wss_endpoint (id, endpoint) VALUES (1, ?)"
+                    )
+                    .bind(WSS_ENDPOINT)
+                    .execute(&pool)
+                    .await {
+                        eprintln!("[Setup] Failed to create default WSS endpoint: {}", e);
+                    } else {
+                        println!("[Setup] Default WSS endpoint created successfully");
+                    }
+                } else {
+                    println!("[Setup] WSS endpoint already exists");
                 }
             }
 

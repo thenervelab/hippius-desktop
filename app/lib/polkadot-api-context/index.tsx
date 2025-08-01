@@ -5,7 +5,7 @@ import { ApiPromise, WsProvider } from "@polkadot/api";
 import {
   WSS_ENDPOINT,
   RECONNECT_INTERVAL,
-  MAX_RETRIES,
+  MAX_RETRIES
 } from "@/config/constants";
 import { useAtomValue, useSetAtom } from "jotai";
 import { polkadotApiAtom } from "../global-atoms/polkadotApiAtom";
@@ -64,7 +64,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         ...prev,
         api: null,
         isConnected: false,
-        blockNumber: null,
+        blockNumber: null
       }));
     }
 
@@ -128,7 +128,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
       console.log("Creating API...");
       const api = await ApiPromise.create({
         provider: wsProvider,
-        throwOnConnect: true,
+        throwOnConnect: true
       });
       apiRef.current = api;
 
@@ -140,7 +140,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         if (mountedRef.current) {
           setState((prev) => ({
             ...prev,
-            blockNumber: BigInt(header.number.toString()),
+            blockNumber: BigInt(header.number.toString())
           }));
         }
       });
@@ -153,7 +153,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({
           ...prev,
           api,
-          isConnected: true,
+          isConnected: true
         }));
       }
     } catch (error) {

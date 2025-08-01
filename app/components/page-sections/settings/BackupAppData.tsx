@@ -43,6 +43,7 @@ const BackupAppData: React.FC<ExportEncryptedSeedProps> = ({ className }) => {
             <SectionHeader
               Icon={Icons.Wallet}
               title="Backup App Data"
+              info="Regular backups help you recover your data stored on this device if you lose access to it. Store your backup ZIP file in a secure location that only you can access."
               subtitle="The ZIP includes your encrypted seed, sub‑account seeds, and notification data. Save it somewhere secure."
             />
           </RevealTextLine>

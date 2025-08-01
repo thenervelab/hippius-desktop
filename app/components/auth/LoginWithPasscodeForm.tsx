@@ -37,14 +37,13 @@ const LoginWithPassCodeForm = () => {
       const success = await unlockWithPasscode(passcode);
       if (success) {
         router.push("/");
-        setLoggingIn(false);
       } else {
         setError("Incorrect passcode. Please try again.");
-        setLoggingIn(false);
       }
     } catch (err) {
-      console.log("err", err);
+      console.error("[handleLogin] ", err);
       setError("Failed to unlock wallet. Please try again.");
+    } finally {
       setLoggingIn(false);
     }
   };
@@ -122,7 +121,11 @@ const LoginWithPassCodeForm = () => {
                     disabled={logginIn || phase !== "ready"}
                     icon={<Icons.ArrowRight />}
                   >
-                    {logginIn ? "Logging in..." : phase !== "ready" ? "Initializing..." : "Login"}
+                    {logginIn
+                      ? "Logging in..."
+                      : phase !== "ready"
+                      ? "Initializing..."
+                      : "Login"}
                   </Button>
                 </RevealTextLine>
               </div>

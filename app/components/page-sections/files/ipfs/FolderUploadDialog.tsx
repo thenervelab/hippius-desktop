@@ -69,7 +69,7 @@ export default function FolderUploadDialog({
         handleClose();
 
         // Show toast to indicate upload has started
-        const toastId = toast.info("Uploading folder...", { duration: Infinity });
+        const toastId = toast.loading("Uploading folder...");
 
         try {
             const command = useEncryption ? "encrypt_and_upload_folder" : "public_upload_folder";

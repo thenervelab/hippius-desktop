@@ -214,7 +214,7 @@ const FilesContent: FC<FilesContentProps> = ({
         file: FormattedUserIpfsFile,
         polkadotAddress: string
     ) => {
-        if (isPrivateView && file.source !== "Hippius") {
+        if (isPrivateView) {
             setFileToDownload(file);
             setEncryptionKeyError(null);
             setIsEncryptionDialogOpen(true);

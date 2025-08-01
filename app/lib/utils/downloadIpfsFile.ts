@@ -34,17 +34,24 @@ export const downloadIpfsFile = async (
   isPrivateView: boolean,
   encryptionKey?: string | null
 ) => {
-  const { source } = file;
-
   if (file.isFolder) {
-    return downloadIpfsFolder({
+    console.log("isFolder", file)
+    const result = await downloadIpfsFolder({
       folderCid: file.cid,
       folderName: file.name,
       polkadotAddress,
       isPrivate: isPrivateView,
       encryptionKey,
     });
-  } else if (source !== "Hippius" && isPrivateView && file.isErasureCoded) {
+
+    if (result && !result.success) {
+      toast.error(
+        `Failed to download folder: ${result.message || "Unknown error"}`
+      );
+    }
+    return;
+  } else if (isPrivateView && file.isErasureCoded) {
+    console.log("downloadEncryptedIpfsFile", downloadEncryptedIpfsFile)
     return downloadEncryptedIpfsFile(
       file,
       polkadotAddress ?? "",
@@ -210,6 +217,10 @@ const downloadEncryptedIpfsFile = async (
     }
 
     console.error("Encrypted download failed:", err);
+    toast.error(
+      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
+      }`
+    );
     return { success: false, error: "DOWNLOAD_FAILED", message: errorMsg };
   }
 };
