@@ -4,8 +4,12 @@
 import { useEffect, useRef } from "react";
 import { checkForUpdates } from "@/app/lib/utils/updater/checkForUpdates";
 
+import { useSetAtom } from "jotai";
+import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
+
 export default function UpdateChecker() {
   const didRun = useRef(false);
+  const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
   useEffect(() => {
     if (didRun.current) return;
@@ -14,6 +18,7 @@ export default function UpdateChecker() {
     if (!(window as any).__didCheckUpdates) {
       (window as any).__didCheckUpdates = true;
       checkForUpdates(true);
+      refreshUnread();
     }
 
     didRun.current = true;

@@ -4,7 +4,7 @@ import DashboardTitleWrapper from "../components/dashboard-title-wrapper";
 import HomePage from "../components/page-sections/home";
 // import UploadFileComponent from "../components/upload-download";
 // import { useFilesNotification } from "../lib/hooks/useFilesNotification";
-import WssEndpointTester from "../wssTest";
+// import WssEndpointTester from "../wssTest";
 
 export default function Home() {
   // const { syncStatus, invokeCount } = useFilesNotification();

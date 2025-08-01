@@ -8,8 +8,6 @@ import {
 } from "../../helpers/notificationsDb";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-import { useSetAtom } from "jotai";
-import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 
 // Utility function to format bytes to MB
 function formatBytes(bytes: number): string {
@@ -22,7 +20,6 @@ function formatPercentage(current: number, total: number): string {
 }
 
 export async function checkForUpdates(notifyOnce = false) {
-  const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   let downloadToastId: string | number | undefined;
 
   try {
@@ -42,7 +39,6 @@ export async function checkForUpdates(notifyOnce = false) {
         notificationLinkText: "Install Update",
         notificationLink: "Install Update"
       });
-      await refreshUnread();
     }
 
     if (notifyOnce && notified) return;
