@@ -133,15 +133,16 @@ export async function checkForUpdates(notifyOnce = false) {
     if (downloadToastId) {
       toast.dismiss(downloadToastId);
     }
+    console.log(err);
 
-    console.error("[Updater] failed:", err);
+    // console.error("[Updater] failed:", err);
 
-    toast.error("Update failed", {
-      description: "Please try again later",
-      duration: 5000
-    });
+    // toast.error("Update failed", {
+    //   description: "Please try again later",
+    //   duration: 5000
+    // });
 
-    await message("Update failed. Please try again later.", { title: "Error" });
+    // await message("Update failed. Please try again later.", { title: "Error" });
   }
 }
 
