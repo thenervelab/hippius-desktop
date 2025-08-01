@@ -68,6 +68,20 @@ export function WalletAuthProvider({
     }, INACTIVITY_TIMEOUT);
   }, [logout]);
 
+  // close previous syncing operations
+  useEffect(() => {
+    const initializeCleanup = async () => {
+      try {
+        await invoke("cleanup_sync");
+      } catch (error) {
+        console.error("Failed to cleanup sync on mount:", error);
+      }
+    };
+    
+    initializeCleanup();
+
+  }, []);
+  
   useEffect(() => {
     if (!isAuthenticated) {
       if (logoutTimer.current) clearTimeout(logoutTimer.current);
@@ -91,6 +105,7 @@ export function WalletAuthProvider({
       );
     };
   }, [isAuthenticated, resetLogoutTimer]);
+
 
   const unlockWithPasscode = async (passcode: string): Promise<boolean> => {
     setIsLoading(true);
@@ -136,20 +151,11 @@ export function WalletAuthProvider({
       setIsAuthenticated(true);
 
       if (!syncInitialized.current) {
-        console.log("[WalletAuth] Starting sync for account:", pair.address);
-        invoke("start_user_profile_sync_tauri", {
-          accountId: pair.address
-        });
-        invoke("start_folder_sync_tauri", {
+        await invoke("initialize_sync", {
           accountId: pair.address,
-          seedPhrase: inputMnemonic
-        });
-        invoke("start_public_folder_sync_tauri", {
-          accountId: pair.address,
-          seedPhrase: inputMnemonic
+          mnemonic: inputMnemonic
         });
         syncInitialized.current = true;
-        console.log("[WalletAuth] Sync commands started successfully");
       }
 
       return true;
