@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { RevealTextLine } from "../ui";
+import { AppVersion, RevealTextLine } from "../ui";
 import Link from "next/link";
 import AccessKeyForm from "./AccessKeyForm";
 import SetNewPassCodeForm from "./signup/SetNewPasscodeForm";
@@ -9,7 +9,7 @@ import { hasWalletRecord } from "@/app/lib/helpers/walletDb";
 import LoginWithPassCodeForm from "./LoginWithPasscodeForm";
 import AuthLayout from "./AuthLayout";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { checkForUpdatesOnce } from "@/app/lib/utils/updater/checkForUpdates";
+import { checkForUpdates } from "@/app/lib/utils/updater/checkForUpdates";
 
 const Login = () => {
   const [showPasscodeFields, setShowPasscodeFields] = useState(false);
@@ -38,7 +38,7 @@ const Login = () => {
 
   const handleCheckUpdates = async () => {
     try {
-      await checkForUpdatesOnce();
+      await checkForUpdates();
     } catch (error) {
       console.error("Failed to check for updates:", error);
     }
@@ -94,7 +94,9 @@ const Login = () => {
         </RevealTextLine>
         <RevealTextLine rotate reveal={true} className="delay-500">
           <div className="text-grey-70 text-xs font-medium mt-2 flex items-center gap-2">
-            <span>Version 0.4.1.3</span>
+            <span>
+              Version <AppVersion />
+            </span>
             <button
               onClick={handleCheckUpdates}
               className="text-primary-50 hover:text-[#0052ff]/90 hover:underline text-xs"

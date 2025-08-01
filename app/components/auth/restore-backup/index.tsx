@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { RevealTextLine } from "@/components/ui";
+import { AppVersion, RevealTextLine } from "@/components/ui";
 import Link from "next/link";
 import RestoreBackupForm from "./RestoreBackupForm";
 import AuthLayout from "../AuthLayout";
@@ -65,7 +65,7 @@ const RestoreBackup = () => {
         </RevealTextLine>
         <RevealTextLine rotate reveal={true} className="delay-500">
           <div className="text-grey-70 text-xs font-medium xl:mt-2 mt-1">
-            Version 0.4.1.3
+            Version <AppVersion />
           </div>
         </RevealTextLine>
       </>

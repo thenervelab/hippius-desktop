@@ -262,60 +262,16 @@ export async function isAboveHalfCredit(): Promise<boolean> {
   const res = db.exec("SELECT isAboveHalfCredit FROM app_state WHERE id = 1");
   return (res[0].values[0][0] as number) === 1;
 }
-// --- NEW: did we already notify for this version? ---
-export async function updateAlreadyNotified(version: string): Promise<boolean> {
+
+export async function hippusVersionNotificationExists(
+  version: string
+): Promise<boolean> {
   const db = await getDb();
   const res = db.exec(
-    `SELECT COUNT(*) 
-       FROM notifications
-      WHERE notificationType = 'Hippius'
-        AND notificationSubtype = ?`,
+    `SELECT COUNT(*) FROM notifications
+       WHERE notificationType = 'Hippius'
+         AND notificationSubtype = ?`,
     [version]
   );
   return (res[0]?.values[0][0] as number) > 0;
-}
-
-// --- NEW: write the single "update available" notification ---
-export async function addUpdateAvailableNotification({
-  version,
-  currentVersion,
-  releaseNotesUrl,
-  downloadPageUrl,
-  changelog
-}: {
-  version: string;
-  currentVersion: string;
-  releaseNotesUrl?: string;
-  downloadPageUrl?: string;
-  changelog?: string;
-}) {
-  const db = await getDb();
-
-  const title = `Hippius ${version} is available`;
-  const descLines = [
-    `You're on ${currentVersion}.`,
-    `New version ${version} is ready to install.`,
-    changelog ? `\nChanges:\n${changelog}` : ""
-  ];
-  const description = descLines.join(" ").trim();
-
-  // Prefer release notes link, fall back to download page, otherwise put something meaningful
-  const link =
-    releaseNotesUrl || downloadPageUrl || "https://hippius.com/releases";
-  const linkText = releaseNotesUrl
-    ? "View release notes"
-    : downloadPageUrl
-    ? "Open download page"
-    : "Learn more";
-
-  db.run(
-    `INSERT INTO notifications
-       (notificationType,  notificationSubtype, notificationTitleText,
-        notificationDescription, notificationLinkText, notificationLink,
-        isUnread, notificationCreationTime)
-     VALUES ('Hippius', ?, ?, ?, ?, ?, 1, strftime('%s','now')*1000)`,
-    [version, title, description, linkText, link]
-  );
-
-  await saveBytes(db.export());
 }

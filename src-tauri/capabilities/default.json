@@ -71,6 +71,8 @@
     "core:tray:default",
     "updater:default",
     "process:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "core:window:allow-hide",
+    "core:window:allow-close"
   ]
 }
