@@ -1,5 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Icons, RevealTextLine, Input, CardButton } from "@/components/ui";
+import {
+  Icons,
+  RevealTextLine,
+  Input,
+  CardButton,
+  IconButton,
+} from "@/components/ui";
 import { toast } from "sonner";
 import SectionHeader from "./SectionHeader";
 import { Label } from "@/components/ui/label";
@@ -9,6 +15,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getWssEndpoint, updateWssEndpoint } from "@/lib/helpers/nodeConfigDb";
 import { invoke } from "@tauri-apps/api/core";
+import { Edit } from "../../ui/icons";
+import { cn } from "@/lib/utils";
 
 // Function to format error messages in a more user-friendly way
 const formatErrorMessage = (error: string): string => {
@@ -46,6 +54,7 @@ const CustomizeRPC: React.FC = () => {
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [editMode, setEditMode] = useState(false);
 
   useEffect(() => {
     // Load the current RPC endpoint from the database
@@ -85,7 +94,9 @@ const CustomizeRPC: React.FC = () => {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+
     if (!rpcEndpoint) {
       setError("Please enter an RPC endpoint");
       return;
@@ -136,6 +147,17 @@ const CustomizeRPC: React.FC = () => {
     }
   };
 
+  // Toggle edit mode
+  const toggleEditMode = () => {
+    setEditMode(!editMode);
+    setError(null);
+
+    // If exiting edit mode, reset to current endpoint
+    if (editMode) {
+      setRpcEndpoint(currentEndpoint);
+    }
+  };
+
   // Check if the endpoint has been modified from current
   const hasEndpointChanged =
     rpcEndpoint !== currentEndpoint && rpcEndpoint.trim() !== "";
@@ -157,70 +179,95 @@ const CustomizeRPC: React.FC = () => {
                 parentClassName="w-full"
                 className="delay-300 w-full"
               >
-                <SectionHeader
-                  Icon={Icons.Box}
-                  title="RPC Setting"
-                  subtitle="Customize your connection by updating the blockchain RPC endpoint."
-                  info="The RPC endpoint determines which blockchain network you connect to. By default, we use wss://rpc.hippius.network. Custom endpoints can provide better performance in specific regions or enable connection to test networks. Always ensure you're using a trusted RPC provider for security."
-                />
+                <div className="w-full flex justify-between gap-4">
+                  <SectionHeader
+                    Icon={Icons.Box}
+                    title="RPC Setting"
+                    subtitle="Customize your connection by updating the blockchain RPC endpoint."
+                    info="The RPC endpoint determines which blockchain network you connect to. By default, we use wss://rpc.hippius.network. Custom endpoints can provide better performance in specific regions or enable connection to test networks. Always ensure you're using a trusted RPC provider for security."
+                  />
+                  {!editMode && (
+                    <IconButton
+                      className="w-[146px] h-[42px]"
+                      icon={Edit}
+                      text={"Update RPC"}
+                      onClick={toggleEditMode}
+                    />
+                  )}
+                </div>
               </RevealTextLine>
             </div>
-            <RevealTextLine
-              rotate
-              reveal={inView}
-              parentClassName="w-full"
-              className="delay-300 w-full mt-[38px]"
-            >
-              <div className="space-y-1 text-grey-10 w-full flex flex-col">
-                <Label
-                  htmlFor="rpc-endpoint"
-                  className="text-sm font-medium text-grey-70"
-                >
-                  RPC Endpoint
-                </Label>
-                <div className="relative flex items-start w-full">
-                  <Icons.Key className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
-                  <Input
-                    id="rpc-endpoint"
-                    placeholder="Enter RPC endpoint"
-                    value={rpcEndpoint}
-                    onChange={(e) => {
-                      setRpcEndpoint(e.target.value);
-                      setError(null);
-                    }}
-                    className="px-11 border-grey-80 h-14 text-grey-30 w-full
-                    bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none 
-                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-white"
-                  />
-                </div>
-                {error && (
-                  <div className="flex text-error-70 text-sm font-medium mt-2 items-center gap-2">
-                    <AlertCircle className="size-4 !relative" />
-                    <span>{error}</span>
-                  </div>
-                )}
-              </div>
-            </RevealTextLine>
-            <div className="flex justify-start mt-6">
+            <form className="w-full flex flex-col" onSubmit={handleSave}>
               <RevealTextLine
                 rotate
                 reveal={inView}
-                className="delay-300 w-full"
+                parentClassName="w-full"
+                className="delay-300 w-full mt-[38px]"
               >
-                <CardButton
-                  className="max-w-[160px] h-[60px]"
-                  variant="dialog"
-                  disabled={saving || testing || !hasEndpointChanged}
-                  onClick={handleSave}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="flex items-center text-lg leading-6 font-medium">
-                      {testing ? "Verifying..." : saving ? "Saving..." : "Save"}
-                    </span>
+                <div className="space-y-1 text-grey-10 w-full flex flex-col">
+                  <Label
+                    htmlFor="rpc-endpoint"
+                    className="text-sm font-medium text-grey-70"
+                  >
+                    RPC Endpoint
+                  </Label>
+                  <div className="relative flex items-start w-full">
+                    <Icons.Key className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
+                    <Input
+                      id="rpc-endpoint"
+                      placeholder="Enter RPC endpoint"
+                      value={rpcEndpoint}
+                      onChange={(e) => {
+                        setRpcEndpoint(e.target.value);
+                        setError(null);
+                      }}
+                      disabled={!editMode}
+                      className="px-11 border-grey-80 h-14 text-grey-30 w-full
+                    bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none 
+                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus bg-white"
+                    />
                   </div>
-                </CardButton>
+                  {error && (
+                    <div className="flex text-error-70 text-sm font-medium mt-2 items-center gap-2">
+                      <AlertCircle className="size-4 !relative" />
+                      <span>{error}</span>
+                    </div>
+                  )}
+                </div>
               </RevealTextLine>
-            </div>
+
+              {/* Form with Save Button - Only visible in edit mode */}
+              <div
+                className={cn(
+                  "overflow-hidden transition-all duration-300 ease-in-out",
+                  editMode ? "max-h-96 opacity-100 mt-6" : "max-h-0 opacity-0"
+                )}
+              >
+                <RevealTextLine
+                  rotate
+                  reveal={inView && editMode}
+                  className="delay-300 w-full"
+                >
+                  <CardButton
+                    type="submit"
+                    className="max-w-[160px] h-[60px]"
+                    variant="dialog"
+                    disabled={saving || testing || !hasEndpointChanged}
+                    onClick={handleSave}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="flex items-center text-lg leading-6 font-medium">
+                        {testing
+                          ? "Verifying..."
+                          : saving
+                          ? "Saving..."
+                          : "Save"}
+                      </span>
+                    </div>
+                  </CardButton>
+                </RevealTextLine>
+              </div>
+            </form>
           </div>
 
           {/* Confirmation Dialog */}
