@@ -154,11 +154,11 @@ async fn start_sync_process(
                             .file_name()
                             .and_then(|s| s.to_str())
                             .unwrap_or("");
-                        let is_synced: Option<(i32,)> = match sqlx::query_as(
-                            "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private' LIMIT 1"
+                        let is_synced: Option<(String,)> = match sqlx::query_as(
+                            "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
                         )
-                        .bind(&job.account_id)
                         .bind(file_name)
+                        .bind(&job.account_id)
                         .fetch_optional(pool)
                         .await
                         {
@@ -324,12 +324,14 @@ async fn start_sync_process(
                     continue;
                 }
 
+                println!("[PrivateStartup] Inserting record for '{}', owner: {}, type: {}", file_name, startup_account_id, "private");
+
                 // Skip if already in sync DB
-                let is_synced: Option<(i32,)> = match sqlx::query_as(
-                    "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private' LIMIT 1"
+                let is_synced: Option<(String,)> = match sqlx::query_as(
+                    "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
                 )
-                .bind(&startup_account_id)
                 .bind(&file_name)
+                .bind(&startup_account_id)
                 .fetch_optional(pool)
                 .await
                 {
@@ -468,11 +470,11 @@ async fn start_sync_process(
                 };
 
                 // Check if path is already in sync_folder_files (should be empty due to prior deletion, but check for safety)
-                let is_synced: Option<(i32,)> = match sqlx::query_as(
-                    "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private' LIMIT 1"
+                let is_synced: Option<(String,)> = match sqlx::query_as(
+                    "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
                 )
-                .bind(&sync_account_id)
                 .bind(&file_name)
+                .bind(&sync_account_id)
                 .fetch_optional(pool)
                 .await
                 {
@@ -673,11 +675,11 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                     };
 
                     // Check if path is already in sync_folder_files
-                    let is_synced: Option<(i32,)> = match sqlx::query_as(
-                        "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private' LIMIT 1"
+                    let is_synced: Option<(String,)> = match sqlx::query_as(
+                        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
                     )
-                    .bind(account_id)
                     .bind(&file_name)
+                    .bind(account_id)
                     .fetch_optional(pool)
                     .await
                     {
@@ -860,11 +862,11 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
 
                 // Check if path is already in sync_folder_files
                 if let Some(pool) = crate::DB_POOL.get() {
-                    let is_synced: Option<(i32,)> = match sqlx::query_as(
-                        "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private' LIMIT 1"
+                    let is_synced: Option<(String,)> = match sqlx::query_as(
+                        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
                     )
-                    .bind(account_id)
                     .bind(&file_name)
+                    .bind(account_id)
                     .fetch_optional(pool)
                     .await
                     {

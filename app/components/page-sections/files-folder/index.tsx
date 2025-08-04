@@ -41,11 +41,13 @@ interface FileEntry {
 interface FolderViewProps {
     folderCid: string;
     folderName?: string;
+    folderActualName?: string;
 }
 
 export default function FolderView({
     folderCid,
-    folderName = "Folder"
+    folderName = "Folder",
+    folderActualName = "Folder"
 }: FolderViewProps) {
     const { polkadotAddress } = useWalletAuth();
     const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
@@ -104,7 +106,7 @@ export default function FolderView({
             }
 
             const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
-                folderName: folderName,
+                folderName: folderActualName,
                 folderMetadataCid: folderCid
             });
 

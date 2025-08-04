@@ -198,18 +198,17 @@ pub async fn encrypt_and_upload_file(
     files_for_storage.push((meta_filename.clone(), metadata_cid.clone()));
     files_for_storage.extend(final_chunk_pairs);
 
-    let storage_result = request_erasure_storage(&meta_filename, &files_for_storage, &api_url, &seed_phrase).await;
-    match storage_result {
-        Ok(res) => {
-            let temp_dir = tempdir().map_err(|e| e.to_string())?;
-            let temp_path = temp_dir.path().join(&file_name);
-            tokio::fs::write(&temp_path, &file_data_for_db_copy).await.map_err(|e| e.to_string())?;
-            copy_to_sync_and_add_to_db(&temp_path, &account_id, &metadata_cid, &res, false, false, &meta_filename, true).await;
-            println!("[encrypt_and_upload_file] Storage request successful: {}", res);
-        },
-        Err(e) => println!("[encrypt_and_upload_file] Storage request error: {}", e),
-    }
-
+    // Perform storage request and ensure it succeeds
+    let res = request_erasure_storage(&meta_filename, &files_for_storage, &api_url, &seed_phrase)
+        .await
+        .map_err(|e| format!("Storage request failed: {}", e))?;
+   
+    let temp_dir = tempdir().map_err(|e| e.to_string())?;
+    let temp_path = temp_dir.path().join(&file_name);
+    tokio::fs::write(&temp_path, &file_data_for_db_copy).await.map_err(|e| e.to_string())?;
+    copy_to_sync_and_add_to_db(&temp_path, &account_id, &metadata_cid, &res, false, false, &meta_filename, true).await;
+    println!("[encrypt_and_upload_file] Storage request successful: {}", res);
+    
     Ok(metadata_cid)
 }
 
@@ -452,20 +451,18 @@ pub async fn encrypt_and_upload_folder(
     let meta_folder_name = format!("{}{}", folder_name, ".folder.ec_metadata");
     all_files_for_storage.push((meta_folder_name.clone(), folder_manifest_cid.clone()));
     println!("folder_manifest_cid for encrypted folder: {}", folder_manifest_cid);
-    let storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, &api_url, &seed_phrase).await;
-    match storage_result {
-        Ok(res) => {
-            copy_to_sync_and_add_to_db(
-                folder_path, &account_id, &folder_manifest_cid, &res, false, true, &meta_folder_name, true
-            ).await;
-            println!("[✔] Folder storage request successful: {}", res);
-            Ok(folder_manifest_cid)
-        }
-        Err(e) => {
+    // Perform storage request and ensure it succeeds
+    let storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, &api_url, &seed_phrase)
+        .await
+        .map_err(|e| {
             eprintln!("[!] Folder storage request error: {}", e);
-            Err(format!("Folder storage request error: {}", e))
-        }
-    }
+            format!("Folder storage request failed: {}", e)
+        })?;
+    copy_to_sync_and_add_to_db(
+        folder_path, &account_id, &folder_manifest_cid, &storage_result, false, true, &meta_folder_name, true
+    ).await;
+    println!("[✔] Folder storage request successful: {}", storage_result);
+    Ok(folder_manifest_cid)
 }
 
 async fn process_single_file_for_folder_upload(
@@ -672,7 +669,7 @@ pub async fn add_file_to_private_folder(
     let meta_folder_name = format!("{}{}", folder_name, ".folder.ec_metadata");
     all_files_for_storage.push((meta_folder_name.clone(), new_folder_manifest_cid.clone()));
 
-    let _storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, &api_url, &seed_phrase).await?;
+    let storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, &api_url, &seed_phrase).await?;
 
     // Sanitize names for local sync
     let sanitized_folder_name = sanitize_name(&folder_name);
@@ -690,7 +687,7 @@ pub async fn add_file_to_private_folder(
         &sanitized_folder_name,
         &account_id,
         &new_folder_manifest_cid,
-        &_storage_result,
+        &storage_result,
         false,
         false,
         &meta_folder_name,
@@ -1102,7 +1099,6 @@ pub async fn download_file_public(
     Ok(())
 }
 
-
 #[tauri::command]
 pub async fn public_upload_with_erasure(
     account_id: String,
@@ -1300,7 +1296,7 @@ pub async fn public_download_with_erasure(
     output_file: String,
 ) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001";
-
+    println!("public erasure download called");
     tokio::task::spawn_blocking(move || {
         println!("Downloading metadata CID: {}", metadata_cid);
         let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
@@ -2719,7 +2715,7 @@ pub async fn list_folder_contents(
                     last_charged_at: 0.to_string(),
                 }
             };
-            file_detail.file_name = file_detail.file_name;
+            file_detail.file_name = clean_file_name(&file_detail.file_name);
             file_detail
         })
         .collect();
@@ -2750,12 +2746,14 @@ async fn parse_folder_metadata(bytes: &[u8], original_cid: &str) -> Result<Vec<F
 }
 
 fn clean_file_name(name: &str) -> String {
-    name.trim_end_matches(".ec_metadata")
-        .trim_end_matches(".ff")
-        .trim_end_matches(".ec")
-        .trim_end_matches("-folder")
-        .trim_end_matches(".folder.ec_metadata")
-        .trim_end_matches("-folder.ec_metadata")
-        .trim_end_matches(".ff.ec.metadata")
-        .to_string()
+    if let Some(stripped) = name.strip_suffix(".ff.ec_metadata") {
+        // Remove ".ff.ec_metadata" and add ".ec_metadata" back
+        format!("{}.ec_metadata", stripped)
+    } else if let Some(stripped) = name.strip_suffix(".ff") {
+        // Just remove ".ff"
+        stripped.to_string()
+    } else {
+        // Return as is if no matching suffix
+        name.to_string()
+    }
 }

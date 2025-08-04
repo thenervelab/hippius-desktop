@@ -11,18 +11,20 @@ mod user_profile_sync;
 mod sync_shared;
 mod utils;
 mod ipfs;
-use crate::sync_shared::{get_sync_status,app_close};
+
+use crate::sync_shared::{get_sync_status, app_close};
 use crate::folder_sync::{start_folder_sync_tauri};
 use crate::public_folder_sync::start_public_folder_sync_tauri;
 use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size};
 use crate::user_profile_sync::start_user_profile_sync_tauri;
 use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
+use crate::commands::syncing::{initialize_sync, cleanup_sync, AppState, SyncState};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
-    upload_file_public, download_file_public, public_download_with_erasure, public_upload_with_erasure ,
-    encrypt_and_upload_folder , download_and_decrypt_folder, public_download_folder, public_upload_folder,list_folder_contents,
-    remove_file_from_public_folder, add_file_to_public_folder, remove_file_from_private_folder,  add_file_to_private_folder
+    upload_file_public, download_file_public, public_download_with_erasure, public_upload_with_erasure,
+    encrypt_and_upload_folder, download_and_decrypt_folder, public_download_folder, public_upload_folder, list_folder_contents,
+    remove_file_from_public_folder, add_file_to_public_folder, remove_file_from_private_folder, add_file_to_private_folder
 };
 use commands::accounts::{create_encryption_key, get_encryption_keys, import_key};
 use utils::file_operations::delete_and_unpin_file_by_name;
@@ -31,13 +33,20 @@ use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_taur
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Manager};
+use tokio::sync::Mutex;
+use std::sync::Arc;
+
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
 fn main() {
     sodiumoxide::init().unwrap();
     println!("[Main] Application starting...");
 
-    let builder = Builder::default().plugin(tauri_plugin_process::init())
+    let builder = Builder::default()
+        .manage(Arc::new(AppState {
+            sync: Mutex::new(SyncState::default()),
+        })) // Register AppState
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -58,12 +67,14 @@ fn main() {
             start_user_profile_sync_tauri,
             start_folder_sync_tauri,
             start_public_folder_sync_tauri,
+            cleanup_sync,
             get_user_synced_files,
             get_sync_status,
             get_ipfs_node_info,
             get_ipfs_bandwidth,
             get_ipfs_peers,
             app_close,
+            initialize_sync,
             delete_and_unpin_file_by_name,
             public_download_with_erasure,
             public_upload_with_erasure,

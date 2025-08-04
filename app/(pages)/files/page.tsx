@@ -10,11 +10,12 @@ const FilesPage: FC = () => {
     const params = useSearchParams();
     const folderCid = params.get("folderCid");
     const folderName = params.get("folderName") || "Folder";
+    const folderActualName = params.get("folderActualName") || "Folder";
 
     if (folderCid) {
         return (
             <DashboardTitleWrapper mainText={`Your Files - ${folderName}`}>
-                <FolderView folderCid={folderCid} folderName={folderName} />
+                <FolderView folderCid={folderCid} folderName={folderName} folderActualName={folderActualName} />
             </DashboardTitleWrapper>
         );
     }

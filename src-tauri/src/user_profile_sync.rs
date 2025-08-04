@@ -292,18 +292,6 @@ pub fn start_user_sync(account_id: &str) {
                                                             file_name.clone()
                                                         };
 
-                                                        if file_type == "public" && public_sync_path.is_some() {
-                                                            let public_path = format!("{}/{}", public_sync_path.as_ref().unwrap(), base_file_name);
-                                                            if Path::new(&public_path).exists() {
-                                                                source = public_path;
-                                                            }
-                                                        } else if file_type == "private" && private_sync_path.is_some() {
-                                                            let private_path = format!("{}/{}", private_sync_path.as_ref().unwrap(), base_file_name);
-                                                            if Path::new(&private_path).exists() {
-                                                                source = private_path;
-                                                            }
-                                                        }
-
                                                         if file_name.ends_with(".ec_metadata") && !file_name.ends_with(".folder.ec_metadata") && !file_name.ends_with("-folder.ec_metadata") {
                                                             let decoded_hash = decode_file_hash(&file_hash.as_bytes())
                                                                 .unwrap_or_else(|_| "Invalid file hash".to_string());
@@ -315,6 +303,13 @@ pub fn start_user_sync(account_id: &str) {
                                                                             if let Some(original_file) = metadata.get("original_file") {
                                                                                 if let Some(size) = original_file.get("size").and_then(|v| v.as_i64()) {
                                                                                     actual_file_size = size;
+                                                                                }
+                                                                            }
+                                                                            if let Some(erasure_coding) = metadata.get("erasure_coding") {
+                                                                                if let Some(encrypted) = erasure_coding.get("encrypted").and_then(|v| v.as_bool()) {
+                                                                                    if !encrypted {
+                                                                                        file_type = "public".to_string();
+                                                                                    }
                                                                                 }
                                                                             }
                                                                         }
@@ -345,6 +340,18 @@ pub fn start_user_sync(account_id: &str) {
                                                                 Err(e) => {
                                                                     eprintln!("[UserSync] Failed to fetch folder content for {}: {}", file_hash, e);
                                                                 }
+                                                            }
+                                                        }
+
+                                                        if file_type == "public" && public_sync_path.is_some() {
+                                                            let public_path = format!("{}/{}", public_sync_path.as_ref().unwrap(), base_file_name);
+                                                            if Path::new(&public_path).exists() {
+                                                                source = public_path;
+                                                            }
+                                                        } else if file_type == "private" && private_sync_path.is_some() {
+                                                            let private_path = format!("{}/{}", private_sync_path.as_ref().unwrap(), base_file_name);
+                                                            if Path::new(&private_path).exists() {
+                                                                source = private_path;
                                                             }
                                                         }
 
@@ -471,7 +478,7 @@ pub fn start_user_sync(account_id: &str) {
                                     || file_name.ends_with(".folder.ec_metadata")
                                     || file_name.ends_with("-folder.ec_metadata");
 
-                                let file_type = if file_name.ends_with(".ec_metadata")
+                                let mut file_type = if file_name.ends_with(".ec_metadata")
                                     || file_name.ends_with(".folder.ec_metadata")
                                     || file_name.ends_with("-folder.ec_metadata") {
                                     "private".to_string()
@@ -493,22 +500,10 @@ pub fn start_user_sync(account_id: &str) {
                                     file_name.clone()
                                 };
 
-                                let mut source = "Hippius".to_string();
-                                if file_type == "public" && public_sync_path.is_some() {
-                                    let public_path = format!("{}/{}", public_sync_path.as_ref().unwrap(), base_file_name);
-                                    if Path::new(&public_path).exists() {
-                                        source = public_path;
-                                    }
-                                } else if file_type == "private" && private_sync_path.is_some() {
-                                    let private_path = format!("{}/{}", private_sync_path.as_ref().unwrap(), base_file_name);
-                                    if Path::new(&private_path).exists() {
-                                        source = private_path;
-                                    }
-                                }
-                                let ipfs_api_url = "http://127.0.0.1:5001";
+                                let ipfs_api_url = "http://127.00.1:5001";
                                 // Handle IPFS content fetching for non-folder files
                                 if !file_name.ends_with("-folder") && !file_name.ends_with(".folder")
-                                    && !file_name.ends_with(".folder.ec_metadata") && !file_name.ends_with("-folder.ec_metadata") {
+                                    && !file_name.ends_with(".folder.ec_metadata") && !file_name.ends_with("-folder.ec_metadata") && !file_name.ends_with(".ec_metadata"){
                                     if decoded_hash != "Invalid file hash" {
                                         match crate::utils::ipfs::download_content_from_ipfs(&ipfs_api_url, &decoded_hash).await {
                                             Ok(json_bytes) => {
@@ -576,6 +571,37 @@ pub fn start_user_sync(account_id: &str) {
                                                                                 }
                                                                             }
                                                                         }
+                                                                    }else {
+                                                                        // Handle .ec_metadata case when none of the target extensions matched
+                                                                        for file in files {
+                                                                            if let Some(filename) = file.get("filename").and_then(|v| v.as_str()) {
+                                                                                if filename.ends_with(".ec_metadata") {
+                                                                                    if let Some(cid) = file.get("cid").and_then(|v| v.as_str()) {
+                                                                                        // Download the .ec_metadata content
+                                                                                        match crate::utils::ipfs::download_content_from_ipfs(&ipfs_api_url, cid).await {
+                                                                                            Ok(metadata_bytes) => {
+                                                                                                if let Ok(metadata_str) = String::from_utf8(metadata_bytes) {
+                                                                                                    if let Ok(metadata_json) = serde_json::from_str::<serde_json::Value>(&metadata_str) {
+                                                                                                        // Check if erasure_coding.encrypted exists and is false
+                                                                                                        if let Some(erasure_coding) = metadata_json.get("erasure_coding") {
+                                                                                                            if let Some(encrypted) = erasure_coding.get("encrypted") {
+                                                                                                                if encrypted == false {
+                                                                                                                    file_type = "public".to_string();
+                                                                                                                }
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                            Err(e) => {
+                                                                                                eprintln!("[UserSync] Failed to download .ec_metadata IPFS content for {}: {}", cid, e);
+                                                                                            }
+                                                                                        }
+                                                                                        break;
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     }
                                                                 }
                                                             }
@@ -593,6 +619,19 @@ pub fn start_user_sync(account_id: &str) {
                                                 eprintln!("[UserSync] Failed to download folder IPFS content for {}: {}", decoded_hash, e);
                                             }
                                         }
+                                    }
+                                }
+
+                                let mut source = "Hippius".to_string();
+                                if file_type == "public" && public_sync_path.is_some() {
+                                    let public_path = format!("{}/{}", public_sync_path.as_ref().unwrap(), base_file_name);
+                                    if Path::new(&public_path).exists() {
+                                        source = public_path;
+                                    }
+                                } else if file_type == "private" && private_sync_path.is_some() {
+                                    let private_path = format!("{}/{}", private_sync_path.as_ref().unwrap(), base_file_name);
+                                    if Path::new(&private_path).exists() {
+                                        source = private_path;
                                     }
                                 }
                                 println!("[UserSync] File hash for storage request : {}, main req hash is : {}", file_hash, decoded_hash);

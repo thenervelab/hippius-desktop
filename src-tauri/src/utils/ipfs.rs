@@ -123,24 +123,43 @@ pub async fn pin_json_to_ipfs_local(json_string: &str, api_url: &str) -> Result<
     }
 }
 
-// You will need a new helper function to upload bytes directly
-pub async fn upload_bytes_to_ipfs(api_url: &str, data: Vec<u8>, filename: &str) -> Result<String, String> {
+pub async fn upload_bytes_to_ipfs(
+    api_url: &str,
+    data: Vec<u8>,
+    filename: &str,
+) -> Result<String, String> {
     let client = reqwest::Client::new();
-    let form = reqwest::multipart::Form::new()
-        .part("file", reqwest::multipart::Part::bytes(data).file_name(filename.to_owned()));
+
+    let part = reqwest::multipart::Part::bytes(data)
+        .file_name(filename.to_owned())
+        .mime_str("application/octet-stream")
+        .map_err(|e| e.to_string())?;
+
+    let form = reqwest::multipart::Form::new().part("file", part);
+
+    // Force CIDv1 with raw-leaves for modern compatibility
+    let url = format!(
+        "{}/api/v0/add?cid-version=1&raw-leaves=true",
+        api_url
+    );
 
     let res = client
-        .post(&format!("{}/api/v0/add", api_url))
+        .post(&url)
         .multipart(form)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("Failed to send request: {}", e))?
+        .error_for_status()
+        .map_err(|e| format!("IPFS returned error: {}", e))?;
 
-    let body = res.text().await.map_err(|e| e.to_string())?;
-    let ipfs_res: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let body = res.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
 
-    ipfs_res["Hash"]
-        .as_str()
-        .ok_or_else(|| "Failed to parse CID from IPFS response".to_string())
+    let ipfs_res: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse JSON: {} | Body: {}", e, body))?;
+
+    ipfs_res.get("Hash")
+        .or_else(|| ipfs_res.get("Cid")) // Fallback if future node returns "Cid"
+        .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+        .ok_or_else(|| format!("Failed to parse CID from response: {}", body))
 }

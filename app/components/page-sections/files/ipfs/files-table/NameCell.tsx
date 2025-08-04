@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 type NameCellProps = {
   rawName: string;
+  actualName?: string;
   cid: string;
   className?: string;
   isAssigned: boolean;
@@ -18,6 +19,7 @@ type NameCellProps = {
 
 const NameCell: FC<NameCellProps> = ({
   rawName,
+  actualName,
   cid,
   className,
   fileType,
@@ -30,7 +32,7 @@ const NameCell: FC<NameCellProps> = ({
   return (
     <div className={className}>
       {isFolder ? (
-        <Link href={`/files?folderCid=${decodeHexCid(cid)}&folderName=${encodeURIComponent(rawName)}`}>
+        <Link href={`/files?folderCid=${decodeHexCid(cid)}&folderName=${encodeURIComponent(rawName)}&folderActualName=${encodeURIComponent(actualName ?? "")}`}>
           <div className="flex items-center">
             <Icon className={cn("size-5 mr-2", color)} />
             <span className="text-grey-20 hover:text-primary-40 hover:underline transition">

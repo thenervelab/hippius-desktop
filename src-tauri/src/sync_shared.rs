@@ -111,7 +111,9 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     .fetch_optional(pool)
     .await
     .unwrap();
+    println!("[insert_file_if_not_exists] Inserting record for '{}', owner: {}, type: {}", file_name, owner, file_type);
     if exists.is_none() {
+        println!("[insert_file_if_not_exists] Inserting record for '{}', owner: {}, type: {}", file_name, owner, file_type);
         sqlx::query(
             "INSERT INTO sync_folder_files (
                 file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
