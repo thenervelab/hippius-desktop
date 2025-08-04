@@ -94,15 +94,3 @@ jobs:
           prerelease: false            # set true for betas like 0.2.0-beta.1
           overwrite: true              # lets you re-run with the same version
           args: ${{ matrix.args }}
-
-      # Optional: keep run artifacts for quick download
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform }}-build
-          path: |
-            src-tauri/target/**/release/bundle/**/*.app.tar.gz*
-            src-tauri/target/**/release/bundle/**/*.msi*
-            src-tauri/target/**/release/bundle/**/*.AppImage*
-            src-tauri/target/**/release/bundle/**/*.dmg*
-          if-no-files-found: ignore
