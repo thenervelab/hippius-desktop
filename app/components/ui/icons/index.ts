@@ -146,3 +146,5 @@ export { default as ArrowLeft2 } from "./ArrowLeft2";
 export { default as File2 } from "./File2";
 export { default as RecieveSquare } from "./RecieveSquare";
 export { default as CopySuccess } from "./CopySuccess";
+export { default as Note2 } from "./Note2";
+export { default as Edit } from "./Edit";

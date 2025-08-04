@@ -1,15 +1,12 @@
 "use client";
 
-import { useEffect, useCallback, useRef, ReactNode } from "react";
+import { useEffect, useCallback, useRef, ReactNode, useState } from "react";
 import { ApiPromise, WsProvider } from "@polkadot/api";
-import {
-  WSS_ENDPOINT,
-  RECONNECT_INTERVAL,
-  MAX_RETRIES
-} from "@/config/constants";
+import { RECONNECT_INTERVAL, MAX_RETRIES } from "@/config/constants";
 import { useAtomValue, useSetAtom } from "jotai";
 import { polkadotApiAtom } from "../global-atoms/polkadotApiAtom";
 import { phaseAtom } from "@/components/splash-screen/atoms";
+import { getWssEndpoint } from "@/lib/helpers/nodeConfigDb";
 
 export const usePolkadotApi = () => {
   return useAtomValue(polkadotApiAtom);
@@ -19,6 +16,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   const setState = useSetAtom(polkadotApiAtom);
   const appPhase = useAtomValue(phaseAtom);
   const isAppReady = appPhase === "ready";
+  const [wssEndpoint, setWssEndpoint] = useState<string | null>(null);
 
   const apiRef = useRef<ApiPromise | null>(null);
   const wsProviderRef = useRef<WsProvider | null>(null);
@@ -28,6 +26,15 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   const retryCountRef = useRef(0);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const connectionInitiatedRef = useRef(false);
+
+  useEffect(() => {
+    const fetchEndpoint = async () => {
+      const endpoint = await getWssEndpoint();
+      setWssEndpoint(endpoint);
+    };
+
+    fetchEndpoint();
+  }, []);
 
   const cleanup = useCallback(async () => {
     console.log("Cleaning up Polkadot API connections...");
@@ -64,7 +71,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         ...prev,
         api: null,
         isConnected: false,
-        blockNumber: null
+        blockNumber: null,
       }));
     }
 
@@ -72,9 +79,9 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   }, [setState]);
 
   const connect = useCallback(async () => {
-    // Don't try to connect if the app isn't ready yet
-    if (!isAppReady) {
-      console.log("Skipping connection: app not ready yet");
+    // Don't try to connect if the app isn't ready yet or we don't have an endpoint
+    if (!isAppReady || !wssEndpoint) {
+      console.log("Skipping connection: app not ready yet or missing endpoint");
       return;
     }
 
@@ -88,8 +95,8 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
       connectingRef.current = true;
       await cleanup();
 
-      console.log("Creating WebSocket provider:", WSS_ENDPOINT);
-      const wsProvider = new WsProvider(WSS_ENDPOINT);
+      console.log("Creating WebSocket provider:", wssEndpoint);
+      const wsProvider = new WsProvider(wssEndpoint);
       wsProviderRef.current = wsProvider;
 
       wsProvider.on("error", async (error) => {
@@ -128,7 +135,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
       console.log("Creating API...");
       const api = await ApiPromise.create({
         provider: wsProvider,
-        throwOnConnect: true
+        throwOnConnect: true,
       });
       apiRef.current = api;
 
@@ -140,7 +147,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         if (mountedRef.current) {
           setState((prev) => ({
             ...prev,
-            blockNumber: BigInt(header.number.toString())
+            blockNumber: BigInt(header.number.toString()),
           }));
         }
       });
@@ -153,7 +160,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         setState((prev) => ({
           ...prev,
           api,
-          isConnected: true
+          isConnected: true,
         }));
       }
     } catch (error) {
@@ -169,15 +176,27 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-  }, [cleanup, setState, isAppReady]);
+  }, [cleanup, setState, isAppReady, wssEndpoint]);
 
+  // Connect when ready and when the endpoint changes
   useEffect(() => {
     mountedRef.current = true;
 
-    // Only try to connect if the app is ready
-    if (isAppReady && !connectionInitiatedRef.current) {
+    // Only try to connect if the app is ready and we have an endpoint
+    if (isAppReady && wssEndpoint && !connectionInitiatedRef.current) {
       connectionInitiatedRef.current = true;
+      connect();
+    }
 
+    // Reconnect if the endpoint changes
+    if (
+      isAppReady &&
+      wssEndpoint &&
+      connectionInitiatedRef.current &&
+      wsProviderRef.current &&
+      wsProviderRef.current.endpoint !== wssEndpoint
+    ) {
+      console.log("WSS endpoint changed, reconnecting...");
       connect();
     }
 
@@ -185,7 +204,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
       mountedRef.current = false;
       cleanup();
     };
-  }, [connect, cleanup, isAppReady]);
+  }, [connect, cleanup, isAppReady, wssEndpoint]);
 
   return children;
 }

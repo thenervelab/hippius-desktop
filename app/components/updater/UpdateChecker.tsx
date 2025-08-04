@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { checkForUpdates } from "@/app/lib/utils/updater/checkForUpdates";
+import { checkForUpdates } from "@/app/components/updater/checkForUpdates";
 
 import { useSetAtom } from "jotai";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";

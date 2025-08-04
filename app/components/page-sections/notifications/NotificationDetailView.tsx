@@ -131,7 +131,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
             )}
           </div>
           <button
-            className="text-grey-70 p-2 hover:bg-primary-100 rounded self-start"
+            className="text-grey-70 p-2 hover:bg-primary-100 rounded self-start ml-auto"
             onClick={handleMoreClick}
             onContextMenu={(e) => {
               e.preventDefault();
