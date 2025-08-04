@@ -32,6 +32,7 @@ pub async fn initialize_sync(
 
     // Start new sync tasks
     let account_clone = account_id.clone();
+    let account_clone2 = account_id.clone();
     let mnemonic_clone = mnemonic.clone();
     
     let user_profile_task = tokio::spawn(async move {
@@ -43,12 +44,12 @@ pub async fn initialize_sync(
     });
 
     let public_folder_task =  tokio::spawn(async move {
-        start_public_folder_sync_tauri(account_id, mnemonic).await;
+        start_public_folder_sync_tauri(account_clone2, mnemonic_clone).await;
     });
     
     // Store the task handles
     sync_state.tasks.push(user_profile_task);
-    sync_state.tasks.push(public_folder_task);
+    // sync_state.tasks.push(public_folder_task);
     sync_state.tasks.push(folder_task);
     
     Ok(())
