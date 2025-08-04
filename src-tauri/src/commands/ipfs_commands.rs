@@ -1099,7 +1099,6 @@ pub async fn download_file_public(
     Ok(())
 }
 
-
 #[tauri::command]
 pub async fn public_upload_with_erasure(
     account_id: String,

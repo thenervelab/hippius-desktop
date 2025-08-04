@@ -41,9 +41,14 @@ pub async fn initialize_sync(
     let folder_task = tokio::spawn(async move {
         start_folder_sync_tauri(account_id, mnemonic).await;
     });
+
+    let public_folder_task =  tokio::spawn(async move {
+        start_public_folder_sync_tauri(account_id, mnemonic).await;
+    });
     
     // Store the task handles
     sync_state.tasks.push(user_profile_task);
+    sync_state.tasks.push(public_folder_task);
     sync_state.tasks.push(folder_task);
     
     Ok(())
