@@ -49,7 +49,7 @@ pub async fn initialize_sync(
     
     // Store the task handles
     sync_state.tasks.push(user_profile_task);
-    // sync_state.tasks.push(public_folder_task);
+    sync_state.tasks.push(public_folder_task);
     sync_state.tasks.push(folder_task);
     
     Ok(())
