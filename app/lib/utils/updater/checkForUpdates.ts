@@ -4,10 +4,13 @@ import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   addNotification,
-  hippusVersionNotificationExists
+  hippusVersionNotificationExists,
 } from "../../helpers/notificationsDb";
-import { ask, message } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
+import {
+  openUpdateDialog,
+  getUpdateConfirmation,
+} from "@/lib/stores/updateStore";
 
 // Utility function to format bytes to MB
 function formatBytes(bytes: number): string {
@@ -37,24 +40,31 @@ export async function checkForUpdates(notifyOnce = false) {
         notificationTitleText: "Update Available",
         notificationDescription: `Hippius ${version} is ready. Install and restart now.`,
         notificationLinkText: "Install Update",
-        notificationLink: "Install Update"
+        notificationLink: "Install Update",
       });
     }
 
     if (notifyOnce && notified) return;
 
-    // Prompt user
-    const install = await ask(
-      `Version ${update.version} is ready to install!\n\nRelease notes: ${update.body}`,
-      {
-        title: "Update Available",
-        kind: "info",
-        okLabel: "Update",
-        cancelLabel: "Cancel"
-      }
-    );
+    // Open the update dialog with the update info
+    openUpdateDialog({
+      version: update.version,
+      body: update.body || "",
+    });
 
-    if (!install) return;
+    // Wait for user response (polling) - will wait indefinitely
+    let userResponse = null;
+    while (userResponse === null) {
+      userResponse = getUpdateConfirmation();
+      if (userResponse === null) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+
+    // If user canceled or dialog was closed
+    if (userResponse !== true) {
+      return;
+    }
 
     let totalBytes = 0;
     let downloadedBytes = 0;
@@ -72,7 +82,7 @@ export async function checkForUpdates(notifyOnce = false) {
             {
               description:
                 "0% complete • 0 MB / " + formatBytes(totalBytes) + " MB",
-              duration: Infinity
+              duration: Infinity,
             }
           );
           break;
@@ -89,7 +99,7 @@ export async function checkForUpdates(notifyOnce = false) {
             toast.loading(`Downloading update... ${percentage}%`, {
               id: downloadToastId,
               description: `${downloadedMB} MB / ${totalMB} MB • ${remainingMB} MB remaining`,
-              duration: Infinity
+              duration: Infinity,
             });
           }
           break;
@@ -104,13 +114,13 @@ export async function checkForUpdates(notifyOnce = false) {
             description: `${formatBytes(
               totalBytes
             )} MB downloaded successfully`,
-            duration: 3000
+            duration: 3000,
           });
 
           // Show installation progress
           toast.loading("Installing update...", {
             description: "Please wait while the update is being installed",
-            duration: Infinity
+            duration: Infinity,
           });
           break;
       }
@@ -119,12 +129,10 @@ export async function checkForUpdates(notifyOnce = false) {
     // Dismiss any remaining toasts
     toast.dismiss();
 
-    await message("Update installed. Restarting now…", { title: "Success" });
-
     // Show final success toast before relaunch
     toast.success("Update installed successfully!", {
       description: "Application will restart now...",
-      duration: 2000
+      duration: 3000,
     });
 
     await relaunch();
@@ -133,16 +141,11 @@ export async function checkForUpdates(notifyOnce = false) {
     if (downloadToastId) {
       toast.dismiss(downloadToastId);
     }
+    toast.error("Update failed", {
+      description: "An error occurred while checking for updates",
+      duration: 5000,
+    });
     console.log(err);
-
-    // console.error("[Updater] failed:", err);
-
-    // toast.error("Update failed", {
-    //   description: "Please try again later",
-    //   duration: 5000
-    // });
-
-    // await message("Update failed. Please try again later.", { title: "Error" });
   }
 }
 

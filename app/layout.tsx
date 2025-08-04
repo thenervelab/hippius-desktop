@@ -10,6 +10,7 @@ import { metadata as appMetadata } from "./metadata";
 import { Suspense } from "react";
 import PageLoader from "@/components/page-loader";
 import SplashWrapper from "./components/splash-screen";
+import UpdateDialogWrapper from "./components/update-dialog-wrapper";
 
 export const metadata = appMetadata;
 
@@ -41,6 +42,7 @@ export default async function RootLayout({
                 <div className="flex min-h-screen h-screen">{children}</div>
               </SplashWrapper>
             </Suspense>
+            <UpdateDialogWrapper />
             <Toaster />
           </WalletAuthProvider>
         </Providers>
