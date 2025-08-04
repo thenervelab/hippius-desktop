@@ -3,7 +3,7 @@ name: publish
 on:
   workflow_dispatch:
   push:
-    branches: [main]   
+    branches: [main]
 
 permissions:
   contents: write
@@ -19,9 +19,7 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: '--target aarch64-apple-darwin'   # Apple Silicon
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin'    # Intel
+            args: '--target universal-apple-darwin'   # One universal mac build
           - platform: ubuntu-22.04
             args: ''
           - platform: windows-latest
@@ -42,6 +40,7 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
+          # Needed so universal contains BOTH slices
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
@@ -84,13 +83,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Optional Apple notarization vars go here if you use them
         with:
-          # Creates a versioned release/tag from your app version (e.g., v0.1.0)
           tagName: v__VERSION__
           releaseName: 'Hippius v__VERSION__'
           releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: false          # set true if you want to review first
-          prerelease: false            # set true for betas like 0.2.0-beta.1
-          overwrite: true              # lets you re-run with the same version
+          releaseDraft: false
+          prerelease: false
+          overwrite: true
           args: ${{ matrix.args }}
