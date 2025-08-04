@@ -1,10 +1,10 @@
 import Sidebar from "../components/sidebar";
 import ResponsiveContent from "./ResponsiveContent";
 import OnBoardingGuard from "./OnBoardingGuard";
-import UpdateChecker from "../components/sidebar/update-checker";
+import UpdateChecker from "../components/updater/UpdateChecker";
 
 export default function ProtectedLayout({
-  children
+  children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {

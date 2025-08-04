@@ -30,7 +30,7 @@ export async function addContact(
     const db = await getDb();
     db.run(`INSERT INTO address_book (name, wallet_address) VALUES (?, ?)`, [
       name,
-      walletAddress
+      walletAddress,
     ]);
     await saveBytes(db.export());
     return true;
@@ -57,63 +57,11 @@ export async function getContacts(): Promise<
       id: row[0] as number,
       name: row[1] as string,
       walletAddress: row[2] as string,
-      dateAdded: row[3] as number
+      dateAdded: row[3] as number,
     }));
   } catch (error) {
     console.error("Failed to get contacts:", error);
     return [];
-  }
-}
-
-export async function getContactById(
-  id: number
-): Promise<{ name: string; walletAddress: string; dateAdded: number } | null> {
-  try {
-    const db = await getDb();
-    const res = db.exec(
-      `SELECT name, wallet_address, date_added 
-       FROM address_book 
-       WHERE id = ?`,
-      [id]
-    );
-
-    if (!res.length || res[0].values.length === 0) return null;
-
-    const row = res[0].values[0];
-    return {
-      name: row[0] as string,
-      walletAddress: row[1] as string,
-      dateAdded: row[2] as number
-    };
-  } catch (error) {
-    console.error("Failed to get contact by id:", error);
-    return null;
-  }
-}
-
-export async function getContactByAddress(
-  walletAddress: string
-): Promise<{ id: number; name: string; dateAdded: number } | null> {
-  try {
-    const db = await getDb();
-    const res = db.exec(
-      `SELECT id, name, date_added 
-       FROM address_book 
-       WHERE wallet_address = ?`,
-      [walletAddress]
-    );
-
-    if (!res.length || res[0].values.length === 0) return null;
-
-    const row = res[0].values[0];
-    return {
-      id: row[0] as number,
-      name: row[1] as string,
-      dateAdded: row[2] as number
-    };
-  } catch (error) {
-    console.error("Failed to get contact by address:", error);
-    return null;
   }
 }
 
@@ -146,20 +94,6 @@ export async function deleteContact(id: number): Promise<boolean> {
     return true;
   } catch (error) {
     console.error("Failed to delete contact:", error);
-    return false;
-  }
-}
-
-export async function contactExists(walletAddress: string): Promise<boolean> {
-  try {
-    const db = await getDb();
-    const res = db.exec(
-      `SELECT COUNT(*) FROM address_book WHERE wallet_address = ?`,
-      [walletAddress]
-    );
-    return (res[0]?.values[0][0] as number) > 0;
-  } catch (error) {
-    console.error("Failed to check if contact exists:", error);
     return false;
   }
 }

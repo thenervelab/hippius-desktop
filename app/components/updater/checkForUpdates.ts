@@ -5,12 +5,12 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import {
   addNotification,
   hippusVersionNotificationExists,
-} from "../../helpers/notificationsDb";
+} from "../../lib/helpers/notificationsDb";
 import { toast } from "sonner";
 import {
   openUpdateDialog,
   getUpdateConfirmation,
-} from "@/lib/stores/updateStore";
+} from "@/app/components/updater/updateStore";
 
 // Utility function to format bytes to MB
 function formatBytes(bytes: number): string {

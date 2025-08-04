@@ -10,22 +10,22 @@ import { metadata as appMetadata } from "./metadata";
 import { Suspense } from "react";
 import PageLoader from "@/components/page-loader";
 import SplashWrapper from "./components/splash-screen";
-import UpdateDialogWrapper from "./components/update-dialog-wrapper";
+import UpdateDialogWrapper from "./components/updater/UpdateDialogWrapper";
 
 export const metadata = appMetadata;
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
-  display: "swap"
+  display: "swap",
 });
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
-  subsets: ["latin"]
+  subsets: ["latin"],
 });
 
 export default async function RootLayout({
-  children
+  children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {

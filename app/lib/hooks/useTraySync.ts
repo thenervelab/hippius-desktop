@@ -6,8 +6,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 import {
   checkForUpdates,
-  getAvailableUpdate
-} from "../utils/updater/checkForUpdates";
+  getAvailableUpdate,
+} from "../../components/updater/checkForUpdates";
 
 const TRAY_ID = "hippius-tray";
 const QUIT_ID = "quit";
@@ -24,6 +24,7 @@ export function useTrayInit() {
 
     menuPromise = (async () => {
       const iconPath = await resolveResource("icons/trayIcon.png");
+      const existingTray = await TrayIcon.getById(TRAY_ID);
 
       // Quit menu item
       const quit = await MenuItem.new({
@@ -31,7 +32,7 @@ export function useTrayInit() {
         text: "Quit Hippius",
         action: async () => {
           await invoke("app_close");
-        }
+        },
       });
 
       // Update menu item (if available)
@@ -43,28 +44,30 @@ export function useTrayInit() {
           text: "Install Update",
           action: async () => {
             await checkForUpdates();
-          }
+          },
         });
       }
 
       // Build menu items array
       const menuItems = [
         ...(installUpdateMenuItem ? [installUpdateMenuItem] : []),
-        quit
+        quit,
       ];
 
       const menu = await Menu.new({
-        items: menuItems
+        items: menuItems,
       });
 
-      await TrayIcon.new({
-        id: TRAY_ID,
-        icon: iconPath,
-        iconAsTemplate: false,
-        tooltip: "Hippius Cloud",
-        menu,
-        menuOnLeftClick: true
-      });
+      if (!existingTray) {
+        await TrayIcon.new({
+          id: TRAY_ID,
+          icon: iconPath,
+          iconAsTemplate: false,
+          tooltip: "Hippius Cloud",
+          menu,
+          menuOnLeftClick: true,
+        });
+      }
 
       return menu;
     })();
@@ -100,7 +103,7 @@ export async function setTraySyncPercent(percent: number | null) {
     syncItem = await MenuItem.new({
       id: SYNC_ID,
       text: label,
-      enabled: false
+      enabled: false,
     });
     await menu.insert(syncItem, 0); // one‑time insert
   } else {

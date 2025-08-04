@@ -13,16 +13,16 @@ import GenerateNewAccountModal from "./GenerateNewAccountModal";
 
 import { ConfirmModal, Icons } from "@/app/components/ui";
 import { useSubAccounts } from "@/app/lib/hooks/api/useSubAccounts";
-import { WalletManager } from "@/app/lib/web3/wallet-manager";
 import SectionHeader from "../SectionHeader";
 import {
   saveSubAccountSeed,
   hasSubAccountSeed,
-  deleteSubAccountSeed
+  deleteSubAccountSeed,
 } from "@/app/lib/helpers/subAccountSeedsDb";
 import { getWalletRecord } from "@/app/lib/helpers/walletDb";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import SeedPasscodeModal from "./SeedPasscodeModal";
+import { generateMnemonic } from "@/app/lib/helpers/mnemonic";
 
 const SubAccounts: React.FC = () => {
   const { subs, loading: tableLoading, reload } = useSubAccounts();
@@ -152,7 +152,7 @@ const SubAccounts: React.FC = () => {
     reload,
     generatedMnemonic,
     draftAddress,
-    isFromDirectCreation
+    isFromDirectCreation,
   ]);
 
   const handlePasscodeSubmit = useCallback(
@@ -260,7 +260,7 @@ const SubAccounts: React.FC = () => {
     setError("");
     setGeneratingKey(true);
     try {
-      const newMnemonic = await WalletManager.generateMnemonic();
+      const newMnemonic = await generateMnemonic();
       setGeneratedMnemonic(newMnemonic);
       setOpenNewAccountModal(true);
       setIsFromDirectCreation(false);
