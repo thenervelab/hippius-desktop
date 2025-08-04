@@ -1297,7 +1297,7 @@ pub async fn public_download_with_erasure(
     output_file: String,
 ) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001";
-
+    println!("public erasure download called");
     tokio::task::spawn_blocking(move || {
         println!("Downloading metadata CID: {}", metadata_cid);
         let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
