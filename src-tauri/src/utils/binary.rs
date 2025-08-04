@@ -156,12 +156,14 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
 
     // Ensure parent directories exist
     ensure_parent_directories(binary_path)?;
+    println!("Parent directories ensured for: {:?}", binary_path);
 
     // Set up reqwest client with timeout
     let client = reqwest::blocking::ClientBuilder::new()
-        .timeout(StdDuration::from_secs(120)) // 2 minute timeout for large files
+        .timeout(StdDuration::from_secs(300)) // Increased to 5 minutes
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    println!("HTTP client created");
 
     // Download the file
     println!("Starting download...");
@@ -170,6 +172,7 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
         .send()
         .map_err(|e| format!("Failed to download IPFS: {}", e))?;
 
+    println!("HTTP response status: {}", response.status());
     if !response.status().is_success() {
         return Err(format!(
             "Failed to download IPFS: HTTP status {}",
@@ -202,15 +205,16 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
         fs::write(&temp_file, &content)
             .map_err(|e| format!("Failed to write temporary file: {}", e))?;
 
-        let file =
-            fs::File::open(&temp_file).map_err(|e| format!("Failed to open zip file: {}", e))?;
+        let file = fs::File::open(&temp_file)
+            .map_err(|e| format!("Failed to open zip file: {}", e))?;
 
-        let mut archive =
-            zip::ZipArchive::new(file).map_err(|e| format!("Failed to read zip archive: {}", e))?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| format!("Failed to read zip archive: {}", e))?;
 
         archive
             .extract(&temp_dir)
             .map_err(|e| format!("Failed to extract zip archive: {}", e))?;
+
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -221,8 +225,8 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
             .map_err(|e| format!("Failed to write temporary file: {}", e))?;
 
         println!("Opening archive for extraction");
-        let tar_gz =
-            fs::File::open(&temp_file).map_err(|e| format!("Failed to open archive: {}", e))?;
+        let tar_gz = fs::File::open(&temp_file)
+            .map_err(|e| format!("Failed to open archive: {}", e))?;
         let tar = flate2::read::GzDecoder::new(tar_gz);
         let mut archive = tar::Archive::new(tar);
 
@@ -230,20 +234,42 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
         archive
             .unpack(&temp_dir)
             .map_err(|e| format!("Failed to extract archive: {}", e))?;
+
     }
 
-    // Look for IPFS binary - check both direct path and in kubo subdirectory
-    println!("Looking for IPFS binary...");
+    // Look for IPFS binary
+    println!("Looking for IPFS binary in {:?}", temp_dir);
     let possible_paths = vec![
+        #[cfg(target_os = "windows")]
+        temp_dir.join("ipfs.exe"),
+        #[cfg(target_os = "windows")]
+        temp_dir.join("kubo").join("ipfs.exe"),
+        #[cfg(target_os = "windows")]
+        temp_dir.join("go-ipfs").join("ipfs.exe"),
+        #[cfg(target_os = "windows")]
+        temp_dir.join(format!("kubo_v{}", KUBO_VERSION)).join("ipfs.exe"),
+        #[cfg(target_os = "windows")]
+        temp_dir.join("ipfs").join("ipfs.exe"), // Additional path
+        #[cfg(not(target_os = "windows"))]
         temp_dir.join("ipfs"),
+        #[cfg(not(target_os = "windows"))]
         temp_dir.join("kubo").join("ipfs"),
+        #[cfg(not(target_os = "windows"))]
         temp_dir.join("go-ipfs").join("ipfs"),
     ];
 
-    let source_binary = possible_paths
+    let source_binary = possible_paths.clone()
         .into_iter()
-        .find(|path| path.exists())
-        .ok_or_else(|| format!("IPFS binary not found after extraction in {:?}", temp_dir))?;
+        .find(|path| {
+            path.exists()
+        })
+        .ok_or_else(|| {
+            format!(
+                "IPFS binary not found after extraction in {:?}. Checked paths: {:?}",
+                temp_dir, possible_paths.clone()
+            )
+        })?;
+
 
     // Remove existing binary if it exists
     if binary_path.exists() {
