@@ -141,10 +141,7 @@ export async function checkForUpdates(notifyOnce = false) {
     if (downloadToastId) {
       toast.dismiss(downloadToastId);
     }
-    toast.error("Update failed", {
-      description: "An error occurred while checking for updates",
-      duration: 5000,
-    });
+
     console.log(err);
   }
 }
