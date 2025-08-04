@@ -577,6 +577,8 @@ pub fn start_user_sync(account_id: &str) {
                                                                             if let Some(filename) = file.get("filename").and_then(|v| v.as_str()) {
                                                                                 if filename.ends_with(".ec_metadata") {
                                                                                     if let Some(cid) = file.get("cid").and_then(|v| v.as_str()) {
+                                                                                        let cid_vec = cid.to_string().as_bytes().to_vec();
+                                                                                        file_hash = hex::encode(cid_vec);
                                                                                         // Download the .ec_metadata content
                                                                                         match crate::utils::ipfs::download_content_from_ipfs(&ipfs_api_url, cid).await {
                                                                                             Ok(metadata_bytes) => {

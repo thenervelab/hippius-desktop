@@ -250,7 +250,7 @@ pub async fn download_and_decrypt_file(
         .map_err(|e| format!("Failed to download metadata: {}", e))?;
     let metadata: Metadata = serde_json::from_slice(&metadata_bytes)
         .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
-
+    println!("[download_and_decrypt_file] Downloaded metadata");
     reconstruct_and_decrypt_file(metadata, output_file, final_encryption_key, api_url).await
 }
 
@@ -485,7 +485,6 @@ async fn process_single_file_for_folder_upload(
         encrypted_data, k, m, chunk_size, &api_url
     ).await?;
 
-    let relative_path = file_path.strip_prefix(&base_folder_path).unwrap().to_str().unwrap().to_string();
     let file_name = file_path.file_name().unwrap().to_str().unwrap().to_string();
     
     let file_metadata = Metadata {
@@ -512,7 +511,7 @@ async fn process_single_file_for_folder_upload(
 
     let result = FileProcessingResult {
         file_entry: FileEntry {
-            file_name: format!("{}{}", relative_path, ".ec_metadata"),
+            file_name: format!("{}{}", file_name, ".ec_metadata"),
             file_size: file_data.len(),
             cid: metadata_cid,
         },
@@ -1446,10 +1445,6 @@ pub async fn public_upload_folder(
         let _ = collect_files_recursively(&folder_path_cloned, &mut files).map_err(|e| e.to_string())?;
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
         for file_path in files {
-            let _relative_path = file_path.strip_prefix(&folder_path_cloned)
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .to_string();
             let file_name = file_path
                 .file_name()
                 .ok_or_else(|| "Invalid file path".to_string())?
@@ -2575,10 +2570,6 @@ pub async fn public_upload_folder_sync(
         let _ = collect_files_recursively(&folder_path_cloned, &mut files).map_err(|e| e.to_string())?;
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
         for file_path in files {
-            let relative_path = file_path.strip_prefix(&folder_path_cloned)
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .to_string();
             let file_name = file_path
                 .file_name()
                 .ok_or_else(|| "Invalid file path".to_string())?
@@ -2595,7 +2586,7 @@ pub async fn public_upload_folder_sync(
             let file_cid = upload_to_ipfs(&api_url_cloned, file_path.to_str().unwrap())
                 .map_err(|e| e.to_string())?;
             file_entries.push(FileEntry {
-                file_name: relative_path,
+                file_name: file_name,
                 file_size,
                 cid: file_cid.clone(),
             });

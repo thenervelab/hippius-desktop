@@ -71,7 +71,7 @@ pub async fn download_from_ipfs_async(api_url: &str, cid: &str) -> Result<Vec<u8
         .send()
         .await?
         .error_for_status()?;
-
+        println!("IPFS response status for CID {}: {}", cid, res.status());
     let bytes = res.bytes().await?.to_vec();
     Ok(bytes)
 }
