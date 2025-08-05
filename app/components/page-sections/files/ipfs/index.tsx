@@ -267,8 +267,16 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     async (path: string) => {
       try {
         if (isPrivateView) {
+          if (path === (await getPublicSyncPath())) {
+            toast.error("Private sync folder cannot be the same as public sync folder");
+            return;
+          }
           await setPrivateSyncPath(path);
         } else {
+          if (path === (await getPrivateSyncPath())) {
+            toast.error("Public sync folder cannot be the same as private sync folder");
+            return;
+          }
           await setPublicSyncPath(path);
         }
         toast.success(
@@ -282,8 +290,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       } catch (error) {
         console.error("Failed to set sync folder:", error);
         toast.error(
-          `Failed to set sync folder: ${
-            error instanceof Error ? error.message : "Unknown error"
+          `Failed to set sync folder: ${error instanceof Error ? error.message : "Unknown error"
           }`
         );
       }

@@ -45,6 +45,14 @@ const UpdateSyncFolder: React.FC = () => {
   const handlePrivateFolderSelected = async (p: string) => {
     try {
       console.log("handlePrivateFolderSelected", p);
+      if (p === selectedPublicFolderPath) {
+        toast.error("Private sync folder cannot be the same as public sync folder");
+        return;
+      }
+      if (!p) {
+        toast.error("Please select a valid folder for private sync");
+        return;
+      }
       await setPrivateSyncPath(p);
       setSelectedPrivateFolderPath(p);
       setSelectedPrivateFolderName(p.split(/[\\/]/).pop() || "");
@@ -58,6 +66,14 @@ const UpdateSyncFolder: React.FC = () => {
   const handlePublicFolderSelected = async (p: string) => {
     try {
       console.log("handlePublicFolderSelected", p);
+      if (p === selectedPrivateFolderPath) {
+        toast.error("Public sync folder cannot be the same as private sync folder");
+        return;
+      }
+      if (!p) {
+        toast.error("Please select a valid folder for public sync");
+        return;
+      }
       await setPublicSyncPath(p);
       setSelectedPublicFolderPath(p);
       setSelectedPublicFolderName(p.split(/[\\/]/).pop() || "");
