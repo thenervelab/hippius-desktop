@@ -13,7 +13,7 @@ import {
   updateInfoAtom,
   confirmUpdate,
   closeUpdateDialog,
-} from "@/lib/stores/updateStore";
+} from "@/app/components/updater/updateStore";
 import RevealTextLine from "../ui/reveal-text-line";
 import { InView } from "react-intersection-observer";
 

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Copy, Check, Loader2, Send } from "lucide-react";
+import { Copy, Check, Loader2 } from "lucide-react";
 import { CloseCircle, Refresh, TaoLogo } from "@/components/ui/icons";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
@@ -92,7 +92,7 @@ const ReferralLinkCard: React.FC = () => {
                 <TaoLogo className="absolute text-white rounded size-6 p-1 bg-primary-50" />
               </AbstractIconWrapper>
               <div className="text-primary-40 text-xs flex gap-x-1 font-medium items-center">
-                <Send className="size-[18px]" />
+                {/* <Send className="max-[1280px]:block hidden  size-[18px]" /> */}
                 REFERRAL LINK
               </div>
             </div>

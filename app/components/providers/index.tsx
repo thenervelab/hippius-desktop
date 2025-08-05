@@ -8,7 +8,7 @@ import { useHydrateAtoms } from "jotai/react/utils";
 import { queryClientAtom } from "jotai-tanstack-query";
 
 import { PolkadotApiProvider } from "@/lib/polkadot-api-context";
-import UpdateDownloadDialog from "@/components/sidebar/UpdateDownloadDialog";
+import UpdateDownloadDialog from "@/app/components/updater/UpdateDownloadDialog";
 
 const queryClient = new QueryClient();
 

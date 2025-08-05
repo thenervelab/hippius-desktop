@@ -5,12 +5,12 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import {
   addNotification,
   hippusVersionNotificationExists,
-} from "../../helpers/notificationsDb";
+} from "../../lib/helpers/notificationsDb";
 import { toast } from "sonner";
 import {
   openUpdateDialog,
   getUpdateConfirmation,
-} from "@/lib/stores/updateStore";
+} from "@/app/components/updater/updateStore";
 
 // Utility function to format bytes to MB
 function formatBytes(bytes: number): string {
@@ -141,10 +141,7 @@ export async function checkForUpdates(notifyOnce = false) {
     if (downloadToastId) {
       toast.dismiss(downloadToastId);
     }
-    toast.error("Update failed", {
-      description: "An error occurred while checking for updates",
-      duration: 5000,
-    });
+
     console.log(err);
   }
 }

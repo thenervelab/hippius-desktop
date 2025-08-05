@@ -45,6 +45,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
         let cancel_token = Arc::new(AtomicBool::new(false));
 
         let sync_path_result = get_public_sync_path().await;
+        println!("[PublicFolderSync] Public sync path result: {:?}", sync_path_result);
         if let Ok(sync_path) = sync_path_result {
             println!("[PublicFolderSync] Public sync path found: {}, starting sync process", sync_path);
             start_sync_process(

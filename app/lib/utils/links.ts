@@ -2,11 +2,11 @@
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AppRouterInstance } from "next/dist/shared/lib/app-router-context.shared-runtime";
-import { checkForUpdates } from "./updater/checkForUpdates";
+import { checkForUpdates } from "../../components/updater/checkForUpdates";
 
 // Centralized object containing all application links
 export const APP_LINKS: any = {
-  BILLING: "https://console.hippius.com/dashboard/billing"
+  BILLING: "https://console.hippius.com/dashboard/billing",
   // Add more links as needed
 };
 

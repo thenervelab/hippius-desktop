@@ -250,7 +250,7 @@ pub async fn download_and_decrypt_file(
         .map_err(|e| format!("Failed to download metadata: {}", e))?;
     let metadata: Metadata = serde_json::from_slice(&metadata_bytes)
         .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
-
+    println!("[download_and_decrypt_file] Downloaded metadata");
     reconstruct_and_decrypt_file(metadata, output_file, final_encryption_key, api_url).await
 }
 
@@ -485,7 +485,6 @@ async fn process_single_file_for_folder_upload(
         encrypted_data, k, m, chunk_size, &api_url
     ).await?;
 
-    let relative_path = file_path.strip_prefix(&base_folder_path).unwrap().to_str().unwrap().to_string();
     let file_name = file_path.file_name().unwrap().to_str().unwrap().to_string();
     
     let file_metadata = Metadata {
@@ -512,7 +511,7 @@ async fn process_single_file_for_folder_upload(
 
     let result = FileProcessingResult {
         file_entry: FileEntry {
-            file_name: format!("{}{}", relative_path, ".ec_metadata"),
+            file_name: format!("{}{}", file_name, ".ec_metadata"),
             file_size: file_data.len(),
             cid: metadata_cid,
         },
@@ -1446,10 +1445,6 @@ pub async fn public_upload_folder(
         let _ = collect_files_recursively(&folder_path_cloned, &mut files).map_err(|e| e.to_string())?;
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
         for file_path in files {
-            let _relative_path = file_path.strip_prefix(&folder_path_cloned)
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .to_string();
             let file_name = file_path
                 .file_name()
                 .ok_or_else(|| "Invalid file path".to_string())?
@@ -1793,71 +1788,6 @@ pub async fn encrypt_and_upload_file_sync(
         .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?
         .to_string();
 
-    // Check if this file is already recorded in the sync database.
-    if let Some(pool) = DB_POOL.get() {
-        let is_synced: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private' LIMIT 1"
-        )
-        .bind(&account_id)
-        .bind(&file_name)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("DB error while checking sync status: {e}"))?;
-
-        if is_synced.is_some() {
-            let message = format!("File '{}' is already in sync DB, skipping upload.", file_name);
-            println!("[encrypt_and_upload_file_sync] {}", message);
-            return Err(message);
-        }
-
-        // Insert record into sync_folder_files
-        sqlx::query(
-            "INSERT INTO sync_folder_files (owner, cid, file_name, type, is_folder, block_number) VALUES (?, ?, ?, 'private', ?, 0)"
-        )
-        .bind(&account_id)
-        .bind("pending")
-        .bind(&file_name)
-        .bind(false)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            eprintln!("[encrypt_and_upload_file_sync] Failed to insert record for '{}': {}", file_name, e);
-            format!("DB error while inserting record: {}", e)
-        })?;
-        println!("[encrypt_and_upload_file_sync] Inserted record for '{}'", file_name);
-    }
-
-    if let Some(pool) = DB_POOL.get() {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
-        )
-        .bind(&account_id)
-        .bind(&file_name)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            // Remove record on error
-            let _ = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
-            )
-            .bind(&account_id)
-            .bind(&file_name)
-            .execute(pool);
-            format!("DB error: {e}")
-        })?;
-        if row.is_some() {
-            // Remove record on error
-            sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
-            )
-            .bind(&account_id)
-            .bind(&file_name)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to delete record for '{}': {}", file_name, e))?;
-            return Err(format!("File '{}' already exists for this user.", file_name));
-        }
-    }
 
     let (file_data, original_file_hash, encrypted_size, file_id, shards_to_upload) = tokio::task::spawn_blocking({
         let file_path_clone = file_path.clone();
@@ -2094,15 +2024,6 @@ pub async fn upload_file_public_sync(
             format!("DB error: {e}")
         })?;
         if row.is_some() {
-            // Remove record on error
-            sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
-            )
-            .bind(&account_id)
-            .bind(&file_name)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to delete record for '{}': {}", file_name, e))?;
             return Err(format!("File '{}' already exists for this user.", file_name));
         }
     }
@@ -2189,71 +2110,6 @@ pub async fn encrypt_and_upload_folder_sync(
         return Err("Invalid folder path, cannot extract folder name".to_string());
     }
 
-    // Check if this folder is already recorded in the sync database.
-    if let Some(pool) = DB_POOL.get() {
-        let is_synced: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private' LIMIT 1"
-        )
-        .bind(&account_id)
-        .bind(&folder_name)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("DB error while checking sync status: {e}"))?;
-
-        if is_synced.is_some() {
-            let message = format!("Folder '{}' is already in sync DB, skipping upload.", folder_name);
-            println!("[encrypt_and_upload_folder_sync] {}", message);
-            return Err(message);
-        }
-
-        // Insert record into sync_folder_files
-        sqlx::query(
-            "INSERT INTO sync_folder_files (owner, cid, file_name, type, is_folder, block_number) VALUES (?, ?, ?, 'private', ?, 0)"
-        )
-        .bind(&account_id)
-        .bind("pending")
-        .bind(&folder_name)
-        .bind(true)
-        .execute(pool)
-        .await
-        .map_err(|e| {
-            eprintln!("[encrypt_and_upload_folder_sync] Failed to insert record for '{}': {}", folder_name, e);
-            format!("DB error while inserting record: {}", e)
-        })?;
-        println!("[encrypt_and_upload_folder_sync] Inserted record for '{}'", folder_name);
-    }
-
-    if let Some(pool) = DB_POOL.get() {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
-        )
-        .bind(&account_id)
-        .bind(&folder_name)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| {
-            // Remove record on error
-            let _ = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
-            )
-            .bind(&account_id)
-            .bind(&folder_name)
-            .execute(pool);
-            format!("DB error: {e}")
-        })?;
-        if row.is_some() {
-            // Remove record on error
-            sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
-            )
-            .bind(&account_id)
-            .bind(&folder_name)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to delete record for '{}': {}", folder_name, e))?;
-            return Err(format!("Folder '{}' already exists for this user.", folder_name));
-        }
-    }
 
     let mut files_to_process = Vec::new();
     collect_files_recursively(folder_path, &mut files_to_process).map_err(|e| {
@@ -2552,16 +2408,7 @@ pub async fn public_upload_folder_sync(
             format!("DB error: {e}")
         })?;
         if row.is_some() {
-            // Remove record on error
-            sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
-            )
-            .bind(&account_id)
-            .bind(&folder_name)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("Failed to delete record for '{}': {}", folder_name, e))?;
-            return Err(format!("Folder '{}' already exists for this user.", folder_name));
+            return Err(format!("File '{}' already exists for this user.",folder_name));
         }
     }
 
@@ -2575,10 +2422,6 @@ pub async fn public_upload_folder_sync(
         let _ = collect_files_recursively(&folder_path_cloned, &mut files).map_err(|e| e.to_string())?;
         let temp_dir = tempdir().map_err(|e| e.to_string())?;
         for file_path in files {
-            let relative_path = file_path.strip_prefix(&folder_path_cloned)
-                .map_err(|e| e.to_string())?
-                .to_string_lossy()
-                .to_string();
             let file_name = file_path
                 .file_name()
                 .ok_or_else(|| "Invalid file path".to_string())?
@@ -2595,7 +2438,7 @@ pub async fn public_upload_folder_sync(
             let file_cid = upload_to_ipfs(&api_url_cloned, file_path.to_str().unwrap())
                 .map_err(|e| e.to_string())?;
             file_entries.push(FileEntry {
-                file_name: relative_path,
+                file_name: file_name,
                 file_size,
                 cid: file_cid.clone(),
             });
@@ -2693,11 +2536,21 @@ pub async fn list_folder_contents(
         .filter(|entry| !entry.file_name.ends_with(".ec"))
         .map(|file_entry| {
             let mut file_detail = if let Some(row) = &folder_record {
+                let mut source_path = row.get::<Option<String>, _>("source").unwrap_or_default();
+                println!("source_path: {}", source_path);
+                if source_path != "Hippius" {
+                    let sanitized_file_name = sanitize_name(&file_entry.file_name);
+                    let full_path = format!("{}/{}",source_path,sanitized_file_name);
+                    println!("trying to set full path {:?}", full_path);
+                    if Path::new(&full_path).exists() {
+                        source_path = full_path;
+                    }
+                }
                 FileDetail {
                     file_name: file_entry.file_name.clone(),
-                    cid: file_entry.cid,
-                    source: row.get::<Option<String>, _>("source").unwrap_or_default(),
-                    file_hash: String::new(),
+                    cid: file_entry.cid.clone(),
+                    source: source_path,
+                    file_hash: hex::encode(file_entry.cid),
                     miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
                     file_size: file_entry.file_size.unwrap_or(0),
                     created_at: row.get::<Option<i64>, _>("created_at").unwrap_or(0).to_string(),
@@ -2706,9 +2559,9 @@ pub async fn list_folder_contents(
             } else {
                 FileDetail {
                     file_name: file_entry.file_name.clone(),
-                    cid: file_entry.cid,
-                    source: String::new(),
-                    file_hash: String::new(),
+                    cid: file_entry.cid.clone(),
+                    source: "Hippius".to_string(),
+                    file_hash: hex::encode(file_entry.cid),
                     miner_ids: String::new(),
                     file_size: file_entry.file_size.unwrap_or(0),
                     created_at: 0.to_string(),

@@ -45,8 +45,9 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
         let cancel_token = Arc::new(AtomicBool::new(false));
 
         let sync_path_result = get_private_sync_path().await;
+        println!("[PrivateFolderSync] private sync path result: {:?}", sync_path_result);
         if let Ok(sync_path) = sync_path_result {
-            println!("[PrivateFolderSync] Private sync path found: {}, starting sync process", sync_path);
+            println!("[PrivateFolderSync] private sync path found: {}, starting sync process", sync_path);
             start_sync_process(
                 account_id.clone(),
                 seed_phrase.clone(),
@@ -89,7 +90,7 @@ pub async fn start_folder_sync(account_id: String, seed_phrase: String) {
                     recently_uploaded.clear();
                 }
                 {
-                    let mut status = PRIVATE_SYNC_STATUS.lock().unwrap(); 
+                    let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
                     *status = SyncStatus::default();
                 }
             } else {
@@ -154,10 +155,10 @@ async fn start_sync_process(
                             .file_name()
                             .and_then(|s| s.to_str())
                             .unwrap_or("");
-                        let is_synced: Option<(String,)> = match sqlx::query_as(
+                        let is_synced: Option<(String,)> = match sqlx::query_as::<_, (String,)>(
                             "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
                         )
-                        .bind(file_name)
+                        .bind(&file_name)
                         .bind(&job.account_id)
                         .fetch_optional(pool)
                         .await
@@ -168,6 +169,8 @@ async fn start_sync_process(
                                 None
                             }
                         };
+                            
+                         
                         if is_synced.is_some() {
                             println!("[PrivateUploadWorker] Path '{}' already exists in sync DB, marking as successful.", file_name);
                             success = true;
@@ -180,14 +183,14 @@ async fn start_sync_process(
                             job.account_id.clone(),
                             job.file_path.clone(),
                             job.seed_phrase.clone(),
-                            None,
+                            None
                         ).await
                     } else {
                         encrypt_and_upload_file_sync(
                             job.account_id.clone(),
                             job.file_path.clone(),
                             job.seed_phrase.clone(),
-                            None,
+                            None
                         ).await
                     };
 
@@ -308,7 +311,7 @@ async fn start_sync_process(
             }
 
             let mut new_paths_to_upload = Vec::new();
-            let mut unique_paths = HashSet::new(); // Deduplicate paths
+            let mut unique_paths = HashSet::new();
             for path in folder_paths.into_iter().chain(file_paths.into_iter()) {
                 let file_name = match path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()) {
                     Some(name) => name,
@@ -324,14 +327,14 @@ async fn start_sync_process(
                     continue;
                 }
 
-                println!("[PrivateStartup] Inserting record for '{}', owner: {}, type: {}", file_name, startup_account_id, "private");
-
                 // Skip if already in sync DB
+                println!("just checking {:?} for account {}", file_name, startup_account_id);
                 let is_synced: Option<(String,)> = match sqlx::query_as(
-                    "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
+                    "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?"
                 )
                 .bind(&file_name)
                 .bind(&startup_account_id)
+                .bind("private")
                 .fetch_optional(pool)
                 .await
                 {
@@ -341,7 +344,8 @@ async fn start_sync_process(
                         None
                     }
                 };
-
+                
+               
                 if is_synced.is_some() {
                     println!("[PrivateStartup] Path '{}' is already in sync DB, marking as processed.", file_name);
                     let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
@@ -415,7 +419,8 @@ async fn start_sync_process(
                 println!("[PrivateStartup] No new paths to upload, sync complete.");
             }
         });
-    }else {
+    }
+    else {
         // Handle sync path change: clean up sync_folder_files and upload new files/folders
         let sync_account_id = account_id.clone();
         let sync_seed_phrase = seed_phrase.clone();
@@ -469,18 +474,21 @@ async fn start_sync_process(
                     }
                 };
 
-                // Check if path is already in sync_folder_files (should be empty due to prior deletion, but check for safety)
                 let is_synced: Option<(String,)> = match sqlx::query_as(
-                    "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
+                    "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?"
                 )
                 .bind(&file_name)
                 .bind(&sync_account_id)
+                .bind("private")
                 .fetch_optional(pool)
                 .await
                 {
                     Ok(result) => result,
                     Err(e) => {
-                        eprintln!("[PrivateSyncPathChange] DB error while checking sync status for '{}': {}", file_name, e);
+                        eprintln!(
+                            "[PrivateSyncPathChange] DB error while checking sync status for '{}': {}",
+                            file_name, e
+                        );
                         None
                     }
                 };
@@ -517,7 +525,6 @@ async fn start_sync_process(
             }
         });
     }
-
     spawn_watcher_thread(account_id, seed_phrase, PathBuf::from(sync_path), cancel_token, path_change_tx);
 }
 
@@ -631,25 +638,25 @@ fn collect_paths_recursively(dir: &Path, paths: &mut Vec<PathBuf>) {
 
 async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_path: &Path) {
     let filtered_paths = event.paths.into_iter()
-        .filter(|path| {
-            // First filter out temp files
-            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if file_name.starts_with('.') || file_name.contains("goutputstream") {
-                    // Mark filtered files as processed
-                    let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
-                    status.processed_files += 1;
-                    if status.processed_files >= status.total_files && status.total_files > 0 {
-                        status.in_progress = false;
-                        println!("[PrivateFolderSync] Filtered path marked as processed: {}", path.display());
-                    }
-                    return false;
+    .filter(|path| {
+        // First filter out temp files
+        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+            if file_name.starts_with('.') || file_name.contains("goutputstream") {
+                // Mark filtered files as processed
+                let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
+                status.processed_files += 1;
+                if status.processed_files >= status.total_files && status.total_files > 0 {
+                    status.in_progress = false;
+                    println!("[PrivateFolderSync] Filtered path marked as processed: {}", path.display());
                 }
+                return false;
             }
-            
-            // Then check if it's a direct child of the sync directory
-            path.parent().map(|p| p == sync_path).unwrap_or(false)
-        })
-        .collect::<Vec<_>>();
+        }
+        
+        // Then check if it's a direct child of the sync directory
+        path.parent().map(|p| p == sync_path).unwrap_or(false)
+    })
+    .collect::<Vec<_>>();
 
     if filtered_paths.is_empty() {
         println!("[PrivateWatcher] Skipping event with only temporary or invalid paths.");
@@ -674,18 +681,18 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         }
                     };
 
-                    // Check if path is already in sync_folder_files
                     let is_synced: Option<(String,)> = match sqlx::query_as(
-                        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
+                        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?"
                     )
                     .bind(&file_name)
-                    .bind(account_id)
+                    .bind(&account_id)
+                    .bind("private")
                     .fetch_optional(pool)
                     .await
                     {
                         Ok(result) => result,
                         Err(e) => {
-                            eprintln!("[PrivateWatcher][Create] DB error while checking sync status for '{}': {}", file_name, e);
+                            eprintln!("[PublicWatcher][Create] DB error while checking sync status for '{}': {}", file_name, e);
                             None
                         }
                     };
@@ -785,7 +792,7 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         if !paths.is_empty() {
                             {
                                 let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
-                                status.total_files += paths.len();
+                                status.total_files += paths.len(); 
                                 // status.synced_files = 0;
                                 status.in_progress = true;
                             }
@@ -862,11 +869,13 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
 
                 // Check if path is already in sync_folder_files
                 if let Some(pool) = crate::DB_POOL.get() {
+
                     let is_synced: Option<(String,)> = match sqlx::query_as(
-                        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = 'private'"
+                        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?"
                     )
                     .bind(&file_name)
-                    .bind(account_id)
+                    .bind(&account_id)
+                    .bind("private")
                     .fetch_optional(pool)
                     .await
                     {
@@ -876,7 +885,7 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                             None
                         }
                     };
-
+                    
                     if is_synced.is_some() {
                         // Path exists in sync DB, delete old records before re-uploading
                         println!("[PrivateWatcher][Modify] Path '{}' exists in sync DB, cleaning up before re-sync.", file_name);
@@ -957,7 +966,7 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         if !final_paths_to_upload.is_empty() {
                             {
                                 let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
-                                status.total_files += final_paths_to_upload.len(); 
+                                status.total_files += final_paths_to_upload.len();
                                 // status.synced_files = 0;
                                 status.in_progress = true;
                             }

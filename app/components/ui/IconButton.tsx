@@ -1,9 +1,10 @@
 import React from "react";
 import { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils"; // Add this import
+import { IconComponent } from "@/app/lib/types";
 
 interface IconButtonProps {
-  icon?: LucideIcon;
+  icon?: LucideIcon | IconComponent;
   text: string;
   onClick: () => void;
   innerPadding?: string;

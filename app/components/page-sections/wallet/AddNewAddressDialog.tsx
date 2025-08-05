@@ -17,7 +17,7 @@ interface AddNewAddressDialogProps {
 const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
   open,
   onClose,
-  onAddSuccess
+  onAddSuccess,
 }) => {
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");

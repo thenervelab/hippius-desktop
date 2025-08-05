@@ -13,6 +13,7 @@ import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
 import EncryptionKey from "./encryption-key";
+import CustomizeRPC from "./CustomizeRPC";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -45,6 +46,10 @@ const SettingsDialogContent: React.FC = () => {
     {
       tabName: "Notifications",
       icon: <Icons.Notification className="size-4" />
+    },
+    {
+      tabName: "Customize RPC",
+      icon: <Icons.Box className="size-4" />
     },
     {
       tabName: "Backup App Data",
@@ -145,6 +150,16 @@ const SettingsDialogContent: React.FC = () => {
                 className="delay-300 w-full flex"
               >
                 <EncryptionKey />
+              </RevealTextLine>
+            )}
+
+            {activeTab === "Customize RPC" && (
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 w-full flex"
+              >
+                <CustomizeRPC />
               </RevealTextLine>
             )}
           </div>
