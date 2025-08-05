@@ -2684,11 +2684,18 @@ pub async fn list_folder_contents(
         .filter(|entry| !entry.file_name.ends_with(".ec"))
         .map(|file_entry| {
             let mut file_detail = if let Some(row) = &folder_record {
+                let mut source_path = row.get::<Option<String>, _>("source").unwrap_or_default();
+                if source_path != "Hippius" {
+                    let full_path = format!("{}/{}",source_path,file_entry.file_name.clone());
+                    if Path::new(&full_path).exists() {
+                        source_path = full_path;
+                    }
+                }
                 FileDetail {
                     file_name: file_entry.file_name.clone(),
-                    cid: file_entry.cid,
-                    source: row.get::<Option<String>, _>("source").unwrap_or_default(),
-                    file_hash: String::new(),
+                    cid: file_entry.cid.clone(),
+                    source: source_path,
+                    file_hash: hex::encode(file_entry.cid),
                     miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
                     file_size: file_entry.file_size.unwrap_or(0),
                     created_at: row.get::<Option<i64>, _>("created_at").unwrap_or(0).to_string(),
@@ -2697,9 +2704,9 @@ pub async fn list_folder_contents(
             } else {
                 FileDetail {
                     file_name: file_entry.file_name.clone(),
-                    cid: file_entry.cid,
-                    source: String::new(),
-                    file_hash: String::new(),
+                    cid: file_entry.cid.clone(),
+                    source: "Hippius".to_string(),
+                    file_hash: hex::encode(file_entry.cid),
                     miner_ids: String::new(),
                     file_size: file_entry.file_size.unwrap_or(0),
                     created_at: 0.to_string(),

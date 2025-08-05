@@ -278,20 +278,22 @@ pub fn start_user_sync(account_id: &str) {
 
                                                         let mut actual_file_size = file_size_in_bytes;
 
-                                                        let base_file_name = if file_name.ends_with(".ec_metadata") {
-                                                            file_name.trim_end_matches(".ec_metadata").to_string()
-                                                        } else if file_name.ends_with(".folder.ec_metadata") {
-                                                            file_name.trim_end_matches(".folder.ec_metadata").to_string()
-                                                        } else if file_name.ends_with("-folder.ec_metadata") {
-                                                            file_name.trim_end_matches("-folder.ec_metadata").to_string()
-                                                        } else if file_name.ends_with(".folder") {
-                                                            file_name.trim_end_matches(".folder").to_string()
-                                                        } else if file_name.ends_with("-folder") {
-                                                            file_name.trim_end_matches("-folder").to_string()
-                                                        } else {
-                                                            file_name.clone()
+                                                        let base_file_name = {
+                                                            let mut name = file_name.clone();
+                                                            if name.ends_with(".folder.ec_metadata") {
+                                                                name = name.trim_end_matches(".folder.ec_metadata").to_string();
+                                                            } else if name.ends_with("-folder.ec_metadata") {
+                                                                name = name.trim_end_matches("-folder.ec_metadata").to_string();
+                                                            } else if name.ends_with(".ec_metadata") {
+                                                                name = name.trim_end_matches(".ec_metadata").to_string();
+                                                            } else if name.ends_with(".folder") {
+                                                                name = name.trim_end_matches(".folder").to_string();
+                                                            } else if name.ends_with("-folder") {
+                                                                name = name.trim_end_matches("-folder").to_string();
+                                                            }
+                                                            name
                                                         };
-
+                                    
                                                         if file_name.ends_with(".ec_metadata") && !file_name.ends_with(".folder.ec_metadata") && !file_name.ends_with("-folder.ec_metadata") {
                                                             let decoded_hash = decode_file_hash(&file_hash.as_bytes())
                                                                 .unwrap_or_else(|_| "Invalid file hash".to_string());
@@ -486,18 +488,20 @@ pub fn start_user_sync(account_id: &str) {
                                     "public".to_string()
                                 };
 
-                                let base_file_name = if file_name.ends_with(".ec_metadata") {
-                                    file_name.trim_end_matches(".ec_metadata").to_string()
-                                } else if file_name.ends_with(".folder.ec_metadata") {
-                                    file_name.trim_end_matches(".folder.ec_metadata").to_string()
-                                } else if file_name.ends_with("-folder.ec_metadata") {
-                                    file_name.trim_end_matches("-folder.ec_metadata").to_string()
-                                } else if file_name.ends_with(".folder") {
-                                    file_name.trim_end_matches(".folder").to_string()
-                                } else if file_name.ends_with("-folder") {
-                                    file_name.trim_end_matches("-folder").to_string()
-                                } else {
-                                    file_name.clone()
+                                let base_file_name = {
+                                    let mut name = file_name.clone();
+                                    if name.ends_with(".folder.ec_metadata") {
+                                        name = name.trim_end_matches(".folder.ec_metadata").to_string();
+                                    } else if name.ends_with("-folder.ec_metadata") {
+                                        name = name.trim_end_matches("-folder.ec_metadata").to_string();
+                                    } else if name.ends_with(".ec_metadata") {
+                                        name = name.trim_end_matches(".ec_metadata").to_string();
+                                    } else if name.ends_with(".folder") {
+                                        name = name.trim_end_matches(".folder").to_string();
+                                    } else if name.ends_with("-folder") {
+                                        name = name.trim_end_matches("-folder").to_string();
+                                    }
+                                    name
                                 };
 
                                 let ipfs_api_url = "http://127.00.1:5001";
@@ -838,21 +842,23 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                     let is_folder = row.get::<bool, _>("is_folder");
 
                     // Use the full file_name for both files and folders, adjusting for folder suffixes if needed
-                    let base_name = if file_name.ends_with(".ec_metadata") {
-                        file_name.trim_end_matches(".ec_metadata").to_string()
-                    } else if file_name.ends_with(".folder.ec_metadata") {
-                        file_name.trim_end_matches(".folder.ec_metadata").to_string()
-                    } else if file_name.ends_with("-folder.ec_metadata") {
-                        file_name.trim_end_matches("-folder.ec_metadata").to_string()
-                    } else if file_name.ends_with(".folder") {
-                        file_name.trim_end_matches(".folder").to_string()
-                    } else if file_name.ends_with("-folder") {
-                        file_name.trim_end_matches("-folder").to_string()
-                    } else {
-                        file_name.clone()
+                    let base_name = {
+                        let mut name = file_name.clone();
+                        if name.ends_with(".folder.ec_metadata") {
+                            name = name.trim_end_matches(".folder.ec_metadata").to_string();
+                        } else if name.ends_with("-folder.ec_metadata") {
+                            name = name.trim_end_matches("-folder.ec_metadata").to_string();
+                        } else if name.ends_with(".ec_metadata") {
+                            name = name.trim_end_matches(".ec_metadata").to_string();
+                        } else if name.ends_with(".folder") {
+                            name = name.trim_end_matches(".folder").to_string();
+                        } else if name.ends_with("-folder") {
+                            name = name.trim_end_matches("-folder").to_string();
+                        }
+                        name
                     };
-
                     let mut source = "Hippius".to_string();
+
                     if type_ == "public" && public_sync_path.is_some() {
                         let full_path = if is_folder {
                             // For folders, use the base_name directly as the folder name
@@ -897,7 +903,6 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                         type_,
                     });
                 }
-                println!("[UserSync] Returning {} files for owner: {}", files.len(), owner);
                 Ok(files)
             }
             Err(e) => Err(format!("Database error: {}", e)),

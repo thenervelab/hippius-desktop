@@ -351,6 +351,7 @@ pub async fn copy_to_sync_and_add_to_db(
 
     // Remove from recently uploaded after 30 seconds
     let dest_path_str = dest_path.to_string_lossy().to_string();
+    let dest_path_str_clone = dest_path_str.clone();
     let files_to_remove = files_in_folder
         .iter()
         .map(|file_path| {
@@ -361,7 +362,7 @@ pub async fn copy_to_sync_and_add_to_db(
         })
         .collect::<Vec<String>>();
     tokio::spawn(async move {
-        sleep(Duration::from_secs(300)).await;
+        sleep(Duration::from_secs(3000)).await;
         let mut recently_uploaded = if is_public {
             PUBLIC_RECENTLY_UPLOADED.lock().unwrap()
         } else {
@@ -406,6 +407,10 @@ pub async fn copy_to_sync_and_add_to_db(
 
         if exists.is_none() {
             println!("inserted main_request_hash {:?}", request_cid);
+            let mut source = "Hippius".to_string();
+            if Path::new(&dest_path).exists() {
+                source = dest_path_str_clone;
+            }
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -420,7 +425,7 @@ pub async fn copy_to_sync_and_add_to_db(
             .bind(file_size_in_bytes)
             .bind(false)
             .bind(request_cid)  // main_req_hash
-            .bind("Hippius")   // source
+            .bind(source)   // source
             .bind(if is_public { "public" } else { "private" })  // type
             .bind(is_folder)
             .execute(pool)
@@ -761,12 +766,12 @@ pub async fn copy_to_sync_folder(
             PRIVATE_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
         };
         if is_folder {
-            recently_uploaded_folders.remove(&dest_path_str);
+            recently_uploaded_folders.remove(&dest_path_str.clone());
             for file_path_str in files_to_remove {
                 recently_uploaded.remove(&file_path_str);
             }
         } else {
-            recently_uploaded.remove(&dest_path_str);
+            recently_uploaded.remove(&dest_path_str.clone());
         }
     });
 
@@ -817,6 +822,10 @@ pub async fn copy_to_sync_folder(
             .execute(pool)
             .await;
         } else {
+            let mut source = "Hippius".to_string();
+            if Path::new(&target_folder).exists() {
+                source = target_folder.to_string_lossy().to_string();
+            }
             // Insert new record
             println!("Inserting new record for folder {} with request_cid: {}", folder_name, request_cid);
             let _ = sqlx::query(
@@ -833,7 +842,7 @@ pub async fn copy_to_sync_folder(
             .bind(file_size_in_bytes)
             .bind(false)
             .bind(request_cid)
-            .bind("Hippius")
+            .bind(source)
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
             .execute(pool)
@@ -1035,6 +1044,10 @@ pub async fn remove_from_sync_folder(
             .execute(pool)
             .await;
         } else {
+            let mut source = "Hippius".to_string();
+            if Path::new(&target_folder).exists() {
+                source =  target_folder.to_string_lossy().to_string()
+            }
             // Insert new record
             println!("Inserting new record for folder {} with request_cid: {}", folder_name, folder_manifest_cid);
             let _ = sqlx::query(
@@ -1051,7 +1064,7 @@ pub async fn remove_from_sync_folder(
             .bind(0)
             .bind(false)
             .bind(requested_cid)
-            .bind("Hippius")
+            .bind(source)
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
             .execute(pool)
