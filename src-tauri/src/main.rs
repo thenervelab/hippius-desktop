@@ -45,13 +45,21 @@ fn main() {
     let builder = Builder::default()
         .manage(Arc::new(AppState {
             sync: Mutex::new(SyncState::default()),
-        })) // Register AppState
-        .plugin(tauri_plugin_process::init())
+        }))
+        // Remove tauri_plugin_process unless you specifically need it
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            println!("Another instance attempted to start");
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             start_ipfs_daemon,
             stop_ipfs_daemon,

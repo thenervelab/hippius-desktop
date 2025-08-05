@@ -46,6 +46,16 @@ const LARGE_SLEEP: u64 = 15;
 
 #[tauri::command]
 pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
+    // Check if IPFS daemon is already running
+    if IPFS_HANDLE.get().is_some() {
+        let mutex = IPFS_HANDLE.get().unwrap();
+        let guard = mutex.lock().await;
+        if guard.is_some() {
+            println!("[IPFS] Daemon already running, skipping start");
+            return Ok(());
+        }
+    }
+
     sleep(Duration::from_secs(LARGE_SLEEP)).await;
     let app = emit_and_update_phase(app, AppSetupPhase::CheckingBinary).await;
     sleep(Duration::from_secs(SMALL_SLEEP)).await;
@@ -58,19 +68,25 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
     crate::utils::binary::ensure_ipfs_repo_initialized(&bin_path)
         .map_err(|e| format!("IPFS repo init failed: {e}"))?;
 
-    // Configure CORS before starting daemon
     let app = emit_and_update_phase(app, AppSetupPhase::ConfiguringCors).await;
     configure_ipfs_cors(&bin_path).await?;
     sleep(Duration::from_secs(SMALL_SLEEP)).await;
 
     let app = emit_and_update_phase(app, AppSetupPhase::StartingDaemon).await;
 
-    // Start the daemon process
-    let mut child = Command::new(&bin_path)
-        .arg("daemon")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+
+    let mut cmd = Command::new(&bin_path);
+    cmd.arg("daemon")
+       .stdout(Stdio::piped())  // Keep piped to capture output
+       .stderr(Stdio::piped());
+
+    // Windows-specific: Hide console window
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let mut child = cmd.spawn()
         .map_err(|e| format!("Spawn failed: {e}"))?;
 
     let stdout = child.stdout.take().unwrap();
