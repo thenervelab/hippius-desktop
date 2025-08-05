@@ -6,7 +6,7 @@ import { RECONNECT_INTERVAL, MAX_RETRIES } from "@/config/constants";
 import { useAtomValue, useSetAtom } from "jotai";
 import { polkadotApiAtom } from "../global-atoms/polkadotApiAtom";
 import { phaseAtom } from "@/components/splash-screen/atoms";
-import { getWssEndpoint } from "@/lib/helpers/nodeConfigDb";
+import { invoke } from "@tauri-apps/api/core";
 
 export const usePolkadotApi = () => {
   return useAtomValue(polkadotApiAtom);
@@ -29,7 +29,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const fetchEndpoint = async () => {
-      const endpoint = await getWssEndpoint();
+      const endpoint = await invoke<string>("get_wss_endpoint");
       setWssEndpoint(endpoint);
     };
 
