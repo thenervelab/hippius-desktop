@@ -408,9 +408,9 @@ pub async fn copy_to_sync_and_add_to_db(
         if exists.is_none() {
             println!("inserted main_request_hash {:?}", request_cid);
             let mut source = "Hippius".to_string();
-            if Path::new(&dest_path).exists() {
-                source = dest_path_str_clone;
-            }
+            println!("dest_path: {}", dest_path_str_clone);
+            let sanitize_name = sanitize_name(&dest_path_str_clone);
+            source = dest_path_str_clone;
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -822,10 +822,7 @@ pub async fn copy_to_sync_folder(
             .execute(pool)
             .await;
         } else {
-            let mut source = "Hippius".to_string();
-            if Path::new(&target_folder).exists() {
-                source = target_folder.to_string_lossy().to_string();
-            }
+            let source = target_folder.to_string_lossy().to_string();
             // Insert new record
             println!("Inserting new record for folder {} with request_cid: {}", folder_name, request_cid);
             let _ = sqlx::query(
@@ -1110,7 +1107,7 @@ pub async fn insert_file_if_not_exists_in_folder(
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
-
+    println!("exists: {:#?}, file_name: {}, file_type: {}, account_id: {}", exists, file_name, file_type, account_id);
     if exists.is_none() {
         let _ = sqlx::query(
             "INSERT INTO sync_folder_files (file_name, type, owner, entry_type, created_at) VALUES (?, ?, ?, ?, ?)"
