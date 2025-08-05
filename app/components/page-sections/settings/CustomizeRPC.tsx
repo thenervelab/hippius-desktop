@@ -13,7 +13,6 @@ import { InView } from "react-intersection-observer";
 import { AlertCircle, ShieldCheck } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { getWssEndpoint, updateWssEndpoint } from "@/lib/helpers/nodeConfigDb";
 import { invoke } from "@tauri-apps/api/core";
 import { Edit } from "../../ui/icons";
 import { cn } from "@/lib/utils";
@@ -60,7 +59,7 @@ const CustomizeRPC: React.FC = () => {
     // Load the current RPC endpoint from the database
     const loadEndpoint = async () => {
       try {
-        const endpoint = await getWssEndpoint();
+        const endpoint = await invoke<string>("get_wss_endpoint");
         setRpcEndpoint(endpoint);
         setCurrentEndpoint(endpoint);
       } catch (err) {
@@ -121,24 +120,16 @@ const CustomizeRPC: React.FC = () => {
   const confirmAndUpdate = async () => {
     setSaving(true);
     try {
-      // Update the endpoint in the database
-      const success = await updateWssEndpoint(rpcEndpoint);
+      await invoke("update_wss_endpoint_command", { endpoint: rpcEndpoint });
 
-      if (success) {
-        // Update in Tauri backend
-        await invoke("update_wss_endpoint_command", { endpoint: rpcEndpoint });
+      toast.success("RPC endpoint updated successfully", {
+        description: "Application will restart now to apply changes...",
+      });
 
-        toast.success("RPC endpoint updated successfully", {
-          description: "Application will restart now to apply changes...",
-        });
-
-        // Give the toast time to be seen
-        setTimeout(async () => {
-          await relaunch();
-        }, 2000);
-      } else {
-        throw new Error("Failed to update RPC endpoint in database");
-      }
+      // Give the toast time to be seen
+      setTimeout(async () => {
+        await relaunch();
+      }, 2000);
     } catch (error) {
       toast.error("Failed to update RPC endpoint");
       console.error("Update failed:", error);

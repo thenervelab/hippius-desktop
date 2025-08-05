@@ -22,7 +22,7 @@ const Referrals: React.FC = () => {
   return (
     <DashboardTitleWrapper mainText="Referrals">
       <div className="w-full mt-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 min-[1300px]:grid-cols-4 gap-4 mb-6">
           <ReferralLinkCard />
           <DetailsCard
             icon={UserSquare}

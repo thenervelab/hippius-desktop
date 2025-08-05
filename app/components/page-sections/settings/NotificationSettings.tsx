@@ -9,7 +9,7 @@ import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPrefe
 import { useSetAtom } from "jotai";
 import {
   refreshEnabledTypesAtom,
-  refreshNotificationsAtom
+  refreshNotificationsAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 
 const NotificationSettings: React.FC = () => {
@@ -32,7 +32,7 @@ const NotificationSettings: React.FC = () => {
   const handleCheckboxChange = (id: string) => {
     setCheckedItems((prev) => ({
       ...prev,
-      [id]: !prev[id]
+      [id]: !prev[id],
     }));
   };
 
@@ -74,7 +74,7 @@ const NotificationSettings: React.FC = () => {
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <SectionHeader
               Icon={Icons.Notification}
-              title="Email Notification Preferences"
+              title="Notification Preferences"
               subtitle="Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you."
               iconSize="small"
               info="Customize which events trigger notifications to stay informed about activity relevant to you. Your preferences can be updated anytime."
