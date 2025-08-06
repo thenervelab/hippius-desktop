@@ -1104,7 +1104,7 @@ async fn process_new_file_for_addition(
 
     let file_metadata = Metadata {
         original_file: OriginalFileInfo {
-            name: file_name.clone(),
+            name: format!("{}.ec_metadata", file_name.clone()),
             size: file_data.len(),
             hash: original_file_hash,
             extension: Path::new(&file_name).extension().and_then(|s| s.to_str()).unwrap_or_default().to_string(),
@@ -1118,7 +1118,7 @@ async fn process_new_file_for_addition(
     let metadata_cid = upload_bytes_to_ipfs(api_url, metadata_json.as_bytes().to_vec(), &metadata_filename).await?;
 
     let new_file_entry = FileEntry {
-        file_name,
+        file_name: format!("{}.ec_metadata", file_name.clone()),
         file_size: file_data.len(),
         cid: metadata_cid,
     };
