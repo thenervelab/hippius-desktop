@@ -7,6 +7,7 @@ import { checkForUpdates } from "../../components/updater/checkForUpdates";
 // Centralized object containing all application links
 export const APP_LINKS: any = {
   BILLING: "https://console.hippius.com/dashboard/billing",
+  CREDITS: "http://console.hippius.com/dashboard/billing?addCredits=true",
   // Add more links as needed
 };
 

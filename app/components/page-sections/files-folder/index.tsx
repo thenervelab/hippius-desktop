@@ -12,7 +12,6 @@ import {
 } from "@/lib/hooks/use-user-ipfs-files";
 import FilesContent from "@/components/page-sections/files/ipfs/FilesContent";
 import { toast } from "sonner";
-import Link from "next/link";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import { FileTypes } from "@/lib/types/fileTypes";
 import {
@@ -36,6 +35,7 @@ interface FileEntry {
     last_charged_at: string;
     miner_ids: string | string[];
     source: string;
+    is_folder: boolean
 }
 
 interface FolderViewProps {
@@ -107,29 +107,40 @@ export default function FolderView({
 
             const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
                 folderName: folderActualName,
-                folderMetadataCid: folderCid
+                folderMetadataCid: folderCid,
+                mainFolderName: null
             });
 
             console.log("Fetched folder contents:", fileEntries);
 
             const formattedFiles = fileEntries.map(
                 (entry): FormattedUserIpfsFile => {
-                    const isErasureCoded = entry.file_name.endsWith(".ec_metadata");
-                    const displayName = isErasureCoded
-                        ? entry.file_name.slice(0, -".ec_metadata".length)
-                        : entry.file_name;
+                    const isErasureCodedFolder = entry.file_name.endsWith(".folder.ec_metadata");
+                    const isErasureCoded = !isErasureCodedFolder && entry.file_name.endsWith(".ec_metadata");
+                    const isFolder = !isErasureCodedFolder && entry.file_name.endsWith(".folder");
+
+                    let displayName = entry.file_name;
+                    if (isErasureCodedFolder) {
+                        displayName = entry.file_name.slice(0, -".folder.ec_metadata".length);
+                    } else if (isErasureCoded) {
+                        displayName = entry.file_name.slice(0, -".ec_metadata".length);
+                    } else if (isFolder) {
+                        displayName = entry.file_name.slice(0, -".folder".length);
+                    }
                     return {
                         cid: entry.cid,
                         name: displayName || "Unnamed File",
+                        actualFileName: entry.file_name,
                         size: entry.file_size,
                         type: entry.file_name.split(".").pop() || "unknown",
                         fileHash: entry.file_hash,
                         isAssigned: true,
-                        source: entry.source,
+                        source: entry.source || "Unknown",
                         createdAt: Number(entry.created_at),
                         minerIds: parseMinerIds(entry.miner_ids),
                         lastChargedAt: Number(entry.last_charged_at),
                         isErasureCoded,
+                        isFolder: isFolder,
                         parentFolderId: folderCid,
                         parentFolderName: folderName
                     };
@@ -346,13 +357,13 @@ export default function FolderView({
         <div className="w-full relative mt-6">
             <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2">
-                    <Link
+                    <button
                         className="flex gap-2 font-semibold text-lg items-center"
-                        href="/files"
+                        onClick={() => window.history.back()}
                     >
                         <Icons.ArrowLeft className="size-5 text-grey-10" />
                         Back
-                    </Link>
+                    </button>
                 </div>
 
                 <div className="flex items-center gap-4">

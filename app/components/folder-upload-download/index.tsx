@@ -120,6 +120,7 @@ export default function IpfsFolderDemo() {
       const files = await invoke<FileEntry[]>("list_folder_contents", {
         folderMetadataCid: manifestCid,
         folderName,
+        mainFolderName: null
       });
 
       setFileList(files);

@@ -22,7 +22,17 @@ pub static PUBLIC_RECENTLY_UPLOADED_FOLDERS: Lazy<Arc<Mutex<std::collections::Ha
 
 // Helper to sanitize file/folder names for DB and filesystem operations
 pub fn sanitize_name(name: &str) -> String {
-    if name.ends_with(".ec_metadata") {
+    if name.ends_with(".s.folder.ec_metadata") {
+        name.trim_end_matches(".s.folder.ec_metadata").to_string()
+    } else if name.ends_with("-folder.ec_metadata") {
+        name.trim_end_matches("-folder.ec_metadata").to_string()
+    } else if name.ends_with(".folder.ec_metadata") {
+        name.trim_end_matches(".folder.ec_metadata").to_string()
+    } else if name.ends_with(".ff.ec_metadata") {
+        name.trim_end_matches(".ff.ec_metadata").to_string()
+    } else if name.ends_with(".s.folder") {
+        name.trim_end_matches(".s.folder").to_string()
+    } else if name.ends_with(".ec_metadata") {
         name.trim_end_matches(".ec_metadata").to_string()
     } else if name.ends_with(".ff") {
         name.trim_end_matches(".ff").to_string()
@@ -30,12 +40,6 @@ pub fn sanitize_name(name: &str) -> String {
         name.trim_end_matches(".ec").to_string()
     } else if name.ends_with("-folder") {
         name.trim_end_matches("-folder").to_string()
-    } else if name.ends_with("-folder.ec_metadata") {
-        name.trim_end_matches("-folder.ec_metadata").to_string()
-    } else if name.ends_with(".folder.ec_metadata") {
-        name.trim_end_matches(".folder.ec_metadata").to_string()
-    } else if name.ends_with(".ff.ec_metadata") {
-        name.trim_end_matches(".ff.ec_metadata").to_string()
     } else if name.ends_with(".folder") {
         name.trim_end_matches(".folder").to_string()
     } else {

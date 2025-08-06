@@ -1,69 +1,73 @@
 {
-  "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Hippius",
-  "version": "0.0.1",
-  "identifier": "hippius.com",
-  "build": {
-    "beforeDevCommand": "pnpm dev",
-    "devUrl": "http://localhost:3000",
-    "beforeBuildCommand": "pnpm build",
-    "frontendDist": "../out"
-  },
-  "plugins": {
-    "fs": {
-      "requireLiteralLeadingDot": false
+    "$schema": "https://schema.tauri.app/config/2",
+    "productName": "Hippius",
+    "version": "0.0.1",
+    "identifier": "hippius.com",
+    "build": {
+        "beforeDevCommand": "pnpm dev",
+        "devUrl": "http://localhost:3000",
+        "beforeBuildCommand": "pnpm build",
+        "frontendDist": "../out"
     },
-    "updater": {
-      "active": true,
-      "windows": {
-        "installMode": "passive"
-      },
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwNzAxNTdDOEIxRDUxNzIKUldSeVVSMkxmQlZ3ME5BQXVHbFdaVHNOdlBNMUp3M2dUYXM2SGZYL2w1a0tVUkZBM3NhSHpDTkEK",
-      "endpoints": ["https://hippius.com/downloads/latest.json"],
-      "dangerousInsecureTransportProtocol": true
-    }
-  },
-  "app": {
-    "windows": [
-      {
-        "dragDropEnabled": false,
-        "title": "Hippius",
-        "width": 1320,
-        "height": 800,
-        "visible": true,
-        "center": true,
-        "resizable": true
-      }
-    ],
+    "plugins": {
+        "fs": {
+            "requireLiteralLeadingDot": false
+        },
+        "updater": {
+            "active": true,
+            "windows": {
+                "installMode": "passive"
+            },
+            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwNzAxNTdDOEIxRDUxNzIKUldSeVVSMkxmQlZ3ME5BQXVHbFdaVHNOdlBNMUp3M2dUYXM2SGZYL2w1a0tVUkZBM3NhSHpDTkEK",
+            "endpoints": ["https://hippius.com/downloads/latest.json"],
+            "dangerousInsecureTransportProtocol": true
+        }
+    },
+    "app": {
+        "windows": [{
+            "dragDropEnabled": false,
+            "title": "Hippius",
+            "width": 1320,
+            "height": 1000,
+            "visible": true,
+            "center": true,
+            "resizable": true
+        }],
 
-    "security": {
-      "capabilities": ["default"],
-      "csp": null,
-      "assetProtocol": {
-        "enable": true,
-        "scope": ["$HOME/**", "%USERPROFILE%/**", "$RESOURCE/**"]
-      }
+        "security": {
+            "capabilities": ["default"],
+            "csp": null,
+            "assetProtocol": {
+                "enable": true,
+                "scope": ["$HOME/**", "%USERPROFILE%/**", "$RESOURCE/**"]
+            }
+        }
+    },
+    "bundle": {
+        "active": true,
+        "targets": "all",
+        "icon": [
+            "icons/32x32.png",
+            "icons/128x128.png",
+            "icons/128x128@2x.png",
+            "icons/icon.icns",
+            "icons/icon.ico"
+        ],
+        "createUpdaterArtifacts": true,
+        "resources": ["icons", "icons/icon.png", "icons/trayIcon.png"],
+        "windows": {
+            "certificateThumbprint": null,
+            "digestAlgorithm": "sha256",
+            "timestampUrl": "http://timestamp.digicert.com",
+            "wix": {
+                "language": "en-US"
+            },
+            "nsis": {
+                "installerIcon": "icons/icon.ico",
+                "headerImage": "installer/header.bmp",
+                "sidebarImage": "installer/sidebar.bmp",
+                "displayLanguageSelector": false
+            }
+        }
     }
-  },
-  "bundle": {
-    "active": true,
-    "targets": "all",
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ],
-    "createUpdaterArtifacts": true,
-    "resources": ["icons", "icons/icon.png", "icons/trayIcon.png"],
-    "windows": {
-      "nsis": {
-        "installerIcon": "icons/icon.ico",
-        "headerImage": "installer/header.bmp",
-        "sidebarImage": "installer/sidebar.bmp",
-        "displayLanguageSelector": false
-      }
-    }
-  }
 }

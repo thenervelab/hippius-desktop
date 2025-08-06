@@ -25,7 +25,7 @@ const AddressSelect: React.FC<AddressSelectProps> = ({
   error,
   disabled = false,
   onOpenChange,
-  placeholder = "Enter or select address"
+  placeholder = "Enter or select address",
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [addresses, setAddresses] = useState<Address[]>([]);
@@ -126,11 +126,7 @@ const AddressSelect: React.FC<AddressSelectProps> = ({
             className="w-[var(--radix-menubar-trigger-width)] max-h-[300px] overflow-y-auto bg-white shadow-menu rounded-lg border border-grey-80 z-50 py-2 flex flex-col gap-1"
             hidden={!isOpen}
           >
-            {filteredAddresses.length === 0 ? (
-              <div className="py-3 px-4 text-grey-50 text-sm text-center">
-                No saved addresses match your search
-              </div>
-            ) : (
+            {filteredAddresses.length > 0 &&
               filteredAddresses.map((addr) => (
                 <Menubar.Item
                   key={addr.id}
@@ -152,8 +148,7 @@ const AddressSelect: React.FC<AddressSelectProps> = ({
                     </span>
                   </div>
                 </Menubar.Item>
-              ))
-            )}
+              ))}
 
             {addresses.length === 0 && (
               <div className="py-3 px-4 text-grey-50 text-sm text-center">

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Wry};
 use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use once_cell::sync::Lazy;
+use std::fs;
+
 
 // Global sync status tracking (split by sync type)
 pub static PRIVATE_SYNC_STATUS: Lazy<Arc<Mutex<SyncStatus>>> =
@@ -56,6 +58,56 @@ pub fn get_sync_status() -> SyncStatusResponse {
 pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);
 }
+
+// Helper to collect all subfolders
+pub fn collect_folders_recursively(dir: &Path, folders: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            folders.push(path.clone());
+            collect_folders_recursively(&path, folders)?;
+        }
+    }
+    Ok(())
+}
+
+// Helper to collect files in a single folder (non-recursive)
+pub fn collect_files_in_folder(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+// Helper function to collect files with their relative paths
+pub fn collect_files_with_relative_paths(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<(PathBuf, String)>,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            let relative_path = path.strip_prefix(root)
+                .unwrap()
+                .parent()
+                .and_then(|p| p.to_str())
+                .unwrap_or("")
+                .to_string();
+            files.push((path, relative_path));
+        } else if path.is_dir() {
+            collect_files_with_relative_paths(root, &path, files)?;
+        }
+    }
+    Ok(())
+}
+
 
 pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {

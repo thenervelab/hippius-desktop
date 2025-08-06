@@ -220,7 +220,9 @@ pub fn start_user_sync(account_id: &str) {
                                                         // Skip files ending with .ff.ec_metadata, .ff, or .ec
                                                         if file_name.ends_with(".ff.ec_metadata")
                                                             || file_name.ends_with(".ff")
-                                                            || file_name.ends_with(".ec") {
+                                                            || file_name.ends_with(".ec") 
+                                                            || file_name.ends_with(".s.folder")
+                                                            || file_name.ends_with(".s.folder.ec_metadata"){
                                                             continue;
                                                         }
 
@@ -452,7 +454,9 @@ pub fn start_user_sync(account_id: &str) {
                                 // Skip files ending with .ff.ec_metadata, .ff, or .ec
                                 if file_name.ends_with(".ff.ec_metadata")
                                     || file_name.ends_with(".ff")
-                                    || file_name.ends_with(".ec") {
+                                    || file_name.ends_with(".ec") 
+                                    || file_name.ends_with(".s.folder")
+                                    || file_name.ends_with(".s.folder.ec_metadata"){
                                     continue;
                                 }
 
@@ -551,26 +555,34 @@ pub fn start_user_sync(account_id: &str) {
                                                         match serde_json::from_str::<serde_json::Value>(&json_str) {
                                                             Ok(json_value) => {
                                                                 if let Some(files) = json_value.as_array() {
-                                                                    let target_extension = if file_name.ends_with(".folder.ec_metadata") {
-                                                                        ".folder.ec_metadata"
+                                                                    println!("file: {:?}", files);
+                                                                    let target_extensions = if file_name.ends_with(".folder.ec_metadata") {
+                                                                        vec![".folder.ec_metadata"]
                                                                     } else if file_name.ends_with("-folder.ec_metadata") {
-                                                                        "-folder.ec_metadata"
+                                                                        vec!["-folder.ec_metadata"]
                                                                     } else if file_name.ends_with(".folder") {
-                                                                        ".folder"
+                                                                        // Only allow .folder and .ec.folder (EXCLUDE .s.folder and .s.ec.folder)
+                                                                        vec![".folder", ".ec.folder", "-folder"]
                                                                     } else if file_name.ends_with("-folder") {
-                                                                        "-folder"
+                                                                        vec!["-folder", ".folder", ".ec.folder"]
                                                                     } else {
-                                                                        ""
+                                                                        vec![]
                                                                     };
-
-                                                                    if !target_extension.is_empty() {
-                                                                        for file in files {
-                                                                            if let Some(filename) = file.get("filename").and_then(|v| v.as_str()) {
-                                                                                if filename.ends_with(target_extension) {
-                                                                                    if let Some(cid) = file.get("cid").and_then(|v| v.as_str()) {
-                                                                                        let cid_vec = cid.to_string().as_bytes().to_vec();
-                                                                                        file_hash = hex::encode(cid_vec);
-                                                                                        break;
+                                                                    
+                                                                    if !target_extensions.is_empty() {
+                                                                        'extension_loop: for target_extension in target_extensions {
+                                                                            for file in files {
+                                                                                if let Some(filename) = file.get("filename").and_then(|v| v.as_str()) {
+                                                                                    // Ensure we don't match .s.folder or .s.ec.folder
+                                                                                    if filename.ends_with(target_extension) && 
+                                                                                       !filename.contains(".s.folder") && 
+                                                                                       !filename.contains(".s.ec.folder") 
+                                                                                    {
+                                                                                        if let Some(cid) = file.get("cid").and_then(|v| v.as_str()) {
+                                                                                            let cid_vec = cid.to_string().as_bytes().to_vec();
+                                                                                            file_hash = hex::encode(cid_vec);
+                                                                                            break 'extension_loop;
+                                                                                        }
                                                                                     }
                                                                                 }
                                                                             }
