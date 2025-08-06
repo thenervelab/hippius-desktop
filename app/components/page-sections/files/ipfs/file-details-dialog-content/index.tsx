@@ -82,8 +82,8 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
     ? Array.isArray(file.minerIds)
       ? file.minerIds
       : typeof file.minerIds === "string"
-      ? [file.minerIds]
-      : []
+        ? [file.minerIds]
+        : []
     : [];
 
   const { uniqueLocations, isLoading } = useNodeLocations(minerIds);
@@ -102,16 +102,16 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
   const fileSize = !file.isAssigned
     ? "Unknown"
     : file.size
-    ? formatBytesFromBigInt(BigInt(file.size))
-    : "Unknown";
+      ? formatBytesFromBigInt(BigInt(file.size))
+      : "Unknown";
 
   const fallbackLocations = ["Loading locations..."];
 
   const locationsToShow = isLoading
     ? fallbackLocations
     : uniqueLocations.length > 0
-    ? uniqueLocations
-    : ["Location data unavailable"];
+      ? uniqueLocations
+      : ["Location data unavailable"];
 
   const handleViewOnExplorer = async () => {
     try {
@@ -133,8 +133,8 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
               {file.isFolder
                 ? "Folder"
                 : fileType
-                ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
-                : ""}
+                  ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
+                  : ""}
             </div>
             {!isPrivateView && file.isErasureCoded && (
               <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-white text-primary-60 border border-primary-50 shadow-sm">
@@ -146,7 +146,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
         </DetailRow>
 
         <DetailRow label="Date Uploaded">
-          <BlockTimestamp blockNumber={file.lastChargedAt} />
+          {file.lastChargedAt === 0 ? "Unknown" : <BlockTimestamp blockNumber={file.lastChargedAt} />}
         </DetailRow>
 
         <DetailRow label="File Size">
