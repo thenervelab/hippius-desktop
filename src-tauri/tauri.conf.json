@@ -56,6 +56,12 @@
         "createUpdaterArtifacts": true,
         "resources": ["icons", "icons/icon.png", "icons/trayIcon.png"],
         "windows": {
+            "certificateThumbprint": null,
+            "digestAlgorithm": "sha256",
+            "timestampUrl": "http://timestamp.digicert.com",
+            "wix": {
+                "language": "en-US"
+            },
             "nsis": {
                 "installerIcon": "icons/icon.ico",
                 "headerImage": "installer/header.bmp",
