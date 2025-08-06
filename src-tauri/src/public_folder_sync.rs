@@ -644,7 +644,8 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
         }
         
         // Then check if it's a direct child of the sync directory
-        path.parent().map(|p| p == sync_path).unwrap_or(false)
+        // path.parent().map(|p| p == sync_path).unwrap_or(false)
+        path.starts_with(sync_path)
     })
     .collect::<Vec<_>>();
 
