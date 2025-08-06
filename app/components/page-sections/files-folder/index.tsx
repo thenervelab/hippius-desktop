@@ -140,7 +140,7 @@ export default function FolderView({
                         minerIds: parseMinerIds(entry.miner_ids),
                         lastChargedAt: Number(entry.last_charged_at),
                         isErasureCoded,
-                        isFolder: entry.is_folder,
+                        isFolder: isFolder,
                         parentFolderId: folderCid,
                         parentFolderName: folderName
                     };
