@@ -91,6 +91,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
   const isChartDataLoading = isCreditsLoading || isBalanceLoading;
 
   const handleOpenConsoleBillingPage = () => openLinkByKey("BILLING");
+  const handleOpenConsoleCreditsPage = () => openLinkByKey("CREDITS");
 
   return (
     <div className="w-full  relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
@@ -116,8 +117,8 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
                   {credits !== undefined
                     ? `${formatCreditBalance(credits)}`
                     : error
-                      ? "ERROR"
-                      : "- - - -"}
+                    ? "ERROR"
+                    : "- - - -"}
                   <span className="text-xs font-medium -translate-y-1 ml-1">
                     Credits
                   </span>
@@ -168,7 +169,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
             <CardButton
               className="w-full mt-4 h-[50px]"
               variant="secondary"
-              onClick={handleOpenConsoleBillingPage}
+              onClick={handleOpenConsoleCreditsPage}
             >
               <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
                 <AddCircle className="size-4" />
