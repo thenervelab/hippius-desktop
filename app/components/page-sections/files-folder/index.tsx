@@ -107,7 +107,8 @@ export default function FolderView({
 
             const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
                 folderName: folderActualName,
-                folderMetadataCid: folderCid
+                folderMetadataCid: folderCid,
+                mainFolderName: null
             });
 
             console.log("Fetched folder contents:", fileEntries);

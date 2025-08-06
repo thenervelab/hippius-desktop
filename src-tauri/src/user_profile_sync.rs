@@ -220,7 +220,9 @@ pub fn start_user_sync(account_id: &str) {
                                                         // Skip files ending with .ff.ec_metadata, .ff, or .ec
                                                         if file_name.ends_with(".ff.ec_metadata")
                                                             || file_name.ends_with(".ff")
-                                                            || file_name.ends_with(".ec") {
+                                                            || file_name.ends_with(".ec") 
+                                                            || file_name.ends_with(".s.folder")
+                                                            || file_name.ends_with(".s.folder.ec_metadata"){
                                                             continue;
                                                         }
 
@@ -452,7 +454,9 @@ pub fn start_user_sync(account_id: &str) {
                                 // Skip files ending with .ff.ec_metadata, .ff, or .ec
                                 if file_name.ends_with(".ff.ec_metadata")
                                     || file_name.ends_with(".ff")
-                                    || file_name.ends_with(".ec") {
+                                    || file_name.ends_with(".ec") 
+                                    || file_name.ends_with(".s.folder")
+                                    || file_name.ends_with(".s.folder.ec_metadata"){
                                     continue;
                                 }
 
