@@ -45,10 +45,17 @@ pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String
         }
 
         // Try to run ipfs version to check if the binary is valid
-        match std::process::Command::new(&binary_path)
-            .arg("--version")
-            .output()
+        #[cfg(target_os = "windows")]
+        let mut cmd = std::process::Command::new(&binary_path);
+        #[cfg(target_os = "windows")]
         {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        #[cfg(not(target_os = "windows"))]
+        let mut cmd = std::process::Command::new(&binary_path);
+        let output = cmd.arg("--version").output();
+        match output {
             Ok(_) => {
                 println!("Valid IPFS binary found at {:?}", binary_path);
                 // Emit DownloadingBinary event even when binary exists (for frontend consistency)
@@ -292,10 +299,17 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
     }
 
     // Verify the binary works
-    match std::process::Command::new(&binary_path)
-        .arg("--version")
-        .output()
+    #[cfg(target_os = "windows")]
+    let mut cmd = std::process::Command::new(&binary_path);
+    #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = std::process::Command::new(&binary_path);
+    let output = cmd.arg("--version").output();
+    match output {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             println!("IPFS binary installation complete: {}", version.trim());
@@ -337,8 +351,7 @@ pub fn ensure_ipfs_repo_initialized(bin_path: &PathBuf) -> Result<(), String> {
         return Ok(());
     }
     println!("No IPFS repo found, running 'ipfs init'...");
-    let output = Command::new(bin_path)
-        .arg("init")
+    let output = spawn_ipfs_command_blocking(bin_path, &["init"])
         .output()
         .map_err(|e| format!("Failed to run 'ipfs init': {}", e))?;
     if !output.status.success() {
@@ -349,4 +362,27 @@ pub fn ensure_ipfs_repo_initialized(bin_path: &PathBuf) -> Result<(), String> {
     }
     println!("IPFS repo initialized successfully.");
     Ok(())
+}
+
+// Helper to spawn IPFS commands with correct flags (no terminal popups on Windows)
+#[cfg(windows)]
+pub fn spawn_ipfs_command_blocking(bin_path: &std::path::Path, args: &[&str]) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = std::process::Command::new(bin_path);
+    cmd.args(args)
+        .creation_flags(0x08000000)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd
+}
+
+#[cfg(unix)]
+pub fn spawn_ipfs_command_blocking(bin_path: &std::path::Path, args: &[&str]) -> std::process::Command {
+    let mut cmd = std::process::Command::new(bin_path);
+    cmd.args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd
 }

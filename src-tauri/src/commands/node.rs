@@ -44,6 +44,29 @@ pub async fn get_current_setup_phase() -> Option<String> {
 const SMALL_SLEEP: u64 = 4;
 const LARGE_SLEEP: u64 = 15;
 
+// Helper to spawn IPFS commands with correct flags (no terminal popups on Windows)
+#[cfg(windows)]
+pub fn spawn_ipfs_command(bin_path: &std::path::Path, args: &[&str]) -> tokio::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = tokio::process::Command::new(bin_path);
+    cmd.args(args)
+        .creation_flags(0x08000000)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd
+}
+
+#[cfg(unix)]
+pub fn spawn_ipfs_command(bin_path: &std::path::Path, args: &[&str]) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(bin_path);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd
+}
+
 #[tauri::command]
 pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
     // Check if IPFS daemon is already running
@@ -74,17 +97,22 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
 
     let app = emit_and_update_phase(app, AppSetupPhase::StartingDaemon).await;
 
-    #[cfg(windows)]
-    use std::os::windows::process::CommandExt;
+    let mut cmd = spawn_ipfs_command(&bin_path, &["daemon"]);
 
-    let mut cmd = Command::new(&bin_path);
-    cmd.arg("daemon")
-       .stdout(Stdio::piped())  // Keep piped to capture output
-       .stderr(Stdio::piped());
-
-    // Windows-specific: Hide console window
     #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    {
+        cmd.stdin(Stdio::null())
+           .stdout(Stdio::piped())
+           .stderr(Stdio::piped());
+    }
+    
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.stdin(Stdio::null())
+           .stdout(Stdio::piped())
+           .stderr(Stdio::piped());
+    }
 
     let mut child = cmd.spawn()
         .map_err(|e| format!("Spawn failed: {e}"))?;
@@ -120,7 +148,7 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
 
 async fn configure_ipfs_cors(bin_path: &std::path::PathBuf) -> Result<(), String> {
     // First ensure no daemon is running
-    let _ = Command::new(&bin_path).arg("shutdown").output().await;
+    let _ = spawn_ipfs_command(bin_path, &["shutdown"]).output().await;
 
     let cors_config = vec![
         ("Access-Control-Allow-Origin", "[\"http://localhost:3000\"]"),
@@ -132,14 +160,7 @@ async fn configure_ipfs_cors(bin_path: &std::path::PathBuf) -> Result<(), String
     ];
 
     for (header, value) in cors_config {
-        let output = Command::new(&bin_path)
-            .arg("config")
-            .arg("--json")
-            .arg(format!("API.HTTPHeaders.{}", header))
-            .arg(value)
-            .output()
-            .await
-            .map_err(|e| format!("Failed to set CORS header {}: {}", header, e))?;
+        let output = spawn_ipfs_command(bin_path, &["config", "--json", &format!("API.HTTPHeaders.{}", header), value]).output().await.map_err(|e| format!("Failed to set CORS header {}: {}", header, e))?;
 
         if !output.status.success() {
             eprintln!(
