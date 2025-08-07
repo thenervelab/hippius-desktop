@@ -19,7 +19,7 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
   inView,
   onBack,
   onKeyGenerated,
-  generatedKey
+  generatedKey,
 }) => {
   const [passcode, setPasscode] = useState("");
   const [showPasscode, setShowPasscode] = useState(false);
@@ -115,14 +115,14 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
         <RevealTextLine
           rotate
           reveal={inView}
-          className="delay-300 w-full mt-11"
+          className="delay-300 w-full mt-6"
         >
           <IconButton
             type="submit"
             outerPadding="p-1.5"
-            innerPadding="px-6 py-2.5"
+            innerPadding="px-6 py-1.5"
             fontSizeClass="text-lg"
-            innerClassName="h-12"
+            innerClassName="h-9"
             text={isGenerating ? "Generating..." : "Generate New Key"}
             onClick={handleGenerateKey}
             disabled={isGenerating || !passcode}
@@ -141,11 +141,11 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
           customWarnings={[
             {
               id: 1,
-              text: "Store this encryption key in a secure password manager"
+              text: "Store this encryption key in a secure password manager",
             },
             {
               id: 2,
-              text: "This key is required to decrypt your private files"
+              text: "This key is required to decrypt your private files",
             },
             {
               id: 3,
@@ -154,8 +154,8 @@ const GenerateNewKey: React.FC<GenerateNewKeyProps> = ({
                   We <b>cannot</b> help you decrypt your files if you lose this
                   key
                 </div>
-              )
-            }
+              ),
+            },
           ]}
           onDone={handleDialogClose}
         />

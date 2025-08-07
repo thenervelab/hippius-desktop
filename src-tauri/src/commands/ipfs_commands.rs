@@ -411,179 +411,118 @@ pub async fn encrypt_and_upload_folder(
         None
     };
 
-    let (folder_name, root_metadata_cid, all_files) = tokio::task::spawn_blocking(move || {
-        // First collect all folder paths (including subfolders)
-        let mut folders = vec![folder_path_cloned.clone()];
-        collect_folders_recursively(&folder_path_cloned, &mut folders)
-            .map_err(|e| format!("Failed to collect folders: {}", e))?;
+    let (folder_name, root_metadata_cid, mut all_files) = tokio::task::spawn_blocking(move || {
+        // Build the folder tree
+        let folder_tree = crate::utils::folder_tree::FolderNode::build_tree(&folder_path_cloned)
+            .map_err(|e| format!("Failed to build folder tree: {}", e))?;
 
-        let mut all_metadata = Vec::new();
         let mut all_files = Vec::new();
         let temp_dir = tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
         let processing_results = Arc::new(Mutex::new(Vec::new()));
 
-        // Process folders in reverse order (deepest first)
-        folders.sort_by(|a, b| b.cmp(a));
-
-        // First pass: upload all files and create metadata for subfolders
-        let mut subfolder_metadata = Vec::new();
-        // Inside the subfolder processing loop:
-        for folder in &folders {
-            if *folder == folder_path_cloned {
-                continue;
-            }
-
-            let relative_path = folder.strip_prefix(&folder_path_cloned)
-                .map_err(|e| format!("Failed to get relative path: {}", e))?
-                .to_str()
-                .unwrap_or("");
-
+        // Recursively build metadata for each folder, returning the root metadata CID
+        fn build_metadata(
+            node: &crate::utils::folder_tree::FolderNode,
+            folder_path_cloned: &Path,
+            api_url_cloned: &Arc<String>,
+            encryption_key_bytes: &Option<Arc<Vec<u8>>>,
+            processing_results: &Arc<Mutex<Vec<FileProcessingResult>>>,
+            temp_dir: &tempfile::TempDir,
+            all_files: &mut Vec<(String, String)>,
+        ) -> Result<(String, String, usize), String> {
             let mut file_entries = Vec::new();
-            let mut files = Vec::new();
-            let mut total_subfolder_size = 0;
-            collect_files_in_folder(folder, &mut files)
-                .map_err(|e| format!("Failed to collect files: {}", e))?;
-
-            // Process files in this folder
-            for file_path in files {
+            // Process files
+            for file_path in &node.files {
                 let file_name = file_path.file_name()
                     .ok_or("Invalid file path".to_string())?
                     .to_string_lossy();
-                
                 if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
                     continue;
                 }
-
-                // Use just the filename without any path components
                 let clean_file_name = file_name.to_string();
-                let ipfs_name = format!("{}{}", 
-                    clean_file_name, 
-                    if clean_file_name.ends_with(".ff.ec_metadata") { "" } else { ".ff.ec_metadata" }
-                );
-
-                // Process file
+                let ipfs_name = format!("{}{}", clean_file_name, if clean_file_name.ends_with(".ff.ec_metadata") { "" } else { ".ff.ec_metadata" });
                 futures::executor::block_on(process_single_file_for_folder_upload(
                     file_path.clone(),
-                    folder_path_cloned.clone(),
-                    Arc::clone(&api_url_cloned),
+                    folder_path_cloned.to_path_buf(),
+                    Arc::clone(api_url_cloned),
                     encryption_key_bytes.as_ref().map(Arc::clone),
-                    Arc::clone(&processing_results),
+                    Arc::clone(processing_results),
                 ))?;
-
                 let results = futures::executor::block_on(processing_results.lock());
                 let result = results.last().ok_or("No result found for file processing")?;
-                
-                total_subfolder_size += result.file_entry.file_size;
                 file_entries.push(FileEntry {
-                    file_name: ipfs_name.clone(),  // Just the filename
+                    file_name: ipfs_name.clone(),
                     file_size: result.file_entry.file_size,
                     cid: result.file_entry.cid.clone(),
                 });
-
-                // For storage, maintain the full path
-                let storage_name = format!("{}.ff.ec_metadata",
-                    clean_file_name
-                );
                 all_files.extend(result.chunk_pairs.clone());
-                all_files.push((storage_name, result.file_entry.cid.clone()));
+                all_files.push((ipfs_name, result.file_entry.cid.clone()));
             }
-
-            // Create subfolder metadata
-            let subfolder_name = folder.file_name()
-                .ok_or("Invalid subfolder path".to_string())?
+            // Process subfolders recursively
+            let mut total_size = 0usize;
+            for file_entry in &file_entries {
+                total_size += file_entry.file_size;
+            }
+            for child in &node.children {
+                let (meta_name, meta_cid, subfolder_size) = build_metadata(
+                    child,
+                    folder_path_cloned,
+                    api_url_cloned,
+                    encryption_key_bytes,
+                    processing_results,
+                    temp_dir,
+                    all_files,
+                )?;
+                // Add subfolder metadata as entry
+                file_entries.push(FileEntry {
+                    file_name: meta_name.clone(),
+                    file_size: subfolder_size,
+                    cid: meta_cid.clone(),
+                });
+                all_files.push((meta_name, meta_cid));
+                total_size += subfolder_size;
+            }
+            // Create this folder's metadata
+            let this_folder_name = node.path.file_name()
+                .ok_or("Invalid folder path".to_string())?
                 .to_string_lossy();
-            let metadata_name = format!("{}.s.folder.ec_metadata", subfolder_name);
-
+            // Only the main/root folder gets .ec_metadata, all children get .s.folder.ec_metadata
+            let is_root = node.path == *folder_path_cloned;
+            let metadata_name = if is_root {
+                format!("{}.ec_metadata", this_folder_name)
+            } else {
+                format!("{}.s.folder.ec_metadata", this_folder_name)
+            };
             let metadata_json = serde_json::to_vec(&file_entries)
                 .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
-            
+            let metadata_path = temp_dir.path().join("metadata.json");
+            std::fs::write(&metadata_path, &metadata_json)
+                .map_err(|e| format!("Failed to write metadata: {}", e))?;
             let metadata_cid = futures::executor::block_on(upload_bytes_to_ipfs(
-                &api_url_cloned,
+                api_url_cloned,
                 metadata_json,
                 &metadata_name
             )).map_err(|e| format!("Failed to upload metadata: {}", e))?;
-            
-            all_files.push((metadata_name.clone(), metadata_cid.clone()));
-            subfolder_metadata.push((relative_path.to_string(), metadata_name, metadata_cid, total_subfolder_size));
+            Ok((metadata_name, metadata_cid, total_size))
         }
-        
-        // Second pass: process root folder with references to subfolders
-        let mut root_file_entries = Vec::new();
-        let mut root_files = Vec::new();
-        collect_files_in_folder(&folder_path_cloned, &mut root_files)
-            .map_err(|e| format!("Failed to collect root files: {}", e))?;
-
-        // Process files in root folder
-        for file_path in root_files {
-            let file_name = file_path.file_name()
-                .ok_or("Invalid file path".to_string())?
-                .to_string_lossy();
-            
-            if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
-                continue;
-            }
-        
-            let ipfs_name = if file_name.ends_with(".ff.ec_metadata") {
-                file_name.to_string()
-            } else {
-                format!("{}.ff.ec_metadata", file_name)
-            };    
-
-            // Process file using existing helper
-            futures::executor::block_on(process_single_file_for_folder_upload(
-                file_path.clone(),
-                folder_path_cloned.clone(),
-                Arc::clone(&api_url_cloned),
-                encryption_key_bytes.as_ref().map(Arc::clone),
-                Arc::clone(&processing_results),
-            ))?;
-
-            let results = futures::executor::block_on(processing_results.lock());
-            let result = results.last().ok_or("No result found for file processing")?;
-            
-            root_file_entries.push(FileEntry {
-                file_name: ipfs_name.clone(),
-                file_size: result.file_entry.file_size,
-                cid: result.file_entry.cid.clone(),
-            });
-            all_files.extend(result.chunk_pairs.clone());
-            all_files.push((ipfs_name, result.file_entry.cid.clone()));
-        }
-
-        // Add references to subfolders in root metadata with their total sizes
-        for (_relative_path, metadata_name, cid, total_size) in subfolder_metadata {
-            root_file_entries.push(FileEntry {
-                file_name: metadata_name,
-                file_size: total_size,
-                cid,
-            });
-        }
-
-        // Create root folder metadata
-        let root_metadata_name = format!("{}.folder.ec_metadata", folder_name);
-        let root_metadata_path = temp_dir.path().join("root_metadata.json");
-        let root_metadata_json = serde_json::to_vec(&root_file_entries)
-            .map_err(|e| format!("Failed to serialize root metadata: {}", e))?;
-        fs::write(&root_metadata_path, &root_metadata_json)
-            .map_err(|e| format!("Failed to write root metadata: {}", e))?;
-
-        // Upload the bytes directly to avoid IPFS adding directory info
-        let root_metadata_cid = futures::executor::block_on(upload_bytes_to_ipfs(
+        // Build root metadata
+        let (root_metadata_name, root_metadata_cid, _root_total_size) = build_metadata(
+            &folder_tree,
+            &folder_path_cloned,
             &api_url_cloned,
-            root_metadata_json,
-            "root_metadata.json"
-        )).map_err(|e| format!("Failed to upload root metadata: {}", e))?;
-        
-        all_files.push((root_metadata_name.clone(), root_metadata_cid.clone()));
-        all_metadata.push((root_metadata_name, root_metadata_cid));
-
-        Ok::<_, String>((folder_name, all_metadata[0].1.clone(), all_files))
+            &encryption_key_bytes,
+            &processing_results,
+            &temp_dir,
+            &mut all_files,
+        )?;
+        Ok::<_, String>((folder_name, root_metadata_cid, all_files))
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
 
+
     let meta_folder_name = format!("{}.folder.ec_metadata", folder_name);
-    
+    all_files.push((meta_folder_name.clone(), root_metadata_cid.clone()));
     // Perform storage request and ensure it succeeds
     let storage_result = request_erasure_storage(&meta_folder_name, &all_files, &api_url, &seed_phrase)
         .await
@@ -701,58 +640,55 @@ pub async fn download_and_decrypt_folder(
                 println!("[download_and_decrypt_folder] Processing entry with CID: {} to: {:?}", 
                     entry.cid, output_root_clone.join(&entry.file_name));
 
-                // Check if the entry is a subfolder metadata
-                if entry.file_name.ends_with(".s.folder.ec_metadata") {
-                    let subfolder_name = entry.file_name.trim_end_matches(".s.folder.ec_metadata");
-                    let subfolder_path = output_root_clone.join(subfolder_name);
+                // Check if the entry is a subfolder metadata (new hierarchical logic)
+                if entry.file_name.ends_with(".folder.ec_metadata") {
+                    let mut subfolder_name = entry.file_name.trim_end_matches(".s.folder.ec_metadata");
+                    // Remove leading '.' and '.s' if present
+                    let cleaned_name = subfolder_name.trim_end_matches(".folder.ec_metadata");
+                    let subfolder_path = output_root_clone.join(cleaned_name);
                     if let Err(e) = tokio::fs::create_dir_all(&subfolder_path).await {
                         eprintln!("[!] Failed to create subfolder {}: {}", subfolder_name, e);
                         return;
                     }
-
-                    let subfolder_manifest_bytes = match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
+                    // Recursively call download_and_decrypt_folder for subfolder
+                    if let Err(e) = download_and_decrypt_folder(
+                        String::new(), // _account_id not needed for recursion
+                        entry.cid.clone(),
+                        subfolder_name.to_string(),
+                        output_root_clone.to_string_lossy().to_string(),
+                        encryption_key_clone.as_ref().map(|k| base64::engine::general_purpose::STANDARD.encode(&**k)),
+                    ).await {
+                        eprintln!("[!] Failed to download/decrypt subfolder {}: {}", subfolder_name, e);
+                    }
+                } else if entry.file_name.ends_with(".ff.ec_metadata") {
+                    // Handle regular file in root folder
+                    let file_metadata_bytes = match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
                         Ok(bytes) => bytes,
                         Err(e) => {
-                            eprintln!("[!] Failed to download subfolder manifest for {} (CID: {}): {}", 
+                            eprintln!("[!] Failed to download metadata for {} (CID: {}): {}", 
                                 entry.file_name, entry.cid, e);
                             return;
                         }
                     };
 
-                    let subfolder_entries: Vec<FileEntry> = match serde_json::from_slice(&subfolder_manifest_bytes) {
-                        Ok(entries) => entries,
-                        Err(e) => {
-                            eprintln!("[!] Failed to parse subfolder manifest for {} (CID: {}): {}", 
-                                entry.file_name, entry.cid, e);
+                    let clean_file_name = entry.file_name.trim_end_matches(".ff.ec_metadata");
+                    let output_file_path = output_root_clone.join(clean_file_name);
+
+                    if let Some(parent) = output_file_path.parent() {
+                        if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                            eprintln!("[!] Failed to create directory for {}: {}", clean_file_name, e);
                             return;
                         }
-                    };
+                    }
 
-                    // Process files in subfolder
-                    for sub_entry in subfolder_entries {
-                        let file_metadata_bytes = match download_from_ipfs_async(&api_url_clone, &sub_entry.cid).await {
-                            Ok(bytes) => bytes,
-                            Err(e) => {
-                                eprintln!("[!] Failed to download metadata for {} (CID: {}): {}", 
-                                    sub_entry.file_name, sub_entry.cid, e);
-                                continue;
-                            }
-                        };
-
-                        let clean_file_name = sub_entry.file_name.trim_end_matches(".ff.ec_metadata");
-                        let output_file_path = subfolder_path.join(clean_file_name);
-
-                        match reconstruct_and_decrypt_single_file(
-                            file_metadata_bytes,
-                            output_file_path.clone(),
-                            api_url_clone.clone(),
-                            encryption_key_clone.clone(),
-                        ).await {
-                            Ok(()) => println!("[✔] Successfully downloaded and decrypted {} in subfolder {}", 
-                                clean_file_name, subfolder_name),
-                            Err(e) => eprintln!("[!] Failed to download/decrypt {} in subfolder {}: {}", 
-                                clean_file_name, subfolder_name, e),
-                        }
+                    match reconstruct_and_decrypt_single_file(
+                        file_metadata_bytes,
+                        output_file_path.clone(),
+                        api_url_clone,
+                        encryption_key_clone,
+                    ).await {
+                        Ok(()) => println!("[✔] Successfully downloaded and decrypted {}", clean_file_name),
+                        Err(e) => eprintln!("[!] Failed to download/decrypt {}: {}", clean_file_name, e),
                     }
                 } else {
                     // Handle regular file in root folder
@@ -1104,7 +1040,7 @@ async fn process_new_file_for_addition(
 
     let file_metadata = Metadata {
         original_file: OriginalFileInfo {
-            name: file_name.clone(),
+            name: format!("{}.ec_metadata", file_name.clone()),
             size: file_data.len(),
             hash: original_file_hash,
             extension: Path::new(&file_name).extension().and_then(|s| s.to_str()).unwrap_or_default().to_string(),
@@ -1118,7 +1054,7 @@ async fn process_new_file_for_addition(
     let metadata_cid = upload_bytes_to_ipfs(api_url, metadata_json.as_bytes().to_vec(), &metadata_filename).await?;
 
     let new_file_entry = FileEntry {
-        file_name,
+        file_name: format!("{}.ec_metadata", file_name.clone()),
         file_size: file_data.len(),
         cid: metadata_cid,
     };
@@ -1608,139 +1544,20 @@ pub async fn public_upload_folder(
 
     let folder_path_cloned = folder_path.to_path_buf();
     let api_url_cloned = api_url.to_string();
-    let (folder_name, root_metadata_cid, all_files) = tokio::task::spawn_blocking(move || {
-        // First collect all folder paths (including subfolders)
-        let mut folders = vec![folder_path_cloned.clone()];
-        collect_folders_recursively(&folder_path_cloned, &mut folders)
-            .map_err(|e| format!("Failed to collect folders: {}", e))?;
-
-        let mut all_metadata = Vec::new();
+    let (folder_name, root_metadata_cid, mut all_files) = tokio::task::spawn_blocking(move || {
         let mut all_files = Vec::new();
-        let temp_dir = tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
-
-        // Process folders in reverse order (deepest first)
-        folders.sort_by(|a, b| b.cmp(a));
-
-        // First pass: upload all files and create metadata for subfolders
-        let mut subfolder_metadata = Vec::new();
-        for folder in &folders {
-            if *folder == folder_path_cloned {
-                continue; // Skip root folder for now
-            }
-
-            let relative_path = folder.strip_prefix(&folder_path_cloned)
-                .map_err(|e| format!("Failed to get relative path: {}", e))?
-                .to_str()
-                .unwrap_or("");
-
-            let mut file_entries = Vec::new();
-            let mut files = Vec::new();
-            let mut total_subfolder_size = 0;
-            collect_files_in_folder(folder, &mut files)
-                .map_err(|e| format!("Failed to collect files: {}", e))?;
-
-            // Process files in this folder
-            for file_path in files {
-                let file_name = file_path.file_name()
-                    .ok_or("Invalid file path".to_string())?
-                    .to_string_lossy();
-                
-                if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
-                    continue;
-                }
-
-                let ipfs_name = format!("{}{}", file_name, if file_name.ends_with(".ff") { "" } else { ".ff" });
-
-                let cid = upload_to_ipfs(&api_url_cloned, file_path.to_str().unwrap())
-                    .map_err(|e| format!("Failed to upload file: {}", e))?;
-                
-                let file_size = file_path.metadata()
-                    .map_err(|e| format!("Failed to get file metadata: {}", e))?
-                    .len() as usize;
-                total_subfolder_size += file_size;
-
-                file_entries.push(FileEntry {
-                    file_name: ipfs_name.clone(),
-                    file_size,
-                    cid: cid.clone(),
-                });
-                all_files.push((ipfs_name, cid));
-            }
-
-            // Create subfolder metadata
-            let subfolder_name = folder.file_name()
-                .ok_or("Invalid subfolder path".to_string())?
-                .to_string_lossy();
-            let metadata_name = format!("{}.s.folder", subfolder_name);
-
-            let metadata_path = temp_dir.path().join("metadata.json");
-            fs::write(&metadata_path, serde_json::to_vec(&file_entries)
-                .map_err(|e| format!("Failed to serialize metadata: {}", e))?)
-                .map_err(|e| format!("Failed to write metadata: {}", e))?;
-            let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap())
-                .map_err(|e| format!("Failed to upload metadata: {}", e))?;
-            
-            all_files.push((metadata_name.clone(), metadata_cid.clone()));
-            subfolder_metadata.push((relative_path.to_string(), metadata_name, metadata_cid, total_subfolder_size));
-        }
-
-        // Second pass: process root folder with references to subfolders
-        let mut root_file_entries = Vec::new();
-        let mut root_files = Vec::new();
-        collect_files_in_folder(&folder_path_cloned, &mut root_files)
-            .map_err(|e| format!("Failed to collect root files: {}", e))?;
-
-        // Process files in root folder
-        for file_path in root_files {
-            let file_name = file_path.file_name()
-                .ok_or("Invalid file path".to_string())?
-                .to_string_lossy();
-            
-            if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
-                continue;
-            }
-
-            let ipfs_name = if file_name.ends_with(".ff") {
-                file_name.to_string()
-            } else {
-                format!("{}.ff", file_name)
-            };
-
-            let cid = upload_to_ipfs(&api_url_cloned, file_path.to_str().unwrap())
-                .map_err(|e| format!("Failed to upload file: {}", e))?;
-            
-            root_file_entries.push(FileEntry {
-                file_name: ipfs_name.clone(),
-                file_size: file_path.metadata()
-                    .map_err(|e| format!("Failed to get file metadata: {}", e))?
-                    .len() as usize,
-                cid: cid.clone(),
-            });
-            all_files.push((ipfs_name, cid));
-        }
-
-        // Add references to subfolders in root metadata with their total sizes
-        for (_relative_path, metadata_name, cid, total_size) in subfolder_metadata {
-            root_file_entries.push(FileEntry {
-                file_name: metadata_name,
-                file_size: total_size,
-                cid,
-            });
-        }
-
-        // Create root folder metadata
-        let root_metadata_name = format!("{}.folder", folder_name);
-        let root_metadata_path = temp_dir.path().join("root_metadata.json");
-        fs::write(&root_metadata_path, serde_json::to_vec(&root_file_entries)
-            .map_err(|e| format!("Failed to serialize root metadata: {}", e))?)
-            .map_err(|e| format!("Failed to write root metadata: {}", e))?;
-        let root_metadata_cid = upload_to_ipfs(&api_url_cloned, root_metadata_path.to_str().unwrap())
-            .map_err(|e| format!("Failed to upload root metadata: {}", e))?;
-        
-        all_files.push((root_metadata_name.clone(), root_metadata_cid.clone()));
-        all_metadata.push((root_metadata_name, root_metadata_cid));
-
-        Ok::<_, String>((folder_name, all_metadata[0].1.clone(), all_files))
+        // Use recursive helper to upload the folder structure
+        let (root_metadata_name, root_metadata_cid, _root_total_size) = upload_folder_recursive_public(
+            &folder_path_cloned,
+            &api_url_cloned,
+            true,
+            &mut all_files,
+        )?;
+        let folder_name = folder_path_cloned
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .ok_or_else(|| "Invalid folder path, cannot extract folder name".to_string())?;
+        Ok::<_, String>((folder_name, root_metadata_cid, all_files))
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))??;
@@ -1748,8 +1565,9 @@ pub async fn public_upload_folder(
     let meta_folder_name = format!("{}{}", folder_name, if folder_name.ends_with(".folder") { "" } else { ".folder" });
     
     // Build files array: folder metadata + all file CIDs
-    let mut files_for_storage = Vec::with_capacity(all_files.len());
+    let mut files_for_storage = Vec::with_capacity(all_files.len()+1);
     files_for_storage.extend(all_files);
+    files_for_storage.push((meta_folder_name.clone(), root_metadata_cid.clone()));
     println!("root_metadata_cid {:?}", root_metadata_cid);
     // Submit storage request
     let storage_result = request_folder_storage(&meta_folder_name.clone(), &files_for_storage, api_url, &seed_phrase).await;
@@ -1764,6 +1582,94 @@ pub async fn public_upload_folder(
     Ok(root_metadata_cid.to_string())
 }
 
+// Recursively upload a folder for public upload, using .folder for root and .s.folder for all subfolders
+fn upload_folder_recursive_public(
+    folder_path: &Path,
+    api_url: &str,
+    is_root: bool,
+    all_files: &mut Vec<(String, String)>,
+) -> Result<(String, String, usize), String> {
+    use std::fs;
+    use crate::commands::types::FileEntry;
+    use tempfile::tempdir;
+    let mut file_entries = Vec::new();
+    let mut files = Vec::new();
+    let mut subfolders = Vec::new();
+
+    // Collect files and subfolders
+    for entry in fs::read_dir(folder_path).map_err(|e| format!("Failed to read dir: {}", e))? {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let path = entry.path();
+        if path.is_dir() {
+            subfolders.push(path);
+        } else {
+            files.push(path);
+        }
+    }
+
+    // Upload files in this folder
+    let mut total_size = 0usize;
+    for file_path in &files {
+        let file_name = file_path.file_name()
+            .ok_or("Invalid file path".to_string())?
+            .to_string_lossy();
+        if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
+            continue;
+        }
+        let ipfs_name = if file_name.ends_with(".ff") {
+            file_name.to_string()
+        } else {
+            format!("{}.ff", file_name)
+        };
+        let cid = upload_to_ipfs(api_url, file_path.to_str().unwrap())
+            .map_err(|e| format!("Failed to upload file: {}", e))?;
+        let file_size = file_path.metadata()
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .len() as usize;
+        file_entries.push(FileEntry {
+            file_name: ipfs_name.clone(),
+            file_size,
+            cid: cid.clone(),
+        });
+        all_files.push((ipfs_name, cid));
+        total_size += file_size;
+    }
+
+    // Recursively process subfolders
+    for subfolder_path in &subfolders {
+        let (meta_name, meta_cid, subfolder_size) = upload_folder_recursive_public(
+            subfolder_path,
+            api_url,
+            false,
+            all_files,
+        )?;
+        // Add subfolder metadata to this folder's entries
+        file_entries.push(FileEntry {
+            file_name: meta_name.clone(),
+            file_size: subfolder_size,
+            cid: meta_cid.clone(),
+        });
+        all_files.push((meta_name, meta_cid));
+        total_size += subfolder_size;
+    }
+
+    // Write and upload metadata for this folder
+    let metadata_name = if is_root {
+        format!("{}.folder", folder_path.file_name().unwrap().to_string_lossy())
+    } else {
+        format!("{}.s.folder", folder_path.file_name().unwrap().to_string_lossy())
+    };
+    let temp_dir = tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    let metadata_path = temp_dir.path().join("metadata.json");
+    fs::write(&metadata_path, serde_json::to_vec(&file_entries)
+        .map_err(|e| format!("Failed to serialize metadata: {}", e))?)
+        .map_err(|e| format!("Failed to write metadata: {}", e))?;
+    let metadata_cid = upload_to_ipfs(api_url, metadata_path.to_str().unwrap())
+        .map_err(|e| format!("Failed to upload metadata: {}", e))?;
+    Ok((metadata_name, metadata_cid, total_size))
+}
+
+
 #[tauri::command]
 pub async fn public_download_folder(
     _account_id: String,
@@ -1771,63 +1677,83 @@ pub async fn public_download_folder(
     folder_name: String,
     output_dir: String,
 ) -> Result<(), String> {
+    public_download_folder_inner(
+        &_account_id,
+        &folder_metadata_cid,
+        &folder_name,
+        &output_dir,
+    ).await
+}
+
+async fn public_download_folder_inner(
+    _account_id: &str,
+    folder_metadata_cid: &str,
+    folder_name: &str,
+    output_dir: &str,
+) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001";
     
-    // Create a boxed future to handle the recursion
-    let download_future = async move {
-        let metadata_bytes = tokio::task::spawn_blocking({
-            let api_url = api_url.to_string();
-            let folder_metadata_cid = folder_metadata_cid.clone();
-            move || {
-                download_from_ipfs(&api_url, &folder_metadata_cid)
-                    .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))
-            }
-        })
-        .await
-        .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
-
-        let file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
-            .map_err(|e| format!("Failed to parse folder metadata: {}", e))?;
-
-        let output_path = std::path::Path::new(&output_dir).join(&folder_name);
-        if !output_path.exists() {
-            fs::create_dir_all(&output_path)
-                .map_err(|e| format!("Failed to create output directory {}: {}", output_path.display(), e))?;
+    // Download folder metadata (blocking for sync with legacy code)
+    let metadata_bytes = tokio::task::spawn_blocking({
+        let api_url = api_url.to_string();
+        let folder_metadata_cid = folder_metadata_cid.to_string();
+        move || {
+            download_from_ipfs(&api_url, &folder_metadata_cid)
+                .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))
         }
+    })
+    .await
+    .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
-        // Process regular files first
-        for entry in file_entries.iter().filter(|e| !e.file_name.ends_with(".s.folder")) {
-            let file_name = entry.file_name.strip_suffix(".ff").unwrap_or(&entry.file_name);
-            let output_file_path = output_path.join(file_name);
-            
+    let file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse folder metadata: {}", e))?;
+
+    let output_path = std::path::Path::new(output_dir).join(folder_name);
+    if !output_path.exists() {
+        fs::create_dir_all(&output_path)
+            .map_err(|e| format!("Failed to create output directory {}: {}", output_path.display(), e))?;
+    }
+
+    // Recursively process folder entries using public suffix conventions
+    for entry in &file_entries {
+        if entry.file_name.ends_with(".folder") || entry.file_name.ends_with(".s.folder") {
+            // Subfolder: recursively download
+            // Remove leading ".s" from subfolder name if present
+            let mut subfolder_name = if entry.file_name.ends_with(".s.folder") {
+                entry.file_name.strip_suffix(".s.folder").unwrap_or(&entry.file_name)
+            } else {
+                entry.file_name.strip_suffix(".folder").unwrap_or(&entry.file_name)
+            };
+            if let Some(stripped) = subfolder_name.strip_prefix(".s") {
+                subfolder_name = stripped;
+            }
+            let subfolder_metadata_cid = &entry.cid;
+            if let Err(e) = Box::pin(public_download_folder_inner(
+                _account_id,
+                subfolder_metadata_cid,
+                subfolder_name,
+                &output_path.to_string_lossy()
+            )).await {
+                eprintln!("[public_download_folder] Failed to download subfolder {}: {}", subfolder_name, e);
+            }
+        } else if entry.file_name.ends_with(".ff") {
+            // Regular file
+            let clean_file_name = entry.file_name.strip_suffix(".ff").unwrap_or(&entry.file_name);
+            let output_file_path = output_path.join(clean_file_name);
             if let Some(parent) = output_file_path.parent() {
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
             }
-            
-            download_file_public(entry.cid.clone(), output_file_path.to_string_lossy().to_string()).await?;
+            if let Err(e) = download_file_public(entry.cid.clone(), output_file_path.to_string_lossy().to_string()).await {
+                eprintln!("[public_download_folder] Failed to download file {}: {}", clean_file_name, e);
+            }
+        } else {
+            // Log or ignore unexpected entries
+            println!("[public_download_folder] Skipping unknown entry: {}", entry.file_name);
         }
+    }
 
-        // Process subfolders recursively
-        for entry in file_entries.iter().filter(|e| e.file_name.ends_with(".s.folder")) {
-            let subfolder_metadata_cid = entry.cid.clone();
-            let subfolder_name = entry.file_name.strip_suffix(".s.folder")
-                .ok_or_else(|| format!("Invalid subfolder metadata filename: {}", entry.file_name))?;
-            
-            // Use Box::pin for the recursive call
-            Box::pin(public_download_folder(
-                _account_id.clone(),
-                subfolder_metadata_cid,
-                subfolder_name.to_string(),
-                output_path.to_string_lossy().to_string()
-            )).await?;
-        }
-
-        Ok(())
-    };
-
-    // Execute the boxed future
-    download_future.await
+    Ok(())
 }
 
 #[tauri::command]
@@ -2396,209 +2322,183 @@ pub async fn encrypt_and_upload_folder_sync(
         return Err("Provided path is not a directory".to_string());
     }
 
-    let folder_name = folder_path.file_name().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+    let folder_name = folder_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+
     if folder_name.is_empty() {
         return Err("Invalid folder path, cannot extract folder name".to_string());
     }
 
-    // Collect all files with their relative paths
-    let mut files_with_paths = Vec::new();
-    collect_files_recursively_with_paths(folder_path, folder_path, &mut files_with_paths)
-        .map_err(|e| {
-            cleanup_db_on_error(&account_id, &folder_name);
-            e.to_string()
-        })?;
+    let folder_tree = crate::utils::folder_tree::FolderNode::build_tree(folder_path).map_err(|e| {
+        cleanup_db_on_error(&account_id, &folder_name);
+        e.to_string()
+    })?;
 
-    println!("[encrypt_and_upload_folder_sync] Found {} files to process.", files_with_paths.len());
-
-    let encryption_key_arc = encryption_key.map(Arc::new);
+    let mut all_files_for_storage = Vec::<(String, String)>::new();
     let processing_results = Arc::new(Mutex::new(Vec::<FileProcessingResultSync>::new()));
-    let all_files_for_storage = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
-    let subfolder_metadata = Arc::new(Mutex::new(Vec::<(String, Vec<FileEntry>, String)>::new()));
 
-    // Process files in parallel
-    stream::iter(files_with_paths)
-        .for_each_concurrent(Some(8), |(file_path, relative_path)| {
-            // Clone all necessary variables for the async block
-            let api_url = Arc::clone(&api_url);
-            let encryption_key = encryption_key_arc.as_ref().map(Arc::clone);
-            let processing_results = Arc::clone(&processing_results);
-            let all_files_for_storage = Arc::clone(&all_files_for_storage);
-            let subfolder_metadata = Arc::clone(&subfolder_metadata);
-            let folder_path = folder_path.to_path_buf();
-            let account_id = account_id.clone();
-            let folder_name = folder_name.clone();
+    let encryption_key_arc = encryption_key.map(Arc::new); // ✅ Fix: properly wrap the encryption key in Arc
 
-            async move {
-                let file_name = file_path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
+    // Recursive helper to process folders and build metadata
+    fn build_metadata_sync(
+        node: &crate::utils::folder_tree::FolderNode,
+        folder_path: &Path,
+        api_url: &Arc<String>,
+        encryption_key: &Option<Arc<Vec<u8>>>,
+        k: usize,
+        m: usize,
+        chunk_size: usize,
+        processing_results: &Arc<Mutex<Vec<FileProcessingResultSync>>>,
+        all_files: &mut Vec<(String, String)>,
+    ) -> Result<(String, String, usize), String> {
+        let mut file_entries = Vec::new();
 
-                if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
-                    return;
-                }
-
-                let is_in_subfolder = !relative_path.is_empty();
-                let ipfs_name = format!("{}{}", 
-                    file_name,
-                    if file_name.ends_with(".ff.ec_metadata") { "" } else { ".ff.ec_metadata" }
-                );
-
-                // Process the file
-                if let Err(e) = process_single_file_for_sync(
-                    file_path.clone(),
-                    folder_path.clone(),
-                    Arc::clone(&api_url),
-                    encryption_key,
-                    k, m, chunk_size,
-                    Arc::clone(&processing_results),
-                ).await {
-                    eprintln!("[!] Error processing file {}: {}", file_name, e);
-                    cleanup_db_on_error(&account_id, &folder_name);
-                    return;
-                }
-
-                // Get the processing result
-                let result = {
-                    let mut results = processing_results.lock().await;
-                    results.pop().unwrap()
-                };
-
-                // Handle storage paths and metadata
-                let storage_name = if is_in_subfolder {
-                    format!("{}.ff.ec_metadata", file_name)
-                } else {
-                    ipfs_name.clone()
-                };
-
-                // Add to storage list
-                {
-                    let mut all_files = all_files_for_storage.lock().await;
-                    all_files.push((storage_name, result.file_entry.cid.clone()));
-                    // Clone the chunk_pairs to avoid partial move
-                    all_files.extend(result.chunk_pairs.clone());
-                }
-
-                // Add to appropriate metadata
-                if is_in_subfolder {
-                    let mut subfolders = subfolder_metadata.lock().await;
-                    let subfolder_path = Path::new(&relative_path);
-                    let subfolder_name = subfolder_path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-
-                    // Find or create subfolder entry
-                    if let Some(entry) = subfolders.iter_mut().find(|(name, _, _)| name == &subfolder_name) {
-                        entry.1.push(FileEntry {
-                            file_name: ipfs_name,
-                            file_size: result.file_entry.file_size,
-                            cid: result.file_entry.cid,
-                        });
-                    } else {
-                        subfolders.push((
-                            subfolder_name,
-                            vec![FileEntry {
-                                file_name: ipfs_name,
-                                file_size: result.file_entry.file_size,
-                                cid: result.file_entry.cid,
-                            }],
-                            relative_path
-                        ));
-                    }
-                } else {
-                    let mut results = processing_results.lock().await;
-                    results.push(result);
-                }
+        use rayon::prelude::*;
+        // Process files in parallel
+        let mut total_size = 0usize;
+        let file_results: Vec<_> = node.files.par_iter().filter_map(|file_path| {
+            let file_name = file_path
+                .file_name()
+                .map(|s| s.to_string_lossy())?;
+            if file_name.starts_with('.') || file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
+                return None;
             }
-        }).await;
+            let clean_file_name = file_name.to_string();
+            let ipfs_name = format!(
+                "{}{}",
+                clean_file_name,
+                if clean_file_name.ends_with(".ff.ec_metadata") {
+                    ""
+                } else {
+                    ".ff.ec_metadata"
+                }
+            );
+            // Each file is processed in its own thread, but we must synchronize access to processing_results
+            let process_result = futures::executor::block_on(process_single_file_for_sync(
+                file_path.clone(),
+                folder_path.to_path_buf(),
+                Arc::clone(api_url),
+                encryption_key.clone(),
+                k,
+                m,
+                chunk_size,
+                Arc::clone(processing_results),
+            ));
+            match process_result {
+                Ok(_) => {
+                    let mut results = futures::executor::block_on(processing_results.lock());
+                    let result = results.pop()?;
+                    Some((FileEntry {
+                        file_name: ipfs_name.clone(),
+                        file_size: result.file_entry.file_size,
+                        cid: result.file_entry.cid.clone(),
+                    }, result.chunk_pairs.clone(), (ipfs_name, result.file_entry.cid.clone())))
+                },
+                Err(_) => None,
+            }
+        }).collect();
+        for (entry, chunk_pairs, file_pair) in file_results {
+            total_size += entry.file_size;
+            file_entries.push(entry);
+            all_files.extend(chunk_pairs);
+            all_files.push(file_pair);
+        }
 
-    // After all files are processed, collect the results
-    let subfolder_metadata = match Arc::try_unwrap(subfolder_metadata) {
-        Ok(mutex) => mutex.into_inner(),
-        Err(_) => return Err("Failed to unwrap subfolder_metadata".to_string()),
-    };
+        // Recursively process subfolders (sequential to allow mutable borrow)
+        for child in &node.children {
+            if let Ok((meta_name, meta_cid, subfolder_size)) = build_metadata_sync(
+                child,
+                folder_path,
+                api_url,
+                encryption_key,
+                k,
+                m,
+                chunk_size,
+                processing_results,
+                all_files,
+            ) {
+                total_size += subfolder_size;
+                file_entries.push(FileEntry {
+                    file_name: meta_name.clone(),
+                    file_size: subfolder_size,
+                    cid: meta_cid.clone(),
+                });
+                all_files.push((meta_name, meta_cid));
+            }
+        }
 
-    let processing_results = match Arc::try_unwrap(processing_results) {
-        Ok(mutex) => mutex.into_inner(),
-        Err(_) => return Err("Failed to unwrap processing_results".to_string()),
-    };
+        // Metadata creation
+        let this_folder_name = node
+            .path
+            .file_name()
+            .ok_or("Invalid folder path".to_string())?
+            .to_string_lossy();
 
-    let root_file_entries: Vec<FileEntry> = processing_results.into_iter().map(|r| r.file_entry).collect();
-
-    // Get the all_files_for_storage data
-    let all_files_for_storage = match Arc::try_unwrap(all_files_for_storage) {
-        Ok(mutex) => mutex.into_inner(),
-        Err(_) => return Err("Failed to unwrap all_files_for_storage".to_string()),
-    };
-
-    // Upload subfolder metadata and add to root entries
-    let mut final_root_entries = root_file_entries;
-    let mut all_files_for_storage = all_files_for_storage; // Make mutable
-
-    for (subfolder_name, entries, relative_path) in subfolder_metadata {
-        let metadata_name = format!("{}.s.folder.ec_metadata", subfolder_name);
-        let metadata_json = serde_json::to_vec(&entries)
-            .map_err(|e| {
-                cleanup_db_on_error(&account_id, &folder_name);
-                e.to_string()
-            })?;
-
-        let metadata_cid = upload_bytes_to_ipfs(&api_url, metadata_json, &metadata_name).await
-            .map_err(|e| {
-                cleanup_db_on_error(&account_id, &folder_name);
-                e.to_string()
-            })?;
-
-        // Add the subfolder metadata to storage list
-        let storage_path = if !relative_path.is_empty() {
-            format!("{}",metadata_name)
+        let is_root = node.path == folder_path;
+        let metadata_name = if is_root {
+            format!("{}.ec_metadata", this_folder_name)
         } else {
-            metadata_name.clone()
+            format!("{}.s.folder.ec_metadata", this_folder_name)
         };
-        all_files_for_storage.push((storage_path, metadata_cid.clone()));
 
-        final_root_entries.push(FileEntry {
-            file_name: metadata_name.clone(),
-            file_size: 0,
-            cid: metadata_cid,
-        });
+        let metadata_json = serde_json::to_vec(&file_entries)
+            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+
+        let metadata_cid = futures::executor::block_on(upload_bytes_to_ipfs(
+            api_url,
+            metadata_json,
+            &metadata_name,
+        ))
+        .map_err(|e| format!("Failed to upload metadata: {}", e))?;
+
+        Ok((metadata_name, metadata_cid, total_size))
     }
 
-    // Create and upload root folder metadata
-    let folder_metadata_filename = format!("{}.folder.ec_metadata", folder_name);
-    let folder_metadata_json = serde_json::to_string_pretty(&final_root_entries)
-        .map_err(|e| {
-            cleanup_db_on_error(&account_id, &folder_name);
-            e.to_string()
-        })?;
+    // ✅ Build root metadata recursively
+    let (root_metadata_name, root_metadata_cid, _root_total_size) = build_metadata_sync(
+        &folder_tree,
+        folder_path,
+        &api_url,
+        &encryption_key_arc,
+        k,
+        m,
+        chunk_size,
+        &processing_results,
+        &mut all_files_for_storage,
+    )?;
 
-    let folder_metadata_cid = upload_bytes_to_ipfs(&api_url, folder_metadata_json.as_bytes().to_vec(), &folder_metadata_filename).await
-        .map_err(|e| {
-            cleanup_db_on_error(&account_id, &folder_name);
-            e.to_string()
-        })?;
+    all_files_for_storage.push((root_metadata_name.clone(), root_metadata_cid.clone()));
 
-    // Add the root folder metadata to storage list
-    all_files_for_storage.push((folder_metadata_filename.clone(), folder_metadata_cid.clone()));
+    let storage_result =
+        request_erasure_storage(&root_metadata_name, &all_files_for_storage, &api_url, &seed_phrase).await;
 
-    let storage_result = request_erasure_storage(&folder_metadata_filename, &all_files_for_storage, &api_url, &seed_phrase).await;
+    println!(
+        "[encrypt_and_upload_folder_sync] Storage request root metadata: {}",
+        root_metadata_name
+    );
 
     match storage_result {
         Ok(res) => {
             copy_to_sync_and_add_to_db(
                 folder_path,
                 &account_id,
-                &folder_metadata_cid,
+                &root_metadata_cid,
                 &res,
                 false,
                 true,
-                &folder_metadata_filename,
-                false, 
-            ).await;
-            println!("[encrypt_and_upload_folder_sync] Storage request result: {}", res);
-            Ok(folder_metadata_cid)
+                &root_metadata_name,
+                false,
+            )
+            .await;
+
+            println!(
+                "[encrypt_and_upload_folder_sync] Storage request result: {}",
+                res
+            );
+            Ok(root_metadata_cid)
         }
         Err(e) => {
             cleanup_db_on_error(&account_id, &folder_name);
@@ -2628,6 +2528,12 @@ fn collect_files_recursively_with_paths(
         if path.is_dir() {
             collect_files_recursively_with_paths(root_path, &path, files)?;
         } else {
+            // Skip hidden files (those starting with '.')
+            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                if file_name.starts_with('.') {
+                    continue;
+                }
+            }
             files.push((path, relative_path));
         }
     }
@@ -2851,149 +2757,98 @@ pub async fn public_upload_folder_sync(
         }
     }
 
+    // Use the recursive helper to upload folder and subfolders with hierarchical metadata
     let folder_path_cloned = folder_path.to_path_buf();
     let api_url_cloned = api_url.to_string();
     let folder_name_cloned = folder_name.clone();
     let (folder_name_from_task, root_metadata_cid, file_cid_pairs) = tokio::task::spawn_blocking(move || {
-        // Collect all folder paths (including subfolders)
-        let mut folders = vec![folder_path_cloned.clone()];
-        collect_folders_recursively(&folder_path_cloned, &mut folders)
-            .map_err(|e| format!("Failed to collect folders: {}", e))?;
+        let mut all_files = Vec::new();
+        // Recursively upload and collect all files and metadata
+        let (root_metadata_name, root_metadata_cid, root_only_files) = {
+            // Custom version to get only direct children for root metadata
+            fn upload_root_and_collect(
+                folder_path: &Path,
+                api_url: &str,
+                all_files: &mut Vec<(String, String)>,
+            ) -> Result<(String, String, Vec<(String, String)>), String> {
+                use std::fs;
+                use crate::commands::types::FileEntry;
+                use tempfile::tempdir;
+                let mut file_entries = Vec::new();
+                let mut files = Vec::new();
+                let mut subfolders = Vec::new();
 
-        let mut all_metadata = Vec::new();
-        let mut file_cid_pairs = Vec::new();
-        let temp_dir = tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
-
-        // Process folders in reverse order (deepest first)
-        folders.sort_by(|a, b| b.cmp(a));
-
-        // First pass: upload all files and create metadata for subfolders
-        let mut subfolder_metadata = Vec::new();
-        for folder in &folders {
-            if *folder == folder_path_cloned {
-                continue; // Skip root folder for now
-            }
-
-            let relative_path = folder.strip_prefix(&folder_path_cloned)
-                .map_err(|e| format!("Failed to get relative path: {}", e))?
-                .to_str()
-                .ok_or("Invalid relative path".to_string())?;
-
-            let mut file_entries = Vec::new();
-            let mut files = Vec::new();
-            collect_files_in_folder(&folder, &mut files)
-                .map_err(|e| format!("Failed to collect files: {}", e))?;
-
-            let mut total_folder_size = 0;
-            // Process files in this folder
-            for file_path in files {
-                let file_name = file_path.file_name()
-                    .ok_or("Invalid file path".to_string())?
-                    .to_string_lossy()
-                    .to_string();
-                
-                if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
-                    continue;
+                for entry in fs::read_dir(folder_path).map_err(|e| format!("Failed to read dir: {}", e))? {
+                    let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+                    let path = entry.path();
+                    if path.is_dir() {
+                        subfolders.push(path);
+                    } else {
+                        files.push(path);
+                    }
                 }
 
-                let ipfs_name = format!("{}{}", file_name, if file_name.ends_with(".ff") { "" } else { ".ff" });
+                // Upload files in this folder
+                let mut root_only_files = Vec::new();
+                for file_path in &files {
+                    let file_name = file_path.file_name()
+                        .ok_or("Invalid file path".to_string())?
+                        .to_string_lossy();
+                    if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
+                        continue;
+                    }
+                    let ipfs_name = if file_name.ends_with(".ff") {
+                        file_name.to_string()
+                    } else {
+                        format!("{}.ff", file_name)
+                    };
+                    let cid = upload_to_ipfs(api_url, file_path.to_str().unwrap())
+                        .map_err(|e| format!("Failed to upload file: {}", e))?;
+                    let file_size = file_path.metadata()
+                        .map_err(|e| format!("Failed to get file metadata: {}", e))?
+                        .len() as usize;
+                    file_entries.push(FileEntry {
+                        file_name: ipfs_name.clone(),
+                        file_size,
+                        cid: cid.clone(),
+                    });
+                    all_files.push((ipfs_name.clone(), cid.clone()));
+                    root_only_files.push((ipfs_name, cid));
+                }
 
-                let file_data = fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e))?;
-                let file_size = file_data.len();
-                let mut hasher = Sha256::new();
-                hasher.update(&file_data);
-                let _original_file_hash = format!("{:x}", hasher.finalize());
-                let cid = upload_to_ipfs(&api_url_cloned, file_path.to_str().unwrap())
-                    .map_err(|e| format!("Failed to upload file: {}", e))?;
-                
-                total_folder_size += file_size;
-                file_entries.push(FileEntry {
-                    file_name: ipfs_name.clone(),
-                    file_size,
-                    cid: cid.clone(),
-                });
-                file_cid_pairs.push((ipfs_name, cid));
+                // Recursively process subfolders, but only add their metadata to root
+                for subfolder_path in &subfolders {
+                    let (meta_name, meta_cid, subfolder_size) = upload_folder_recursive_public(
+                        subfolder_path,
+                        api_url,
+                        false,
+                        all_files,
+                    )?;
+                    file_entries.push(FileEntry {
+                        file_name: meta_name.clone(),
+                        file_size: subfolder_size,
+                        cid: meta_cid.clone(),
+                    });
+                    all_files.push((meta_name.clone(), meta_cid.clone()));
+                    root_only_files.push((meta_name, meta_cid));
+                }
+
+                // Write and upload metadata for this folder
+                let metadata_name = format!("{}.folder", folder_path.file_name().unwrap().to_string_lossy());
+                let temp_dir = tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+                let metadata_path = temp_dir.path().join("metadata.json");
+                fs::write(&metadata_path, serde_json::to_vec(&file_entries)
+                    .map_err(|e| format!("Failed to serialize metadata: {}", e))?)
+                    .map_err(|e| format!("Failed to write metadata: {}", e))?;
+                let metadata_cid = upload_to_ipfs(api_url, metadata_path.to_str().unwrap())
+                    .map_err(|e| format!("Failed to upload metadata: {}", e))?;
+                all_files.push((metadata_name.clone(), metadata_cid.clone()));
+                root_only_files.push((metadata_name.clone(), metadata_cid.clone()));
+                Ok((metadata_name, metadata_cid, all_files.clone()))
             }
-
-            // Create subfolder metadata
-            let subfolder_name = folder.file_name()
-                .ok_or("Invalid subfolder path".to_string())?
-                .to_string_lossy()
-                .to_string();
-            let metadata_name = format!("{}.s.folder", subfolder_name);
-
-            let metadata_path = temp_dir.path().join("metadata.json");
-            fs::write(&metadata_path, serde_json::to_vec(&file_entries)
-                .map_err(|e| format!("Failed to serialize metadata: {}", e))?)
-                .map_err(|e| format!("Failed to write metadata: {}", e))?;
-            let metadata_cid = upload_to_ipfs(&api_url_cloned, metadata_path.to_str().unwrap())
-                .map_err(|e| format!("Failed to upload metadata: {}", e))?;
-            
-            file_cid_pairs.push((metadata_name.clone(), metadata_cid.clone()));
-            subfolder_metadata.push((relative_path.to_string(), metadata_name, metadata_cid, total_folder_size));
-        }
-
-        // Second pass: process root folder with references to subfolders
-        let mut root_file_entries = Vec::new();
-        let mut root_files = Vec::new();
-        collect_files_in_folder(&folder_path_cloned, &mut root_files)
-            .map_err(|e| format!("Failed to collect root files: {}", e))?;
-
-        // Process files in root folder
-        for file_path in root_files {
-            let file_name = file_path.file_name()
-                .ok_or("Invalid file path".to_string())?
-                .to_string_lossy()
-                .to_string();
-            
-            if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
-                continue;
-            }
-
-            let ipfs_name = if file_name.ends_with(".ff") {
-                file_name
-            } else {
-                format!("{}.ff", file_name)
-            };
-
-            let file_data = fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e))?;
-            let file_size = file_data.len();
-            let mut hasher = Sha256::new();
-            hasher.update(&file_data);
-            let _original_file_hash = format!("{:x}", hasher.finalize());
-            let cid = upload_to_ipfs(&api_url_cloned, file_path.to_str().unwrap())
-                .map_err(|e| format!("Failed to upload file: {}", e))?;
-            
-            root_file_entries.push(FileEntry {
-                file_name: ipfs_name.clone(),
-                file_size,
-                cid: cid.clone(),
-            });
-            file_cid_pairs.push((ipfs_name, cid));
-        }
-
-        // Add references to subfolders in root metadata with actual sizes
-        for (_relative_path, metadata_name, cid, total_folder_size) in subfolder_metadata {
-            root_file_entries.push(FileEntry {
-                file_name: metadata_name,
-                file_size: total_folder_size,
-                cid,
-            });
-        }
-
-        // Create root folder metadata
-        let root_metadata_name = format!("{}.folder", folder_name_cloned);
-        let root_metadata_path = temp_dir.path().join("root_metadata.json");
-        fs::write(&root_metadata_path, serde_json::to_vec(&root_file_entries)
-            .map_err(|e| format!("Failed to serialize root metadata: {}", e))?)
-            .map_err(|e| format!("Failed to write root metadata: {}", e))?;
-        let root_metadata_cid = upload_to_ipfs(&api_url_cloned, root_metadata_path.to_str().unwrap())
-            .map_err(|e| format!("Failed to upload root metadata: {}", e))?;
-        
-        file_cid_pairs.push((root_metadata_name.clone(), root_metadata_cid.clone()));
-        all_metadata.push((root_metadata_name, root_metadata_cid));
-
-        Ok::<(String, String, Vec<(String, String)>), String>((folder_name_cloned, all_metadata[0].1.clone(), file_cid_pairs))
+            upload_root_and_collect(&folder_path_cloned, &api_url_cloned, &mut all_files)?
+        };
+        Ok::<(String, String, Vec<(String, String)>), String>((folder_name_cloned, root_metadata_cid,  all_files.clone()))
     })
     .await
     .map_err(|e| {
@@ -3012,8 +2867,9 @@ pub async fn public_upload_folder_sync(
     let meta_folder_name = format!("{}{}", folder_name_from_task, if folder_name_from_task.ends_with(".folder") { "" } else { ".folder" });
     
     // Build files array: folder metadata + all file CIDs
-    let mut files_for_storage = Vec::with_capacity(file_cid_pairs.len());
+    let mut files_for_storage = Vec::with_capacity(file_cid_pairs.len()+1);
     files_for_storage.extend(file_cid_pairs);
+
     println!("[public_upload_folder_sync] root_metadata_cid {:?}", root_metadata_cid);
     // Submit storage request
     let storage_result = request_folder_storage(&meta_folder_name.clone(), &files_for_storage, api_url, &seed_phrase).await;

@@ -52,7 +52,7 @@ const buttonCardVariants = ({
       break;
     case "dialog":
       variantClasses = cn(
-        "relative overflow-hidden bg-primary-50 hover:bg-primary-40 text-white border border-primary-40 rounded shadow-outer-buttonCard",
+        "relative overflow-hidden bg-primary-50 hover:bg-primary-40 text-white border border-primary-40 rounded shadow-outer-action-button",
         classes.primary
       );
       break;
@@ -116,10 +116,10 @@ const ButtonCardOrLinkInner: React.FC<{
           <div className="absolute border rounded border-primary-40 left-0.5 right-0.5 top-0.5 bottom-0.5 shadow-inner-buttonCard" />
         )}
         {variant === "dialog" && (
-          <div className="absolute border rounded border-primary-40 left-1.5 right-1.5 top-1.5 bottom-1.5 shadow-inner-buttonCard" />
+          <div className="absolute border rounded border-primary-40 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-action-button" />
         )}
         {variant === "error" && (
-          <div className="absolute border rounded border-error-70/80 left-1.5 right-1.5 top-1.5 bottom-1.5 shadow-inner-buttonCard shadow-md" />
+          <div className="absolute border rounded border-error-70/80 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-buttonCard shadow-md" />
         )}
 
         {appendToStart && icon && (

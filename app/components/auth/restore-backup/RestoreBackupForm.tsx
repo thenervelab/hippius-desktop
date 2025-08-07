@@ -7,7 +7,7 @@ import React, {
   useCallback,
   DragEvent,
   ChangeEvent,
-  useEffect
+  useEffect,
 } from "react";
 import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
@@ -15,15 +15,15 @@ import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   AbstractIconWrapper,
+  BackButton,
   Button,
   Icons,
   Input,
-  RevealTextLine
+  RevealTextLine,
 } from "@/components/ui";
 import { Eye, EyeOff, Key } from "@/components/ui/icons";
 import { InView } from "react-intersection-observer";
 import BoxSimple from "@/components/ui/icons/BoxSimple";
-import Link from "next/link";
 import { restoreWalletFromZip } from "@/app/lib/helpers/restoreWallet";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
@@ -166,12 +166,7 @@ const RestoreBackupForm: React.FC = () => {
               {/* File Drop Zone */}
               <div className="flex flex-col xl:gap-4 gap-2">
                 <RevealTextLine rotate reveal={inView} className="delay-300">
-                  <div className="text-lg font-medium flex items-center gap-2 text-grey-10">
-                    <Link href="/signup">
-                      <Icons.ArrowLeft className="size-6" />
-                    </Link>
-                    <div>Upload your file</div>
-                  </div>
+                  <BackButton href={"login"} text="Upload your file" />
                 </RevealTextLine>
                 <RevealTextLine
                   rotate
@@ -209,7 +204,7 @@ const RestoreBackupForm: React.FC = () => {
                               setFile(null);
                               setFieldError((prev) => ({
                                 ...prev,
-                                file: null
+                                file: null,
                               }));
                               if (fileInput.current)
                                 fileInput.current.value = "";
@@ -267,7 +262,7 @@ const RestoreBackupForm: React.FC = () => {
                       type={showPasscode ? "text" : "password"}
                       value={passCode}
                       onChange={handlePasscodeChange}
-                      className="pl-11 border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
+                      className="pl-11 border-grey-80 h-14 text-grey-30 w-full bg-grey-100 py-4 font-medium text-base rounded-lg outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
                     />
                     {!showPasscode ? (
                       <Eye
@@ -305,7 +300,7 @@ const RestoreBackupForm: React.FC = () => {
                 >
                   <Button
                     type="submit"
-                    className="w-full h-[60px] text-white font-medium text-lg"
+                    className="w-full h-[48px] text-white font-medium text-lg"
                     disabled={restoring}
                     icon={<Icons.ArrowRight />}
                   >

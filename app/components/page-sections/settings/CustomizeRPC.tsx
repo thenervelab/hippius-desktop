@@ -241,7 +241,7 @@ const CustomizeRPC: React.FC = () => {
                 >
                   <CardButton
                     type="submit"
-                    className="max-w-[160px] h-[60px]"
+                    className="max-w-[160px] h-[48px]"
                     variant="dialog"
                     disabled={saving || testing || !hasEndpointChanged}
                     onClick={handleSave}

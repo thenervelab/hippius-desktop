@@ -106,7 +106,7 @@ const SplashScreen = () => {
               </RevealTextLine>
               <RevealTextLine
                 reveal={inView}
-                className="delay-400 lg:mb-16 mb-6"
+                className="delay-400  [@media(max-height:750px)]:mb-[15%] lg:mb-[27%] mb-4"
               >
                 <AnimatePresence mode="wait">
                   <motion.div

@@ -81,8 +81,8 @@ const AccessKeyForm: React.FC<AccessKeyFormProps> = ({
                       type={showAccessKey ? "text" : "password"}
                       value={mnemonic}
                       onChange={(e) => setMnemonic(e.target.value)}
-                      className="px-11 border-grey-80 h-14 text-grey-30 w-full
-              bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none 
+                      className="bg-grey-100 px-11 border-grey-80 h-14 text-grey-30 w-full
+               py-4 font-medium text-base rounded-lg duration-300 outline-none 
               hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
                     />
                     {!showAccessKey ? (
@@ -116,7 +116,7 @@ const AccessKeyForm: React.FC<AccessKeyFormProps> = ({
                   <Button
                     type="submit"
                     className={cn(
-                      "w-full h-[60px] text-white font-medium text-lg"
+                      "w-full h-[48px] text-white font-medium text-lg"
                     )}
                     disabled={logginIn}
                     icon={<Icons.ArrowRight />}
