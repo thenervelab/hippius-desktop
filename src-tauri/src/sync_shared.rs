@@ -78,6 +78,11 @@ pub fn collect_files_in_folder(dir: &Path, files: &mut Vec<PathBuf>) -> std::io:
         let entry = entry?;
         let path = entry.path();
         if path.is_file() {
+            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                if file_name.starts_with('.') {
+                    continue; // Skip hidden files
+                }
+            }
             files.push(path);
         }
     }

@@ -18,6 +18,7 @@ dependencies = [
  "once_cell",
  "parity-scale-codec",
  "rand 0.8.5",
+ "rayon",
  "reed-solomon-erasure",
  "reqwest",
  "serde",
