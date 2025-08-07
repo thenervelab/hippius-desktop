@@ -53,7 +53,7 @@ pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
         base_name.to_string(),
         format!("{}.ec_metadata", base_name),
         format!("{}.ff", base_name),
-        format!("{}.ff_ec_metadata", base_name),
+        format!("{}.ff.ec_metadata", base_name),
         format!("{}.ec", base_name),
         format!("{}-folder", base_name),
         format!("{}-folder.ec_metadata", base_name),
@@ -670,6 +670,7 @@ pub async fn copy_to_sync_folder(
     is_public: bool,
     is_folder: bool,
     meta_folder_name: &str,
+    subfolder_path: Option<String>,
 ) {
     // Choose sync folder path
     let sync_folder = if is_public {
@@ -690,10 +691,10 @@ pub async fn copy_to_sync_folder(
         }
     };
 
-    let target_folder = sync_folder.join(folder_name);
+    let target_folder = sync_folder.join(subfolder_path.unwrap_or_else(|| folder_name.to_string()));
     if !target_folder.exists() {
         if let Err(e) = std::fs::create_dir_all(&target_folder) {
-            eprintln!("Failed to create target folder '{}': {}", folder_name, e);
+            eprintln!("Failed to create target folder '{}': {}", target_folder.display(), e);
             return;
         }
     }
@@ -853,7 +854,7 @@ pub async fn copy_to_sync_folder(
         let folder_relative_path = PathBuf::from(folder_name).join(&file_name);
         insert_file_if_not_exists(pool, &folder_relative_path, account_id, is_public, is_folder).await;
     }
-
+    println!("copying file to sync folder {}", dest_path.display());
     if is_folder {
         if !dest_path.exists() {
             if let Err(e) = std::fs::create_dir_all(&dest_path) {
@@ -894,7 +895,8 @@ pub async fn remove_from_sync_folder(
     meta_folder_name: &str,
     folder_manifest_cid: &str,
     account_id: &str,
-    requested_cid: &str
+    requested_cid: &str,
+    subfolder_path: Option<String>,
 ) {
     let sync_folder = if is_public {
         match get_public_sync_path().await {
@@ -914,7 +916,11 @@ pub async fn remove_from_sync_folder(
         }
     };
 
-    let target_folder = sync_folder.join(folder_name);
+    let target_folder = if let Some(ref subpath) = subfolder_path {
+        sync_folder.join(subpath)
+    } else {
+        sync_folder.join(folder_name)
+    };
     let sync_file_path = target_folder.join(file_name);
 
     // Update sync status before any async operations
