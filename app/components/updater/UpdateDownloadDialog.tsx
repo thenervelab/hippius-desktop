@@ -220,7 +220,7 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
                       >
                         <CardButton
                           variant="dialog"
-                          className="w-[208px] h-[60px] py-4 text-base"
+                          className="w-[208px] h-[48px] py-4 text-base"
                           onClick={handleDownload}
                         >
                           Update Now

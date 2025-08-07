@@ -249,7 +249,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                   <Button
                     type="submit"
                     className={cn(
-                      "w-full h-[60px] text-white font-medium text-lg"
+                      "w-full h-[48px] text-white font-medium text-lg"
                     )}
                     disabled={logginIn || phase !== "ready"}
                     icon={<Icons.ArrowRight />}

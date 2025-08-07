@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState } from "react";
-import { Icons, RevealTextLine, IconButton } from "@/components/ui";
+import { Icons, RevealTextLine, IconButton, BackButton } from "@/components/ui";
 import { toast } from "sonner";
 import SectionHeader from "../SectionHeader";
 import { getWalletRecord } from "@/app/lib/helpers/walletDb";
@@ -111,13 +111,7 @@ const ImportEncryptionKey: React.FC<ImportEncryptionKeyProps> = ({
         className="delay-300 w-full"
       >
         <div className="w-full flex flex-col gap-4">
-          <button
-            className="flex gap-2 font-semibold text-lg items-center"
-            onClick={onBack}
-          >
-            <Icons.ArrowLeft className="size-5 text-grey-10" />
-            Back
-          </button>
+          <BackButton onBack={onBack} />
           <SectionHeader
             Icon={Icons.ShieldSecurity}
             title="Import Encryption Key"
@@ -176,14 +170,14 @@ const ImportEncryptionKey: React.FC<ImportEncryptionKeyProps> = ({
         <RevealTextLine
           rotate
           reveal={inView}
-          className="delay-300 w-full mt-11"
+          className="delay-300 w-full mt-6"
         >
           <IconButton
             type="submit"
-            outerPadding="p-1.5"
+            outerPadding="p-[5px]"
             innerPadding="px-6 py-2.5"
             fontSizeClass="text-lg"
-            innerClassName="h-12"
+            innerClassName="h-9"
             text={isImporting ? "Importing..." : "Import Key"}
             onClick={handleImportKey}
             disabled={isImporting || !passcode || !encryptionKey.trim()}

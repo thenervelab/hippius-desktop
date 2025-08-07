@@ -18,7 +18,7 @@ interface CreateAccountFormProps {
 const CreateAccountForm: React.FC<CreateAccountFormProps> = ({
   setShowPasscodeFields,
 
-  mnemonic
+  mnemonic,
 }) => {
   const [error, setError] = useState<string | null>(null);
   const [SigningUp, setSigningUp] = useState(false);
@@ -116,7 +116,7 @@ const CreateAccountForm: React.FC<CreateAccountFormProps> = ({
                   <Button
                     type="submit"
                     className={cn(
-                      "w-full h-[60px] text-white font-medium text-lg"
+                      "w-full h-[48px] text-white font-medium text-lg"
                     )}
                     disabled={SigningUp}
                     icon={<Icons.ArrowRight />}
