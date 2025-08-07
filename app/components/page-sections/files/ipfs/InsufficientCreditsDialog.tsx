@@ -2,6 +2,7 @@ import React from "react";
 import { useAtom } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "./atoms/query-atoms";
 import { Icons, CardButton, AbstractIconWrapper } from "@/components/ui";
+import { openLinkByKey } from "@/app/lib/utils/links";
 
 const InsufficientCreditsDialog: React.FC = () => {
     const [isOpen, setIsOpen] = useAtom(insufficientCreditsDialogOpenAtom);
@@ -12,6 +13,15 @@ const InsufficientCreditsDialog: React.FC = () => {
             setIsOpen(false);
         }
     };
+
+    const handleOpenConsoleBillingPage = () => {
+        setIsOpen(false)
+        openLinkByKey("BILLING");
+    }
+    const handleOpenConsoleCreditsPage = () => {
+        setIsOpen(false)
+        openLinkByKey("CREDITS");
+    }
 
     return (
         <div
@@ -35,9 +45,7 @@ const InsufficientCreditsDialog: React.FC = () => {
                     <div className="flex flex-col w-full gap-y-2">
                         <CardButton
                             className="w-full"
-                            asLink
-                            href="/dashboard/billing/plans"
-                            onClick={() => setIsOpen(false)}
+                            onClick={handleOpenConsoleCreditsPage}
                         >
                             Buy Credits
                         </CardButton>
@@ -45,9 +53,7 @@ const InsufficientCreditsDialog: React.FC = () => {
                         <CardButton
                             variant="secondary"
                             className="w-full"
-                            asLink
-                            href="/dashboard/billing"
-                            onClick={() => setIsOpen(false)}
+                            onClick={handleOpenConsoleBillingPage}
                         >
                             Subscribe
                         </CardButton>
