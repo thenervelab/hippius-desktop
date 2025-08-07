@@ -16,7 +16,7 @@ interface ConfirmAccessKeyProps {
 const ConfirmAccessKey: React.FC<ConfirmAccessKeyProps> = ({
   mnemonic,
   onBack,
-  onContinue
+  onContinue,
 }) => {
   const [enteredKey, setEnteredKey] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -100,8 +100,8 @@ const ConfirmAccessKey: React.FC<ConfirmAccessKeyProps> = ({
                       type={showKey ? "text" : "password"}
                       value={enteredKey}
                       onChange={(e) => setEnteredKey(e.target.value)}
-                      className="px-11 border-grey-80 h-14 text-grey-30 w-full
-                                  bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none 
+                      className="bg-grey-100 px-11 border-grey-80 h-14 text-grey-30 w-full
+                                   py-4 font-medium text-base rounded-lg duration-300 outline-none 
                                   hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
                     />
                     {!showKey ? (

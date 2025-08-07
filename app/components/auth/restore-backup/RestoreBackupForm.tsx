@@ -7,7 +7,7 @@ import React, {
   useCallback,
   DragEvent,
   ChangeEvent,
-  useEffect
+  useEffect,
 } from "react";
 import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
@@ -18,7 +18,7 @@ import {
   Button,
   Icons,
   Input,
-  RevealTextLine
+  RevealTextLine,
 } from "@/components/ui";
 import { Eye, EyeOff, Key } from "@/components/ui/icons";
 import { InView } from "react-intersection-observer";
@@ -209,7 +209,7 @@ const RestoreBackupForm: React.FC = () => {
                               setFile(null);
                               setFieldError((prev) => ({
                                 ...prev,
-                                file: null
+                                file: null,
                               }));
                               if (fileInput.current)
                                 fileInput.current.value = "";
@@ -267,7 +267,7 @@ const RestoreBackupForm: React.FC = () => {
                       type={showPasscode ? "text" : "password"}
                       value={passCode}
                       onChange={handlePasscodeChange}
-                      className="pl-11 border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
+                      className="pl-11 border-grey-80 h-14 text-grey-30 w-full bg-grey-100 py-4 font-medium text-base rounded-lg outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
                     />
                     {!showPasscode ? (
                       <Eye

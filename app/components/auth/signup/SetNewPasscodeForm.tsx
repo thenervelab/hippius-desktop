@@ -16,20 +16,20 @@ import { phaseAtom } from "../../splash-screen/atoms";
 import {
   addNotification,
   isFirstTime,
-  listNotifications
+  listNotifications,
 } from "@/app/lib/helpers/notificationsDb";
 
 const passcodeFields = [
   {
     name: "newPassCode",
     label: "Set a Passcode",
-    placeholder: "Enter Passcode"
+    placeholder: "Enter Passcode",
   },
   {
     name: "confirmPassCode",
     label: "Confirm your Passcode",
-    placeholder: "Confirm Passcode"
-  }
+    placeholder: "Confirm Passcode",
+  },
 ];
 type PasscodeField = "newPassCode" | "confirmPassCode";
 type FieldErrorState = { [key in PasscodeField]?: string | null };
@@ -40,7 +40,7 @@ interface PassCodeFormProps {
 const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
   const [passCode, setPasscode] = useState({
     newPassCode: "",
-    confirmPassCode: ""
+    confirmPassCode: "",
   });
   const [error, setError] = useState<string | null>(null);
   const [logginIn, setLoggingIn] = useState(false);
@@ -108,7 +108,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
           notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
           notificationDescription: `🎉 Welcome to Hippius! You’re now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you’re spending. You can check your remaining credits at any time in the Wallets tab, and top up when you need more. When you’re ready, tap Check Out to launch your first storage session.`,
           notificationLinkText: "Check Out",
-          notificationLink: "/files"
+          notificationLink: "/files",
         });
       }
     }
@@ -190,8 +190,8 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                           onChange={(e) =>
                             handleInputChange(e, item.name as PasscodeField)
                           }
-                          className="pl-11 border-grey-80 h-14 text-grey-30 w-full
-                                  bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none 
+                          className="bg-grey-100 pl-11 border-grey-80 h-14 text-grey-30 w-full
+                                   py-4 font-medium text-base rounded-lg duration-300 outline-none 
                                   hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
                         />
                         {!showPasscode ? (
@@ -257,8 +257,8 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                     {logginIn
                       ? "Creating Account..."
                       : phase !== "ready"
-                        ? "Initializing..."
-                        : "Create Account"}
+                      ? "Initializing..."
+                      : "Create Account"}
                   </Button>
                 </RevealTextLine>
               </div>
