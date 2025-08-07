@@ -19,12 +19,12 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   initialPath,
   isFromSettingsPage = false,
   handleBackClick,
-  isPrivateView = true
+  isPrivateView = true,
 }) => {
   const [suggested, setSuggested] = useState({
     desktop: "",
     documents: "",
-    downloads: ""
+    downloads: "",
   });
   const [selected, setSelected] = useState<string | null>(null);
   const [custom, setCustom] = useState<string | null>(null);
@@ -61,7 +61,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
       const p = await open({
         directory: true,
         multiple: false,
-        title: "Select Folder to Sync"
+        title: "Select Folder to Sync",
       });
       if (typeof p === "string") {
         setCustom(p);
@@ -220,7 +220,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
       </div>
       <div className="flex justify-end p-5">
         <CardButton
-          className="max-w-[160px] h-[60px]"
+          className="max-w-[160px] h-[48px]"
           variant="dialog"
           disabled={loading || !selected}
           loading={loading}

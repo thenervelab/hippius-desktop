@@ -25,7 +25,7 @@ const ResetAppData = () => {
       toast.success(
         "Local data cleared. You can restore everything with your backup.",
         {
-          duration: 4000
+          duration: 4000,
         }
       );
       setSettingsDialogOpen(false);
@@ -57,7 +57,7 @@ const ResetAppData = () => {
 
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <CardButton
-              className="text-base h-[60px]"
+              className="text-base h-[48px]"
               variant="error"
               onClick={openDialog}
             >

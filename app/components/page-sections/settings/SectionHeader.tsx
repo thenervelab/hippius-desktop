@@ -16,7 +16,7 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
   title,
   subtitle,
   iconSize = "large",
-  info = ""
+  info = "",
 }) => {
   const wrapperSize = iconSize === "small" ? "size-8" : "size-8 sm:size-10";
   const iconSizeClass = iconSize === "small" ? "size-4" : "size-5 sm:size-6";
@@ -27,12 +27,12 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
         <Icon className={`absolute ${iconSizeClass} text-primary-50`} />
       </AbstractIconWrapper>
       <div className="flex flex-col">
-        <div className="flex gap-2">
-          <h2 className="text-lg leading-6 text-grey-10 font-medium">
+        <div className="flex gap-2 mb-0.5">
+          <div className="text-[16px] leading-[18px] text-grey-10 font-medium">
             {title}
-          </h2>
+          </div>
           {info && (
-            <div className="size-6  flex items-center justify-center">
+            <div className="size-4  flex items-center justify-center">
               <InfoTooltip iconColor="text-grey-60">{info}</InfoTooltip>
             </div>
           )}

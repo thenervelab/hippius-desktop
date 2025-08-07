@@ -29,7 +29,10 @@ export default {
         "outer-button":
           "0px 4px 4px 0px #0441951A,0px 2px 9px 0px #3D8CFA99 inset",
         dialog: "0px 12px 36px 0px #00000024",
-
+        "inner-action-button":
+          "0 2px 9px 0 rgba(61, 140, 250, 0.60) inset, 0 4px 4px 0 rgba(4, 65, 149, 0.10)",
+        "outer-action-button":
+          " 0 2px 9px 0 rgba(61, 140, 250, 0.60) inset, 0 4px 4px 0 rgba(4, 65, 149, 0.10)",
       },
       backgroundImage: {
         "white-cloud-gradient":

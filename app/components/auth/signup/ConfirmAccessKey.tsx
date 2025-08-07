@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
-import { Button, Icons, Input, RevealTextLine } from "../../ui";
+import { BackButton, Button, Icons, Input, RevealTextLine } from "../../ui";
 import { Eye, EyeOff, Key } from "../../ui/icons";
 import { InView } from "react-intersection-observer";
 
@@ -58,14 +58,8 @@ const ConfirmAccessKey: React.FC<ConfirmAccessKeyProps> = ({
                 className="delay-300 w-full"
               >
                 <div className="w-full flex flex-col gap-[26px]">
-                  <button
-                    type="button"
-                    className="flex gap-2 font-semibold text-lg items-center"
-                    onClick={onBack}
-                  >
-                    <Icons.ArrowLeft className="size-5 text-grey-10" />
-                    Back
-                  </button>
+                  <BackButton onBack={onBack} />
+
                   <div className="flex flex-col gap-2">
                     <div className="text-grey-10  xl:text-[32px] text-2xl font-medium">
                       Confirm your Access Key
@@ -78,7 +72,7 @@ const ConfirmAccessKey: React.FC<ConfirmAccessKeyProps> = ({
                 </div>
               </RevealTextLine>
 
-              <div className="space-y-2 mb-2 text-grey-10 w-full flex flex-col mt-6">
+              <div className="space-y-2 mb-2 text-grey-10 w-full flex flex-col mt-6 mb-5">
                 <RevealTextLine rotate reveal={inView} className="delay-300">
                   <Label
                     htmlFor="accessKey"
@@ -133,7 +127,7 @@ const ConfirmAccessKey: React.FC<ConfirmAccessKeyProps> = ({
                 >
                   <Button
                     type="submit"
-                    className="w-full h-[60px] text-white font-medium text-lg"
+                    className="w-full h-[48px] text-white font-medium text-lg"
                     disabled={verifying}
                     icon={<Icons.ArrowRight />}
                   >

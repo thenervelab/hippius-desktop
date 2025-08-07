@@ -116,7 +116,7 @@ const AccessKeyForm: React.FC<AccessKeyFormProps> = ({
                   <Button
                     type="submit"
                     className={cn(
-                      "w-full h-[60px] text-white font-medium text-lg"
+                      "w-full h-[48px] text-white font-medium text-lg"
                     )}
                     disabled={logginIn}
                     icon={<Icons.ArrowRight />}

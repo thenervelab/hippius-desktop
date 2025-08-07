@@ -11,7 +11,7 @@ const buttonVariants = cva({
   variants: {
     variant: {
       primary: cn(
-        "relative overflow-hidden bg-primary-50 hover:bg-primary-50 text-white border border-primary-40 rounded",
+        "relative overflow-hidden bg-primary-50 hover:bg-primary-50 text-white border border-primary-40 rounded shadow-outer-action-button",
         classes.primary
       ),
       error: cn(
@@ -64,7 +64,7 @@ const ButtonOrLinkInner: React.FC<{
     return (
       <>
         {variant === "primary" && (
-          <div className="absolute border rounded border-primary-40 left-1.5 right-1.5 top-1.5 bottom-1.5" />
+          <div className="absolute border rounded border-primary-40 left-[5px] right-[5px] top-[5px] bottom-[5px] shadow-inner-action-button" />
         )}
         {variant === "error" && (
           <div className="absolute border rounded border-error-40 left-1 right-1 top-1 bottom-1" />

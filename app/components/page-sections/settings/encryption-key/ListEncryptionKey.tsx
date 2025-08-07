@@ -22,7 +22,7 @@ const ListEncryptionKey: React.FC<ListEncryptionKeyProps> = ({
   encryptionKeys,
   inView,
   onGenerateClick,
-  onImportClick
+  onImportClick,
 }) => {
   const [showPasscodeInput, setShowPasscodeInput] = useState(false);
   const [passcode, setPasscode] = useState("");
@@ -199,10 +199,10 @@ const ListEncryptionKey: React.FC<ListEncryptionKeyProps> = ({
           >
             <IconButton
               type="submit"
-              outerPadding="p-1.5"
+              outerPadding="p-[5px]"
               innerPadding="px-6 py-2.5"
               fontSizeClass="text-lg"
-              innerClassName="h-12"
+              innerClassName="h-9"
               text={"View Encryption Key"}
               onClick={validatePasscode}
               disabled={isValidating || !passcode}

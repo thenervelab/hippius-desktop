@@ -50,7 +50,7 @@ const BackupAppData: React.FC<ExportEncryptedSeedProps> = ({ className }) => {
 
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <CardButton
-              className="h-[60px] w-[247px]"
+              className="h-[48px] w-[247px]"
               variant="dialog"
               onClick={handleExport}
               disabled={isExporting}

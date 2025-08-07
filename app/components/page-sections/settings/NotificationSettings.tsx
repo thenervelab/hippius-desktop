@@ -133,7 +133,7 @@ const NotificationSettings: React.FC = () => {
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <div className="flex gap-4 mt-8 self-start">
               <CardButton
-                className="max-w-[160px] h-[60px]"
+                className="max-w-[160px] h-[48px]"
                 variant="dialog"
                 onClick={handleSaveChanges}
               >
