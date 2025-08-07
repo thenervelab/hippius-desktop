@@ -43,7 +43,11 @@ export default async function RootLayout({
               </SplashWrapper>
             </Suspense>
             <UpdateDialogWrapper />
-            <Toaster />
+            <Toaster
+              toastOptions={{
+                style: { fontFamily: "var(--font-geist-sans)" },
+              }}
+            />
           </WalletAuthProvider>
         </Providers>
       </body>
