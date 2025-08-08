@@ -28,8 +28,11 @@
       {
         "dragDropEnabled": false,
         "title": "Hippius",
-        "visible": false,
-        "center": false
+        "width": 1320,
+        "height": 1000,
+        "visible": true,
+        "center": true,
+        "resizable": true
       }
     ],
 
