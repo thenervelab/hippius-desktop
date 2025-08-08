@@ -146,7 +146,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 let origin = m.position();        // PhysicalPosition<i32>
 
                 
-                let w = if phys.width > 1470 { 1320u32 } else { (phys.width as f64 * 0.9) as u32 };
+                let w = (phys.width as f64 * 0.8) as u32;
                 let h =          (phys.height as f64 * 0.9) as u32;
 
               
