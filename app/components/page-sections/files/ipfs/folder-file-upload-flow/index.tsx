@@ -149,6 +149,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     fileName: file.name,
                     fileData: fileData,
                     seedPhrase: mnemonic,
+                    subfolderPath: null,
                     ...(isPrivateFolder ? { encryptionKey: encryptionKey || null } : {})
                 };
 
