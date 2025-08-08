@@ -25,7 +25,7 @@ use futures::{future, stream::{self, StreamExt}};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::utils::file_operations::sanitize_name;
-
+use rayon::prelude::*;
 
 // Helper function to format file sizes
 fn format_file_size(size_bytes: usize) -> String {
@@ -784,8 +784,14 @@ pub async fn add_file_to_private_folder(
     delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
         .map_err(|e| format!("Failed to request unpinning of old folder version: {}", e))?;
 
-    // Build storage list as before
-    let mut all_files_for_storage = build_complete_storage_list(vec![], &api_url).await?;
+    // Get the complete list of files in the folder to build storage list
+    let manifest_bytes = download_from_ipfs_async(&api_url, &new_folder_manifest_cid).await
+        .map_err(|e| format!("Failed to download new folder manifest: {}", e))?;
+    let file_entries: Vec<FileEntry> = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| format!("Could not parse new folder manifest: {}", e))?;
+
+    // Build storage list with all files and their chunks
+    let mut all_files_for_storage = build_complete_storage_list(file_entries, &api_url).await?;
     all_files_for_storage.push((meta_folder_name.clone(), new_folder_manifest_cid.clone()));
 
     let storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, &api_url, &seed_phrase).await?;
@@ -794,12 +800,11 @@ pub async fn add_file_to_private_folder(
     let sanitized_folder_name = sanitize_name(&folder_name);
     let sanitized_file_name = sanitize_name(&file_name);
 
-    // Update this section in add_file_to_private_folder:
     let temp_dir = tempfile::tempdir()
-    .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-    let temp_path = temp_dir.path().join(&sanitized_file_name);  // Use original filename
+        .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    let temp_path = temp_dir.path().join(&sanitized_file_name);
     fs::write(&temp_path, &file_data)
-    .map_err(|e| format!("Failed to write sync temp file: {}", e))?;
+        .map_err(|e| format!("Failed to write sync temp file: {}", e))?;
     
     let sync_subfolder_path = subfolder_path.as_ref().map(|path_vec| {
         let mut full_path = std::path::PathBuf::from(&sanitized_folder_name);
@@ -974,7 +979,6 @@ async fn remove_file_recursive_private(
     Ok((meta_name, new_cid, file_cid_pairs))
 }
 
-// Update the existing remove_file_from_private_folder function
 #[tauri::command]
 pub async fn remove_file_from_private_folder(
     account_id: String,
@@ -1035,10 +1039,17 @@ pub async fn remove_file_from_private_folder(
         .await
         .map_err(|e| format!("Failed to request unpinning of old folder version: {}", e))?;
 
-    // Submit updated storage request
-    let mut all_files_for_storage = file_cid_pairs;
+    // Get complete storage list including chunks
+    let manifest_bytes = download_from_ipfs_async(&api_url, &new_folder_metadata_cid).await
+        .map_err(|e| format!("Failed to download new folder manifest: {}", e))?;
+    let file_entries: Vec<FileEntry> = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| format!("Could not parse new folder manifest: {}", e))?;
+
+    // Build storage list with all files and their chunks
+    let mut all_files_for_storage = build_complete_storage_list(file_entries, &api_url).await?;
     all_files_for_storage.push((meta_filename.clone(), new_folder_metadata_cid.clone()));
 
+    // Submit updated storage request
     let storage_result =
         request_erasure_storage(&meta_filename, &all_files_for_storage, &api_url, &seed_phrase)
             .await?;
