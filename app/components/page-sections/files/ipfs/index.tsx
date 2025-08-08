@@ -28,6 +28,7 @@ import FilesHeader from "./FilesHeader";
 import FilesContent from "./FilesContent";
 import { useAtomValue } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userPreferencesDb";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { api } = usePolkadotApi();
@@ -353,6 +354,22 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     };
   }, []);
 
+
+  // Load user's view mode preference on component mount
+  useEffect(() => {
+    async function loadViewModePreference() {
+      const savedViewMode = await getViewModePreference();
+      setViewMode(savedViewMode);
+    }
+    loadViewModePreference();
+  }, []);
+
+  // Update view mode and save preference
+  const handleViewModeChange = useCallback((mode: "list" | "card") => {
+    setViewMode(mode);
+    saveViewModePreference(mode);
+  }, []);
+
   // Determine what content to render
   let content;
   if (isCheckingSyncPath) {
@@ -374,7 +391,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           formattedStorageSize={formattedStorageSize}
           allFilteredDataLength={displayedFileCount}
           viewMode={viewMode}
-          setViewMode={setViewMode}
+          setViewMode={handleViewModeChange} // Use our new handler
           searchTerm={searchTerm}
           handleSearchChange={handleSearchChange}
           activeFilters={activeFilters}

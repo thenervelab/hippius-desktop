@@ -34,7 +34,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
     <Menubar.Root>
       <Menubar.Menu>
         <Menubar.Trigger asChild>
-          <button className="flex justify-between p-2 bg-grey-90 w-full rounded border border-grey-80 hover:bg-grey-80 transition-colors">
+          <button className="group flex justify-between p-2 bg-grey-90 w-full rounded border border-grey-80 hover:bg-grey-80 transition-colors">
             <div className="flex gap-2">
               <div className="flex justify-center items-center ">
                 <Icons.Calendar className="size-[18px] text-grey-10" />
@@ -44,7 +44,7 @@ const DateSelector: React.FC<DateSelectorProps> = ({
               </div>
             </div>
             <div className="rounded border border-prmary-80 bg-primary-100 flex justify-center items-center p-[3px]">
-              <Icons.ChevronDown className="size-[14px] text-primary-50" />
+              <Icons.ChevronDown className="size-[14px] text-primary-50 transition-transform duration-200 group-data-[state=open]:rotate-180" />
             </div>
           </button>
         </Menubar.Trigger>

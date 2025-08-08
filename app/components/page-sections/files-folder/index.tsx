@@ -25,6 +25,8 @@ import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import EncryptionKeyDialog from "@/components/page-sections/files/ipfs/EncryptionKeyDialog";
 import { downloadIpfsFolder } from "@/lib/utils/downloadIpfsFolder";
 import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFileToFolderButton";
+import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userPreferencesDb";
+import { getFolderPathArray } from "@/app/utils/folderPathUtils";
 
 interface FileEntry {
     file_name: string;
@@ -42,12 +44,16 @@ interface FolderViewProps {
     folderCid: string;
     folderName?: string;
     folderActualName?: string;
+    mainFolderActualName?: string;
+    subFolderPath?: string;
 }
 
 export default function FolderView({
     folderCid,
     folderName = "Folder",
-    folderActualName = "Folder"
+    folderActualName = "Folder",
+    mainFolderActualName,
+    subFolderPath
 }: FolderViewProps) {
     const { polkadotAddress } = useWalletAuth();
     const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
@@ -81,6 +87,7 @@ export default function FolderView({
         });
     }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
 
+    // console.log("mainFolderActualName", mainFolderActualName);
 
     useEffect(() => {
         const newActiveFilters = generateActiveFilters(
@@ -105,11 +112,15 @@ export default function FolderView({
                 setIsRefreshing(true);
             }
 
+            // Parse the folder path into an array of folder names
+            const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
+
+
             const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
                 folderName: folderActualName,
                 folderMetadataCid: folderCid,
-                mainFolderName: null,
-                subfolderPath: null
+                mainFolderName: mainFolderActualName || null,
+                subfolderPath: folderPath || null
             });
 
             console.log("Fetched folder contents:", fileEntries);
@@ -161,7 +172,7 @@ export default function FolderView({
                 setIsRefreshing(false);
             }
         }
-    }, [folderCid, folderName]);
+    }, [folderCid, folderName, folderActualName, mainFolderActualName, subFolderPath]);
 
     useEffect(() => {
         loadFolderContents();
@@ -354,6 +365,21 @@ export default function FolderView({
         };
     }, []);
 
+    // Load user's view mode preference on component mount
+    useEffect(() => {
+        async function loadViewModePreference() {
+            const savedViewMode = await getViewModePreference();
+            setViewMode(savedViewMode);
+        }
+        loadViewModePreference();
+    }, []);
+
+    // Update view mode and save preference
+    const handleViewModeChange = useCallback((mode: "list" | "card") => {
+        setViewMode(mode);
+        saveViewModePreference(mode);
+    }, []);
+
     return (
         <div className="w-full relative mt-6">
             <div className="flex items-center justify-between mb-6">
@@ -390,7 +416,7 @@ export default function FolderView({
                                     ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
                                     : "bg-grey-100 text-grey-70"
                             )}
-                            onClick={() => setViewMode("list")}
+                            onClick={() => handleViewModeChange("list")}
                             aria-label="List View"
                         >
                             <Icons.Grid className="size-5" />
@@ -402,7 +428,7 @@ export default function FolderView({
                                     ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
                                     : "bg-grey-100 text-grey-70"
                             )}
-                            onClick={() => setViewMode("card")}
+                            onClick={() => handleViewModeChange("card")}
                             aria-label="Card View"
                         >
                             <Icons.Category className="size-5" />

@@ -152,15 +152,16 @@ const CardView: FC<CardViewProps> = ({
               }
 
               const handleCardClick = () => {
+
                 if (
                   fileType === "video" ||
                   fileType === "image" ||
                   fileType === "PDF"
                 ) {
                   setSelectedFile?.(file);
-                } else if (fileType === "ec") {
+                } else if (file.isFolder) {
                   router.push(
-                    `/dashboard/storage/ipfs/${decodeHexCid(file.cid)}`
+                    `/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}`
                   );
                 }
               };

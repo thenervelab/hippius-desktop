@@ -9,6 +9,8 @@ import { queryClientAtom } from "jotai-tanstack-query";
 import { useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { getFolderPathArray } from "@/app/utils/folderPathUtils";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 
 export const useDeleteIpfsFile = ({
     cid,
@@ -24,9 +26,14 @@ export const useDeleteIpfsFile = ({
     isPrivateFolder?: boolean
 }) => {
     const { data: ipfsFiles } = useUserIpfsFiles();
+    const { getParam } = useUrlParams();
+
     const { api } = usePolkadotApi();
     const { walletManager, polkadotAddress, mnemonic } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
+    const mainFolderActualName = getParam("mainFolderActualName", "");
+    const subFolderPath = getParam("subFolderPath");
+
 
     return useMutation({
         mutationKey: ["delete-ipfs-file", cid],
@@ -48,6 +55,9 @@ export const useDeleteIpfsFile = ({
                     throw new Error("Seed phrase required to delete files from folder");
                 }
 
+                const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
+
+
                 try {
                     const command = isPrivateFolder ? "remove_file_from_private_folder" : "remove_file_from_public_folder";
                     const params = {
@@ -56,7 +66,7 @@ export const useDeleteIpfsFile = ({
                         folderName: folderName,
                         fileName: fileToDelete.name,
                         seedPhrase: mnemonic,
-                        subfolderPath: null
+                        subfolderPath: folderPath || null
                     }
                     console.log("params", params);
                     await invoke<string>(command, params);

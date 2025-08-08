@@ -94,7 +94,7 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
   const handleOpenConsoleCreditsPage = () => openLinkByKey("CREDITS");
 
   return (
-    <div className="w-full  relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
+    <div className="w-full  relative ">
       <div
         className={cn(
           " relative gap-4 overflow-hidden   h-[310px] grid grid-cols-[auto_minmax(0,1fr)]",

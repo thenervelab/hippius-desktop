@@ -14,7 +14,7 @@ import {
   SVG,
   Terminal,
   File,
-  Folder2
+  Folder2,
 } from "@/components/ui/icons";
 import { FileTypes } from "@/lib/types/fileTypes";
 
@@ -24,27 +24,27 @@ const fileTypes: Array<{
   icon: React.FC<Record<string, unknown>>;
   color: string;
 }> = [
-    { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
-    { type: "image", label: "Picture", icon: Image, color: "text-[#ea4335]" },
-    {
-      type: "document",
-      label: "Unknown",
-      icon: File,
-      color: "text-primary-70 fill-primary-60"
-    },
-    { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
-    {
-      type: "PPT",
-      label: "PPT",
-      icon: Presentation,
-      color: "text-[#fbbc04]"
-    },
-    { type: "XLS", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
-    { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
-    { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
-    { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
-    { type: "folder", label: "Folder", icon: Folder2, color: "text-primary-40" }
-  ];
+  { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
+  { type: "image", label: "Picture", icon: Image, color: "text-[#ea4335]" },
+  {
+    type: "document",
+    label: "Unknown",
+    icon: File,
+    color: "text-primary-70 fill-primary-60",
+  },
+  { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
+  {
+    type: "PPT",
+    label: "PPT",
+    icon: Presentation,
+    color: "text-[#fbbc04]",
+  },
+  { type: "XLS", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
+  { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
+  { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
+  { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
+  { type: "folder", label: "Folder", icon: Folder2, color: "text-primary-40" },
+];
 
 interface FileTypeSelectorProps {
   selectedTypes?: FileTypes[];
@@ -53,7 +53,7 @@ interface FileTypeSelectorProps {
 
 const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
   selectedTypes = [],
-  onTypesSelect
+  onTypesSelect,
 }) => {
   const handleTypeToggle = (type: FileTypes) => {
     const newSelectedTypes = selectedTypes.includes(type)
@@ -89,7 +89,7 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
     <Menubar.Root>
       <Menubar.Menu>
         <Menubar.Trigger asChild>
-          <button className="flex justify-between p-2 bg-grey-90 w-full rounded border border-grey-80 hover:bg-grey-80 transition-colors">
+          <button className="flex justify-between group p-2 bg-grey-90 w-full rounded border border-grey-80 hover:bg-grey-80 transition-colors">
             <div className="flex gap-2">
               <div className="flex justify-center items-center p-1">
                 {getDisplayIcon()}
@@ -99,7 +99,7 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
               </div>
             </div>
             <div className="rounded border border-prmary-80 bg-primary-100 flex justify-center items-center p-[3px]">
-              <Icons.ChevronDown className="size-[14px] text-primary-50" />
+              <Icons.ChevronDown className="size-[14px] text-primary-50 transition-transform duration-200 group-data-[state=open]:rotate-180" />
             </div>
           </button>
         </Menubar.Trigger>

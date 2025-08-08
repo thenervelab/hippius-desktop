@@ -2,10 +2,10 @@
 import { useMemo, useState } from "react";
 import {
   Icons,
-  Graphsheet,
   Select,
   LineChart,
   AbstractIconWrapper,
+  ChartGridOverlay,
 } from "@/components/ui";
 import { Option } from "@/components/ui/select";
 import { Account } from "@/app/lib/types/accounts";
@@ -23,7 +23,7 @@ import { COLORS } from "./constants";
 import { WalletAdd } from "@/app/components/ui/icons";
 
 const timeRangeOptions: Option[] = [
-  { value: "week", label: "This Week" },
+  { value: "week", label: "Last 7 Days" },
   { value: "month", label: "This Month" },
   { value: "year", label: "This Year" },
 ];
@@ -108,7 +108,9 @@ const BalanceTrends: React.FC<{
       {({ ref }) => (
         <div
           ref={ref}
-          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${className || ""}`}
+          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${
+            className || ""
+          }`}
         >
           <div className="flex justify-between mb-3.5">
             <div className="flex gap-4 items-center">
@@ -141,19 +143,6 @@ const BalanceTrends: React.FC<{
               </div>
             </div>
 
-            <Graphsheet
-              className="absolute inset-0"
-              majorCell={{
-                lineColor: [232, 237, 248, 1],
-                lineWidth: 2,
-                cellDim: 100,
-              }}
-              minorCell={{
-                lineColor: [251, 252, 254, 1],
-                lineWidth: 1,
-                cellDim: 15,
-              }}
-            />
             <div className="relative w-full h-full flex">
               {isLoading ? (
                 <div className="flex items-center justify-center w-full h-full">
@@ -167,7 +156,11 @@ const BalanceTrends: React.FC<{
                   </span>
                 </div>
               ) : (
-                <div className="w-full h-full pt-4">
+                <div className="w-full h-full pt-4 pr-4">
+                  <ChartGridOverlay
+                    bgClass="bg-[url('/wallet-chart-grid.png')]"
+                    marginClasses="mt-[36px] ml-[43px] mb-[30px] mr-[21px]"
+                  />
                   <LineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
                     className="w-full h-full"
