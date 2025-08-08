@@ -1976,16 +1976,16 @@ pub async fn add_file_to_public_folder(
     seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let api_url = "http://127.0.0.1:5001";
+    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
 
     // Helper: recursively add file to the correct subfolder metadata
     async fn add_file_recursive_public(
-        api_url: &str,
+        api_url: &Arc<String>,
         current_metadata_cid: &str,
         path: &[String],
         file_name: &str,
         file_data: &[u8],
-    ) -> Result<(String, String), String> {
+    ) -> Result<(String, String, Vec<(String, String)>), String> {
         // Download current metadata
         let metadata_bytes = download_from_ipfs_async(api_url, current_metadata_cid)
             .await
@@ -2044,15 +2044,22 @@ pub async fn add_file_to_public_folder(
             .await
             .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
-            Ok((meta_name, new_cid))
+            // Collect all CIDs in this folder
+            let mut all_cids = file_entries.iter()
+                .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
+                .collect::<Vec<_>>();
+            all_cids.push((meta_name.clone(), new_cid.clone()));
+
+            Ok((meta_name, new_cid, all_cids))
         } else {
             // Traverse to next subfolder
             let subfolder = &path[0];
             let mut found = false;
+            let mut all_cids = Vec::new();
             for entry in &mut file_entries {
                 if entry.file_name.starts_with(subfolder) && entry.file_name.ends_with(".folder") {
                     // Recursively update subfolder with boxing
-                    let (new_subfolder_name, new_subfolder_cid) = Box::pin(add_file_recursive_public(
+                    let (new_subfolder_name, new_subfolder_cid, subfolder_cids) = Box::pin(add_file_recursive_public(
                         api_url,
                         &entry.cid,
                         &path[1..],
@@ -2062,6 +2069,7 @@ pub async fn add_file_to_public_folder(
                     .await?;
                     entry.file_name = new_subfolder_name;
                     entry.cid = new_subfolder_cid;
+                    all_cids.extend(subfolder_cids);
                     found = true;
                     break;
                 }
@@ -2090,15 +2098,20 @@ pub async fn add_file_to_public_folder(
             .await
             .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
-            Ok((meta_name, new_cid))
+            // Add all entries and the folder itself
+            all_cids.extend(file_entries.iter()
+                .map(|entry| (entry.file_name.clone(), entry.cid.clone())));
+            all_cids.push((meta_name.clone(), new_cid.clone()));
+
+            Ok((meta_name, new_cid, all_cids))
         }
     }
 
     // --- Main logic ---
-    let (_meta_filename, new_folder_metadata_cid) = if let Some(ref path) = subfolder_path {
+    let (meta_filename, new_folder_metadata_cid, all_cids) = if let Some(ref path) = subfolder_path {
         // Recursive add to subfolder with boxing
         Box::pin(add_file_recursive_public(
-            api_url,
+            &api_url,
             &folder_metadata_cid,
             path,
             &file_name,
@@ -2107,7 +2120,7 @@ pub async fn add_file_to_public_folder(
         .await?
     } else {
         // Old logic (root folder)
-        let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata_cid)
+        let metadata_bytes = download_from_ipfs_async(&api_url, &folder_metadata_cid)
             .await
             .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))?;
 
@@ -2164,6 +2177,23 @@ pub async fn add_file_to_public_folder(
         .await
         .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
+        // Collect all CIDs
+        let mut all_cids = file_entries.iter()
+            .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
+            .collect::<Vec<_>>();
+        all_cids.push((
+            format!(
+                "{}{}",
+                folder_name,
+                if folder_name.ends_with(".folder") {
+                    ""
+                } else {
+                    ".folder"
+                }
+            ),
+            new_cid.clone(),
+        ));
+
         (
             format!(
                 "{}{}",
@@ -2175,11 +2205,11 @@ pub async fn add_file_to_public_folder(
                 }
             ),
             new_cid,
+            all_cids,
         )
     };
 
     // Storage request and sync
-    let files_for_storage = vec![(_meta_filename.clone(), new_folder_metadata_cid.clone())];
     let _unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase)
         .await
         .map_err(|e| {
@@ -2193,16 +2223,15 @@ pub async fn add_file_to_public_folder(
             }
         })?;
 
-    let storage_result = request_folder_storage(&_meta_filename, &files_for_storage, api_url, &seed_phrase).await;
+    let storage_result = request_folder_storage(&meta_filename, &all_cids, &api_url, &seed_phrase).await;
 
     match &storage_result {
         Ok(res) => {
-            // Update this section in add_file_to_private_folder:
             let temp_dir = tempfile::tempdir()
-            .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-            let temp_path = temp_dir.path().join(&file_name);  // Use original filename
+                .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+            let temp_path = temp_dir.path().join(&file_name);
             fs::write(&temp_path, &file_data)
-            .map_err(|e| format!("Failed to write sync temp file: {}", e))?;
+                .map_err(|e| format!("Failed to write sync temp file: {}", e))?;
             
             let sync_subfolder_path = subfolder_path.as_ref().map(|path_vec| {
                 let mut full_path = std::path::PathBuf::from(&folder_name);
@@ -2225,7 +2254,7 @@ pub async fn add_file_to_public_folder(
                 &res,
                 true,
                 false,
-                &_meta_filename,
+                &meta_filename,
                 sync_subfolder_path,
             )
             .await;
@@ -2244,7 +2273,6 @@ pub async fn add_file_to_public_folder(
 
     Ok(new_folder_metadata_cid)
 }
-
 
 #[tauri::command]
 pub async fn remove_file_from_public_folder(
