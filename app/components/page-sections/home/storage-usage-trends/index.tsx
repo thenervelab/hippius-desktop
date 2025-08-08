@@ -3,11 +3,11 @@ import {
   AbstractIconWrapper,
   Icons,
   Card,
-  Graphsheet,
   Select,
   H4,
   RevealTextLine,
   BarChart,
+  ChartGridOverlay,
 } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
 import { Option } from "@/components/ui/select";
@@ -87,16 +87,20 @@ const StorageUsageTrends: React.FC<{
   // Build X‐labels (strings) depending on selected range
   let xLabels: string[] = [];
   if (timeRange === "week") {
-    const last7Dates = (() => {
+    const currentWeekDates = (() => {
       const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const currentDay = today.getDay();
+      const diff = today.getDate() - currentDay + (currentDay === 0 ? -6 : 1);
+      const monday = new Date(today.setDate(diff));
+      monday.setHours(0, 0, 0, 0);
+
       return Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(today);
-        d.setDate(today.getDate() - (6 - i));
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
         return d;
       });
     })();
-    xLabels = last7Dates.map((date) =>
+    xLabels = currentWeekDates.map((date) =>
       date.toLocaleDateString("en-US", { weekday: "short" })
     );
   } else if (timeRange === "month" && formattedChartData.length > 0) {
@@ -144,8 +148,8 @@ const StorageUsageTrends: React.FC<{
     const baseYear =
       chartData && chartData.length
         ? new Date(
-          chartData[chartData.length - 1].processed_timestamp
-        ).getFullYear()
+            chartData[chartData.length - 1].processed_timestamp
+          ).getFullYear()
         : new Date().getFullYear();
     const now = new Date();
     const currentYear = now.getFullYear();
@@ -155,7 +159,6 @@ const StorageUsageTrends: React.FC<{
 
   // Compute a "half‐band" paddingOuter so the first tick sits half a band away
   const paddingOuter = xLabels.length > 0 ? 1 / (2 * xLabels.length) : 0;
-
   return (
     <InView triggerOnce threshold={0.2}>
       {({ ref, inView }) => (
@@ -195,20 +198,6 @@ const StorageUsageTrends: React.FC<{
             className={cn("flex-1 rounded", className)}
             contentClassName="relative h-[300px]"
           >
-            <Graphsheet
-              className="absolute right-0 left-0 top-0 w-full h-full"
-              majorCell={{
-                lineColor: [232, 237, 248, 1.0],
-                lineWidth: 2,
-                cellDim: 100,
-              }}
-              minorCell={{
-                lineColor: [251, 252, 254, 1],
-                lineWidth: 1,
-                cellDim: 15,
-              }}
-            />
-
             <div className="relative w-full h-full flex">
               {isLoading ? (
                 <div className="flex items-center justify-center w-full h-full">
@@ -222,7 +211,9 @@ const StorageUsageTrends: React.FC<{
                   </span>
                 </div>
               ) : (
-                <div className="w-full h-full pt-4">
+                <div className="relative w-full h-full pt-4 pr-4">
+                  <ChartGridOverlay marginClasses="mt-[50px] ml-[60px] mb-[30px] mr-[21px]" />
+
                   <BarChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
                     data={formattedChartData}

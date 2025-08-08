@@ -21,7 +21,10 @@ export function getAllDatesInRange(start: Date, end: Date): Date[] {
 
 // Helper function to normalize a date to YYYY-MM-DD format for consistent comparison
 function normalizeDate(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+    2,
+    "0"
+  )}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 // Helper function to extract date from UTC timestamp string
@@ -139,9 +142,15 @@ export const formatStorageForChartByRange = (
   now.setHours(0, 0, 0, 0);
 
   if (range === "week") {
+    const currentDay = now.getDay();
+    const diff = now.getDate() - currentDay + (currentDay === 0 ? -6 : 1);
+    const monday = new Date(now);
+    monday.setDate(diff);
+    monday.setHours(0, 0, 0, 0);
+
     const weekDates = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(now);
-      d.setDate(now.getDate() - (6 - i));
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
       return d;
     });
 
