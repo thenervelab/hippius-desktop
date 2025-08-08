@@ -3395,11 +3395,29 @@ pub async fn list_folder_contents(
                 let mut source_path = row.get::<Option<String>, _>("source").unwrap_or_default();
                 println!("source_path: {}", source_path);
                 if source_path != "Hippius" {
-                    let sanitized_file_name = sanitize_name(&file_entry.file_name);
-                    let full_path = format!("{}/{}",source_path,sanitized_file_name);
-                    println!("trying to set full path {:?}", full_path);
-                    if Path::new(&full_path).exists() {
-                        source_path = full_path;
+                    if subfolder_path.is_some() {
+                        let sanitized_file_name = sanitize_name(&file_entry.file_name);
+                        let updated_source_path = source_path.trim_end_matches(&sanitized_file_name);
+                        let sync_subfolder_path = subfolder_path.as_ref().map(|path_vec| {
+                            let mut full_path = std::path::PathBuf::new();
+                            for segment in path_vec {
+                                full_path.push(segment);
+                            }
+                            full_path.to_string_lossy().to_string()
+                        });
+                        let full_path = format!("{}{}",updated_source_path, sync_subfolder_path.unwrap_or_default());
+                        println!("trying to set full path {:?}", full_path);
+                        if Path::new(&full_path).exists() {
+                            source_path = full_path;
+                        }    
+                    }
+                    else{
+                        let sanitized_file_name = sanitize_name(&file_entry.file_name);
+                        let full_path = format!("{}/{}",source_path,sanitized_file_name);
+                        println!("trying to set full path {:?}", full_path);
+                        if Path::new(&full_path).exists() {
+                            source_path = full_path;
+                        }    
                     }
                 }
                 FileDetail {
