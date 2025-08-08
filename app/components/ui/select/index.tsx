@@ -35,17 +35,21 @@ const Select: React.FC<RadixSelectProps> = ({
       {label && (
         <label className="block mb-1 text-sm font-medium">{label}</label>
       )}
-      <RadixSelect.Root value={value} onValueChange={onValueChange} defaultOpen={false}>
+      <RadixSelect.Root
+        value={value}
+        onValueChange={onValueChange}
+        defaultOpen={false}
+      >
         <RadixSelect.Trigger
           className={cn(
-            "flex justify-center items-center gap-2 p-2 h-9 text-sm font-medium font-grotesk border border-grey-80 rounded text-grey-10 bg-grey-100 focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300 whitespace-nowrap",
+            "flex justify-center cursor-pointer group items-center gap-2 p-2 h-9 text-sm font-medium font-grotesk border border-grey-80 rounded text-grey-10 bg-grey-100 focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300 whitespace-nowrap",
             triggerClassName
           )}
           aria-label={label}
         >
           <RadixSelect.Value placeholder={placeholder} />
-          <RadixSelect.Icon className="h-4 w-4 text-grey-10 font-grotesk">
-            <Icons.ChevronDown />
+          <RadixSelect.Icon className="h-4 w-4 text-grey-10 font-grotesk ">
+            <Icons.ChevronDown className="transition-transform duration-200 group-data-[state=open]:rotate-180" />
           </RadixSelect.Icon>
         </RadixSelect.Trigger>
 
