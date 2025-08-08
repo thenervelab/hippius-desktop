@@ -2831,9 +2831,44 @@ pub async fn encrypt_and_upload_folder_sync(
         e.to_string()
     })?;
 
+    // Small-folder fast path: reduce erasure overhead for tiny folders
+    let mut k = k;
+    let mut m = m;
+    let mut chunk_size = chunk_size;
+    {
+        // Approximate total bytes in this folder (non-recursive quick scan)
+        let mut total_bytes: u64 = 0;
+        let mut stack = vec![folder_path.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else if let Ok(meta) = std::fs::metadata(&p) {
+                        total_bytes = total_bytes.saturating_add(meta.len());
+                        if total_bytes > 512 * 1024 { // cap scan
+                            break;
+                        }
+                    }
+                }
+            }
+            if total_bytes > 512 * 1024 {
+                break;
+            }
+        }
+        // If tiny folder (<=256KB), lower redundancy and chunk size for faster processing
+        if total_bytes <= 256 * 1024 {
+            k = 4;
+            m = 6; // 2 parity shards
+            chunk_size = 32 * 1024; // 32KB chunks
+            println!("[encrypt_and_upload_folder_sync] Small folder fast-path: total_bytes={} k={} m={} chunk_size={}KB", total_bytes, k, m, chunk_size / 1024);
+        }
+    }
+ 
     let mut all_files_for_storage = Vec::<(String, String)>::new();
     let processing_results = Arc::new(Mutex::new(Vec::<FileProcessingResultSync>::new()));
-
+ 
     let encryption_key_arc = encryption_key.map(Arc::new); // ✅ Fix: properly wrap the encryption key in Arc
 
     // Recursive helper to process folders and build metadata
@@ -2901,9 +2936,12 @@ pub async fn encrypt_and_upload_folder_sync(
             all_files.push(file_pair);
         }
 
-        // Recursively process subfolders (sequential to allow mutable borrow)
-        for child in &node.children {
-            if let Ok((meta_name, meta_cid, subfolder_size)) = build_metadata_sync(
+        // Recursively process subfolders in parallel (rayon)
+        let child_results: Vec<_> = node.children.par_iter().map(|child| {
+            // Local state per child to avoid lock contention
+            let processing_results_child = Arc::new(Mutex::new(Vec::<FileProcessingResultSync>::new()));
+            let mut child_all_files: Vec<(String, String)> = Vec::new();
+            let res = build_metadata_sync(
                 child,
                 folder_path,
                 api_url,
@@ -2911,15 +2949,21 @@ pub async fn encrypt_and_upload_folder_sync(
                 k,
                 m,
                 chunk_size,
-                processing_results,
-                all_files,
-            ) {
+                &processing_results_child,
+                &mut child_all_files,
+            );
+            (res, child_all_files)
+        }).collect();
+
+        for (res, mut child_all_files) in child_results {
+            if let Ok((meta_name, meta_cid, subfolder_size)) = res {
                 total_size += subfolder_size;
                 file_entries.push(FileEntry {
                     file_name: meta_name.clone(),
                     file_size: subfolder_size,
                     cid: meta_cid.clone(),
                 });
+                all_files.append(&mut child_all_files);
                 all_files.push((meta_name, meta_cid));
             }
         }
@@ -3398,7 +3442,7 @@ pub async fn list_folder_contents(
     folder_name: String,
     folder_metadata_cid: String,
     main_folder_name: Option<String>,
-    subfolder_path: Option<Vec<String>>,
+    mut subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
     let api_url = "http://127.0.0.1:5001";
     println!("[list_folder_contents] Downloading folder folder_name: {} for CID: {}", folder_name, folder_metadata_cid);
@@ -3434,21 +3478,24 @@ pub async fn list_folder_contents(
                 let mut source_path = row.get::<Option<String>, _>("source").unwrap_or_default();
                 println!("source_path: {}", source_path);
                 if source_path != "Hippius" {
-                    if subfolder_path.is_some() {
-                        let sanitized_file_name = sanitize_name(&file_entry.file_name);
-                        let updated_source_path = source_path.trim_end_matches(&sanitized_file_name);
-                        let sync_subfolder_path = subfolder_path.as_ref().map(|path_vec| {
+                    if let Some(path_vector) = &mut subfolder_path {
+                        // Only process if there are multiple items
+                        if path_vector.len() > 1 {
+                            let first = path_vector.remove(0);
+                            println!("sub path is {:?}", path_vector);
+                            let sanitize_name_entry = sanitize_name(&file_entry.file_name);
                             let mut full_path = std::path::PathBuf::new();
-                            for segment in path_vec {
-                                full_path.push(segment);
+                            for segment in path_vector {
+                                let sanitized_segment = sanitize_name(&segment);
+                                full_path.push(sanitized_segment);
                             }
-                            full_path.to_string_lossy().to_string()
-                        });
-                        let full_path = format!("{}{}",updated_source_path, sync_subfolder_path.unwrap_or_default());
-                        println!("trying to set full path {:?}", full_path);
-                        if Path::new(&full_path).exists() {
-                            source_path = full_path;
-                        }    
+                            let sync_subfolder_path = full_path.to_string_lossy().to_string();                            
+                            let full_path = format!("{}/{}/{}",source_path, sync_subfolder_path, sanitize_name_entry);
+                            println!("trying to set full path with sub path  {:?}", full_path);
+                            if Path::new(&full_path).exists() {
+                                source_path = full_path;
+                            }        
+                        }
                     }
                     else{
                         let sanitized_file_name = sanitize_name(&file_entry.file_name);
