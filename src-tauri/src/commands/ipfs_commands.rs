@@ -45,6 +45,18 @@ fn format_file_size(size_bytes: usize) -> String {
     }
 }
 
+// Drops the first segment and returns None if the remaining path is empty
+fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<Vec<String>> {
+    if let Some(mut path) = subfolder_path.take() {
+        if !path.is_empty() {
+            path.remove(0);
+        }
+        if path.is_empty() { None } else { Some(path) }
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
 pub async fn encrypt_and_upload_file(
     account_id: String,
@@ -746,8 +758,9 @@ pub async fn add_file_to_private_folder(
     } else {
         None
     };
-
-    let (meta_folder_name, new_folder_manifest_cid) = if let Some(ref path) = subfolder_path {
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+    println!("subfolder_path: {:?} cid: {} normalized_subfolder: {:?}", subfolder_path, folder_metadata_cid, normalized_subfolder);
+    let (meta_folder_name, new_folder_manifest_cid) = if let Some(ref path) = normalized_subfolder {
         // Recursive add with boxing
         Box::pin(add_file_recursive_private(
             &api_url,
@@ -806,7 +819,8 @@ pub async fn add_file_to_private_folder(
     fs::write(&temp_path, &file_data)
         .map_err(|e| format!("Failed to write sync temp file: {}", e))?;
     
-    let sync_subfolder_path = subfolder_path.as_ref().map(|path_vec| {
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+    let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
         let mut full_path = std::path::PathBuf::from(&sanitized_folder_name);
         for segment in path_vec {
             full_path.push(segment);
@@ -991,8 +1005,10 @@ pub async fn remove_file_from_private_folder(
     println!("[+] Removing file '{}' from folder '{}'", file_name, folder_name);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
 
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+    println!("subfolder_path: {:?} cid: {} normalized_subfolder: {:?}", subfolder_path, folder_metadata_cid, normalized_subfolder);
     // Main logic - use ref pattern to avoid move
-    let (meta_filename, new_folder_metadata_cid, file_cid_pairs) = if let Some(ref path) = subfolder_path {
+    let (meta_filename, new_folder_metadata_cid, file_cid_pairs) = if let Some(ref path) = normalized_subfolder {
         // Use recursive removal for subfolders with boxing
         Box::pin(remove_file_recursive_private(
             &api_url,
@@ -1054,8 +1070,10 @@ pub async fn remove_file_from_private_folder(
         request_erasure_storage(&meta_filename, &all_files_for_storage, &api_url, &seed_phrase)
             .await?;
 
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+    println!("subfolder_path: {:?} cid: {} normalized_subfolder: {:?}", subfolder_path, folder_metadata_cid, normalized_subfolder);
     // Update sync folder
-    let sync_subfolder_path = subfolder_path.as_ref().map(|path_vec| {
+    let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
         let mut full_path = std::path::PathBuf::from(&folder_name);
         for segment in path_vec {
             full_path.push(segment);
@@ -2107,8 +2125,10 @@ pub async fn add_file_to_public_folder(
         }
     }
 
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+    println!("subfolder_path: {:?} cid: {} normalized_subfolder: {:?}", subfolder_path, folder_metadata_cid, normalized_subfolder);
     // --- Main logic ---
-    let (meta_filename, new_folder_metadata_cid, all_cids) = if let Some(ref path) = subfolder_path {
+    let (meta_filename, new_folder_metadata_cid, all_cids) = if let Some(ref path) = normalized_subfolder {
         // Recursive add to subfolder with boxing
         Box::pin(add_file_recursive_public(
             &api_url,
@@ -2233,7 +2253,7 @@ pub async fn add_file_to_public_folder(
             fs::write(&temp_path, &file_data)
                 .map_err(|e| format!("Failed to write sync temp file: {}", e))?;
             
-            let sync_subfolder_path = subfolder_path.as_ref().map(|path_vec| {
+            let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
                 let mut full_path = std::path::PathBuf::from(&folder_name);
                 for segment in path_vec {
                     full_path.push(segment);
@@ -2363,9 +2383,11 @@ pub async fn remove_file_from_public_folder(
             Ok((meta_name, new_cid, file_cid_pairs))
         })
     }
-
+    
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+    println!("subfolder_path: {:?} cid: {} normalized_subfolder: {:?}", subfolder_path, folder_metadata_cid, normalized_subfolder);
     // Main logic
-    let (meta_filename, new_folder_metadata_cid, file_cid_pairs) = if let Some(ref path) = subfolder_path {
+    let (meta_filename, new_folder_metadata_cid, file_cid_pairs) = if let Some(ref path) = normalized_subfolder {
         Box::pin(remove_file_recursive_public(
             api_url,
             &folder_metadata_cid,
@@ -2453,14 +2475,14 @@ pub async fn remove_file_from_public_folder(
         .map_err(|e| format!("Failed to request folder storage: {}", e))?;
 
     // Step 5: Remove file from sync folder
-    let sync_subfolder_path = subfolder_path.as_ref().map(|path_vec| {
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+    let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
         let mut full_path = std::path::PathBuf::from(&folder_name);
         for segment in path_vec {
             full_path.push(segment);
         }
         full_path.to_string_lossy().to_string()
     });
-
     remove_from_sync_folder(
         &file_name,
         &folder_name,
