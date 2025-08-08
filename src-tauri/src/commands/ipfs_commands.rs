@@ -3359,6 +3359,7 @@ pub async fn list_folder_contents(
     folder_name: String,
     folder_metadata_cid: String,
     main_folder_name: Option<String>,
+    subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
     let api_url = "http://127.0.0.1:5001";
     println!("[list_folder_contents] Downloading folder folder_name: {} for CID: {}", folder_name, folder_metadata_cid);
