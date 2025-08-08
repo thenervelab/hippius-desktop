@@ -45,11 +45,11 @@ export const formatDisplayName = (rawName: string): string => {
     return name;
 }
 
-export const getFileIcon = (fileType: FileTypes | undefined, isDir: boolean): {
+export const getFileIcon = (fileType: FileTypes | undefined, isFolder: boolean): {
     icon: React.FC<Record<string, unknown>>;
     color: string;
 } => {
-    if (isDir) {
+    if (isFolder) {
         return { icon: Folder2, color: "text-primary-40" };
     }
 
@@ -80,12 +80,12 @@ export const getFileIcon = (fileType: FileTypes | undefined, isDir: boolean): {
 }
 
 // Get icon for thumbnails/white icons (used in FileTypeIcon)
-export const getFileIconForThumbnail = (fileType: FileTypes | undefined, isDir: boolean): {
+export const getFileIconForThumbnail = (fileType: FileTypes | undefined, isFolder: boolean): {
     icon: React.FC<Record<string, unknown>>;
     color?: string;
 } => {
-    if (isDir) {
-        return { icon: EC };
+    if (isFolder) {
+        return { icon: Folder2, color: "fill-white" };
     }
 
     switch (fileType) {

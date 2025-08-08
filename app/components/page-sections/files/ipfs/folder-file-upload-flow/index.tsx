@@ -7,6 +7,8 @@ import { Icons, CardButton, Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
 import FileDropzone from "../upload-files-flow/FileDropzone";
 import { readFileAsArrayBuffer } from "@/app/lib/hooks/useFilesUpload";
+import { getFolderPathArray } from "@/app/utils/folderPathUtils";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 
 interface FolderFileUploadFlowProps {
     folderCid: string;
@@ -31,6 +33,8 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     onSuccess,
     onCancel
 }) => {
+    const { getParam } = useUrlParams();
+
     const [files, setFiles] = useState<FileList | null>(null);
     const [revealFiles, setRevealFiles] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
@@ -40,6 +44,9 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
         null
     );
     const [encryptionKey, setEncryptionKey] = useState("");
+    const mainFolderActualName = getParam("mainFolderActualName", "");
+    const subFolderPath = getParam("subFolderPath");
+
 
     // Handle initial files if provided
     useEffect(() => {
@@ -141,6 +148,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     : "add_file_to_public_folder";
 
 
+                const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
 
                 const params = {
                     accountId: polkadotAddress,
@@ -149,8 +157,12 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     fileName: file.name,
                     fileData: fileData,
                     seedPhrase: mnemonic,
-                    ...(isPrivateFolder ? { encryptionKey: encryptionKey || null } : {})
+                    ...(isPrivateFolder ? { encryptionKey: encryptionKey || null } : {}),
+                    mainFolderName: mainFolderActualName || null,
+                    subfolderPath: folderPath || null
                 };
+
+                console.log("Adding file with params:", params);
 
                 await invoke<string>(functionName, params);
 

@@ -3,19 +3,28 @@
 import DashboardTitleWrapper from "@/app/components/dashboard-title-wrapper";
 import FolderView from "@/app/components/page-sections/files-folder";
 import { Files } from "@/components/page-sections";
-import { useSearchParams } from "next/navigation";
 import { FC } from "react";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 
 const FilesPage: FC = () => {
-    const params = useSearchParams();
-    const folderCid = params.get("folderCid");
-    const folderName = params.get("folderName") || "Folder";
-    const folderActualName = params.get("folderActualName") || "Folder";
+    const { getParam } = useUrlParams();
+
+    const folderCid = getParam("folderCid");
+    const folderName = getParam("folderName", "");
+    const folderActualName = getParam("folderActualName", "");
+    const mainFolderActualName = getParam("mainFolderActualName", "");
+    const subFolderPath = getParam("subFolderPath");
 
     if (folderCid) {
         return (
             <DashboardTitleWrapper mainText={`Your Files - ${folderName}`}>
-                <FolderView folderCid={folderCid} folderName={folderName} folderActualName={folderActualName} />
+                <FolderView
+                    folderCid={folderCid}
+                    folderName={folderName}
+                    folderActualName={folderActualName}
+                    mainFolderActualName={mainFolderActualName}
+                    subFolderPath={subFolderPath}
+                />
             </DashboardTitleWrapper>
         );
     }
