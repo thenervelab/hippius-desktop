@@ -157,9 +157,8 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     fileName: file.name,
                     fileData: fileData,
                     seedPhrase: mnemonic,
-                    ...(isPrivateFolder ? { encryptionKey: encryptionKey || null } : {}),
-                    mainFolderName: mainFolderActualName || null,
-                    subfolderPath: folderPath || null
+                    subfolderPath: folderPath || null,
+                    ...(isPrivateFolder ? { encryptionKey: encryptionKey || null } : {})
                 };
 
                 console.log("Adding file with params:", params);

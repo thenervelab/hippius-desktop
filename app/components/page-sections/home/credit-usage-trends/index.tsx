@@ -3,11 +3,11 @@ import {
   AbstractIconWrapper,
   Icons,
   Card,
-  Graphsheet,
   Select,
   H4,
   RevealTextLine,
   AreaLineChart,
+  ChartGridOverlay,
 } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
 import { Option } from "@/components/ui/select";
@@ -105,16 +105,20 @@ const CreditUsageTrends: React.FC<{
   // Build X‐labels (strings) depending on selected range
   let xLabels: string[] = [];
   if (timeRange === "week") {
-    const last7Dates = (() => {
+    const currentWeekDates = (() => {
       const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const currentDay = today.getDay(); // 0 is Sunday, 1 is Monday, etc.
+      const diff = today.getDate() - currentDay + (currentDay === 0 ? -6 : 1); // Adjust when day is Sunday
+      const monday = new Date(today.setDate(diff));
+      monday.setHours(0, 0, 0, 0);
+
       return Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(today);
-        d.setDate(today.getDate() - (6 - i));
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
         return d;
       });
     })();
-    xLabels = last7Dates.map((date) =>
+    xLabels = currentWeekDates.map((date) =>
       date.toLocaleDateString("en-US", { weekday: "short" })
     );
   } else if (timeRange === "month" && formattedChartData.length > 0) {
@@ -213,20 +217,6 @@ const CreditUsageTrends: React.FC<{
             className={cn("flex-1 rounded", className)}
             contentClassName="relative h-[300px]"
           >
-            <Graphsheet
-              className="absolute right-0 left-0 top-0 w-full h-full"
-              majorCell={{
-                lineColor: [232, 237, 248, 1.0],
-                lineWidth: 2,
-                cellDim: 100,
-              }}
-              minorCell={{
-                lineColor: [251, 252, 254, 1],
-                lineWidth: 1,
-                cellDim: 15,
-              }}
-            />
-
             <div className="relative w-full h-full flex">
               {isLoading ? (
                 <div className="flex items-center justify-center w-full h-full">
@@ -240,7 +230,7 @@ const CreditUsageTrends: React.FC<{
                   </span>
                 </div>
               ) : (
-                <div className="w-full h-full pt-12">
+                <div className="w-full h-full pt-12 relative pr-4">
                   {/* Total Credits Used Display - Added based on image */}
                   <div className="absolute top-1 left-14 border border-grey-80 rounded bg-white px-2 py-1 z-50">
                     <div className="text-grey-60 text-base mb-1 font-medium">
@@ -250,7 +240,7 @@ const CreditUsageTrends: React.FC<{
                       {totalCreditsUsed}
                     </div>
                   </div>
-
+                  <ChartGridOverlay marginClasses="mt-[80px] ml-[45px] mb-[30px] mr-[21px]" />
                   <AreaLineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
                     data={formattedChartData}

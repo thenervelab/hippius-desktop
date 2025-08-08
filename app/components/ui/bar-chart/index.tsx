@@ -92,6 +92,17 @@ function BarChart<T extends object>({
             }
           }
         >
+          <defs>
+            <pattern
+              id="gridPattern"
+              patternUnits="userSpaceOnUse"
+              width="100"
+              height="100"
+            >
+              <image href="/chart-grid.png" width="100" height="100" />
+            </pattern>
+          </defs>
+
           {/* X Axis */}
           <AnimatedAxis
             key={"x-axis"}

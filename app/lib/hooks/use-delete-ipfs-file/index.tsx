@@ -66,7 +66,6 @@ export const useDeleteIpfsFile = ({
                         folderName: folderName,
                         fileName: fileToDelete.name,
                         seedPhrase: mnemonic,
-                        mainFolderName: mainFolderActualName || null,
                         subfolderPath: folderPath || null
                     }
                     console.log("params", params);

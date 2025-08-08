@@ -120,7 +120,8 @@ export default function IpfsFolderDemo() {
       const files = await invoke<FileEntry[]>("list_folder_contents", {
         folderMetadataCid: manifestCid,
         folderName,
-        mainFolderName: null
+        mainFolderName: null,
+        subfolderPath: null
       });
 
       setFileList(files);
@@ -149,8 +150,8 @@ export default function IpfsFolderDemo() {
       const folderName = folderPath.split("/").pop() || "uploaded_folder";
       const command = isPrivateFolder ? "add_file_to_private_folder" : "add_file_to_public_folder";
       const params = isPrivateFolder
-        ? { accountId, folderMetadataCid: manifestCid, folderName, filePath, seedPhrase, encryptionKey: null }
-        : { accountId, folderMetadataCid: manifestCid, folderName, filePath, seedPhrase };
+        ? { accountId, folderMetadataCid: manifestCid, folderName, filePath, seedPhrase, subfolderPath: null, encryptionKey: null }
+        : { accountId, folderMetadataCid: manifestCid, folderName, filePath, seedPhrase, subfolderPath: null };
 
       const result = await invoke<string>(command, params);
 
@@ -182,7 +183,7 @@ export default function IpfsFolderDemo() {
     try {
       const folderName = folderPath.split("/").pop() || "uploaded_folder";
       const command = isPrivateFolder ? "remove_file_from_private_folder" : "remove_file_from_public_folder";
-      const params = { accountId, folderMetadataCid: manifestCid, folderName, fileName: fileToRemove, seedPhrase };
+      const params = { accountId, folderMetadataCid: manifestCid, folderName, fileName: fileToRemove, seedPhrase, subfolderPath: null };
 
       console.log("params", params)
 
