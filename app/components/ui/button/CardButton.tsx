@@ -45,7 +45,7 @@ const buttonCardVariants = ({
       break;
     case "secondary":
       variantClasses =
-        "relative overflow-hidden bg-grey-100 hover:bg-grey-80 text-grey-10 border border-grey-80";
+        "relative overflow-hidden bg-grey-90 hover:bg-grey-80 text-grey-10 border border-grey-80";
       break;
     case "ghost":
       variantClasses = "hover:opacity-60 text-grey-50";
