@@ -133,125 +133,144 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
-    builder.setup(|app| {
-        println!("[Setup] .setup() closure called in setup.rs");
-        
-        let handle = app.handle().clone();
-
-        // Spawn async task for database initialization and IPFS daemon
-        tauri::async_runtime::spawn(async move {
-            println!("[Setup] async block started in setup.rs");
+    pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
+        builder.setup(|app| {
+            println!("[Setup] .setup() closure called in setup.rs");
             
-            // Database initialization
-            let home_dir = dirs::home_dir().expect("Failed to get home directory");
-            let db_dir = home_dir.join(".hippius");
-            let db_path = db_dir.join("hippius.db");
-            println!("[Setup] DB path: {}", db_path.display());
+            let handle = app.handle().clone();
+           let win = app.get_webview_window("main").expect("main window not found");
 
-            std::fs::create_dir_all(&db_dir).expect("Failed to create .hippius directory");
+            if let Some(m) = win.current_monitor()? {
+               
+                let phys   = m.size();
+                let origin = m.position();        // PhysicalPosition<i32>
 
-            if !db_path.exists() {
-                std::fs::File::create(&db_path).expect("Failed to create database file");
+                
+                let w = if phys.width > 1470 { 1320u32 } else { (phys.width as f64 * 0.9) as u32 };
+                let h =          (phys.height as f64 * 0.9) as u32;
+
+              
+                let pos_x = origin.x + ((phys.width  as i32 - w as i32) / 2);
+                let pos_y = origin.y + ((phys.height as i32 - h as i32) / 2);
+
+                
+                win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
+                win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
+                win.show()?;       
             }
+            // Spawn async task for database initialization and IPFS daemon
+            tauri::async_runtime::spawn(async move {
+                println!("[Setup] async block started in setup.rs");
+                
+                // Database initialization
+                let home_dir = dirs::home_dir().expect("Failed to get home directory");
+                let db_dir = home_dir.join(".hippius");
+                let db_path = db_dir.join("hippius.db");
+                println!("[Setup] DB path: {}", db_path.display());
 
-            let db_url = format!("sqlite:{}", db_path.display());
-            let pool = SqlitePool::connect(&db_url).await.unwrap();
-            DB_POOL.set(pool.clone()).unwrap();
+                std::fs::create_dir_all(&db_dir).expect("Failed to create .hippius directory");
 
-            // Ensure all tables and columns exist
-            if let Err(e) = ensure_table_schema(&pool).await {
-                eprintln!("[Setup] Failed to ensure table schema: {}", e);
-                return;
-            }
-
-            // Set default values for existing records
-            if let Err(e) = sqlx::query(
-                r#"
-                UPDATE user_profiles 
-                SET type = CASE 
-                    WHEN file_name LIKE '%.ec' OR file_name LIKE '%.ec_metadata' THEN 'private'
-                    ELSE 'public'
-                END,
-                is_folder = CASE 
-                    WHEN file_name LIKE '%.folder' OR file_name LIKE '%.folder.ec' THEN 1
-                    ELSE 0
-                END,
-                source = COALESCE(source, 'Hippius')
-                WHERE type IS NULL OR is_folder IS NULL OR source IS NULL
-                "#
-            ).execute(&pool).await {
-                eprintln!("[Setup] Failed to update type, is_folder, and source columns in user_profiles: {}", e);
-            }
-
-            // Set default values for sync_folder_files
-            if let Err(e) = sqlx::query(
-                r#"
-                UPDATE sync_folder_files 
-                SET type = 'public',
-                    is_folder = 0,
-                    source = 'Hippius'
-                WHERE type IS NULL OR is_folder IS NULL OR source IS NULL
-                "#
-            ).execute(&pool).await {
-                eprintln!("[Setup] Failed to update default values in sync_folder_files: {}", e);
-            }
-
-            // Check if any encryption keys exist, create one if none found
-            let key_exists: Option<(i64,)> = sqlx::query_as(
-                "SELECT COUNT(*) as count FROM encryption_keys"
-            )
-            .fetch_optional(&pool)
-            .await
-            .unwrap_or(Some((0,)));
-
-            if let Some((count,)) = key_exists {
-                if count == 0 {
-                    println!("[Setup] No encryption keys found, creating initial key...");
-                    if let Err(e) = crate::utils::accounts::create_and_store_encryption_key().await {
-                        eprintln!("[Setup] Failed to create initial encryption key: {}", e);
-                    } else {
-                        println!("[Setup] Initial encryption key created successfully");
-                    }
-                } else {
-                    println!("[Setup] Found {} existing encryption key(s)", count);
+                if !db_path.exists() {
+                    std::fs::File::create(&db_path).expect("Failed to create database file");
                 }
-            }
 
-            // Initialize WSS endpoint if it doesn't exist
-            let endpoint_exists: Option<(i64,)> = sqlx::query_as(
-                "SELECT COUNT(*) as count FROM wss_endpoint"
-            )
-            .fetch_optional(&pool)
-            .await
-            .unwrap_or(Some((0,)));
+                let db_url = format!("sqlite:{}", db_path.display());
+                let pool = SqlitePool::connect(&db_url).await.unwrap();
+                DB_POOL.set(pool.clone()).unwrap();
 
-            if let Some((count,)) = endpoint_exists {
-                if count == 0 {
-                    println!("[Setup] No WSS endpoint found, creating default endpoint...");
-                    if let Err(e) = sqlx::query(
-                        "INSERT INTO wss_endpoint (id, endpoint) VALUES (1, ?)"
-                    )
-                    .bind(WSS_ENDPOINT)
-                    .execute(&pool)
-                    .await {
-                        eprintln!("[Setup] Failed to create default WSS endpoint: {}", e);
-                    } else {
-                        println!("[Setup] Default WSS endpoint created successfully");
-                    }
-                } else {
-                    println!("[Setup] WSS endpoint already exists");
+                // Ensure all tables and columns exist
+                if let Err(e) = ensure_table_schema(&pool).await {
+                    eprintln!("[Setup] Failed to ensure table schema: {}", e);
+                    return;
                 }
-            }
 
-            println!("[Setup] Database initialized successfully");
+                // Set default values for existing records
+                if let Err(e) = sqlx::query(
+                    r#"
+                    UPDATE user_profiles 
+                    SET type = CASE 
+                        WHEN file_name LIKE '%.ec' OR file_name LIKE '%.ec_metadata' THEN 'private'
+                        ELSE 'public'
+                    END,
+                    is_folder = CASE 
+                        WHEN file_name LIKE '%.folder' OR file_name LIKE '%.folder.ec' THEN 1
+                        ELSE 0
+                    END,
+                    source = COALESCE(source, 'Hippius')
+                    WHERE type IS NULL OR is_folder IS NULL OR source IS NULL
+                    "#
+                ).execute(&pool).await {
+                    eprintln!("[Setup] Failed to update type, is_folder, and source columns in user_profiles: {}", e);
+                }
 
-            // Start IPFS daemon
-            if let Err(e) = start_ipfs_daemon(handle).await {
-                eprintln!("Failed to start IPFS daemon: {e:?}");
-            }
-        });
-        
-        Ok(())
-    })
-}
+                // Set default values for sync_folder_files
+                if let Err(e) = sqlx::query(
+                    r#"
+                    UPDATE sync_folder_files 
+                    SET type = 'public',
+                        is_folder = 0,
+                        source = 'Hippius'
+                    WHERE type IS NULL OR is_folder IS NULL OR source IS NULL
+                    "#
+                ).execute(&pool).await {
+                    eprintln!("[Setup] Failed to update default values in sync_folder_files: {}", e);
+                }
+
+                // Check if any encryption keys exist, create one if none found
+                let key_exists: Option<(i64,)> = sqlx::query_as(
+                    "SELECT COUNT(*) as count FROM encryption_keys"
+                )
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+                if let Some((count,)) = key_exists {
+                    if count == 0 {
+                        println!("[Setup] No encryption keys found, creating initial key...");
+                        if let Err(e) = crate::utils::accounts::create_and_store_encryption_key().await {
+                            eprintln!("[Setup] Failed to create initial encryption key: {}", e);
+                        } else {
+                            println!("[Setup] Initial encryption key created successfully");
+                        }
+                    } else {
+                        println!("[Setup] Found {} existing encryption key(s)", count);
+                    }
+                }
+
+                // Initialize WSS endpoint if it doesn't exist
+                let endpoint_exists: Option<(i64,)> = sqlx::query_as(
+                    "SELECT COUNT(*) as count FROM wss_endpoint"
+                )
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+                if let Some((count,)) = endpoint_exists {
+                    if count == 0 {
+                        println!("[Setup] No WSS endpoint found, creating default endpoint...");
+                        if let Err(e) = sqlx::query(
+                            "INSERT INTO wss_endpoint (id, endpoint) VALUES (1, ?)"
+                        )
+                        .bind(WSS_ENDPOINT)
+                        .execute(&pool)
+                        .await {
+                            eprintln!("[Setup] Failed to create default WSS endpoint: {}", e);
+                        } else {
+                            println!("[Setup] Default WSS endpoint created successfully");
+                        }
+                    } else {
+                        println!("[Setup] WSS endpoint already exists");
+                    }
+                }
+
+                println!("[Setup] Database initialized successfully");
+
+                // Start IPFS daemon
+                if let Err(e) = start_ipfs_daemon(handle).await {
+                    eprintln!("Failed to start IPFS daemon: {e:?}");
+                }
+            });
+            
+            Ok(())
+        })
+    }

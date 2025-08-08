@@ -87,7 +87,7 @@ const AddressSelect: React.FC<AddressSelectProps> = ({
             className={cn(
               "relative h-14 w-full bg-transparent rounded-lg border border-grey-80",
               "flex items-center cursor-pointer transition-shadow duration-300",
-              "hover:shadow-input-focus",
+              "hover:shadow-input-focus group",
               error ? "border-error-50" : "",
               disabled ? "opacity-50 cursor-not-allowed" : ""
             )}
@@ -109,7 +109,9 @@ const AddressSelect: React.FC<AddressSelectProps> = ({
               />
               <span className="relative z-10 ml-2  flex justify-center items-center text-grey-60  ">
                 <Icons.ChevronDown
-                  className={cn("size-6 transition-transform duration-200")}
+                  className={cn(
+                    "size-6 transition-transform duration-200 group-data-[state=open]:rotate-180"
+                  )}
                 />
               </span>
             </div>
