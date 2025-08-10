@@ -64,6 +64,11 @@ pub fn collect_folders_recursively(dir: &Path, folders: &mut Vec<PathBuf>) -> st
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+            if name.starts_with('.') {
+                continue; // Skip hidden files and directories
+            }
+        }
         if path.is_dir() {
             folders.push(path.clone());
             collect_folders_recursively(&path, folders)?;
@@ -77,6 +82,11 @@ pub fn collect_files_in_folder(dir: &Path, files: &mut Vec<PathBuf>) -> std::io:
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+            if name.starts_with('.') {
+                continue; // Skip hidden files and directories
+            }
+        }
         if path.is_file() {
             if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
                 if file_name.starts_with('.') {
@@ -118,6 +128,13 @@ pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::i
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+
+        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+            if name.starts_with('.') {
+                continue; // Skip hidden files and directories
+            }
+        }
+
         if path.is_file() {
             files.push(path);
         } else if path.is_dir() {

@@ -617,6 +617,11 @@ fn collect_paths_recursively(dir: &Path, paths: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with('.') {
+                    continue; // Skip hidden files and directories
+                }
+            }
             // Only add direct children of the sync directory
             if path.parent().map(|p| p == dir).unwrap_or(false) {
                 paths.push(path.clone());

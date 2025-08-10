@@ -442,6 +442,13 @@ pub async fn encrypt_and_upload_folder(
             temp_dir: &tempfile::TempDir,
             all_files: &mut Vec<(String, String)>,
         ) -> Result<(String, String, usize), String> {
+            // Skip hidden folders
+            if let Some(name) = node.path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.') {
+                    return Ok((String::new(), String::new(), 0)); // skip entirely
+                }
+            }
+
             let mut file_entries = Vec::new();
             // Process files
             for file_path in &node.files {
@@ -1828,6 +1835,18 @@ fn upload_folder_recursive_public(
     for entry in fs::read_dir(folder_path).map_err(|e| format!("Failed to read dir: {}", e))? {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let path = entry.path();
+
+        // Get file or folder name safely
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue, // skip if can't get valid name
+        };
+        
+        // Skip hidden files/folders
+        if name.starts_with('.') {
+            continue;
+        }
+
         if path.is_dir() {
             subfolders.push(path);
         } else {
@@ -2905,6 +2924,13 @@ pub async fn encrypt_and_upload_folder_sync(
         processing_results: &Arc<Mutex<Vec<FileProcessingResultSync>>>,
         all_files: &mut Vec<(String, String)>,
     ) -> Result<(String, String, usize), String> {
+        // Skip hidden folders
+        if let Some(name) = node.path.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with('.') {
+                return Ok((String::new(), String::new(), 0)); // skip entirely
+            }
+        }
+
         let mut file_entries = Vec::new();
 
         use rayon::prelude::*;
@@ -3077,6 +3103,13 @@ fn collect_files_recursively_with_paths(
     for entry in fs::read_dir(current_path)? {
         let entry = entry?;
         let path = entry.path();
+
+        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+            if name.starts_with('.') {
+                continue; // Skip hidden files and directories
+            }
+        }
+
         let relative_path = path.strip_prefix(root_path)
             .unwrap()
             .parent()
@@ -3341,6 +3374,11 @@ pub async fn public_upload_folder_sync(
                 for entry in fs::read_dir(folder_path).map_err(|e| format!("Failed to read dir: {}", e))? {
                     let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
                     let path = entry.path();
+                    if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                        if name.starts_with('.') {
+                            continue; // Skip hidden files and directories
+                        }
+                    }
                     if path.is_dir() {
                         subfolders.push(path);
                     } else {
@@ -3354,6 +3392,9 @@ pub async fn public_upload_folder_sync(
                     let file_name = file_path.file_name()
                         .ok_or("Invalid file path".to_string())?
                         .to_string_lossy();
+                    if file_name.starts_with('.') {
+                        continue;
+                    }
                     if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
                         continue;
                     }
@@ -3378,6 +3419,12 @@ pub async fn public_upload_folder_sync(
 
                 // Recursively process subfolders, but only add their metadata to root
                 for subfolder_path in &subfolders {
+                    // Skip hidden subfolders
+                    if let Some(name) = subfolder_path.file_name().and_then(|s| s.to_str()) {
+                        if name.starts_with('.') {
+                            continue;
+                        }
+                    }
                     let (meta_name, meta_cid, subfolder_size) = upload_folder_recursive_public(
                         subfolder_path,
                         api_url,
@@ -3634,7 +3681,7 @@ pub async fn add_folder_to_public_folder(
             // Add new folder entry
             file_entries.push(FileEntry {
                 file_name: meta_name.clone(),
-                file_size: 0, // You can sum up the size if needed
+                file_size: 0,
                 cid: meta_cid.clone(),
             });
 
@@ -4269,6 +4316,13 @@ fn upload_folder_recursive_private_ec(
         temp_dir: &tempfile::TempDir,
         all_files: &mut Vec<(String, String)>,
     ) -> Result<(String, String, usize), String> {
+        // Skip hidden folders
+        if let Some(name) = node.path.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with('.') {
+                return Ok((String::new(), String::new(), 0)); // skip entirely
+            }
+        }
+
         let mut file_entries = Vec::new();
         // Process files
         for file_path in &node.files {
