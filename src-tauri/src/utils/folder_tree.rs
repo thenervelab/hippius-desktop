@@ -20,6 +20,11 @@ impl FolderNode {
         for entry in std::fs::read_dir(root)? {
             let entry = entry?;
             let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with('.') {
+                    continue; // Skip hidden files and directories
+                }
+            }
             if path.is_dir() {
                 node.children.push(FolderNode::build_tree(&path)?);
             } else {

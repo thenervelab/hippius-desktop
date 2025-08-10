@@ -3671,7 +3671,7 @@ pub async fn add_folder_to_public_folder(
 
             // Recursively upload the folder
             let mut all_files = Vec::new();
-            let (meta_name, meta_cid, _size) = upload_folder_recursive_public(
+            let (meta_name, meta_cid, total_size) = upload_folder_recursive_public(
                 folder_path,
                 &api_url,
                 false,
@@ -3681,7 +3681,7 @@ pub async fn add_folder_to_public_folder(
             // Add new folder entry
             file_entries.push(FileEntry {
                 file_name: meta_name.clone(),
-                file_size: 0,
+                file_size: total_size,
                 cid: meta_cid.clone(),
             });
 
@@ -4035,7 +4035,7 @@ pub async fn add_folder_to_private_folder(
             }
             // Recursively upload the folder (reuse public_upload_folder logic, but private)
             let mut all_files = Vec::new();
-            let (meta_name, meta_cid, _size) = upload_folder_recursive_private_ec(
+            let (meta_name, meta_cid, size) = upload_folder_recursive_private_ec(
                 folder_path,
                 api_url,
                 encryption_key_bytes,
@@ -4043,7 +4043,7 @@ pub async fn add_folder_to_private_folder(
             )?;
             file_entries.push(FileEntry {
                 file_name: meta_name.clone(),
-                file_size: 0,
+                file_size: size,
                 cid: meta_cid.clone(),
             });
             let updated_manifest_json = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
@@ -4107,7 +4107,7 @@ pub async fn add_folder_to_private_folder(
             return Err(format!("Folder '{}' already exists in folder '{}'.", folder_name_actual, folder_name));
         }
         let mut all_files = Vec::new();
-        let (meta_name, meta_cid, _size) = upload_folder_recursive_private_ec(
+        let (meta_name, meta_cid, size) = upload_folder_recursive_private_ec(
             folder_path_obj,
             &api_url,
             &encryption_key_bytes,
@@ -4115,7 +4115,7 @@ pub async fn add_folder_to_private_folder(
         )?;
         file_entries.push(FileEntry {
             file_name: meta_name.clone(),
-            file_size: 0,
+            file_size: size,
             cid: meta_cid.clone(),
         });
         let updated_manifest_json = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
