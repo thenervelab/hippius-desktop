@@ -27,6 +27,7 @@ use tokio::sync::Mutex;
 use crate::utils::file_operations::sanitize_name;
 use rayon::prelude::*;
 use crate::utils::folder_tree::FolderNode;
+use std::collections::HashMap;
 
 // Helper function to format file sizes
 fn format_file_size(size_bytes: usize) -> String {
@@ -49,10 +50,17 @@ fn format_file_size(size_bytes: usize) -> String {
 // Drops the first segment and returns None if the remaining path is empty
 fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<Vec<String>> {
     if let Some(mut path) = subfolder_path.take() {
+        // Drop the main/root folder name if present
         if !path.is_empty() {
             path.remove(0);
         }
-        if path.is_empty() { None } else { Some(path) }
+        // Sanitize the remaining segments
+        let cleaned: Vec<String> = path
+            .into_iter()
+            .map(|segment| sanitize_name(&segment))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if cleaned.is_empty() { None } else { Some(cleaned) }
     } else {
         None
     }
@@ -761,6 +769,7 @@ pub async fn add_file_to_private_folder(
 ) -> Result<String, String> {
     println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
+    let folder_name = sanitize_name(&folder_name);
     let encryption_key_bytes = if let Some(key_b64) = encryption_key {
         Some(Arc::new(general_purpose::STANDARD.decode(&key_b64).map_err(|e| format!("Key decode error: {}", e))?))
     } else {
@@ -1062,7 +1071,7 @@ pub async fn remove_file_from_private_folder(
 ) -> Result<String, String> {
     println!("[+] Removing file '{}' from folder '{}'", file_name, folder_name);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
-
+    let folder_name = sanitize_name(&folder_name);
     // Recursive helper function
     async fn remove_file_recursive_private(
         api_url: &Arc<String>,
@@ -1382,7 +1391,9 @@ async fn reconstruct_and_decrypt_single_file(
                 let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
                 chunk_data.extend_from_slice(&shard[..bytes_to_take]);
                 bytes_collected += bytes_to_take;
-                if bytes_collected >= chunk_bytes_needed { break; }
+                if bytes_collected == chunk_bytes_needed {
+                    break;
+                }
             }
         }
         reconstructed_chunks_data.push(chunk_data);
@@ -2159,7 +2170,9 @@ pub async fn add_file_to_public_folder(
     seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
+    println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
+    let folder_name = sanitize_name(&folder_name);
 
     // Helper: recursively add file to the correct subfolder metadata
     async fn add_file_recursive_public(
@@ -2476,7 +2489,7 @@ pub async fn remove_file_from_public_folder(
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
-
+    let folder_name = sanitize_name(&folder_name);
     // Recursive helper needs to be boxed
     async fn remove_file_recursive_public(
         api_url: Arc<String>,
