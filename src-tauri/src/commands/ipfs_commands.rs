@@ -3741,12 +3741,12 @@ pub async fn list_folder_contents(
     mut subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
     let api_url = "http://127.0.0.1:5001";
-    println!("[list_folder_contents] Downloading folder folder_name: {} for CID: {}", folder_name, folder_metadata_cid);
+    println!("subfolder_path {:?}", subfolder_path);
+    println!("[list_folder_contents] fetching folder folder_name: {} for CID: {}", folder_name, folder_metadata_cid);
     let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata_cid)
         .await
         .map_err(|e| format!("Failed to download folder manifest for CID {}: {}", folder_metadata_cid, e))?;
     let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
-    println!("[list_folder_contents] Downloaded file_entries: {:?}", file_entries);
     let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
 
     let folder_record = sqlx::query(
@@ -3765,7 +3765,7 @@ pub async fn list_folder_contents(
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("DB query failed for folder {}: {}", folder_name, e))?;
-
+    println!("files_in_folder , {:?}", file_entries);
     let files_in_folder: Vec<FileDetail> = file_entries
         .into_iter()
         .filter(|entry| !entry.file_name.ends_with(".ec"))
@@ -3774,32 +3774,34 @@ pub async fn list_folder_contents(
                 let mut source_path = row.get::<Option<String>, _>("source").unwrap_or_default();
                 println!("source_path: {}", source_path);
                 if source_path != "Hippius" {
-                    if let Some(path_vector) = &mut subfolder_path {
-                        // Only process if there are multiple items
-                        if path_vector.len() > 1 {
-                            let first = path_vector.remove(0);
-                            println!("sub path is {:?}", path_vector);
-                            let sanitize_name_entry = sanitize_name(&file_entry.file_name);
-                            let mut full_path = std::path::PathBuf::new();
-                            for segment in path_vector {
-                                let sanitized_segment = sanitize_name(&segment);
-                                full_path.push(sanitized_segment);
+                    // Build a base directory from source and sanitized subfolder path (excluding main folder)
+                    let mut base_dir = PathBuf::from(&source_path);
+                    if let Some(ref mut path_vector) = subfolder_path {
+                        // If the first segment is main folder, drop it
+                        if let Some(main) = main_folder_name.as_ref().or(Some(&folder_name)) {
+                            if !path_vector.is_empty() && sanitize_name(&path_vector[0]) == sanitize_name(main) {
+                                let _ = path_vector.remove(0);
                             }
-                            let sync_subfolder_path = full_path.to_string_lossy().to_string();                            
-                            let full_path = format!("{}/{}/{}",source_path, sync_subfolder_path, sanitize_name_entry);
-                            println!("trying to set full path with sub path  {:?}", full_path);
-                            if Path::new(&full_path).exists() {
-                                source_path = full_path;
-                            }        
+                        } else if !path_vector.is_empty() {
+                            let _ = path_vector.remove(0);
+                        }
+                        for segment in path_vector.iter() {
+                            let sanitized_segment = sanitize_name(segment);
+                            if !sanitized_segment.is_empty() {
+                                base_dir.push(sanitized_segment);
+                            }
                         }
                     }
-                    else{
-                        let sanitized_file_name = sanitize_name(&file_entry.file_name);
-                        let full_path = format!("{}/{}",source_path,sanitized_file_name);
-                        println!("trying to set full path {:?}", full_path);
-                        if Path::new(&full_path).exists() {
-                            source_path = full_path;
-                        }    
+
+                    // Append the sanitized entry name (works for files and folders)
+                    let sanitized_entry_name = sanitize_name(&file_entry.file_name);
+                    let candidate_path = base_dir.join(&sanitized_entry_name);
+                    let candidate_str = candidate_path.to_string_lossy().to_string();
+                    println!("constructed candidate path: {}", candidate_str);
+                    if candidate_path.exists() {
+                        source_path = candidate_str;
+                    }else{
+                        source_path = "Hippius".to_string()
                     }
                 }
                 FileDetail {
