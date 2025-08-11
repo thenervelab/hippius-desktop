@@ -161,11 +161,6 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_secs(2));
-                    // let _ = message(
-                    //     Some(&app_handle.get_webview_window("main").unwrap()),
-                    //     "Hippius Setup",
-                    //     "Hippius needs file and network access to sync your data.\n\nClick OK to grant permissions automatically, or manually grant them in System Preferences > Security & Privacy > Privacy."
-                    // );
                     
                     // Request permissions programmatically
                     request_macos_permissions();
