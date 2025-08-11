@@ -76,6 +76,16 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("is_folder", "BOOLEAN"),
             ],
         ),
+        (
+            "file_paths",
+            &[
+                ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+                ("file_name", "TEXT NOT NULL"),
+                ("file_hash", "TEXT NOT NULL"),
+                ("timestamp", "INTEGER NOT NULL"),
+                ("path", "TEXT NOT NULL"),
+            ],
+        ),
     ];
 
     for (table_name, columns) in TABLE_SCHEMAS {
@@ -141,6 +151,18 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             id INTEGER PRIMARY KEY CHECK (id = 1),
             endpoint TEXT NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS file_paths (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_name TEXT NOT NULL,
+            file_hash TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            path TEXT NOT NULL
         )"
     )
     .execute(pool)
