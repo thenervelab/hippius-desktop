@@ -10,6 +10,22 @@ use crate::{
     constants::substrate::WSS_ENDPOINT,
 };
 
+#[cfg(target_os = "macos")]
+use tauri::api::dialog::blocking::message;
+
+#[cfg(target_os = "macos")]
+fn request_macos_permissions() {
+    use std::process::Command;
+    
+    // Request file access permissions programmatically
+    let _ = Command::new("osascript")
+        .args(&[
+            "-e", 
+            "tell application \"System Events\" to authorize \"Hippius\" for \"Files and Folders\""
+        ])
+        .output();
+}
+
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas
     const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
@@ -138,6 +154,24 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             println!("[Setup] .setup() closure called in setup.rs");
             
             let handle = app.handle().clone();
+            
+            // Show macOS permission guidance on first run
+            #[cfg(target_os = "macos")]
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let _ = message(
+                        Some(&app_handle.get_window("main").unwrap()),
+                        "Hippius Setup",
+                        "Hippius needs file and network access to sync your data.\n\nClick OK to grant permissions automatically, or manually grant them in System Preferences > Security & Privacy > Privacy."
+                    );
+                    
+                    // Request permissions programmatically
+                    request_macos_permissions();
+                });
+            }
+            
             // Spawn async task for database initialization and IPFS daemon
             tauri::async_runtime::spawn(async move {
                 println!("[Setup] async block started in setup.rs");

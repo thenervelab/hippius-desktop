@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>Hippius</string>
+    <key>CFBundleIconFile</key>
+    <string>icon.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>hippius.com</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Hippius</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.0.1</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Hippius may need microphone access for voice features.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Hippius may need camera access for media features.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Hippius needs access to your photo library to sync media files.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Hippius needs access to your documents folder to sync files.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Hippius needs access to your downloads folder to sync files.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Hippius needs access to your desktop folder to sync files.</string>
+    <key>NSMusicUsageDescription</key>
+    <string>Hippius needs access to your music folder to sync media files.</string>
+    <key>NSMoviesUsageDescription</key>
+    <string>Hippius needs access to your movies folder to sync media files.</string>
+    <key>NSPicturesUsageDescription</key>
+    <string>Hippius needs access to your pictures folder to sync media files.</string>
+</dict>
+</plist> 

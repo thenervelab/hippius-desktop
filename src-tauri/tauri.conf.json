@@ -11,7 +11,8 @@
   },
   "plugins": {
     "fs": {
-      "requireLiteralLeadingDot": false
+      "requireLiteralLeadingDot": false,
+      "scope": ["$HOME/**", "$DOCUMENT/**", "$DESKTOP/**", "$DOWNLOAD/**", "$PICTURE/**", "$MUSIC/**", "$VIDEO/**"]
     },
     "updater": {
       "active": true,
@@ -57,6 +58,15 @@
     ],
     "createUpdaterArtifacts": true,
     "resources": ["icons", "icons/icon.png", "icons/trayIcon.png"],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "exceptionDomain": "hippius.com",
+      "frameworks": [],
+      "providerShortName": "Hippius",
+      "signingIdentity": null,
+      "hardenedRuntime": true,
+      "minimumSystemVersion": "10.13.0"
+    },
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
