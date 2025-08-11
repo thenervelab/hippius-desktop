@@ -1138,8 +1138,7 @@ pub async fn delete_and_unpin_user_file_records_from_folder(
 ) -> Result<u64, String> {
     if let Some(pool) = DB_POOL.get() {
         unpin_user_file_by_name(folder_name, seed_phrase)
-            .await
-            .map_err(|e| format!("Unpin failed for '{}': {}", folder_name, e))?;
+            .await;
 
         let result = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
             .bind(folder_name)

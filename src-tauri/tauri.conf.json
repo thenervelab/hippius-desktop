@@ -11,8 +11,7 @@
   },
   "plugins": {
     "fs": {
-      "requireLiteralLeadingDot": false,
-      "scope": ["$HOME/**", "$DOCUMENT/**", "$DESKTOP/**", "$DOWNLOAD/**", "$PICTURE/**", "$MUSIC/**", "$VIDEO/**"]
+      "requireLiteralLeadingDot": false
     },
     "updater": {
       "active": true,

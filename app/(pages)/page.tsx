@@ -2,7 +2,7 @@
 
 import DashboardTitleWrapper from "../components/dashboard-title-wrapper";
 import HomePage from "../components/page-sections/home";
-// import UploadFileComponent from "../components/upload-download";
+import PublicFolderTest from "../components/folder-upload-download";
 // import { useFilesNotification } from "../lib/hooks/useFilesNotification";
 // import WssEndpointTester from "../wssTest";
 
@@ -11,7 +11,7 @@ export default function Home() {
 
   return (
     <DashboardTitleWrapper mainText="">
-      {/* <WssEndpointTester /> */}
+      <PublicFolderTest />
       {/* TEMPORARY SYNC STATUS DISPLAY - TO BE REMOVED LATER */}
       {/* {syncStatus && (
         <div className="p-3 border-b border-grey-80">
