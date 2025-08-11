@@ -50,7 +50,7 @@ export const useDeleteIpfsFile = ({
 
             if (!fileToDelete) throw new Error("Cannot find file");
             // Handle file in folder deletion
-            if (folderCid && folderName) {
+            if (folderCid && mainFolderActualName) {
                 if (!mnemonic) {
                     throw new Error("Seed phrase required to delete files from folder");
                 }
@@ -58,14 +58,12 @@ export const useDeleteIpfsFile = ({
                 const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
                 const mainFolderCid = getParam("mainFolderCid", "");
 
-
-
                 try {
                     const command = isPrivateFolder ? "remove_file_from_private_folder" : "remove_file_from_public_folder";
                     const params = {
                         accountId: polkadotAddress,
                         folderMetadataCid: mainFolderCid,
-                        folderName: folderName,
+                        folderName: mainFolderActualName,
                         fileName: fileToDelete.name,
                         seedPhrase: mnemonic,
                         subfolderPath: folderPath || null

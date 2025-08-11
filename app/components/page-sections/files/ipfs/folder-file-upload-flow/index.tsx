@@ -154,7 +154,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                 const params = {
                     accountId: polkadotAddress,
                     folderMetadataCid: mainFolderCid,
-                    folderName,
+                    folderName: mainFolderActualName,
                     fileName: file.name,
                     fileData: fileData,
                     seedPhrase: mnemonic,
