@@ -32,13 +32,16 @@ const NameCell: FC<NameCellProps> = ({
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
 
+  const folderCid = getParam("folderCid", "");
+  const mainFolderCid = getParam("mainFolderCid", "");
   const folderActualName = isFolder ? actualName || "" : "";
   const mainFolderActualName = getParam("mainFolderActualName", isFolder ? actualName || "" : "");
   const subFolderPath = getParam("subFolderPath", "");
 
   // Build the folder path for navigation
-  const { mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
+  const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
     folderActualName,
+    mainFolderCid || folderCid,
     mainFolderActualName || folderActualName,
     subFolderPath
   );
@@ -47,7 +50,7 @@ const NameCell: FC<NameCellProps> = ({
   return (
     <div className={className}>
       {isFolder ? (
-        <Link href={`/files?folderCid=${decodeHexCid(cid)}&folderName=${encodeURIComponent(rawName)}&folderActualName=${encodeURIComponent(actualName ?? "")}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`}>
+        <Link href={`/files?folderCid=${decodeHexCid(cid)}&folderName=${encodeURIComponent(rawName)}&folderActualName=${encodeURIComponent(actualName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`}>
           <div className="flex items-center">
             <Icon className={cn("size-5 mr-2", color)} />
             <span className="text-grey-20 hover:text-primary-40 hover:underline transition">

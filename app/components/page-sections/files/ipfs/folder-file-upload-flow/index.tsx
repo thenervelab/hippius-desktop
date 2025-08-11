@@ -149,10 +149,11 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
 
 
                 const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
+                const mainFolderCid = getParam("mainFolderCid", "");
 
                 const params = {
                     accountId: polkadotAddress,
-                    folderMetadataCid: folderCid,
+                    folderMetadataCid: mainFolderCid,
                     folderName,
                     fileName: file.name,
                     fileData: fileData,

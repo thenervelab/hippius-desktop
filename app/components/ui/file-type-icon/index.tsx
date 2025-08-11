@@ -35,13 +35,16 @@ const FileTypeIcon: React.FC<FileTypeIconProps> = ({
     const { icon: Icon, color: iconColor } = getFileIconForThumbnail(fileType, !!file.isFolder);
 
     // Get current path information
+    const folderCid = getParam("folderCid", "");
+    const mainFolderCid = getParam("mainFolderCid", "");
     const folderActualName = getParam("folderActualName", "");
     const mainFolderActualName = getParam("mainFolderActualName", "");
     const subFolderPath = getParam("subFolderPath", "");
 
     // Build the folder path for navigation
-    const { mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
+    const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
         folderActualName,
+        mainFolderCid || folderCid,
         mainFolderActualName || folderActualName,
         subFolderPath
     );
@@ -49,7 +52,7 @@ const FileTypeIcon: React.FC<FileTypeIconProps> = ({
     return (
         <div className={cn(className)}>
             {file.isFolder ? (
-                <Link href={`/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`}>
+                <Link href={`/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`}>
                     <div className="flex items-center justify-center">
                         <Icon className={cn("text-grey-100", iconSizeClass, iconClassName)} />
                     </div>

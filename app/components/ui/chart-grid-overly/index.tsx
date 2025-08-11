@@ -6,16 +6,22 @@ interface GridOverlayProps {
   bgClass?: string;
 }
 
-const GridOverlay: React.FC<GridOverlayProps> = ({
+const ChartGridOverlay: React.FC<GridOverlayProps> = ({
   marginClasses = "mt-[50px] ml-[60px] mb-[30px] mr-[21px]",
   className = "",
   bgClass = "bg-[url('/chart-grid.png')]",
 }) => (
-  <div className={cn("absolute inset-0", marginClasses, className)}>
-    <div className="relative w-full h-full">
+  <div
+    className={cn(
+      "absolute inset-0 pointer-events-none",
+      marginClasses,
+      className
+    )}
+  >
+    <div className="relative w-full h-full pointer-events-none">
       <div
         className={cn(
-          "absolute inset-0 pointer-events-none select-none bg-cover z-[-1]",
+          "absolute inset-0 bg-cover z-[-1] pointer-events-none",
           bgClass
         )}
       />
@@ -23,4 +29,4 @@ const GridOverlay: React.FC<GridOverlayProps> = ({
   </div>
 );
 
-export default GridOverlay;
+export default ChartGridOverlay;

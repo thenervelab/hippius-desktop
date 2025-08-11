@@ -56,13 +56,15 @@ export const useDeleteIpfsFile = ({
                 }
 
                 const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
+                const mainFolderCid = getParam("mainFolderCid", "");
+
 
 
                 try {
                     const command = isPrivateFolder ? "remove_file_from_private_folder" : "remove_file_from_public_folder";
                     const params = {
                         accountId: polkadotAddress,
-                        folderMetadataCid: folderCid,
+                        folderMetadataCid: mainFolderCid,
                         folderName: folderName,
                         fileName: fileToDelete.name,
                         seedPhrase: mnemonic,

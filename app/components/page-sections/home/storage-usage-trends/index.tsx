@@ -165,7 +165,7 @@ const StorageUsageTrends: React.FC<{
         <div ref={ref} className="w-full">
           <Card
             title={
-              <div className="flex justify-between gap-3 w-full py-1 px-2">
+              <div className="flex justify-between gap-3 w-full py-1 mb-1.5 px-2">
                 <div className="flex items-center group-x-2">
                   <AbstractIconWrapper
                     className={cn(
@@ -196,7 +196,7 @@ const StorageUsageTrends: React.FC<{
               </div>
             }
             className={cn("flex-1 rounded", className)}
-            contentClassName="relative h-[300px]"
+            contentClassName="relative h-[246px]"
           >
             <div className="relative w-full h-full flex">
               {isLoading ? (
@@ -211,8 +211,8 @@ const StorageUsageTrends: React.FC<{
                   </span>
                 </div>
               ) : (
-                <div className="relative w-full h-full pt-4 pr-4">
-                  <ChartGridOverlay marginClasses="mt-[50px] ml-[60px] mb-[30px] mr-[21px]" />
+                <div className="relative w-full h-full  pr-4">
+                  <ChartGridOverlay marginClasses="mt-[0px] ml-[60px] mb-[30px] mr-[21px]" />
 
                   <BarChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
@@ -229,7 +229,7 @@ const StorageUsageTrends: React.FC<{
                     ]}
                     xScaleType="band"
                     yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
-                    margin={{ top: 34, left: 60, bottom: 30, right: 5 }}
+                    margin={{ top: 0, left: 60, bottom: 30, right: 5 }}
                     showVerticalCrosshair={true}
                     showHorizontalCrosshair={true}
                     xAxisProps={{
