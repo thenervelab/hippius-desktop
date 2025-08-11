@@ -27,6 +27,8 @@ import { downloadIpfsFolder } from "@/lib/utils/downloadIpfsFolder";
 import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFileToFolderButton";
 import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userPreferencesDb";
 import { getFolderPathArray } from "@/app/utils/folderPathUtils";
+import AddFolderToFolderButton from "@/components/page-sections/files/ipfs/AddFolderToFolderButton";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 
 interface FileEntry {
     file_name: string;
@@ -68,6 +70,7 @@ export default function FolderView({
     );
     const isPrivateFolder = activeSubMenuItem === "Private";
     const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
+    const addFolderButtonRef = useRef<{}>({});
 
     const [searchTerm, setSearchTerm] = useState("");
     const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
@@ -449,6 +452,17 @@ export default function FolderView({
                             )}
                         </button>
                     </div>
+
+                    <AddFolderToFolderButton
+                        ref={addFolderButtonRef}
+                        className="h-9"
+                        folderCid={folderCid}
+                        folderName={folderName}
+                        isPrivateFolder={isPrivateFolder}
+                        mainFolderActualName={mainFolderActualName}
+                        subFolderPath={subFolderPath}
+                        onFolderAdded={handleRefresh}
+                    />
 
                     <AddFileToFolderButton
                         ref={addButtonRef}

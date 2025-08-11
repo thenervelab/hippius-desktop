@@ -10,11 +10,13 @@ const FilesPage: FC = () => {
     const { getParam } = useUrlParams();
 
     const folderCid = getParam("folderCid");
-    // const mainFolderCid = getParam("mainFolderCid");
+    const mainFolderCid = getParam("mainFolderCid");
     const folderName = getParam("folderName", "");
     const folderActualName = getParam("folderActualName", "");
     const mainFolderActualName = getParam("mainFolderActualName", "");
     const subFolderPath = getParam("subFolderPath");
+
+    console.log("mainFolderCid from page file", mainFolderCid)
 
     if (folderCid) {
         return (
