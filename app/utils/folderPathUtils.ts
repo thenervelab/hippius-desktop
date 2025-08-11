@@ -5,21 +5,25 @@
 /**
  * Builds the folder path for navigation and backend operations
  * @param currentFolderName - The actual name of the current folder
+ * @param mainFolderCID - The actual CID of the main folder
  * @param mainFolderName - The main/root folder name
  * @param existingPath - The existing subfolder path (if any)
  * @returns An object with updated path information
  */
 export function buildFolderPath(
     currentFolderName: string,
+    mainFolderCID: string,
     mainFolderName?: string | null,
     existingPath?: string | null
 ): {
+    mainFolderCid: string;
     mainFolderActualName: string;
     subFolderPath: string;
 } {
     // If no main folder is set yet, the current folder becomes the main folder
     if (!mainFolderName) {
         return {
+            mainFolderCid: mainFolderCID,
             mainFolderActualName: currentFolderName,
             subFolderPath: ''
         };
@@ -29,12 +33,14 @@ export function buildFolderPath(
     if (!existingPath || existingPath === '') {
         // First level subfolder - path should be just the main folder
         return {
+            mainFolderCid: mainFolderCID,
             mainFolderActualName: mainFolderName,
             subFolderPath: mainFolderName
         };
     } else {
         // Deeper level subfolder - append current folder to existing path
         return {
+            mainFolderCid: mainFolderCID,
             mainFolderActualName: mainFolderName,
             subFolderPath: `${existingPath}/${currentFolderName}`
         };

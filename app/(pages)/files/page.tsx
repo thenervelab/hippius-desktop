@@ -10,6 +10,7 @@ const FilesPage: FC = () => {
     const { getParam } = useUrlParams();
 
     const folderCid = getParam("folderCid");
+    // const mainFolderCid = getParam("mainFolderCid");
     const folderName = getParam("folderName", "");
     const folderActualName = getParam("folderActualName", "");
     const mainFolderActualName = getParam("mainFolderActualName", "");
