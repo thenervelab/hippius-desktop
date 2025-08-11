@@ -766,6 +766,121 @@ pub async fn add_file_to_private_folder(
     } else {
         None
     };
+
+    // Helper: recursively add file to the correct subfolder metadata
+    async fn add_file_recursive_private(
+        api_url: &Arc<String>,
+        current_metadata_cid: &str,
+        path: &[String],
+        file_name: &str,
+        file_data: &[u8],
+        encryption_key_bytes: &Option<Arc<Vec<u8>>>,
+        current_folder_name: &str,
+        main_folder_name: &str,
+    ) -> Result<(String, String), String> {
+        // Download current metadata
+        let metadata_bytes = download_from_ipfs_async(api_url, current_metadata_cid)
+            .await
+            .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", current_metadata_cid, e))?;
+
+        let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+            .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", current_metadata_cid, e))?;
+
+        if path.is_empty() {
+            // At the target subfolder: add the file
+            let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
+                file_name.to_string()
+            } else {
+                format!("{}.ff.ec_metadata", file_name)
+            };
+
+            if file_entries.iter().any(|entry| entry.file_name == final_file_name) {
+                return Err(format!("File '{}' already exists in this folder.", final_file_name));
+            }
+
+            // Process and upload file to IPFS
+            let (new_file_entry, _new_chunk_pairs) = process_new_file_for_addition(
+                final_file_name.clone(),
+                file_data.to_vec(),
+                api_url,
+                encryption_key_bytes.clone(),
+            )
+            .await?;
+
+            file_entries.push(new_file_entry);
+
+            // Write updated metadata and upload
+            let folder_metadata = serde_json::to_string_pretty(&file_entries)
+                .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
+
+            let meta_name = if current_folder_name == main_folder_name {
+                format!("{}{}", current_folder_name, if current_folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" })
+            } else {
+                format!("{}.s.folder.ec_metadata", current_folder_name)
+            };
+            println!("meta_name: {}, current_folder_name: {}, main_folder_name: {}", meta_name, current_folder_name, main_folder_name);
+
+            let new_cid = upload_bytes_to_ipfs(
+                api_url,
+                folder_metadata.as_bytes().to_vec(),
+                "folder_metadata.json",
+            )
+            .await
+            .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e))?;
+
+            Ok((meta_name, new_cid))
+        } else {
+            // Traverse to next subfolder
+            let subfolder = &path[0];
+            let mut found = false;
+            for entry in &mut file_entries {
+                if entry.file_name.starts_with(subfolder) && entry.file_name.ends_with(".s.folder.ec_metadata") {
+                    // Recursively update subfolder with boxing
+                    let (new_subfolder_name, new_subfolder_cid) = Box::pin(add_file_recursive_private(
+                        api_url,
+                        &entry.cid,
+                        &path[1..],
+                        file_name,
+                        file_data,
+                        encryption_key_bytes,
+                        subfolder,
+                        main_folder_name,
+                    ))
+                    .await?;
+                    entry.file_name = new_subfolder_name;
+                    entry.cid = new_subfolder_cid;
+                    found = true;
+                    break;
+                }
+            }
+            println!("[private add file] Downloaded file_entries: {:?}", file_entries);
+            if !found {
+                return Err(format!("Subfolder '{}' not found in metadata.", subfolder));
+            }
+
+            // Write updated parent metadata and upload
+            let folder_metadata = serde_json::to_string_pretty(&file_entries)
+                .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
+
+            let meta_name = if current_folder_name == main_folder_name {
+                format!("{}{}", current_folder_name, if current_folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" })
+            } else {
+                format!("{}.s.folder.ec_metadata", current_folder_name)
+            };
+            println!("meta_name: {}, current_folder_name: {}, main_folder_name: {}", meta_name, current_folder_name, main_folder_name);
+
+            let new_cid = upload_bytes_to_ipfs(
+                api_url,
+                folder_metadata.as_bytes().to_vec(),
+                "folder_metadata.json",
+            )
+            .await
+            .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e))?;
+
+            Ok((meta_name, new_cid))
+        }
+    }
+
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
     println!("subfolder_path: {:?} cid: {} normalized_subfolder: {:?}", subfolder_path, folder_metadata_cid, normalized_subfolder);
     let (meta_folder_name, new_folder_manifest_cid) = if let Some(ref path) = normalized_subfolder {
@@ -778,6 +893,7 @@ pub async fn add_file_to_private_folder(
             &file_data,
             &encryption_key_bytes,
             &folder_name,
+            &folder_name,
         )).await?
     } else {
         // Old logic (root folder)
@@ -786,12 +902,18 @@ pub async fn add_file_to_private_folder(
         let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| format!("Could not parse existing folder manifest: {}", e))?;
 
-        if file_entries.iter().any(|entry| entry.file_name == file_name) {
-            return Err(format!("File '{}' already exists in folder '{}'.", file_name, folder_name));
+        let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
+            file_name.clone()
+        } else {
+            format!("{}.ff.ec_metadata", file_name)
+        };
+
+        if file_entries.iter().any(|entry| entry.file_name == final_file_name) {
+            return Err(format!("File '{}' already exists in folder '{}'.", final_file_name, folder_name));
         }
 
         let (new_file_entry, _new_chunk_pairs) =
-            process_new_file_for_addition(file_name.clone(), file_data.clone(), &api_url, encryption_key_bytes.clone()).await?;
+            process_new_file_for_addition(final_file_name.clone(), file_data.clone(), &api_url, encryption_key_bytes.clone()).await?;
 
         file_entries.push(new_file_entry);
         let updated_manifest_json = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
@@ -800,7 +922,10 @@ pub async fn add_file_to_private_folder(
             updated_manifest_json.as_bytes().to_vec(),
             "folder.manifest.json"
         ).await?;
-        (format!("{}{}", folder_name, ".folder.ec_metadata"), new_folder_manifest_cid)
+        (
+            format!("{}{}", folder_name, if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" }),
+            new_folder_manifest_cid
+        )
     };
 
     delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
@@ -820,7 +945,12 @@ pub async fn add_file_to_private_folder(
 
     // Sanitize names for local sync
     let sanitized_folder_name = sanitize_name(&folder_name);
-    let sanitized_file_name = sanitize_name(&file_name);
+    let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
+        file_name.clone()
+    } else {
+        format!("{}.ff.ec_metadata", file_name)
+    };
+    let sanitized_file_name = sanitize_name(&final_file_name);
 
     let temp_dir = tempfile::tempdir()
         .map_err(|e| format!("Failed to create temp dir: {}", e))?;
@@ -921,88 +1051,6 @@ async fn add_file_recursive_private(
     Ok((new_metadata_name, new_metadata_cid))
 }
 
-// Add this recursive helper function near the top of the file with other helper functions
-async fn remove_file_recursive_private(
-    api_url: &Arc<String>,
-    current_metadata_cid: &str,
-    path: &[String],
-    file_name: &str,
-) -> Result<(String, String, Vec<(String, String)>), String> {
-    let manifest_bytes = download_from_ipfs_async(api_url, current_metadata_cid)
-        .await
-        .map_err(|e| format!("Failed to download folder metadata: {}", e))?;
-
-    let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&manifest_bytes)
-        .map_err(|e| format!("Failed to parse folder manifest: {}", e))?;
-
-    let mut file_cid_pairs = Vec::new();
-
-    if path.is_empty() {
-        // Base case: we're at the target folder
-        let initial_len = file_entries.len();
-        let file_name_variations = get_file_name_variations(file_name);
-        file_entries.retain(|entry| !file_name_variations.contains(&entry.file_name));
-        
-        if file_entries.len() == initial_len {
-            return Err(format!("File '{}' (or its variations) not found in this folder.", file_name));
-        }
-    } else {
-        // Recursive case: navigate to subfolder
-        let subfolder = &path[0];
-        let mut found = false;
-        
-        for entry in &mut file_entries {
-            if entry.file_name.starts_with(subfolder) && entry.file_name.ends_with(".folder") {
-                let (new_subfolder_name, new_subfolder_cid, subfolder_pairs) = 
-                    Box::pin(remove_file_recursive_private(
-                        api_url,
-                        &entry.cid,
-                        &path[1..],
-                        file_name,
-                    )).await?;
-                
-                entry.file_name = new_subfolder_name;
-                entry.cid = new_subfolder_cid;
-                file_cid_pairs.extend(subfolder_pairs);
-                found = true;
-                break;
-            }
-        }
-        
-        if !found {
-            return Err(format!("Subfolder '{}' not found in metadata.", subfolder));
-        }
-    }
-
-    // Upload updated metadata
-    let updated_manifest_json = serde_json::to_string_pretty(&file_entries)
-        .map_err(|e| format!("Failed to serialize folder manifest: {}", e))?;
-
-    let meta_name = if path.is_empty() {
-        // Use the folder name from the metadata, or fallback to file_name
-        if let Some(folder_entry) = file_entries.iter().find(|entry| entry.file_name.ends_with(".folder")) {
-            folder_entry.file_name.clone()
-        } else {
-            format!("{}.folder", file_name)
-        }
-    } else {
-        format!("{}.folder", &path[0])
-    };
-
-    let new_cid = upload_bytes_to_ipfs(
-        api_url,
-        updated_manifest_json.as_bytes().to_vec(),
-        "folder.manifest.json",
-    ).await?;
-
-    // Collect all file CIDs for storage
-    file_cid_pairs.extend(
-        file_entries.iter().map(|entry| (entry.file_name.clone(), entry.cid.clone()))
-    );
-
-    Ok((meta_name, new_cid, file_cid_pairs))
-}
-
 #[tauri::command]
 pub async fn remove_file_from_private_folder(
     account_id: String,
@@ -1022,6 +1070,7 @@ pub async fn remove_file_from_private_folder(
         path: &[String],
         file_name: &str,
         current_folder_name: &str,
+        main_folder_name: &str,
     ) -> Result<(String, String, Vec<(String, String)>), String> {
         let manifest_bytes = download_from_ipfs_async(api_url, current_metadata_cid)
             .await
@@ -1035,11 +1084,16 @@ pub async fn remove_file_from_private_folder(
         if path.is_empty() {
             // Remove file from current folder
             let original_len = file_entries.len();
-            let file_name_variations = get_file_name_variations(file_name);
+            let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
+                file_name.to_string()
+            } else {
+                format!("{}.ff.ec_metadata", file_name)
+            };
+            let file_name_variations = get_file_name_variations(&final_file_name);
             file_entries.retain(|entry| !file_name_variations.contains(&entry.file_name));
             
             if file_entries.len() == original_len {
-                return Err(format!("File '{}' not found in folder", file_name));
+                return Err(format!("File '{}' not found in folder '{}'", final_file_name, current_folder_name));
             }
         } else {
             // Handle subfolder recursion
@@ -1047,13 +1101,14 @@ pub async fn remove_file_from_private_folder(
             let mut found = false;
             
             for entry in &mut file_entries {
-                if entry.file_name.starts_with(subfolder) && entry.file_name.ends_with(".folder.ec_metadata") {
+                if entry.file_name.starts_with(subfolder) && entry.file_name.ends_with(".s.folder.ec_metadata") {
                     let (new_name, new_cid, pairs) = Box::pin(remove_file_recursive_private(
                         api_url,
                         &entry.cid,
                         &path[1..],
                         file_name,
                         subfolder,
+                        main_folder_name,
                     )).await?;
                     
                     entry.file_name = new_name;
@@ -1073,6 +1128,13 @@ pub async fn remove_file_from_private_folder(
         let updated_manifest = serde_json::to_string_pretty(&file_entries)
             .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
 
+        let meta_name = if current_folder_name == main_folder_name {
+            format!("{}{}", current_folder_name, if current_folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" })
+        } else {
+            format!("{}.s.folder.ec_metadata", current_folder_name)
+        };
+        println!("meta_name: {}, current_folder_name: {}, main_folder_name: {}", meta_name, current_folder_name, main_folder_name);
+
         let new_cid = upload_bytes_to_ipfs(
             api_url,
             updated_manifest.as_bytes().to_vec(),
@@ -1084,12 +1146,9 @@ pub async fn remove_file_from_private_folder(
             file_entries.iter()
                 .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
         );
+        file_cid_pairs.push((meta_name.clone(), new_cid.clone()));
 
-        Ok((
-            format!("{}.folder.ec_metadata", current_folder_name),
-            new_cid,
-            file_cid_pairs,
-        ))
+        Ok((meta_name, new_cid, file_cid_pairs))
     }
 
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
@@ -1103,6 +1162,7 @@ pub async fn remove_file_from_private_folder(
             path,
             &file_name,
             &folder_name,
+            &folder_name,
         )).await?
     } else {
         // Original flat removal logic
@@ -1114,12 +1174,16 @@ pub async fn remove_file_from_private_folder(
             .map_err(|e| format!("Failed to parse folder manifest: {}", e))?;
 
         let original_len = file_entries.len();
-        let file_name_variations = get_file_name_variations(&file_name);
+        let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
+            file_name.clone()
+        } else {
+            format!("{}.ff.ec_metadata", file_name)
+        };
+        let file_name_variations = get_file_name_variations(&final_file_name);
         file_entries.retain(|entry| !file_name_variations.contains(&entry.file_name));
         
         if file_entries.len() == original_len {
-            return Err(format!("File '{}' (or its variations) not found in folder '{}'.", 
-                file_name, folder_name));
+            return Err(format!("File '{}' not found in folder '{}'.", final_file_name, folder_name));
         }
 
         let updated_manifest_json = serde_json::to_string_pretty(&file_entries)
@@ -1131,15 +1195,16 @@ pub async fn remove_file_from_private_folder(
             "folder.manifest.json",
         ).await?;
 
-        let file_cid_pairs = file_entries
+        let mut file_cid_pairs = file_entries
             .iter()
             .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
-            .collect();
+            .collect::<Vec<_>>();
+        let meta_filename = format!("{}{}", folder_name, if folder_name.ends_with(".folder.ec_metadata") { "" } else { ".folder.ec_metadata" });
+        file_cid_pairs.push((meta_filename.clone(), new_folder_manifest_cid.clone()));
 
-        (format!("{}.folder.ec_metadata", folder_name), new_folder_manifest_cid, file_cid_pairs)
+        (meta_filename, new_folder_manifest_cid, file_cid_pairs)
     };
 
-    // Rest of the function remains the same...
     delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase)
         .await
         .map_err(|e| format!("Failed to request unpinning: {}", e))?;
@@ -1159,6 +1224,13 @@ pub async fn remove_file_from_private_folder(
         &seed_phrase
     ).await?;
 
+    let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
+        file_name.clone()
+    } else {
+        format!("{}.ff.ec_metadata", file_name)
+    };
+    let sanitized_file_name = sanitize_name(&final_file_name);
+
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
         let mut full_path = std::path::PathBuf::from(&folder_name);
         for segment in path_vec {
@@ -1168,7 +1240,7 @@ pub async fn remove_file_from_private_folder(
     });
 
     remove_from_sync_folder(
-        &file_name,
+        &sanitized_file_name,
         &folder_name,
         false,
         false,
@@ -2096,7 +2168,8 @@ pub async fn add_file_to_public_folder(
         path: &[String],
         file_name: &str,
         file_data: &[u8],
-        current_folder_name: &str
+        current_folder_name: &str,
+        main_folder_name: &str
     ) -> Result<(String, String, Vec<(String, String)>), String> {
         // Download current metadata
         let metadata_bytes = download_from_ipfs_async(api_url, current_metadata_cid)
@@ -2112,10 +2185,16 @@ pub async fn add_file_to_public_folder(
                 return Err(format!("File '{}' already exists in this folder.", file_name));
             }
 
+            // At the target subfolder: add the file
+            let final_file_name = if file_name.ends_with(".ff") {
+                file_name.to_string()
+            } else {
+                format!("{}.ff", file_name)
+            };
             // Upload file to IPFS
             let file_cid = tokio::task::spawn_blocking({
                 let file_data = file_data.to_vec();
-                let file_name = file_name.to_string();
+                let file_name = final_file_name.clone();
                 let api_url = api_url.to_string(); // Clone to own data
                 move || {
                     let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
@@ -2130,7 +2209,7 @@ pub async fn add_file_to_public_folder(
             .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
             let new_file_entry = FileEntry {
-                file_name: file_name.to_string(),
+                file_name: final_file_name.clone(),
                 file_size: file_data.len(),
                 cid: file_cid.clone(),
             };
@@ -2141,7 +2220,7 @@ pub async fn add_file_to_public_folder(
                 .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
             
             let meta_name = format!("{}.folder", current_folder_name);
-
+            println!("meta_name : {},current_folder_name : {}, folder_name: {}", meta_name, current_folder_name, main_folder_name);
             let new_cid = tokio::task::spawn_blocking({
                 let folder_metadata = folder_metadata.clone();
                 let api_url = api_url.to_string(); // Clone to own data
@@ -2179,6 +2258,7 @@ pub async fn add_file_to_public_folder(
                         file_name,
                         file_data,
                         subfolder,
+                        main_folder_name,
                     ))
                     .await?;
                     entry.file_name = new_subfolder_name;
@@ -2188,6 +2268,7 @@ pub async fn add_file_to_public_folder(
                     break;
                 }
             }
+            println!("[public add file] Downloaded file_entries: {:?}", file_entries);
             if !found {
                 return Err(format!("Subfolder '{}' not found in metadata.", subfolder));
             }
@@ -2195,8 +2276,9 @@ pub async fn add_file_to_public_folder(
             // Write updated parent metadata and upload
             let folder_metadata = serde_json::to_string_pretty(&file_entries)
                 .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
-            let meta_name = format!("{}.folder", &current_folder_name);
 
+            let meta_name = format!("{}.folder", &current_folder_name);
+            println!("meta_name : {},current_folder_name : {}, folder_name: {}", meta_name, current_folder_name, main_folder_name);
             let new_cid = tokio::task::spawn_blocking({
                 let folder_metadata = folder_metadata.clone();
                 let api_url = api_url.to_string(); // Clone to own data
@@ -2232,6 +2314,7 @@ pub async fn add_file_to_public_folder(
             path,
             &file_name,
             &file_data,
+            &folder_name,
             &folder_name,
         ))
         .await?
@@ -2298,16 +2381,18 @@ pub async fn add_file_to_public_folder(
         let mut all_cids = file_entries.iter()
             .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
             .collect::<Vec<_>>();
+
+        let meta_filename = format!(
+            "{}{}",
+            folder_name,
+            if folder_name.ends_with(".folder") {
+                ""
+            } else {
+                ".folder"
+            }
+        );
         all_cids.push((
-            format!(
-                "{}{}",
-                folder_name,
-                if folder_name.ends_with(".folder") {
-                    ""
-                } else {
-                    ".folder"
-                }
-            ),
+            meta_filename,
             new_cid.clone(),
         ));
 
@@ -2399,6 +2484,7 @@ pub async fn remove_file_from_public_folder(
         path: &Vec<String>,
         file_name: String,
         current_folder_name: String,
+        is_main_folder: bool, // New parameter to track if this is the main folder
     ) -> Result<(String, String, Vec<(String, String)>), String> {
         // Download metadata
         let metadata_bytes = download_from_ipfs_async(&api_url, &current_metadata_cid)
@@ -2413,11 +2499,16 @@ pub async fn remove_file_from_public_folder(
         if path.is_empty() {
             // Remove file from current folder
             let initial_len = file_entries.len();
-            let file_name_variations = get_file_name_variations(&file_name);
+            let final_file_name = if file_name.ends_with(".ff") {
+                file_name.clone()
+            } else {
+                format!("{}.ff", file_name)
+            };
+            let file_name_variations = get_file_name_variations(&final_file_name);
             file_entries.retain(|entry| !file_name_variations.contains(&entry.file_name));
             
             if file_entries.len() == initial_len {
-                return Err(format!("File '{}' not found in folder", file_name));
+                return Err(format!("File '{}' not found in folder", final_file_name));
             }
         } else {
             // Handle subfolder recursion with Box::pin
@@ -2425,13 +2516,14 @@ pub async fn remove_file_from_public_folder(
             let mut found = false;
             
             for entry in &mut file_entries {
-                if entry.file_name.starts_with(&subfolder) && entry.file_name.ends_with(".folder") {
+                if entry.file_name.starts_with(&subfolder) && entry.file_name.ends_with(".s.folder") {
                     let (new_name, new_cid, pairs) = Box::pin(remove_file_recursive_public(
                         api_url.clone(),
                         entry.cid.clone(),
                         &path[1..].to_vec(),
                         file_name.clone(),
                         subfolder.clone(),
+                        false, // Subfolders are not the main folder
                     )).await?;
                     
                     entry.file_name = new_name;
@@ -2451,7 +2543,12 @@ pub async fn remove_file_from_public_folder(
         let folder_metadata = serde_json::to_string_pretty(&file_entries)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
         
-        let meta_name = format!("{}.folder", current_folder_name);
+        // Use .folder for main folder, .s.folder for subfolders
+        let meta_name = if is_main_folder {
+            format!("{}{}", current_folder_name, if current_folder_name.ends_with(".folder") { "" } else { ".folder" })
+        } else {
+            format!("{}.s.folder", current_folder_name)
+        };
         
         let new_cid = tokio::task::spawn_blocking({
             let api_url = api_url.clone();
@@ -2472,6 +2569,7 @@ pub async fn remove_file_from_public_folder(
         file_cid_pairs.extend(
             file_entries.iter().map(|entry| (entry.file_name.clone(), entry.cid.clone()))
         );
+        file_cid_pairs.push((meta_name.clone(), new_cid.clone()));
 
         Ok((meta_name, new_cid, file_cid_pairs))
     }
@@ -2488,6 +2586,7 @@ pub async fn remove_file_from_public_folder(
             path,
             file_name.clone(),
             folder_name.clone(),
+            true, // Main folder at the top level
         ).await?
     } else {
         // Handle root folder case
@@ -2499,11 +2598,16 @@ pub async fn remove_file_from_public_folder(
             .map_err(|e| format!("Failed to parse metadata: {}", e))?;
 
         let initial_len = file_entries.len();
-        let file_name_variations = get_file_name_variations(&file_name);
+        let final_file_name = if file_name.ends_with(".ff") {
+            file_name.clone()
+        } else {
+            format!("{}.ff", file_name)
+        };
+        let file_name_variations = get_file_name_variations(&final_file_name);
         file_entries.retain(|entry| !file_name_variations.contains(&entry.file_name));
         
         if file_entries.len() == initial_len {
-            return Err(format!("File '{}' not found in folder '{}'", file_name, folder_name));
+            return Err(format!("File '{}' not found in folder '{}'", final_file_name, folder_name));
         }
 
         // Upload updated metadata
@@ -2525,13 +2629,20 @@ pub async fn remove_file_from_public_folder(
         .await
         .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
-        let file_cid_pairs = file_entries
+        let mut file_cid_pairs = file_entries
             .iter()
             .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
-            .collect();
+            .collect::<Vec<_>>();
+
+        let meta_filename = format!(
+            "{}{}",
+            folder_name,
+            if folder_name.ends_with(".folder") { "" } else { ".folder" }
+        );
+        file_cid_pairs.push((meta_filename.clone(), new_cid.clone()));
 
         (
-            format!("{}{}", folder_name, if folder_name.ends_with(".folder") { "" } else { ".folder" }),
+            meta_filename,
             new_cid,
             file_cid_pairs,
         )
@@ -2559,8 +2670,14 @@ pub async fn remove_file_from_public_folder(
         full_path.to_string_lossy().to_string()
     });
 
+    let final_file_name = if file_name.ends_with(".ff") {
+        file_name.clone()
+    } else {
+        format!("{}.ff", file_name)
+    };
+
     remove_from_sync_folder(
-        &file_name,
+        &final_file_name,
         &folder_name,
         true,
         false,
@@ -2573,7 +2690,6 @@ pub async fn remove_file_from_public_folder(
     
     Ok(new_folder_metadata_cid)
 }
-
 
 #[tauri::command]
 pub async fn encrypt_and_upload_file_sync(
@@ -3830,8 +3946,9 @@ pub async fn add_folder_to_public_folder(
                     break;
                 }
             }
+            println!("[public add file] Downloaded file_entries: {:?}", file_entries);
             if !found {
-                return Err(format!("Subfolder '{}' not found in metadata.", subfolder));
+                return Err(format!("Subfolder '{}' not found in metadata", subfolder));
             }
 
             // Write updated parent metadata and upload
