@@ -26,6 +26,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::utils::file_operations::sanitize_name;
 use rayon::prelude::*;
+use crate::utils::folder_tree::FolderNode;
 
 // Helper function to format file sizes
 fn format_file_size(size_bytes: usize) -> String {
@@ -2902,9 +2903,9 @@ pub async fn encrypt_and_upload_folder_sync(
 ) -> Result<String, String> {
     println!("[encrypt_and_upload_folder_sync] Encrypting and uploading folder: {}", folder_path);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
-    let k = DEFAULT_K;
-    let m = DEFAULT_M;
-    let chunk_size = DEFAULT_CHUNK_SIZE;
+    let mut k = DEFAULT_K;
+    let mut m = DEFAULT_M;
+    let mut chunk_size = DEFAULT_CHUNK_SIZE;
 
     let folder_path = Path::new(&folder_path);
     if !folder_path.is_dir() {
@@ -2921,18 +2922,9 @@ pub async fn encrypt_and_upload_folder_sync(
         return Err("Invalid folder path, cannot extract folder name".to_string());
     }
 
-    let folder_tree = crate::utils::folder_tree::FolderNode::build_tree(folder_path).map_err(|e| {
-        cleanup_db_on_error(&account_id, &folder_name);
-        e.to_string()
-    })?;
-
-    // Small-folder fast path: reduce erasure overhead for tiny folders
-    let mut k = k;
-    let mut m = m;
-    let mut chunk_size = chunk_size;
+    // Small-folder fast path: adjust parameters for tiny folders
+    let mut total_bytes: u64 = 0;
     {
-        // Approximate total bytes in this folder (non-recursive quick scan)
-        let mut total_bytes: u64 = 0;
         let mut stack = vec![folder_path.to_path_buf()];
         while let Some(dir) = stack.pop() {
             if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -2942,7 +2934,7 @@ pub async fn encrypt_and_upload_folder_sync(
                         stack.push(p);
                     } else if let Ok(meta) = std::fs::metadata(&p) {
                         total_bytes = total_bytes.saturating_add(meta.len());
-                        if total_bytes > 512 * 1024 { // cap scan
+                        if total_bytes > 512 * 1024 {
                             break;
                         }
                     }
@@ -2952,85 +2944,135 @@ pub async fn encrypt_and_upload_folder_sync(
                 break;
             }
         }
-        // If tiny folder (<=256KB), lower redundancy and chunk size for faster processing
         if total_bytes <= 256 * 1024 {
             k = 4;
-            m = 6; // 2 parity shards
-            chunk_size = 32 * 1024; // 32KB chunks
-            println!("[encrypt_and_upload_folder_sync] Small folder fast-path: total_bytes={} k={} m={} chunk_size={}KB", total_bytes, k, m, chunk_size / 1024);
+            m = 6;
+            chunk_size = 32 * 1024;
+            println!(
+                "[encrypt_and_upload_folder_sync] Small folder fast-path: total_bytes={} k={} m={} chunk_size={}KB",
+                total_bytes, k, m, chunk_size / 1024
+            );
         }
     }
- 
-    let mut all_files_for_storage = Vec::<(String, String)>::new();
-    let processing_results = Arc::new(Mutex::new(Vec::<FileProcessingResultSync>::new()));
- 
-    let encryption_key_arc = encryption_key.map(Arc::new); // ✅ Fix: properly wrap the encryption key in Arc
 
-    // Recursive helper to process folders and build metadata
-    fn build_metadata_sync(
-        node: &crate::utils::folder_tree::FolderNode,
-        folder_path: &Path,
+    let folder_tree = FolderNode::build_tree(folder_path).map_err(|e| {
+        cleanup_db_on_error(&account_id, &folder_name);
+        e.to_string()
+    })?;
+
+    let encryption_key_arc = encryption_key.map(Arc::new);
+    let mut all_files_for_storage = Vec::new();
+
+    // Process folder tree recursively with parallelism
+    async fn process_node(
+        node: &FolderNode,
+        root_path: &Path,
         api_url: &Arc<String>,
         encryption_key: &Option<Arc<Vec<u8>>>,
         k: usize,
         m: usize,
         chunk_size: usize,
-        processing_results: &Arc<Mutex<Vec<FileProcessingResultSync>>>,
+        total_bytes: u64,
         all_files: &mut Vec<(String, String)>,
     ) -> Result<(String, String, usize), String> {
         // Skip hidden folders
         if let Some(name) = node.path.file_name().and_then(|n| n.to_str()) {
             if name.starts_with('.') {
-                return Ok((String::new(), String::new(), 0)); // skip entirely
+                return Ok((String::new(), String::new(), 0));
             }
         }
 
         let mut file_entries = Vec::new();
+        let mut total_size = 0;
 
-        use rayon::prelude::*;
-        // Process files in parallel
-        let mut total_size = 0usize;
-        let file_results: Vec<_> = node.files.par_iter().filter_map(|file_path| {
-            let file_name = file_path
-                .file_name()
-                .map(|s| s.to_string_lossy())?;
-            if file_name.starts_with('.') || file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
-                return None;
-            }
-            let clean_file_name = file_name.to_string();
-            let ipfs_name = format!(
-                "{}{}",
-                clean_file_name,
-                if clean_file_name.ends_with(".ff.ec_metadata") {
-                    ""
-                } else {
-                    ".ff.ec_metadata"
+        // Process files: sequentially for small folders, in parallel for larger ones
+        let file_results = if total_bytes <= 256 * 1024 {
+            // Sequential processing for small folders to reduce overhead
+            let mut results = Vec::new();
+            for file_path in &node.files {
+                let file_name = match file_path.file_name().and_then(|s| s.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => continue,
+                };
+                if file_name.starts_with('.') || file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
+                    continue;
                 }
-            );
-            // Each file is processed in its own thread, but we must synchronize access to processing_results
-            let process_result = futures::executor::block_on(process_single_file_for_sync(
-                file_path.clone(),
-                folder_path.to_path_buf(),
-                Arc::clone(api_url),
-                encryption_key.clone(),
-                k,
-                m,
-                chunk_size,
-                Arc::clone(processing_results),
-            ));
-            match process_result {
-                Ok(_) => {
-                    let mut results = futures::executor::block_on(processing_results.lock());
-                    let result = results.pop()?;
-                    Some((FileEntry {
-                        file_name: ipfs_name.clone(),
-                        file_size: result.file_entry.file_size,
-                        cid: result.file_entry.cid.clone(),
-                    }, result.chunk_pairs.clone(), (ipfs_name, result.file_entry.cid.clone())))
-                },
-                Err(_) => None,
+                let ipfs_name = format!(
+                    "{}{}",
+                    file_name,
+                    if file_name.ends_with(".ff.ec_metadata") { "" } else { ".ff.ec_metadata" }
+                );
+                let processing_results = Arc::new(Mutex::new(Vec::<FileProcessingResultSync>::new()));
+                let process_result = process_single_file_for_sync(
+                    file_path.clone(),
+                    root_path.to_path_buf(),
+                    Arc::clone(api_url),
+                    encryption_key.clone(),
+                    k,
+                    m,
+                    chunk_size,
+                    Arc::clone(&processing_results),
+                ).await;
+                match process_result {
+                    Ok(_) => {
+                        let mut results_guard = processing_results.lock().await;
+                        let result = results_guard.pop().ok_or("No processing result available")?;
+                        results.push((FileEntry {
+                            file_name: ipfs_name.clone(),
+                            file_size: result.file_entry.file_size,
+                            cid: result.file_entry.cid.clone(),
+                        }, result.chunk_pairs.clone(), (ipfs_name, result.file_entry.cid)));
+                    }
+                    Err(e) => {
+                        println!("[process_node] File processing failed for {}: {}", file_name, e);
+                        continue;
+                    }
+                }
             }
-        }).collect();
+            results
+        } else {
+            // Parallel processing for larger folders
+            let file_tasks = node.files.iter().filter_map(|file_path| {
+                let file_name = file_path.file_name()?.to_str()?.to_string();
+                if file_name.starts_with('.') || file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
+                    return None;
+                }
+                let ipfs_name = format!(
+                    "{}{}",
+                    file_name,
+                    if file_name.ends_with(".ff.ec_metadata") { "" } else { ".ff.ec_metadata" }
+                );
+                let api_url = Arc::clone(api_url);
+                let encryption_key = encryption_key.clone();
+                Some(async move {
+                    let processing_results = Arc::new(Mutex::new(Vec::<FileProcessingResultSync>::new()));
+                    let process_result = process_single_file_for_sync(
+                        file_path.clone(),
+                        root_path.to_path_buf(),
+                        api_url,
+                        encryption_key,
+                        k,
+                        m,
+                        chunk_size,
+                        Arc::clone(&processing_results),
+                    ).await;
+                    match process_result {
+                        Ok(_) => {
+                            let mut results_guard = processing_results.lock().await;
+                            let result = results_guard.pop().ok_or("No processing result available")?;
+                            Ok((FileEntry {
+                                file_name: ipfs_name.clone(),
+                                file_size: result.file_entry.file_size,
+                                cid: result.file_entry.cid.clone(),
+                            }, result.chunk_pairs.clone(), (ipfs_name, result.file_entry.cid)))
+                        }
+                        Err(e) => Err(format!("File processing failed for {}: {}", file_name, e)),
+                    }
+                })
+            });
+            futures::future::try_join_all(file_tasks).await?
+        };
+
         for (entry, chunk_pairs, file_pair) in file_results {
             total_size += entry.file_size;
             file_entries.push(entry);
@@ -3038,67 +3080,66 @@ pub async fn encrypt_and_upload_folder_sync(
             all_files.push(file_pair);
         }
 
-        // Recursively process subfolders in parallel (rayon)
-        let child_results: Vec<_> = node.children.par_iter().map(|child| {
-            // Local state per child to avoid lock contention
-            let processing_results_child = Arc::new(Mutex::new(Vec::<FileProcessingResultSync>::new()));
-            let mut child_all_files: Vec<(String, String)> = Vec::new();
-            let res = build_metadata_sync(
-                child,
-                folder_path,
-                api_url,
-                encryption_key,
-                k,
-                m,
-                chunk_size,
-                &processing_results_child,
-                &mut child_all_files,
-            );
-            (res, child_all_files)
-        }).collect();
+        // Process subfolders in parallel using tokio
+        let folder_tasks = node.children.iter().map(|child| {
+            let api_url = Arc::clone(api_url);
+            let encryption_key = encryption_key.clone();
+            let mut child_files = Vec::new();
+            async move {
+                process_node(
+                    child,
+                    root_path,
+                    &api_url,
+                    &encryption_key,
+                    k,
+                    m,
+                    chunk_size,
+                    total_bytes,
+                    &mut child_files,
+                ).await.map(|res| (res, child_files))
+            }
+        });
 
-        for (res, mut child_all_files) in child_results {
-            if let Ok((meta_name, meta_cid, subfolder_size)) = res {
-                total_size += subfolder_size;
+        let folder_results = futures::future::try_join_all(folder_tasks).await?;
+
+        for (res, mut child_files) in folder_results {
+            let (meta_name, meta_cid, subfolder_size) = res;
+            total_size += subfolder_size;
+            if !meta_name.is_empty() {
                 file_entries.push(FileEntry {
                     file_name: meta_name.clone(),
                     file_size: subfolder_size,
                     cid: meta_cid.clone(),
                 });
-                all_files.append(&mut child_all_files);
+                all_files.append(&mut child_files);
                 all_files.push((meta_name, meta_cid));
             }
         }
 
-        // Metadata creation
-        let this_folder_name = node
-            .path
-            .file_name()
-            .ok_or("Invalid folder path".to_string())?
-            .to_string_lossy();
-
-        let is_root = node.path == folder_path;
+        // Create metadata
+        let folder_name = node.path.file_name()
+            .ok_or("Invalid folder path")?
+            .to_string_lossy()
+            .to_string();
+        let is_root = node.path == root_path;
         let metadata_name = if is_root {
-            format!("{}.ec_metadata", this_folder_name)
+            format!("{}.folder.ec_metadata", folder_name)
         } else {
-            format!("{}.s.folder.ec_metadata", this_folder_name)
+            format!("{}.s.folder.ec_metadata", folder_name)
         };
 
         let metadata_json = serde_json::to_vec(&file_entries)
             .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
 
-        let metadata_cid = futures::executor::block_on(upload_bytes_to_ipfs(
-            api_url,
-            metadata_json,
-            &metadata_name,
-        ))
-        .map_err(|e| format!("Failed to upload metadata: {}", e))?;
+        let metadata_cid = upload_bytes_to_ipfs(api_url, metadata_json, &metadata_name)
+            .await
+            .map_err(|e| format!("Failed to upload metadata: {}", e))?;
 
         Ok((metadata_name, metadata_cid, total_size))
     }
 
-    // ✅ Build root metadata recursively
-    let (root_metadata_name, root_metadata_cid, _root_total_size) = build_metadata_sync(
+    // Process the root node
+    let (root_metadata_name, root_metadata_cid, _total_size) = process_node(
         &folder_tree,
         folder_path,
         &api_url,
@@ -3106,14 +3147,19 @@ pub async fn encrypt_and_upload_folder_sync(
         k,
         m,
         chunk_size,
-        &processing_results,
+        total_bytes,
         &mut all_files_for_storage,
-    )?;
+    ).await?;
 
     all_files_for_storage.push((root_metadata_name.clone(), root_metadata_cid.clone()));
 
-    let storage_result =
-        request_erasure_storage(&root_metadata_name, &all_files_for_storage, &api_url, &seed_phrase).await;
+    // Request storage
+    let storage_result = request_erasure_storage(
+        &root_metadata_name,
+        &all_files_for_storage,
+        &api_url,
+        &seed_phrase,
+    ).await;
 
     println!(
         "[encrypt_and_upload_folder_sync] Storage request root metadata: {}",
@@ -3131,9 +3177,7 @@ pub async fn encrypt_and_upload_folder_sync(
                 true,
                 &root_metadata_name,
                 false,
-            )
-            .await;
-
+            ).await;
             println!(
                 "[encrypt_and_upload_folder_sync] Storage request result: {}",
                 res
