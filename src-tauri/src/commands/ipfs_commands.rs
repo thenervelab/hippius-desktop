@@ -27,6 +27,7 @@ use tokio::sync::Mutex;
 use crate::utils::file_operations::sanitize_name;
 use rayon::prelude::*;
 use crate::utils::folder_tree::FolderNode;
+use std::collections::HashMap;
 
 // Helper function to format file sizes
 fn format_file_size(size_bytes: usize) -> String {
@@ -49,10 +50,17 @@ fn format_file_size(size_bytes: usize) -> String {
 // Drops the first segment and returns None if the remaining path is empty
 fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<Vec<String>> {
     if let Some(mut path) = subfolder_path.take() {
+        // Drop the main/root folder name if present
         if !path.is_empty() {
             path.remove(0);
         }
-        if path.is_empty() { None } else { Some(path) }
+        // Sanitize the remaining segments
+        let cleaned: Vec<String> = path
+            .into_iter()
+            .map(|segment| sanitize_name(&segment))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if cleaned.is_empty() { None } else { Some(cleaned) }
     } else {
         None
     }
@@ -761,6 +769,7 @@ pub async fn add_file_to_private_folder(
 ) -> Result<String, String> {
     println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
+    let folder_name = sanitize_name(&folder_name);
     let encryption_key_bytes = if let Some(key_b64) = encryption_key {
         Some(Arc::new(general_purpose::STANDARD.decode(&key_b64).map_err(|e| format!("Key decode error: {}", e))?))
     } else {
@@ -1062,7 +1071,7 @@ pub async fn remove_file_from_private_folder(
 ) -> Result<String, String> {
     println!("[+] Removing file '{}' from folder '{}'", file_name, folder_name);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
-
+    let folder_name = sanitize_name(&folder_name);
     // Recursive helper function
     async fn remove_file_recursive_private(
         api_url: &Arc<String>,
@@ -1382,7 +1391,9 @@ async fn reconstruct_and_decrypt_single_file(
                 let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
                 chunk_data.extend_from_slice(&shard[..bytes_to_take]);
                 bytes_collected += bytes_to_take;
-                if bytes_collected >= chunk_bytes_needed { break; }
+                if bytes_collected == chunk_bytes_needed {
+                    break;
+                }
             }
         }
         reconstructed_chunks_data.push(chunk_data);
@@ -2159,7 +2170,9 @@ pub async fn add_file_to_public_folder(
     seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
+    println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
+    let folder_name = sanitize_name(&folder_name);
 
     // Helper: recursively add file to the correct subfolder metadata
     async fn add_file_recursive_public(
@@ -2476,7 +2489,7 @@ pub async fn remove_file_from_public_folder(
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
-
+    let folder_name = sanitize_name(&folder_name);
     // Recursive helper needs to be boxed
     async fn remove_file_recursive_public(
         api_url: Arc<String>,
@@ -3728,12 +3741,12 @@ pub async fn list_folder_contents(
     mut subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
     let api_url = "http://127.0.0.1:5001";
-    println!("[list_folder_contents] Downloading folder folder_name: {} for CID: {}", folder_name, folder_metadata_cid);
+    println!("subfolder_path {:?}", subfolder_path);
+    println!("[list_folder_contents] fetching folder folder_name: {} for CID: {}", folder_name, folder_metadata_cid);
     let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata_cid)
         .await
         .map_err(|e| format!("Failed to download folder manifest for CID {}: {}", folder_metadata_cid, e))?;
     let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
-    println!("[list_folder_contents] Downloaded file_entries: {:?}", file_entries);
     let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
 
     let folder_record = sqlx::query(
@@ -3752,7 +3765,7 @@ pub async fn list_folder_contents(
     .fetch_optional(pool)
     .await
     .map_err(|e| format!("DB query failed for folder {}: {}", folder_name, e))?;
-
+    println!("files_in_folder , {:?}", file_entries);
     let files_in_folder: Vec<FileDetail> = file_entries
         .into_iter()
         .filter(|entry| !entry.file_name.ends_with(".ec"))
@@ -3761,32 +3774,34 @@ pub async fn list_folder_contents(
                 let mut source_path = row.get::<Option<String>, _>("source").unwrap_or_default();
                 println!("source_path: {}", source_path);
                 if source_path != "Hippius" {
-                    if let Some(path_vector) = &mut subfolder_path {
-                        // Only process if there are multiple items
-                        if path_vector.len() > 1 {
-                            let first = path_vector.remove(0);
-                            println!("sub path is {:?}", path_vector);
-                            let sanitize_name_entry = sanitize_name(&file_entry.file_name);
-                            let mut full_path = std::path::PathBuf::new();
-                            for segment in path_vector {
-                                let sanitized_segment = sanitize_name(&segment);
-                                full_path.push(sanitized_segment);
+                    // Build a base directory from source and sanitized subfolder path (excluding main folder)
+                    let mut base_dir = PathBuf::from(&source_path);
+                    if let Some(ref mut path_vector) = subfolder_path {
+                        // If the first segment is main folder, drop it
+                        if let Some(main) = main_folder_name.as_ref().or(Some(&folder_name)) {
+                            if !path_vector.is_empty() && sanitize_name(&path_vector[0]) == sanitize_name(main) {
+                                let _ = path_vector.remove(0);
                             }
-                            let sync_subfolder_path = full_path.to_string_lossy().to_string();                            
-                            let full_path = format!("{}/{}/{}",source_path, sync_subfolder_path, sanitize_name_entry);
-                            println!("trying to set full path with sub path  {:?}", full_path);
-                            if Path::new(&full_path).exists() {
-                                source_path = full_path;
-                            }        
+                        } else if !path_vector.is_empty() {
+                            let _ = path_vector.remove(0);
+                        }
+                        for segment in path_vector.iter() {
+                            let sanitized_segment = sanitize_name(segment);
+                            if !sanitized_segment.is_empty() {
+                                base_dir.push(sanitized_segment);
+                            }
                         }
                     }
-                    else{
-                        let sanitized_file_name = sanitize_name(&file_entry.file_name);
-                        let full_path = format!("{}/{}",source_path,sanitized_file_name);
-                        println!("trying to set full path {:?}", full_path);
-                        if Path::new(&full_path).exists() {
-                            source_path = full_path;
-                        }    
+
+                    // Append the sanitized entry name (works for files and folders)
+                    let sanitized_entry_name = sanitize_name(&file_entry.file_name);
+                    let candidate_path = base_dir.join(&sanitized_entry_name);
+                    let candidate_str = candidate_path.to_string_lossy().to_string();
+                    println!("constructed candidate path: {}", candidate_str);
+                    if candidate_path.exists() {
+                        source_path = candidate_str;
+                    }else{
+                        source_path = "Hippius".to_string()
                     }
                 }
                 FileDetail {

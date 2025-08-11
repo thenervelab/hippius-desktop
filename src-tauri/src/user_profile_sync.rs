@@ -185,6 +185,7 @@ pub fn start_user_sync(account_id: &str) {
                 Ok(Some(bounded_vec)) => bounded_vec_to_string(&bounded_vec.0),
                 Ok(None) => {
                     println!("[UserSync] No user profile found for account: {}", account_id);
+                    profile_parsed_successfully = true;
                     String::new()
                 }
                 Err(e) => {
