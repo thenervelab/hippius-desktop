@@ -25,7 +25,7 @@ export async function exportWalletAsZip(): Promise<boolean> {
           extensions: ["zip"],
         },
       ],
-      defaultPath: "wallet-backup.zip",
+      defaultPath: "hippius-backup.zip",
     });
 
     if (filePath) {
