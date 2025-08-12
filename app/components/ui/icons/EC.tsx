@@ -1,6 +1,6 @@
 import { IconComponent } from "@/app/lib/types";
 
-export const File: IconComponent = (props) => (
+export const EC: IconComponent = (props) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
     {...props}
@@ -10,7 +10,7 @@ export const File: IconComponent = (props) => (
     <g clipPath="url(#clip0_21848_46698)">
       <path
         d="M17.5 9.25V13.75C17.5 16.75 16.75 17.5 13.75 17.5H6.25C3.25 17.5 2.5 16.75 2.5 13.75V6.25C2.5 3.25 3.25 2.5 6.25 2.5H7.375C8.5 2.5 8.7475 2.83 9.175 3.4L10.3 4.9C10.585 5.275 10.75 5.5 11.5 5.5H13.75C16.75 5.5 17.5 6.25 17.5 9.25Z"
-        fill="#3167DD"
+        fill="currentColor"
       />
       <path
         d="M5.55499 13.7497V8.42469H8.77999C9.04509 8.42469 9.25999 8.63959 9.25999 8.90469C9.25999 9.16978 9.04509 9.38469 8.77999 9.38469H6.69499V10.6072H8.69749C8.95845 10.6072 9.16999 10.8187 9.16999 11.0797C9.16999 11.3406 8.95845 11.5522 8.69749 11.5522H6.69499V12.7897H8.83999C9.10509 12.7897 9.31999 13.0046 9.31999 13.2697C9.31999 13.5348 9.10509 13.7497 8.83999 13.7497H5.55499Z"
@@ -29,4 +29,4 @@ export const File: IconComponent = (props) => (
   </svg>
 );
 
-export default File;
+export default EC;
