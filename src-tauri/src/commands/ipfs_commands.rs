@@ -1094,11 +1094,8 @@ pub async fn remove_file_from_private_folder(
         if path.is_empty() {
             // Remove file from current folder
             let original_len = file_entries.len();
-            let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
-                file_name.to_string()
-            } else {
-                format!("{}.ff.ec_metadata", file_name)
-            };
+            let base_name = file_name.strip_suffix(".ec_metadata").unwrap_or(&file_name);
+            let final_file_name = format!("{}.ff.ec_metadata", base_name);
             let file_name_variations = get_file_name_variations(&final_file_name);
             file_entries.retain(|entry| !file_name_variations.contains(&entry.file_name));
             
@@ -1184,11 +1181,8 @@ pub async fn remove_file_from_private_folder(
             .map_err(|e| format!("Failed to parse folder manifest: {}", e))?;
 
         let original_len = file_entries.len();
-        let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
-            file_name.clone()
-        } else {
-            format!("{}.ff.ec_metadata", file_name)
-        };
+        let base_name = file_name.strip_suffix(".ec_metadata").unwrap_or(&file_name);
+        let final_file_name = format!("{}.ff.ec_metadata", base_name);
         let file_name_variations = get_file_name_variations(&final_file_name);
         file_entries.retain(|entry| !file_name_variations.contains(&entry.file_name));
         
@@ -1423,6 +1417,13 @@ async fn process_new_file_for_addition(
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE;
 
+    // Ensure the filename has the correct suffix without duplication
+    let final_file_name = if file_name.ends_with(".ec_metadata") {
+        file_name.clone()
+    } else {
+        format!("{}.ec_metadata", file_name)
+    };
+
     let original_file_hash = format!("{:x}", Sha256::digest(&file_data));
     let encrypted_data = encrypt_file(&file_data, encryption_key.map(|k| (*k).clone())).await?;
     let encrypted_size = encrypted_data.len();
@@ -1433,7 +1434,7 @@ async fn process_new_file_for_addition(
 
     let file_metadata = Metadata {
         original_file: OriginalFileInfo {
-            name: format!("{}.ec_metadata", file_name.clone()),
+            name: final_file_name.clone(),
             size: file_data.len(),
             hash: original_file_hash,
             extension: Path::new(&file_name).extension().and_then(|s| s.to_str()).unwrap_or_default().to_string(),
@@ -1447,7 +1448,7 @@ async fn process_new_file_for_addition(
     let metadata_cid = upload_bytes_to_ipfs(api_url, metadata_json.as_bytes().to_vec(), &metadata_filename).await?;
 
     let new_file_entry = FileEntry {
-        file_name: format!("{}.ec_metadata", file_name.clone()),
+        file_name: final_file_name,
         file_size: file_data.len(),
         cid: metadata_cid,
     };
@@ -2171,9 +2172,11 @@ pub async fn add_file_to_public_folder(
     seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
+    use std::sync::Arc;
     println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_name = sanitize_name(&folder_name);
+    let file_name = sanitize_name(&file_name);
 
     // Helper: recursively add file to the correct subfolder metadata
     async fn add_file_recursive_public(
@@ -2183,7 +2186,7 @@ pub async fn add_file_to_public_folder(
         file_name: &str,
         file_data: &[u8],
         current_folder_name: &str,
-        main_folder_name: &str
+        main_folder_name: &str,
     ) -> Result<(String, String, Vec<(String, String)>), String> {
         // Download current metadata
         let metadata_bytes = download_from_ipfs_async(api_url, current_metadata_cid)
@@ -2192,14 +2195,17 @@ pub async fn add_file_to_public_folder(
 
         let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
             .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", current_metadata_cid, e))?;
+        println!("[add_file_recursive_public] File entries for CID {}: {:?}", current_metadata_cid, file_entries);
+
+        let mut all_cids = Vec::new();
 
         if path.is_empty() {
             // At the target subfolder: add the file
-            if file_entries.iter().any(|entry| entry.file_name == file_name) {
+            if file_entries.iter().any(|entry| entry.file_name == file_name || entry.file_name == format!("{}.ff", file_name)) {
                 return Err(format!("File '{}' already exists in this folder.", file_name));
             }
 
-            // At the target subfolder: add the file
+            // Add .ff suffix to file
             let final_file_name = if file_name.ends_with(".ff") {
                 file_name.to_string()
             } else {
@@ -2209,7 +2215,7 @@ pub async fn add_file_to_public_folder(
             let file_cid = tokio::task::spawn_blocking({
                 let file_data = file_data.to_vec();
                 let file_name = final_file_name.clone();
-                let api_url = api_url.to_string(); // Clone to own data
+                let api_url = api_url.to_string();
                 move || {
                     let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
                     let temp_file_path = temp_dir.path().join(file_name);
@@ -2232,12 +2238,14 @@ pub async fn add_file_to_public_folder(
             // Write updated metadata and upload
             let folder_metadata = serde_json::to_string_pretty(&file_entries)
                 .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
-            
-            let meta_name = format!("{}.folder", current_folder_name);
-            println!("meta_name : {},current_folder_name : {}, folder_name: {}", meta_name, current_folder_name, main_folder_name);
+            let meta_name = if current_folder_name == main_folder_name {
+                format!("{}.folder", current_folder_name)
+            } else {
+                format!("{}.s.folder", current_folder_name)
+            };
             let new_cid = tokio::task::spawn_blocking({
                 let folder_metadata = folder_metadata.clone();
-                let api_url = api_url.to_string(); // Clone to own data
+                let api_url = api_url.to_string();
                 move || {
                     let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
                     let meta_path = temp_dir.path().join("folder_metadata.json");
@@ -2250,21 +2258,26 @@ pub async fn add_file_to_public_folder(
             .await
             .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
-            // Collect all CIDs in this folder
-            let mut all_cids = file_entries.iter()
+            // Collect all CIDs in this folder, avoiding duplicates
+            let unique_entries: Vec<(String, String)> = file_entries
+                .iter()
                 .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
-                .collect::<Vec<_>>();
-            all_cids.push((meta_name.clone(), new_cid.clone()));
+                .filter(|(name, _)| !all_cids.iter().any(|(existing_name, _)| existing_name == name))
+                .collect();
+            all_cids.extend(unique_entries);
+            
+            println!("[add_file_recursive_public] Final all_cids for {}: {:?}", current_metadata_cid, all_cids);
 
             Ok((meta_name, new_cid, all_cids))
         } else {
             // Traverse to next subfolder
             let subfolder = &path[0];
             let mut found = false;
-            let mut all_cids = Vec::new();
             for entry in &mut file_entries {
-                if entry.file_name.starts_with(subfolder) && entry.file_name.ends_with(".folder") {
-                    // Recursively update subfolder with boxing
+                if entry.file_name.starts_with(subfolder)
+                    && (entry.file_name.ends_with(".s.folder") || entry.file_name.ends_with(".folder"))
+                {
+                    // Recursively update subfolder
                     let (new_subfolder_name, new_subfolder_cid, subfolder_cids) = Box::pin(add_file_recursive_public(
                         api_url,
                         &entry.cid,
@@ -2275,27 +2288,40 @@ pub async fn add_file_to_public_folder(
                         main_folder_name,
                     ))
                     .await?;
-                    entry.file_name = new_subfolder_name;
+                    entry.file_name = if new_subfolder_name.ends_with(".s.folder") || new_subfolder_name.ends_with(".folder") {
+                        new_subfolder_name
+                    } else {
+                        format!("{}.s.folder", subfolder)
+                    };
                     entry.cid = new_subfolder_cid;
-                    all_cids.extend(subfolder_cids);
+                    let unique_subfolder_cids: Vec<(String, String)> = subfolder_cids
+                        .into_iter()
+                        .filter(|(name, _)| !all_cids.iter().any(|(existing_name, _)| existing_name == name))
+                        .collect();
+                    all_cids.extend(unique_subfolder_cids);
+                    println!(
+                        "[add_file_recursive_public] After extending with subfolder_cids for {}: {:?}", 
+                        current_metadata_cid, all_cids
+                    );
                     found = true;
                     break;
                 }
             }
-            println!("[public add file] Downloaded file_entries: {:?}", file_entries);
             if !found {
-                return Err(format!("Subfolder '{}' not found in metadata.", subfolder));
+                return Err(format!("Subfolder '{}' not found in metadata for CID {}.", subfolder, current_metadata_cid));
             }
 
             // Write updated parent metadata and upload
             let folder_metadata = serde_json::to_string_pretty(&file_entries)
                 .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
-
-            let meta_name = format!("{}.folder", &current_folder_name);
-            println!("meta_name : {},current_folder_name : {}, folder_name: {}", meta_name, current_folder_name, main_folder_name);
+            let meta_name = if current_folder_name == main_folder_name {
+                format!("{}.folder", current_folder_name)
+            } else {
+                format!("{}.s.folder", current_folder_name)
+            };
             let new_cid = tokio::task::spawn_blocking({
                 let folder_metadata = folder_metadata.clone();
-                let api_url = api_url.to_string(); // Clone to own data
+                let api_url = api_url.to_string();
                 move || {
                     let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
                     let meta_path = temp_dir.path().join("folder_metadata.json");
@@ -2308,20 +2334,28 @@ pub async fn add_file_to_public_folder(
             .await
             .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
-            // Add all entries and the folder itself
-            all_cids.extend(file_entries.iter()
-                .map(|entry| (entry.file_name.clone(), entry.cid.clone())));
-            all_cids.push((meta_name.clone(), new_cid.clone()));
+            // Collect all CIDs, avoiding duplicates
+            let unique_entries: Vec<(String, String)> = file_entries
+                .iter()
+                .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
+                .filter(|(name, _)| !all_cids.iter().any(|(existing_name, _)| existing_name == name))
+                .collect();
+            all_cids.extend(unique_entries);
+            
+            println!("[add_file_recursive_public] Final all_cids for {}: {:?}", current_metadata_cid, all_cids);
 
             Ok((meta_name, new_cid, all_cids))
         }
     }
 
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
-    println!("subfolder_path: {:?} cid: {} normalized_subfolder: {:?}", subfolder_path, folder_metadata_cid, normalized_subfolder);
-    // --- Main logic ---
+    println!(
+        "[add_file_to_public_folder] subfolder_path: {:?}, cid: {}, normalized_subfolder: {:?}", 
+        subfolder_path, folder_metadata_cid, normalized_subfolder
+    );
+
+    // Main logic
     let (meta_filename, new_folder_metadata_cid, all_cids) = if let Some(ref path) = normalized_subfolder {
-        // Recursive add to subfolder with boxing
         Box::pin(add_file_recursive_public(
             &api_url,
             &folder_metadata_cid,
@@ -2333,7 +2367,7 @@ pub async fn add_file_to_public_folder(
         ))
         .await?
     } else {
-        // Old logic (root folder)
+        // Root folder logic
         let metadata_bytes = download_from_ipfs_async(&api_url, &folder_metadata_cid)
             .await
             .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))?;
@@ -2341,18 +2375,24 @@ pub async fn add_file_to_public_folder(
         let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
             .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
 
-        if file_entries.iter().any(|entry| entry.file_name == file_name) {
+        if file_entries.iter().any(|entry| entry.file_name == file_name || entry.file_name == format!("{}.ff", file_name)) {
             return Err(format!(
                 "File '{}' already exists in folder '{}'.",
                 file_name, folder_name
             ));
         }
 
+        // Add .ff suffix to file
+        let final_file_name = if file_name.ends_with(".ff") {
+            file_name.clone()
+        } else {
+            format!("{}.ff", file_name)
+        };
         // Upload file to IPFS
         let file_cid = tokio::task::spawn_blocking({
             let file_data = file_data.clone();
-            let file_name = file_name.clone();
-            let api_url = api_url.to_string(); // Clone to own data
+            let file_name = final_file_name.clone();
+            let api_url = api_url.to_string();
             move || {
                 let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
                 let temp_file_path = temp_dir.path().join(&file_name);
@@ -2366,7 +2406,7 @@ pub async fn add_file_to_public_folder(
         .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
         let new_file_entry = FileEntry {
-            file_name: file_name.clone(),
+            file_name: final_file_name.clone(),
             file_size: file_data.len(),
             cid: file_cid.clone(),
         };
@@ -2375,10 +2415,10 @@ pub async fn add_file_to_public_folder(
         // Write updated metadata and upload
         let folder_metadata = serde_json::to_string_pretty(&file_entries)
             .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
-
+        let meta_filename = format!("{}.folder", folder_name);
         let new_cid = tokio::task::spawn_blocking({
             let folder_metadata = folder_metadata.clone();
-            let api_url = api_url.to_string(); // Clone to own data
+            let api_url = api_url.to_string();
             move || {
                 let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
                 let meta_path = temp_dir.path().join("folder_metadata.json");
@@ -2392,90 +2432,65 @@ pub async fn add_file_to_public_folder(
         .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
         // Collect all CIDs
-        let mut all_cids = file_entries.iter()
+        let all_cids = file_entries
+            .iter()
             .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
             .collect::<Vec<_>>();
 
-        let meta_filename = format!(
-            "{}{}",
-            folder_name,
-            if folder_name.ends_with(".folder") {
-                ""
-            } else {
-                ".folder"
-            }
-        );
-        all_cids.push((
-            meta_filename,
-            new_cid.clone(),
-        ));
-
-        (
-            format!(
-                "{}{}",
-                folder_name,
-                if folder_name.ends_with(".folder") {
-                    ""
-                } else {
-                    ".folder"
-                }
-            ),
-            new_cid,
-            all_cids,
-        )
+        (meta_filename, new_cid, all_cids)
     };
 
     // Storage request and sync
     let _unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase)
-        .await;
+        .await
+        .map_err(|e| format!("Failed to unpin old folder version: {}", e))?;
 
-    let storage_result = request_folder_storage(&meta_filename, &all_cids, &api_url, &seed_phrase).await;
+    let mut all_cids_for_storage = all_cids;
+    all_cids_for_storage.push((meta_filename.clone(), new_folder_metadata_cid.clone()));
+    println!("[add_file_to_public_folder] all_cids_for_storage: {:?}", all_cids_for_storage);
 
-    match &storage_result {
-        Ok(res) => {
-            let temp_dir = tempfile::tempdir()
-                .map_err(|e| format!("Failed to create temp dir: {}", e))?;
-            let temp_path = temp_dir.path().join(&file_name);
-            fs::write(&temp_path, &file_data)
-                .map_err(|e| format!("Failed to write sync temp file: {}", e))?;
-            
-            let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
-                let mut full_path = std::path::PathBuf::from(&folder_name);
-                for segment in path_vec {
-                    full_path.push(segment);
-                }
-                full_path.to_string_lossy().to_string()
-            });
+    let storage_result = request_folder_storage(&meta_filename, &all_cids_for_storage, &api_url, &seed_phrase)
+        .await
+        .map_err(|e| format!("Failed to request folder storage: {}", e))?;
 
-            println!(
-                "[+] Copying file to sync folder. Root: {}, File: {}, Subfolder: {:?}",
-                folder_name, file_name, sync_subfolder_path
-            );
-            
-            copy_to_sync_folder(
-                &temp_path,
-                &folder_name,
-                &account_id,
-                &new_folder_metadata_cid,
-                &res,
-                true,
-                false,
-                &meta_filename,
-                sync_subfolder_path,
-            )
-            .await;
+    let temp_dir = tempfile::tempdir()
+        .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    let temp_path = temp_dir.path().join(&file_name);
+    fs::write(&temp_path, &file_data)
+        .map_err(|e| format!("Failed to write sync temp file: {}", e))?;
 
-            println!(
-                "[add_file_to_public_folder] Storage request result: {}",
-                res
-            );
-            println!(
-                "[add_file_to_public_folder] New folder metadata CID: {}",
-                new_folder_metadata_cid
-            );
+    let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
+        let mut full_path = std::path::PathBuf::from(&folder_name);
+        for segment in path_vec {
+            full_path.push(segment);
         }
-        Err(e) => println!("[public_upload_folder] Storage request error: {}", e),
-    }
+        full_path.to_string_lossy().to_string()
+    });
+
+    println!(
+        "[+] Copying file to sync folder. Root: {}, File: {}, Subfolder: {:?}",
+        folder_name, file_name, sync_subfolder_path
+    );
+
+    copy_to_sync_folder(
+        &temp_path,
+        &folder_name,
+        &account_id,
+        &new_folder_metadata_cid,
+        &storage_result,
+        true,
+        false,
+        &meta_filename,
+        sync_subfolder_path,
+    )
+    .await;
+
+    println!(
+        "[add_file_to_public_folder] Storage request result: {:?}", storage_result
+    );
+    println!(
+        "[add_file_to_public_folder] New folder metadata CID: {}", new_folder_metadata_cid
+    );
 
     Ok(new_folder_metadata_cid)
 }
