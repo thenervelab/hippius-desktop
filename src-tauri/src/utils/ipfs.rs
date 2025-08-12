@@ -5,6 +5,45 @@ use serde_json;
 use std::fs;
 use std::io::Read;
 
+pub async fn upload_to_ipfs_async(
+    api_url: &str,
+    file_path: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let client = reqwest::Client::new();
+
+    let mut file = tokio::fs::File::open(file_path).await?;
+    let mut file_data = Vec::new();
+    use tokio::io::AsyncReadExt;
+    file.read_to_end(&mut file_data).await?;
+
+    let part = reqwest::multipart::Part::bytes(file_data)
+        .file_name("file")
+        .mime_str("application/octet-stream")?;
+    let form = reqwest::multipart::Form::new().part("file", part);
+
+    let res = client
+        .post(&format!(
+            "{}/api/v0/add?cid-version=1&raw-leaves=true",
+            api_url
+        ))
+        .multipart(form)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let json: serde_json::Value = res.json().await?;
+    let cid = json["Hash"]
+        .as_str()
+        .ok_or("No Hash in IPFS response")?
+        .to_string();
+
+    // Pin asynchronously
+    let pin_url = format!("{}/api/v0/pin/add?arg={}", api_url, cid);
+    let _ = client.post(&pin_url).send().await;
+
+    Ok(cid)
+}
+
 pub fn upload_to_ipfs(
     api_url: &str,
     file_path: &str,
