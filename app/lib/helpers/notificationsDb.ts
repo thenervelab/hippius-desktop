@@ -1,5 +1,5 @@
 import type initSqlJsType from "sql.js/dist/sql-wasm.js";
-import { initWalletDb, saveBytes } from "./walletDb";
+import { initHippiusDesktopDB, saveBytes } from "./walletDb";
 
 /* ── schemas ─────────────────────────────── */
 
@@ -37,7 +37,7 @@ const NOTIFICATION_PREFERENCES_SCHEMA = `
 /* ── helpers ─────────────────────────────── */
 
 async function getDb(): Promise<initSqlJsType.Database> {
-  const db = await initWalletDb(); // same file as wallet
+  const db = await initHippiusDesktopDB(); // same file as wallet
   db.run(NOTIFICATION_SCHEMA);
   db.run(APP_STATE_SCHEMA);
   db.run(NOTIFICATION_PREFERENCES_SCHEMA);

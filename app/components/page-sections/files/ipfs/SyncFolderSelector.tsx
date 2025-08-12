@@ -5,6 +5,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { desktopDir, documentDir, downloadDir } from "@tauri-apps/api/path";
 import SectionHeader from "../../settings/SectionHeader";
+import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
+import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
+import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 
 interface SyncFolderSelectorProps {
   onFolderSelected: (path: string) => void;
@@ -21,6 +24,10 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   handleBackClick,
   isPrivateView = true,
 }) => {
+  const { data: balanceInfo } = useHippiusBalance();
+  const {
+    data: credits,
+  } = useUserCredits();
   const [suggested, setSuggested] = useState({
     desktop: "",
     documents: "",
@@ -67,14 +74,41 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
         setCustom(p);
         setSelected(p);
       }
-    } catch {}
+    } catch { }
   };
 
   const apply = async () => {
+    console.log("formatCreditBalance(credits)", formatCreditBalance(credits ?? null));
+    console.log("balanceInfo", balanceInfo);
     if (!selected) {
       toast.error("Please select a folder to sync");
       return;
     }
+
+    if (!balanceInfo?.data?.free) {
+      toast.error(
+        "Your balance is zero. Please add funds to your account first."
+      );
+      return;
+    }
+
+    const currentBalance = +formatCreditBalance(balanceInfo.data.free);
+
+    // Check if balance is zero
+    if (currentBalance <= 0) {
+      toast.error(
+        "Your balance is zero. Please add funds to your account first."
+      );
+      return;
+    }
+
+    if (formatCreditBalance(credits ?? null) === "0") {
+      toast.error(
+        "You have no credits available. Please add credits to your account first."
+      );
+      return;
+    }
+
     const isStd = ["desktop", "documents", "downloads"].includes(selected);
     const path = isStd
       ? suggested[selected as keyof typeof suggested]
@@ -97,7 +131,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
         className={cn(
           "w-full flex-1 relative ",
           !isFromSettingsPage &&
-            "bg-[url('/assets/folder-sync-bg-layer.png')] bg-no-repeat bg-cover",
+          "bg-[url('/assets/folder-sync-bg-layer.png')] bg-no-repeat bg-cover",
           !initialPath && !isFromSettingsPage && "mt-6"
         )}
       >
@@ -122,9 +156,8 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
                 subtitle={
                   initialPath
                     ? `Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
-                    : `Choose a folder on your device to keep your ${
-                        isPrivateView ? "private" : "public"
-                      } files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
+                    : `Choose a folder on your device to keep your ${isPrivateView ? "private" : "public"
+                    } files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
                 }
               />
             </div>

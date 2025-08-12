@@ -92,7 +92,7 @@ export const getFileIconForThumbnail = (fileType: FileTypes | undefined, isFolde
         case "video":
             return { icon: Video };
         case "ec":
-            return { icon: EC };
+            return { icon: EC, color: "fill-white" };
         case "document":
             return { icon: File, color: "fill-white" };
         case "PDF":

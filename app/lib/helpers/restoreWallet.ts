@@ -14,8 +14,8 @@ export async function restoreWalletFromZip(
     const zip = new JSZip();
     const zipContents = await zip.loadAsync(zipBuffer);
 
-    // Check if wallet.db exists in the zip
-    const dbFile = zipContents.file("wallet.db");
+    // Check if hippius-desktop.db exists in the zip
+    const dbFile = zipContents.file("hippius-desktop.db");
     if (!dbFile) {
       return {
         success: false,

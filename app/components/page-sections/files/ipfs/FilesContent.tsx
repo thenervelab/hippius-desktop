@@ -32,8 +32,7 @@ import FileContextMenu from "@/app/components/ui/context-menu";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import EncryptionKeyDialog from "./EncryptionKeyDialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { HardDrive } from "lucide-react";
-import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
+import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -350,7 +349,7 @@ const FilesContent: FC<FilesContentProps> = ({
                             )}
                         >
                             <div className="size-15 p-2 rounded-full flex items-center justify-center">
-                                <CloudArrowUpIcon className="size-10 text-[#3167dc] animate-slide-up" />
+                                <CloudUploadIcon className="size-10 text-[#3167dc] animate-slide-up" />
                             </div>
                         </div>
 
