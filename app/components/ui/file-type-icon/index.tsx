@@ -34,18 +34,19 @@ const FileTypeIcon: React.FC<FileTypeIconProps> = ({
     const iconSizeClass = sizeClassMap[size];
     const { icon: Icon, color: iconColor } = getFileIconForThumbnail(fileType, !!file.isFolder);
 
-    // Get current path information
-    const folderCid = getParam("folderCid", "");
     const mainFolderCid = getParam("mainFolderCid", "");
-    const folderActualName = getParam("folderActualName", "");
-    const mainFolderActualName = getParam("mainFolderActualName", "");
+    const folderActualName = file.isFolder ? file.actualFileName || "" : "";
+    const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
     const subFolderPath = getParam("subFolderPath", "");
+    const effectiveMainFolderCid = mainFolderCid || file.cid;
+    const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
+
 
     // Build the folder path for navigation
     const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
         folderActualName,
-        mainFolderCid || folderCid,
-        mainFolderActualName || folderActualName,
+        effectiveMainFolderCid,
+        effectiveMainFolderActualName,
         subFolderPath
     );
 

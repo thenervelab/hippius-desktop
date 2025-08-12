@@ -84,14 +84,6 @@ export default function FolderToFolderUploadDialog({
             // Parse the folder path into an array of folder names
             const folderPathArray = getFolderPathArray(mainFolderActualName, subFolderPath);
 
-            console.log("Debug info:");
-            console.log("URL mainFolderCid:", urlMainFolderCid);
-            console.log("parentFolderCid:", parentFolderCid);
-            console.log("effectiveMainFolderCid:", effectiveMainFolderCid);
-            console.log("mainFolderActualName:", mainFolderActualName);
-            console.log("subFolderPath:", subFolderPath);
-            console.log("folderPathArray:", folderPathArray);
-
             // Choose the appropriate command based on folder type
             const command = isPrivateFolder
                 ? "add_folder_to_private_folder"
@@ -110,7 +102,7 @@ export default function FolderToFolderUploadDialog({
             console.log("Invoke params (sanitized):", {
                 ...invokeParams,
                 seedPhrase: "[REDACTED]",
-                encryptionKey: invokeParams.encryptionKey ? "[REDACTED]" : null
+                ...(isPrivateFolder ? { encryptionKey: encryptionKey.trim() || null } : {})
             });
 
             const manifestCid = await invoke<string>(command, invokeParams);

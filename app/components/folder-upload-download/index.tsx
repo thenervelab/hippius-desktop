@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useState } from 'react';
@@ -8,6 +9,7 @@ interface TestResult {
   success: boolean;
   message: string;
   data?: any;
+  timestamp?: string;
 }
 
 export default function PrivateFolderTest() {
@@ -22,7 +24,7 @@ export default function PrivateFolderTest() {
     folderName: 'testing-file-add122',
     fileName: 'stranger.jpeg',
     seedPhrase: mnemonic,
-    subfolderPath: ['testing-file-add122','3-folder-inside-2'],
+    subfolderPath: ['testing-file-add122', '3-folder-inside-2'],
     fileData: new TextEncoder().encode('This is test file content for testing purposes'),
   };
 
@@ -38,7 +40,7 @@ export default function PrivateFolderTest() {
     setLoading(true);
     try {
       console.log('Testing add_file_to_private_folder...');
-      
+
       const result = await invoke('add_file_to_private_folder', {
         accountId: TEST_VALUES.accountId,
         folderMetadataCid: TEST_VALUES.folderMetadataCid,
@@ -69,7 +71,7 @@ export default function PrivateFolderTest() {
     setLoading(true);
     try {
       console.log('Testing remove_file_from_private_folder...');
-      
+
       const result = await invoke('remove_file_from_private_folder', {
         accountId: TEST_VALUES.accountId,
         folderMetadataCid: TEST_VALUES.folderMetadataCid,
@@ -99,7 +101,7 @@ export default function PrivateFolderTest() {
     setLoading(true);
     try {
       console.log('Testing add_file_to_private_folder (root folder)...');
-      
+
       const result = await invoke('add_file_to_private_folder', {
         accountId: TEST_VALUES.accountId,
         folderMetadataCid: TEST_VALUES.folderMetadataCid,
@@ -130,7 +132,7 @@ export default function PrivateFolderTest() {
     setLoading(true);
     try {
       console.log('Testing remove_file_from_private_folder (root folder)...');
-      
+
       const result = await invoke('remove_file_from_private_folder', {
         accountId: TEST_VALUES.accountId,
         folderMetadataCid: TEST_VALUES.folderMetadataCid,
@@ -160,7 +162,7 @@ export default function PrivateFolderTest() {
     setLoading(true);
     try {
       console.log('Testing list_folder_contents...');
-      
+
       const result = await invoke('list_folder_contents', {
         folderName: TEST_VALUES.folderName,
         folderMetadataCid: TEST_VALUES.folderMetadataCid,
@@ -187,7 +189,7 @@ export default function PrivateFolderTest() {
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <h1 className="text-3xl font-bold mb-6">Private Folder Operations Test</h1>
-      
+
       {/* Test Values Display */}
       <div className="bg-gray-100 p-4 rounded-lg mb-6">
         <h2 className="text-xl font-semibold mb-3">Test Values</h2>
@@ -261,17 +263,15 @@ export default function PrivateFolderTest() {
             {results.map((result, index) => (
               <div
                 key={index}
-                className={`p-4 rounded-lg border ${
-                  result.success 
-                    ? 'bg-green-50 border-green-200' 
-                    : 'bg-red-50 border-red-200'
-                }`}
+                className={`p-4 rounded-lg border ${result.success
+                  ? 'bg-green-50 border-green-200'
+                  : 'bg-red-50 border-red-200'
+                  }`}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
-                    <div className={`font-semibold ${
-                      result.success ? 'text-green-800' : 'text-red-800'
-                    }`}>
+                    <div className={`font-semibold ${result.success ? 'text-green-800' : 'text-red-800'
+                      }`}>
                       {result.success ? '✅ Success' : '❌ Error'}
                     </div>
                     <div className="text-sm text-gray-600 mt-1">

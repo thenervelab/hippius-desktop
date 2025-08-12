@@ -47,19 +47,29 @@ const FileCard: React.FC<FileCardProps> = ({
   const { getParam } = useUrlParams();
 
   // Get current path information for folder navigation
-  const folderActualName = getParam("folderActualName", "");
-  const folderCid = getParam("folderCid", "");
+  const folderActualName = file.isFolder ? file.actualFileName || "" : "";
   const mainFolderCid = getParam("mainFolderCid", "");
-  const mainFolderActualName = getParam("mainFolderActualName", "");
+  const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
   const subFolderPath = getParam("subFolderPath", "");
+  const effectiveMainFolderCid = mainFolderCid || file.cid;
+  const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
+
 
   // Build the folder path for navigation
   const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
     folderActualName,
-    mainFolderCid || folderCid,
-    mainFolderActualName || folderActualName,
+    effectiveMainFolderCid,
+    effectiveMainFolderActualName,
     subFolderPath
   );
+
+  // console.log("effectiveMainFolderActualName", effectiveMainFolderActualName);
+  // console.log("folderActualName", folderActualName);
+  // console.log("file", file);
+  // console.log("newMainFolder", newMainFolder)
+
+
+  // console.log("FileCard", `/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`)
 
   useEffect(() => {
     if (

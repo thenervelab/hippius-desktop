@@ -16,7 +16,6 @@ export const useDeleteIpfsFile = ({
     cid,
     fileToDelete: file,
     folderCid,
-    folderName,
     isPrivateFolder
 }: {
     cid: string,
@@ -48,7 +47,11 @@ export const useDeleteIpfsFile = ({
                 fileToDelete = file ?? undefined;
             }
 
+            console.log("fileToDelete", fileToDelete);
+
             if (!fileToDelete) throw new Error("Cannot find file");
+            console.log("folderCid", folderCid);
+            console.log("mainFolderActualName", mainFolderActualName)
             // Handle file in folder deletion
             if (folderCid && mainFolderActualName) {
                 if (!mnemonic) {
@@ -58,23 +61,42 @@ export const useDeleteIpfsFile = ({
                 const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
                 const mainFolderCid = getParam("mainFolderCid", "");
 
+                // Optimize the repeated code by creating common params first
                 try {
-                    const command = isPrivateFolder ? "remove_file_from_private_folder" : "remove_file_from_public_folder";
+                    const isFolder = fileToDelete.isFolder;
+                    // Determine the command based on file type and folder privacy
+                    const command = isPrivateFolder
+                        ? (isFolder ? "remove_folder_from_private_folder" : "remove_file_from_private_folder")
+                        : (isFolder ? "remove_folder_from_public_folder" : "remove_file_from_public_folder");
+
+                    // Create the common base parameters
                     const params = {
                         accountId: polkadotAddress,
                         folderMetadataCid: mainFolderCid,
                         folderName: mainFolderActualName,
-                        fileName: fileToDelete.name,
                         seedPhrase: mnemonic,
                         subfolderPath: folderPath || null
+                    };
+
+                    // Add the specific parameter based on whether it's a folder or file
+                    if (isFolder) {
+                        (params as any).folderToRemove = fileToDelete.actualFileName;
+                    } else {
+                        (params as any).fileName = fileToDelete.actualFileName;
                     }
-                    console.log("params", params);
+
+                    console.log("params", {
+                        ...params,
+                        seedPhrase: "[REDACTED]" // Don't log sensitive info
+                    });
+
                     await invoke<string>(command, params);
                     return true;
                 } catch (error) {
-                    console.error("Failed to delete file from folder:", error);
-                    throw new Error(`Failed to delete file from folder: ${error instanceof Error ? error.message : String(error)}`);
+                    console.error(`Failed to delete ${fileToDelete.isFolder ? 'folder' : 'file'} from folder:`, error);
+                    throw new Error(`Failed to delete ${fileToDelete.isFolder ? 'folder' : 'file'} from folder: ${error instanceof Error ? error.message : String(error)}`);
                 }
+
             } else {
                 try {
                     if (!mnemonic) {
