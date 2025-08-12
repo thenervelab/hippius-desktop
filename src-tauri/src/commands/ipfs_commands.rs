@@ -4858,7 +4858,7 @@ pub async fn add_folder_to_private_folder(
         &account_id,
         &new_folder_manifest_cid,
         &storage_result,
-        true,
+        false,
         true,
         &meta_folder_name,
         sync_subfolder_path,
