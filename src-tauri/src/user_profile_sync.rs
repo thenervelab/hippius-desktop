@@ -556,7 +556,6 @@ pub fn start_user_sync(account_id: &str) {
                                                         match serde_json::from_str::<serde_json::Value>(&json_str) {
                                                             Ok(json_value) => {
                                                                 if let Some(files) = json_value.as_array() {
-                                                                    println!("file: {:?}", files);
                                                                     let target_extensions = if file_name.ends_with(".folder.ec_metadata") {
                                                                         vec![".folder.ec_metadata"]
                                                                     } else if file_name.ends_with("-folder.ec_metadata") {
