@@ -12,7 +12,7 @@ export async function exportWalletAsZip(): Promise<boolean> {
 
     // Create a new zip file
     const zip = new JSZip();
-    zip.file("wallet.db", dbBytes);
+    zip.file("hippius-desktop.db", dbBytes);
 
     // Generate the zip blob
     const zipBlob = await zip.generateAsync({ type: "uint8array" });
