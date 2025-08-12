@@ -4236,10 +4236,6 @@ pub async fn remove_folder_from_public_folder(
             .filter(|(name, _)| !file_cid_pairs.iter().any(|(existing_name, _)| existing_name == name))
             .collect();
         file_cid_pairs.extend(unique_entries);
-        // // Only add the current folder's metadata at the root level
-        // if current_folder_name == main_folder_name {
-        //     file_cid_pairs.push((meta_name.clone(), new_cid.clone()));
-        // }
         println!("[remove_folder_recursive_public] Final file_cid_pairs for {}: {:?}", current_metadata_cid, file_cid_pairs);
 
         Ok((meta_name, new_cid, file_cid_pairs))
@@ -4867,105 +4863,213 @@ pub async fn remove_folder_from_private_folder(
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     use std::sync::Arc;
+    println!(
+        "[remove_folder_from_private_folder] folder_metadata_cid: {}, folder_name: {}, folder_to_remove: {}, subfolder_path: {:?}",
+        folder_metadata_cid, folder_name, folder_to_remove, subfolder_path
+    );
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_name = sanitize_name(&folder_name);
+    let folder_to_remove = sanitize_name(&folder_to_remove);
     let encryption_key_bytes = if let Some(key_b64) = encryption_key {
-        Some(Arc::new(base64::engine::general_purpose::STANDARD.decode(&key_b64).map_err(|e| format!("Key decode error: {}", e))?))
+        Some(Arc::new(
+            base64::engine::general_purpose::STANDARD
+                .decode(&key_b64)
+                .map_err(|e| format!("Key decode error: {}", e))?,
+        ))
     } else {
         None
     };
+
     // Recursive helper
     async fn remove_folder_recursive_private(
         api_url: &Arc<String>,
         current_metadata_cid: &str,
         path: &[String],
-        folder_name: &str,
+        folder_to_remove: &str,
+        current_folder_name: &str,
+        main_folder_name: &str,
         encryption_key_bytes: &Option<Arc<Vec<u8>>>,
-    ) -> Result<(String, String), String> {
-        let manifest_bytes = download_from_ipfs_async(api_url, current_metadata_cid).await
+    ) -> Result<(String, String, Vec<(String, String)>), String> {
+        let manifest_bytes = download_from_ipfs_async(api_url, current_metadata_cid)
+            .await
             .map_err(|e| e.to_string())?;
         let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&manifest_bytes)
-            .map_err(|e| format!("Could not parse existing folder manifest: {}", e))?;
+            .map_err(|e| format!("Could not parse folder manifest for CID {}: {}", current_metadata_cid, e))?;
+        println!(
+            "[remove_folder_recursive_private] File entries for CID {}: {:?}",
+            current_metadata_cid, file_entries
+        );
+
+        let mut file_cid_pairs = Vec::new();
+
         if path.is_empty() {
             let initial_len = file_entries.len();
-            file_entries.retain(|entry| entry.file_name != folder_name);
+            file_entries.retain(|entry| {
+                let variations = vec![
+                    format!("{}.s.folder.ec_metadata", folder_to_remove),
+                    format!("{}.folder.ec_metadata", folder_to_remove),
+                    folder_to_remove.to_string(),
+                ];
+                !variations.contains(&entry.file_name)
+            });
             if file_entries.len() == initial_len {
-                return Err(format!("Folder '{}' not found in this folder.", folder_name));
+                return Err(format!("Folder '{}' not found in this folder.", folder_to_remove));
             }
         } else {
             let subfolder = &path[0];
             let mut found = false;
             for entry in &mut file_entries {
-                if entry.file_name.starts_with(subfolder) && entry.file_name.ends_with(".folder.ec_metadata") {
-                    let (new_subfolder_name, new_subfolder_cid) = Box::pin(remove_folder_recursive_private(
-                        api_url,
-                        &entry.cid,
-                        &path[1..],
-                        folder_name,
-                        encryption_key_bytes,
-                    )).await?;
-                    entry.file_name = new_subfolder_name;
+                if entry.file_name.starts_with(subfolder)
+                    && (entry.file_name.ends_with(".s.folder.ec_metadata")
+                        || entry.file_name.ends_with(".folder.ec_metadata")
+                        || entry.file_name == *subfolder)
+                {
+                    let (new_subfolder_name, new_subfolder_cid, subfolder_pairs) = Box::pin(
+                        remove_folder_recursive_private(
+                            api_url,
+                            &entry.cid,
+                            &path[1..],
+                            folder_to_remove,
+                            subfolder,
+                            main_folder_name,
+                            encryption_key_bytes,
+                        ),
+                    )
+                    .await?;
+                    entry.file_name = if new_subfolder_name.ends_with(".s.folder.ec_metadata")
+                        || new_subfolder_name.ends_with(".folder.ec_metadata")
+                    {
+                        new_subfolder_name
+                    } else {
+                        format!("{}.s.folder.ec_metadata", subfolder)
+                    };
                     entry.cid = new_subfolder_cid;
+                    let unique_subfolder_pairs: Vec<(String, String)> = subfolder_pairs
+                        .into_iter()
+                        .filter(|(name, _)| !file_cid_pairs.iter().any(|(existing_name, _)| existing_name == name))
+                        .collect();
+                    file_cid_pairs.extend(unique_subfolder_pairs);
+                    println!(
+                        "[remove_folder_recursive_private] After extending with subfolder_pairs for {}: {:?}", 
+                        current_metadata_cid, file_cid_pairs
+                    );
                     found = true;
                     break;
                 }
             }
             if !found {
-                return Err(format!("Subfolder '{}' not found in metadata.", subfolder));
+                return Err(format!(
+                    "Subfolder '{}' not found in metadata for CID {}. Available entries: {:?}", 
+                    subfolder, current_metadata_cid, file_entries
+                ));
             }
         }
-        let updated_manifest_json = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
-        let meta_name = if path.is_empty() {
-            format!("{}.folder.ec_metadata", folder_name)
+
+        // Write updated metadata and upload
+        let updated_manifest_json = serde_json::to_string_pretty(&file_entries)
+            .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
+        let meta_name = if current_folder_name == main_folder_name {
+            format!("{}.folder.ec_metadata", current_folder_name)
         } else {
-            format!("{}.folder.ec_metadata", &path[0])
+            format!("{}.s.folder.ec_metadata", current_folder_name)
         };
-        let new_cid = upload_bytes_to_ipfs(
-            api_url,
-            updated_manifest_json.as_bytes().to_vec(),
-            "folder.manifest.json"
-        ).await?;
-        Ok((meta_name, new_cid))
+        let new_cid = upload_bytes_to_ipfs(api_url, updated_manifest_json.as_bytes().to_vec(), "folder.manifest.json")
+            .await
+            .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e))?;
+
+        // Collect all file CIDs for storage, avoiding duplicates
+        let unique_entries: Vec<(String, String)> = file_entries
+            .iter()
+            .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
+            .filter(|(name, _)| !file_cid_pairs.iter().any(|(existing_name, _)| existing_name == name))
+            .collect();
+        file_cid_pairs.extend(unique_entries);
+        
+        println!(
+            "[remove_folder_recursive_private] Final file_cid_pairs for {}: {:?}", 
+            current_metadata_cid, file_cid_pairs
+        );
+
+        Ok((meta_name, new_cid, file_cid_pairs))
     }
-    // --- Main logic ---
-    let (meta_folder_name, new_folder_manifest_cid) = if let Some(ref path) = subfolder_path {
+
+    // Main logic
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+    println!(
+        "[remove_folder_from_private_folder] subfolder_path: {:?}, cid: {}, normalized_subfolder: {:?}", 
+        subfolder_path, folder_metadata_cid, normalized_subfolder
+    );
+
+    let (meta_folder_name, new_folder_manifest_cid, file_cid_pairs) = if let Some(ref path) = normalized_subfolder {
         Box::pin(remove_folder_recursive_private(
             &api_url,
             &folder_metadata_cid,
             path,
             &folder_to_remove,
+            &folder_name,
+            &folder_name,
             &encryption_key_bytes,
-        )).await?
+        ))
+        .await?
     } else {
-        let manifest_bytes = download_from_ipfs_async(&api_url, &folder_metadata_cid).await
+        // Remove from root
+        let manifest_bytes = download_from_ipfs_async(&api_url, &folder_metadata_cid)
+            .await
             .map_err(|e| e.to_string())?;
         let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| format!("Could not parse existing folder manifest: {}", e))?;
+
         let initial_len = file_entries.len();
-        file_entries.retain(|entry| entry.file_name != folder_to_remove);
+        file_entries.retain(|entry| {
+            let variations = vec![
+                format!("{}.s.folder.ec_metadata", &folder_to_remove),
+                format!("{}.folder.ec_metadata", &folder_to_remove),
+                folder_to_remove.to_string(),
+            ];
+            !variations.contains(&entry.file_name)
+        });
         if file_entries.len() == initial_len {
-            return Err(format!("Folder '{}' not found in folder '{}'.", folder_to_remove, folder_name));
+            return Err(format!(
+                "Folder '{}' not found in folder '{}'.",
+                folder_to_remove, folder_name
+            ));
         }
-        let updated_manifest_json = serde_json::to_string_pretty(&file_entries).map_err(|e| e.to_string())?;
-        let meta_folder_name = format!("{}{}", folder_name, ".folder.ec_metadata");
+
+        let updated_manifest_json = serde_json::to_string_pretty(&file_entries)
+            .map_err(|e| e.to_string())?;
+        let meta_folder_name = format!("{}.folder.ec_metadata", folder_name);
         let new_folder_manifest_cid = upload_bytes_to_ipfs(
             &api_url,
             updated_manifest_json.as_bytes().to_vec(),
-            "folder.manifest.json"
-        ).await?;
-        (meta_folder_name, new_folder_manifest_cid)
+            "folder.manifest.json",
+        )
+        .await?;
+
+        let file_cid_pairs = file_entries
+            .iter()
+            .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
+            .collect::<Vec<_>>();
+
+        (meta_folder_name, new_folder_manifest_cid, file_cid_pairs)
     };
-    delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase).await
+
+    // Unpin old version
+    delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase)
+        .await
         .map_err(|e| format!("Failed to request unpinning of old folder version: {}", e))?;
-    let manifest_bytes = download_from_ipfs_async(&api_url, &new_folder_manifest_cid).await
-        .map_err(|e| format!("Failed to download new folder manifest: {}", e))?;
-    let file_entries: Vec<FileEntry> = serde_json::from_slice(&manifest_bytes)
-        .map_err(|e| format!("Could not parse new folder manifest: {}", e))?;
-    let mut all_files_for_storage = build_complete_storage_list(file_entries, &api_url).await?;
+
+    let mut all_files_for_storage = file_cid_pairs;
     all_files_for_storage.push((meta_folder_name.clone(), new_folder_manifest_cid.clone()));
-    let storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, &api_url, &seed_phrase).await?;
+    println!(
+        "[remove_folder_from_private_folder] all_files_for_storage: {:?}", 
+        all_files_for_storage
+    );
+
+    let storage_result = request_erasure_storage(&meta_folder_name, &all_files_for_storage, &api_url, &seed_phrase)
+        .await
+        .map_err(|e| format!("Failed to request folder storage: {}", e))?;
+
     let sanitized_folder_name = sanitize_name(&folder_name);
-    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
         let mut full_path = std::path::PathBuf::from(&sanitized_folder_name);
         for segment in path_vec {
@@ -4977,14 +5081,16 @@ pub async fn remove_folder_from_private_folder(
     remove_from_sync_folder(
         &folder_to_remove,
         &sanitized_folder_name,
-        true,
+        false,
         true,
         &meta_folder_name,
         &new_folder_manifest_cid,
         &account_id,
         &storage_result,
         sync_subfolder_path,
-    ).await;
+    )
+    .await;
+
     Ok(new_folder_manifest_cid)
 }
 
