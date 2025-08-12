@@ -135,6 +135,18 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
                             .await
                             .map(|_| ())
                             .map_err(|e| format!("Unpin request error for variant '{}': {}", variant, e));
+                        
+                        let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
+                            .bind(variant)
+                            .execute(pool)
+                            .await
+                            .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
+
+                        // Also delete from file_paths table
+                        let _ = sqlx::query("DELETE FROM file_paths WHERE file_name = ?")
+                            .bind(variant)
+                            .execute(pool)
+                            .await;
                     }
                     return Err("Found empty hash result despite non-empty hashes".to_string());
                 },
@@ -179,13 +191,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
         .unwrap_or(false);
 
-        let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
-            .bind(file_name)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
-
-        let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
+        let result = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
             .bind(&sanitized_file_name)
             .bind(if is_public { "public" } else { "private" })
             .execute(pool)
@@ -220,7 +226,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         // Remove from sync folder
         remove_file_from_sync_and_db(&sanitized_file_name, is_public, is_folder, should_delete_folder).await;
 
-        let total_deleted = result1.rows_affected() + result2.rows_affected();
+        let total_deleted = result.rows_affected();
         Ok(total_deleted)
     } else {
         Err("DB_POOL not initialized".to_string())
@@ -414,7 +420,7 @@ pub async fn copy_to_sync_and_add_to_db(
             let mut source = "Hippius".to_string();
             println!("dest_path: {}", dest_path_str_clone);
             let sanitize_name = sanitize_name(&dest_path_str_clone);
-            source = dest_path_str_clone;
+            source = dest_path_str_clone.clone();
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -432,6 +438,17 @@ pub async fn copy_to_sync_and_add_to_db(
             .bind(source)   // source
             .bind(if is_public { "public" } else { "private" })  // type
             .bind(is_folder)
+            .execute(pool)
+            .await;
+
+            // Also insert into file_paths table
+            let _ = sqlx::query(
+                "INSERT INTO file_paths (file_name, file_hash, timestamp, path) VALUES (?, ?, ?, ?)"
+            )
+            .bind(&requested_file_name)
+            .bind(&file_hash)
+            .bind(chrono::Utc::now().timestamp())
+            .bind(&dest_path_str_clone)
             .execute(pool)
             .await;
         }
@@ -1145,6 +1162,12 @@ pub async fn delete_and_unpin_user_file_records_from_folder(
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
+
+        // Also delete from file_paths table
+        let _ = sqlx::query("DELETE FROM file_paths WHERE file_name = ?")
+            .bind(folder_name)
+            .execute(pool)
+            .await;
 
         let total_deleted = result.rows_affected();
         Ok(total_deleted)
