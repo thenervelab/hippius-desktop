@@ -896,6 +896,21 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                         }
                     }
 
+                    // If source is still "Hippius", check file_paths table
+                    if source == "Hippius" {
+                        if let Ok(path_record) = sqlx::query_as::<_, (String,)>(
+                            "SELECT path FROM file_paths WHERE file_name = ? LIMIT 1"
+                        )
+                        .bind(&file_name)
+                        .fetch_optional(pool)
+                        .await
+                        {
+                            if let Some((path,)) = path_record {
+                                source = path;
+                            }
+                        }
+                    }
+
                     files.push(UserProfileFileWithType {
                         owner: row.get("owner"),
                         cid: row.get("cid"),

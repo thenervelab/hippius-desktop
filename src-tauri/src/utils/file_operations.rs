@@ -420,7 +420,7 @@ pub async fn copy_to_sync_and_add_to_db(
             let mut source = "Hippius".to_string();
             println!("dest_path: {}", dest_path_str_clone);
             let sanitize_name = sanitize_name(&dest_path_str_clone);
-            source = dest_path_str_clone;
+            source = dest_path_str_clone.clone();
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
