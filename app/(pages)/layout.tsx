@@ -1,7 +1,7 @@
-import Sidebar from "../components/sidebar";
+import Sidebar from "@/components/sidebar";
 import ResponsiveContent from "./ResponsiveContent";
 import OnBoardingGuard from "./OnBoardingGuard";
-import UpdateChecker from "../components/updater/UpdateChecker";
+import UpdateChecker from "@/components/updater/UpdateChecker";
 
 export default function ProtectedLayout({
   children,

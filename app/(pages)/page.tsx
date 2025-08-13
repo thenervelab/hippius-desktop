@@ -1,8 +1,8 @@
 "use client";
 
-import DashboardTitleWrapper from "../components/dashboard-title-wrapper";
-import HomePage from "../components/page-sections/home";
-// import PublicFolderTest from "../components/folder-upload-download";
+import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
+import HomePage from "@/components/page-sections/home";
+// import PublicFolderTest from "@/components/folder-upload-download";
 // import { useFilesNotification } from "../lib/hooks/useFilesNotification";
 // import WssEndpointTester from "../wssTest";
 
