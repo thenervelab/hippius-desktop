@@ -27,8 +27,8 @@ interface WalletContextType {
   } | null;
   setSession: (mnemonic: string) => Promise<boolean>;
   unlockWithPasscode: (passcode: string) => Promise<boolean>;
-  logout: () => void;
-  resetHippiusDesktop: () => void;
+  logout: () => Promise<void>;
+  resetHippiusDesktop: () => Promise<void>;
 }
 const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 
@@ -52,7 +52,12 @@ export function WalletAuthProvider({
 
   const logout = useCallback(async () => {
     try {
+      console.log("[WalletAuth] Starting sync cleanup...");
       await invoke("cleanup_sync");
+      // Add a longer delay to ensure all cleanup operations complete
+      // This includes global cancellation, state cleanup, and task abortion
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      console.log("[WalletAuth] Sync cleanup completed");
     } catch (error) {
       console.error("Failed to cleanup sync on logout:", error);
     }
@@ -69,8 +74,8 @@ export function WalletAuthProvider({
     if (logoutTimer.current) {
       clearTimeout(logoutTimer.current);
     }
-    logoutTimer.current = setTimeout(() => {
-      logout();
+    logoutTimer.current = setTimeout(async () => {
+      await logout();
     }, INACTIVITY_TIMEOUT);
   }, [logout]);
 
@@ -97,7 +102,6 @@ export function WalletAuthProvider({
       );
     };
   }, [isAuthenticated, resetLogoutTimer]);
-
 
   const unlockWithPasscode = async (passcode: string): Promise<boolean> => {
     setIsLoading(true);
@@ -164,7 +168,7 @@ export function WalletAuthProvider({
   // Full reset: clear session + wallet storage
   const resetHippiusDesktop = async () => {
     await clearHippiusDesktopDB();
-    logout();
+    await logout();
   };
 
   useTrayInit();

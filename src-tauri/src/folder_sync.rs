@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
-pub use crate::sync_shared::{SYNCING_ACCOUNTS, find_top_level_folder, UPLOAD_LOCK, UploadJob, insert_file_if_not_exists, PRIVATE_SYNC_STATUS};
+pub use crate::sync_shared::{SYNCING_ACCOUNTS, find_top_level_folder, UPLOAD_LOCK, UploadJob, insert_file_if_not_exists, PRIVATE_SYNC_STATUS, GLOBAL_CANCEL_TOKEN};
 use once_cell::sync::Lazy;
 use tauri::AppHandle;
 
@@ -33,6 +33,16 @@ pub static CREATE_BATCH_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
 pub async fn start_folder_sync(app_handle: AppHandle, account_id: String, seed_phrase: String) {
     let mut is_initial_startup = true;
     loop {
+        // Check global cancellation token first
+        if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
+            println!("[PrivateFolderSync] Global cancellation detected, stopping sync for account {}", account_id);
+            {
+                let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+                syncing_accounts.remove(&(account_id.clone(), "private"));
+            }
+            return;
+        }
+        
         {
             let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
             if syncing_accounts.contains(&(account_id.clone(), "private")) {
@@ -110,8 +120,18 @@ pub async fn start_folder_sync(app_handle: AppHandle, account_id: String, seed_p
         // Set to false after the first startup
         is_initial_startup = false;
 
-        while !cancel_token.load(Ordering::SeqCst) {
+        while !cancel_token.load(Ordering::SeqCst) && !GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        
+        // If global cancellation was triggered, clean up and exit
+        if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
+            println!("[PrivateFolderSync] Global cancellation detected in main loop, cleaning up for account {}", account_id);
+            {
+                let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+                syncing_accounts.remove(&(account_id.clone(), "private"));
+            }
+            return;
         }
     }
 }
@@ -133,6 +153,12 @@ async fn start_sync_process(
         UPLOAD_SENDER.set(tx).ok();
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
+                // Check global cancellation before processing each job
+                if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
+                    println!("[PrivateUploadWorker] Global cancellation detected, stopping upload worker");
+                    break;
+                }
+                
                 let path_str = job.file_path.clone();
                 {
                     let mut uploading_files = UPLOADING_FILES.lock().unwrap();
@@ -554,12 +580,16 @@ fn spawn_watcher_thread(
         let event_handler_app_handle = app_handle.clone();
 
         loop {
-            if cancel_token.load(Ordering::SeqCst) {
+            if cancel_token.load(Ordering::SeqCst) || GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
                 if let Some(w) = watcher.take() {
                     drop(w);
                     println!("[PrivateFolderSync] Stopped watching path: {}", current_path);
                 }
-                println!("[PrivateFolderSync] Watcher thread cancelled for account {}", account_id);
+                if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
+                    println!("[PrivateFolderSync] Watcher thread cancelled due to global cancellation for account {}", account_id);
+                } else {
+                    println!("[PrivateFolderSync] Watcher thread cancelled for account {}", account_id);
+                }
                 break;
             }
 

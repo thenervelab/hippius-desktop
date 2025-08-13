@@ -5,6 +5,7 @@ use tauri::{AppHandle, Wry};
 use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
 use once_cell::sync::Lazy;
 use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 
 // Global sync status tracking (split by sync type)
@@ -19,6 +20,10 @@ pub static UPLOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 // Track accounts currently syncing (account_id + sync_type)
 pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<(String, &'static str)>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
+
+// Global cancellation token for all sync processes
+pub static GLOBAL_CANCEL_TOKEN: Lazy<Arc<AtomicBool>> = 
+    Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
 #[derive(Debug, Clone)]
 pub struct UploadJob {
@@ -57,6 +62,39 @@ pub fn get_sync_status() -> SyncStatusResponse {
 #[tauri::command]
 pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);
+}
+
+// Function to reset all sync state and signal cancellation
+pub fn reset_all_sync_state() {
+    println!("[SyncShared] Resetting all sync state and signaling cancellation");
+    
+    // Signal global cancellation
+    GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
+    
+    // Clear syncing accounts (folder sync)
+    {
+        let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+        syncing_accounts.clear();
+    }
+    
+    // Clean up user profile sync state
+    crate::user_profile_sync::cleanup_user_profile_sync_state();
+    
+    // Reset sync statuses
+    {
+        let mut private_status = PRIVATE_SYNC_STATUS.lock().unwrap();
+        *private_status = SyncStatus::default();
+    }
+    {
+        let mut public_status = PUBLIC_SYNC_STATUS.lock().unwrap();
+        *public_status = SyncStatus::default();
+    }
+}
+
+// Function to prepare for new sync (reset cancellation token)
+pub fn prepare_for_new_sync() {
+    println!("[SyncShared] Preparing for new sync - resetting cancellation token");
+    GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
 }
 
 // Helper to collect all subfolders

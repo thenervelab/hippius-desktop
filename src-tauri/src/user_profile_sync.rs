@@ -21,6 +21,8 @@ use std::path::Path;
 use tauri::{AppHandle, Manager};
 use tauri::Emitter;
 use crate::events::AppEvent;
+use crate::sync_shared::{GLOBAL_CANCEL_TOKEN, reset_all_sync_state};
+use std::sync::atomic::Ordering;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +32,13 @@ pub struct FileSizeBreakdown {
 }
 
 static SYNCING_ACCOUNTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+// Function to clean up user profile sync state
+pub fn cleanup_user_profile_sync_state() {
+    println!("[UserSync] Cleaning up user profile sync state");
+    let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+    syncing_accounts.clear();
+}
 
 #[derive(Debug, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -126,6 +135,16 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
         };
 
         loop {
+            // Check global cancellation token
+            if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
+                println!("[UserSync] Global cancellation detected, stopping sync for account {}", account_id);
+                {
+                    let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+                    syncing_accounts.remove(&account_id);
+                }
+                return;
+            }
+            
             println!("[UserSync] Periodic check: scanning for unsynced data...");
 
             let account: AccountId32 = match account_id.parse() {
@@ -507,6 +526,16 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
             let max_storage_retries = 5;
 
             while let Some(result) = iter.next().await {
+                // Check global cancellation during iteration
+                if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
+                    println!("[UserSync] Global cancellation detected during storage iteration, stopping sync for account {}", account_id);
+                    {
+                        let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+                        syncing_accounts.remove(&account_id);
+                    }
+                    return;
+                }
+                
                 match result {
                     Ok(StorageKeyValuePair { value, .. }) => {
                         if let Some(storage_request) = value {
