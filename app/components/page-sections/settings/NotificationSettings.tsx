@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
-import { CardButton, Icons, RevealTextLine } from "../../ui";
+import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import SectionHeader from "./SectionHeader";
 import { toast } from "sonner";
 import { InView } from "react-intersection-observer";

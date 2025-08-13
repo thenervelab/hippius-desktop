@@ -3,7 +3,7 @@
 import React, { ReactNode } from "react";
 import { InView } from "react-intersection-observer";
 import { cn } from "@/app/lib/utils";
-import { Graphsheet } from "../ui";
+import { Graphsheet } from "@/components/ui";
 
 interface BaseAuthLayoutProps {
   children: ReactNode;

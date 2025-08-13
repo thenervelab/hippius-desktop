@@ -1,5 +1,5 @@
 import { AppSetupPhaseContent } from "@/app/lib/constants";
-import { Icons } from "../ui";
+import { Icons } from "@/components/ui";
 import { AppSetupPhases } from "@/app/lib/types";
 
 export const PHASE_CONTENT: Record<AppSetupPhases, AppSetupPhaseContent> = {

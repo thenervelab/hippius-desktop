@@ -1,5 +1,5 @@
-import { MarketplaceCreditObject } from "../hooks/api/useMarketplaceCredits";
-import { Account } from "../types";
+import { MarketplaceCreditObject } from "@/lib/hooks/api/useMarketplaceCredits";
+import { Account } from "@/lib/types";
 
 /**
  * Transforms marketplace credits data by aggregating credits for the same date

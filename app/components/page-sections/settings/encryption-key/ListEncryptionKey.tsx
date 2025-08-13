@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Icons, RevealTextLine, IconButton, CardButton } from "@/components/ui";
 import { toast } from "sonner";
-import SectionHeader from "../SectionHeader";
+import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import { PlusCircle } from "lucide-react";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";

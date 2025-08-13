@@ -1,16 +1,16 @@
 import React, { useState } from "react";
-import { AbstractIconWrapper, CardButton } from "../../ui";
+import { AbstractIconWrapper, CardButton } from "@/components/ui";
 import { IconComponent } from "@/app/lib/types";
 import NotificationType from "./NotificationType";
 import { handleButtonLink } from "@/app/lib/utils/links";
 import { MoreVertical } from "lucide-react";
 import TimeAgo from "react-timeago";
 import NotificationContextMenu from "./NotificationContextMenu";
-import RevealTextLine from "../../ui/reveal-text-line";
+import RevealTextLine from "@/components/ui/reveal-text-line";
 import { InView } from "react-intersection-observer";
 import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
-import { activeSubMenuItemAtom } from "../../sidebar/sideBarAtoms";
+import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
 
 interface NotificationDetailViewProps {
   selectedNotification: {

@@ -1,6 +1,6 @@
 "use client";
 
-import BaseAuthLayout from "../BaseAuthLayout";
+import BaseAuthLayout from "@/components/auth/BaseAuthLayout";
 import Onboarding from ".";
 
 const OnboardingPage: React.FC<{

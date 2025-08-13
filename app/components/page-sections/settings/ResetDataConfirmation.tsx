@@ -1,9 +1,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React, { useState } from "react";
 import { ArrowLeft } from "lucide-react";
-import DialogContainer from "../../ui/DialogContainer";
-import { CardButton, Graphsheet, Icons } from "../../ui";
-import { exportWalletAsZip } from "../../../lib/helpers/exportWallet";
+import DialogContainer from "@/components/ui/DialogContainer";
+import { CardButton, Graphsheet, Icons } from "@/components/ui";
+import { exportHippiusDBDataAsZip } from "@/app/lib/helpers/exportHippiusDB";
 import { toast } from "sonner";
 
 export interface ResetDataConfirmationProps {
@@ -26,7 +26,7 @@ const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
   const handleBackupData = async () => {
     setIsBackingUp(true);
     try {
-      const success = await exportWalletAsZip();
+      const success = await exportHippiusDBDataAsZip();
       if (success) {
         toast.success("Backup exported successfully.", { duration: 3000 });
       }

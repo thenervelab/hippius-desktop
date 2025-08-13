@@ -13,8 +13,8 @@ import {
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { toast } from "sonner";
-import NoNotificationsFound from "../../page-sections/notifications/NoNotificationsFound";
-import NoNotificationsEnabled from "../../page-sections/notifications/NoNotificationsEnabled";
+import NoNotificationsFound from "@/components/page-sections/notifications/NoNotificationsFound";
+import NoNotificationsEnabled from "@/components/page-sections/notifications/NoNotificationsEnabled";
 import NotificationMenuFooter from "./NotificationMenuFooter";
 import {
   settingsDialogOpenAtom,

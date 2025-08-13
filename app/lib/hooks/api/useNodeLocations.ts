@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { API_BASE_URL } from "../../constants";
+import { API_BASE_URL } from "@/lib/constants";
 
 export interface NodeMetric {
     miner_id: string;

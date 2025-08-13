@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React from "react";
-import { Icons } from "../../ui";
+import { Icons } from "@/components/ui";
 import { ShieldCheck } from "lucide-react";
 
 interface SendBalanceConfirmationDialogProps {

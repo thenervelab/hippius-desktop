@@ -9,7 +9,7 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { toast } from "sonner";
 import { REFERRAL_CODE_CONFIG } from "@/lib/config";
 import { useReferralLinks } from "@/app/lib/hooks/api/useReferralLinks";
-import { AbstractIconWrapper } from "../../ui";
+import { AbstractIconWrapper } from "@/components/ui";
 
 const ReferralLinkCard: React.FC = () => {
   const { links, loading, reload } = useReferralLinks();

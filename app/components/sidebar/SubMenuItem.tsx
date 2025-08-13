@@ -2,7 +2,7 @@ import React from "react";
 import Link from "next/link";
 import cn from "@/app/lib/utils/cn";
 import { SubMenuItemData } from "./NavData";
-import { Graphsheet, RevealTextLine } from "../ui";
+import { Graphsheet, RevealTextLine } from "@/components/ui";
 import { ArrowRight } from "lucide-react";
 import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "./sideBarAtoms";

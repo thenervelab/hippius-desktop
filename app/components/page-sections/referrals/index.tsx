@@ -4,11 +4,11 @@ import ReferralLinkCard from "./ReferralLinkaCard";
 import DetailsCard from "./RefferalCard";
 import ReferralHistoryTable from "./ReferralHistoryTable";
 import ReferralLinksTable from "./ReferralLinksTable";
-import DashboardTitleWrapper from "../../dashboard-title-wrapper";
+import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useReferralLinks } from "@/app/lib/hooks/api/useReferralLinks";
 import { useUserReferrals } from "@/app/lib/hooks/api/useUserReferrals";
 import { UserSquare, PieChart } from "lucide-react";
-import { WalletAdd } from "../../ui/icons";
+import { WalletAdd } from "@/components/ui/icons";
 
 const Referrals: React.FC = () => {
   const { data } = useUserReferrals();

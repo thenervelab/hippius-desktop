@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import Refresh from "../icons/Refresh";
+import Refresh from "@/components/ui/icons/Refresh";
 import { Loader } from "lucide-react";
 
 const RefreshButton: React.FC<{

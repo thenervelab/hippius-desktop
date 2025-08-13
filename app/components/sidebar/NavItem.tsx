@@ -1,6 +1,6 @@
 import Link from "next/link";
 import cn from "@/app/lib/utils/cn";
-import { Graphsheet, RevealTextLine } from "../ui";
+import { Graphsheet, RevealTextLine } from "@/components/ui";
 import { ChevronDown } from "lucide-react";
 import * as NavigationMenu from "@radix-ui/react-navigation-menu";
 import { SubMenuItemData } from "./NavData";

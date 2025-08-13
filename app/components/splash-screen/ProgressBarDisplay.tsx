@@ -1,5 +1,5 @@
 import { useAtomValue } from "jotai";
-import { ProgressBar } from "../progress-bar";
+import { ProgressBar } from "@/components/progress-bar";
 import { PHASE_CONTENT } from "./SplashContent";
 import { progressAtom } from "./atoms";
 

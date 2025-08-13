@@ -1,7 +1,7 @@
 import React, { useState } from "react";
-import { CardButton, Icons, RevealTextLine } from "../../ui";
-import { Zip } from "../../ui/icons";
-import { exportWalletAsZip } from "../../../lib/helpers/exportWallet";
+import { CardButton, Icons, RevealTextLine } from "@/components/ui";
+import { Zip } from "@/components/ui/icons";
+import { exportHippiusDBDataAsZip } from "@/app/lib/helpers/exportHippiusDB";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { InView } from "react-intersection-observer";
@@ -17,7 +17,7 @@ const BackupAppData: React.FC<ExportEncryptedSeedProps> = ({ className }) => {
   const handleExport = async () => {
     setIsExporting(true);
     try {
-      const success = await exportWalletAsZip();
+      const success = await exportHippiusDBDataAsZip();
       if (success) {
         toast.success("Backup saved.", { duration: 3000 });
       }

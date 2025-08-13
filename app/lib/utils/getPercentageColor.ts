@@ -1,4 +1,4 @@
-import { Rgb } from "../types";
+import { Rgb } from "@/lib/types";
 import { lerpBetweeenRGB } from "./lerp";
 
 export const getPercentageColor = (percentage: number, inverse?: boolean) => {

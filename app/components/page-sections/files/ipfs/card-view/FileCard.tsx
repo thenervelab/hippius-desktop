@@ -15,7 +15,7 @@ import {
 } from "@/lib/utils/fileTypeUtils";
 import { Folder2 } from "@/components/ui/icons";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { toBlobUrl } from "../files-table/VideoPlayer";
+import { toBlobUrl } from "@/components/page-sections/files/ipfs/files-table/VideoPlayer";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
 

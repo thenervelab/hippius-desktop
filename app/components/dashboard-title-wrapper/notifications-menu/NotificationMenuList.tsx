@@ -1,6 +1,6 @@
 import React from "react";
 import NotificationMenuItem from "./NotificationMenuItem";
-import { UiNotification } from "../../page-sections/notifications/types";
+import { UiNotification } from "@/components/page-sections/notifications/types";
 
 interface NotificationListProps {
   notifications: UiNotification[];

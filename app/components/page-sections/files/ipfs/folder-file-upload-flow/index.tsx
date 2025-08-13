@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Icons, CardButton, Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
-import FileDropzone from "../upload-files-flow/FileDropzone";
+import FileDropzone from "@/components/page-sections/files/ipfs/upload-files-flow/FileDropzone";
 import { readFileAsArrayBuffer } from "@/app/lib/hooks/useFilesUpload";
 import { getFolderPathArray } from "@/app/utils/folderPathUtils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";

@@ -13,7 +13,7 @@ import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
 
-import Ipfs from "../files/ipfs";
+import Ipfs from "@/components/page-sections/files/ipfs";
 import { getPrivateSyncPath } from "@/app/lib/utils/syncPathUtils";
 import { Icons } from "@/components/ui";
 

@@ -1,4 +1,4 @@
-import { NodeMetric } from "../types";
+import { NodeMetric } from "@/lib/types";
 
 export const getLocationText = (node: NodeMetric) => {
   const locationDetails = { city: "", country: "" };

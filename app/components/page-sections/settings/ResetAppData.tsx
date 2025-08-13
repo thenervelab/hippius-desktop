@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { CardButton, Icons, RevealTextLine } from "../../ui";
-import { Trash } from "../../ui/icons";
+import { CardButton, Icons, RevealTextLine } from "@/components/ui";
+import { Trash } from "@/components/ui/icons";
 import { InView } from "react-intersection-observer";
 import ResetDataConfirmation from "./ResetDataConfirmation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { AppVersion, RevealTextLine } from "../ui";
+import { AppVersion, RevealTextLine } from "@/components/ui";
 import Link from "next/link";
 import AccessKeyForm from "./AccessKeyForm";
 import SetNewPassCodeForm from "./signup/SetNewPasscodeForm";

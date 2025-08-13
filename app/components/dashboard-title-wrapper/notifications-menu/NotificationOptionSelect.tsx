@@ -1,6 +1,6 @@
 import * as Menubar from "@radix-ui/react-menubar";
 import ActiveTabBg from "@/app/components/ui/tabs/ActiveTabBg";
-import { Icons } from "../../ui";
+import { Icons } from "@/components/ui";
 
 interface Option {
   label: string;
@@ -47,8 +47,8 @@ const NotificationOptionSelect: React.FC<NotificationOptionSelectProps> = ({
               <Menubar.Item
                 key={opt.value}
                 className={`pl-6 pr-3 py-2 cursor-pointer text-xs leading-[18px] font-medium hover:text-primary-50 ${value === opt.value
-                    ? "text-primary-50 border-l border-primary-50"
-                    : "text-grey-70"
+                  ? "text-primary-50 border-l border-primary-50"
+                  : "text-grey-70"
                   }`}
                 onSelect={() => onChange(opt.value)}
               >

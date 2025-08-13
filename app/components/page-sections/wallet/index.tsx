@@ -3,11 +3,11 @@
 import React, { useState, useEffect } from "react";
 
 import WalletBalanceWidgetWithGraph from "./WalletBalanceWidgetWithGraph";
-import DashboardTitleWrapper from "../../dashboard-title-wrapper";
+import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import TransactionHistoryTable from "./TransactionHistoryTable";
 import HippiusBalance from "./HippiusBalance";
-import TabList, { TabOption } from "../../ui/tabs/TabList";
-import { CardButton, Icons } from "../../ui";
+import TabList, { TabOption } from "@/components/ui/tabs/TabList";
+import { CardButton, Icons } from "@/components/ui";
 import { PlusCircle } from "lucide-react";
 import AddNewAddressDialog from "./AddNewAddressDialog";
 import { getContacts } from "@/app/lib/helpers/addressBookDb";

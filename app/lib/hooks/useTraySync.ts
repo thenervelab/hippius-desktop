@@ -7,7 +7,7 @@ import { resolveResource } from "@tauri-apps/api/path";
 import {
   checkForUpdates,
   getAvailableUpdate,
-} from "../../components/updater/checkForUpdates";
+} from "@/components/updater/checkForUpdates";
 
 const TRAY_ID = "hippius-tray";
 const QUIT_ID = "quit";

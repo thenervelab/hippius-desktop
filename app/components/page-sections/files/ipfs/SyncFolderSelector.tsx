@@ -4,7 +4,7 @@ import { BackButton, CardButton, Icons } from "@/components/ui";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { desktopDir, documentDir, downloadDir } from "@tauri-apps/api/path";
-import SectionHeader from "../../settings/SectionHeader";
+import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";

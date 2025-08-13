@@ -5,7 +5,7 @@ import { Icons, CardButton, Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
 import FileDropzone from "./FileDropzone";
 import { useSetAtom } from "jotai";
-import { insufficientCreditsDialogOpenAtom } from "../atoms/query-atoms";
+import { insufficientCreditsDialogOpenAtom } from "@/components/page-sections/files/ipfs/atoms/query-atoms";
 import { Trash2, Check, AlertCircle } from "lucide-react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { invoke } from "@tauri-apps/api/core";

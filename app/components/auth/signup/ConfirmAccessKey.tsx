@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
-import { BackButton, Button, Icons, Input, RevealTextLine } from "../../ui";
-import { Eye, EyeOff, Key } from "../../ui/icons";
+import { BackButton, Button, Icons, Input, RevealTextLine } from "@/components/ui";
+import { Eye, EyeOff, Key } from "@/components/ui/icons";
 import { InView } from "react-intersection-observer";
 
 interface ConfirmAccessKeyProps {

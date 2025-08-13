@@ -2,8 +2,8 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React, { useState } from "react";
 import { Label } from "@/components/ui/label";
-import DialogContainer from "../../ui/DialogContainer";
-import { AbstractIconWrapper, CardButton, Icons, Input } from "../../ui";
+import DialogContainer from "@/components/ui/DialogContainer";
+import { AbstractIconWrapper, CardButton, Icons, Input } from "@/components/ui";
 import { AlertCircle } from "lucide-react";
 import AddressSelect from "./AddressSelect";
 

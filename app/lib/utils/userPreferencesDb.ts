@@ -1,4 +1,4 @@
-import { initHippiusDesktopDB, saveBytes } from "../helpers/hippiusDesktopDB";
+import { initHippiusDesktopDB, saveBytes } from "@/lib/helpers/hippiusDesktopDB";
 
 type ViewMode = "list" | "card";
 

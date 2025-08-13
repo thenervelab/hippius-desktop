@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { Header, flexRender } from "@tanstack/react-table";
-import { ChevronDown } from "../icons";
+import { ChevronDown } from "@/components/ui/icons";
 
 export interface ThProps<TData, TValue>
   extends React.ThHTMLAttributes<HTMLTableCellElement> {

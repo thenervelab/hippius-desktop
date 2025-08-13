@@ -4,13 +4,13 @@ import { useState } from "react";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Icons, Input, RevealTextLine } from "../ui";
-import { Eye, EyeOff, Key } from "../ui/icons";
+import { Button, Icons, Input, RevealTextLine } from "@/components/ui";
+import { Eye, EyeOff, Key } from "@/components/ui/icons";
 import { InView } from "react-intersection-observer";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useRouter } from "next/navigation";
 import { useAtomValue } from "jotai";
-import { phaseAtom } from "../splash-screen/atoms";
+import { phaseAtom } from "@/components/splash-screen/atoms";
 
 const LoginWithPassCodeForm = () => {
   const [error, setError] = useState<string | null>(null);
@@ -124,8 +124,8 @@ const LoginWithPassCodeForm = () => {
                     {logginIn
                       ? "Logging in..."
                       : phase !== "ready"
-                      ? "Initializing..."
-                      : "Login"}
+                        ? "Initializing..."
+                        : "Login"}
                   </Button>
                 </RevealTextLine>
               </div>

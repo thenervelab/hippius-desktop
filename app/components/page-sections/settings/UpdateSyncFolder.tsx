@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { InView } from "react-intersection-observer";
 import SectionHeader from "./SectionHeader";
-import SyncFolderSelector from "../files/ipfs/SyncFolderSelector";
+import SyncFolderSelector from "@/components/page-sections/files/ipfs/SyncFolderSelector";
 import {
   getPrivateSyncPath,
   getPublicSyncPath,
   setPrivateSyncPath,
   setPublicSyncPath
 } from "@/app/lib/utils/syncPathUtils";
-import { CardButton, Icons, RevealTextLine } from "../../ui";
+import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 

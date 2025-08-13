@@ -1,4 +1,4 @@
-import { Account } from "../types";
+import { Account } from "@/lib/types";
 import { formatBalance } from "./formatters/formatBalance";
 
 export interface ChartPoint {

@@ -1,5 +1,5 @@
 import cn from "@/app/lib/utils/cn";
-import { RevealTextLine } from "../ui";
+import { RevealTextLine } from "@/components/ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "./sideBarAtoms";

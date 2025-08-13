@@ -10,7 +10,7 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 import type { Bytes } from "@polkadot/types";
 
-import { decodeBytesToString } from "../../utils/formatters/decodeByteToString";
+import { decodeBytesToString } from "@/lib/utils/formatters/decodeByteToString";
 
 export type ReferralLink = {
   code: string;

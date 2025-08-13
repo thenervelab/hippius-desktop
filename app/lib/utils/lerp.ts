@@ -1,4 +1,4 @@
-import { Rgb } from "../types/rgb";
+import { Rgb } from "@/lib/types/rgb";
 
 // Linearly interpolate between 2 values given a third value between 0 -> 1 as its anchor
 export const lerp = (v0: number, v1: number, t: number): number => {

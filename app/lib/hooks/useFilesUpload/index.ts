@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import { useUserIpfsFiles } from "../use-user-ipfs-files";
+import { useUserIpfsFiles } from "@/app/lib/hooks/use-user-ipfs-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom } from "jotai";
 import { uploadProgressAtom } from "@/app/components/page-sections/files/ipfs/atoms/query-atoms";

@@ -1,5 +1,5 @@
-import { FileObject } from "../hooks/api/useFilesSize";
-import { Account } from "../types";
+import { FileObject } from "@/lib/hooks/api/useFilesSize";
+import { Account } from "@/lib/types";
 
 /**
  * Transforms files data by aggregating file sizes for the same date

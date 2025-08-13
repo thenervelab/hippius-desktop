@@ -1,4 +1,4 @@
-import { AbstractIconWrapper } from "../../ui";
+import { AbstractIconWrapper } from "@/components/ui";
 import { IconComponent } from "@/app/lib/types";
 
 interface DetailsCardProps {

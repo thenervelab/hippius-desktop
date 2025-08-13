@@ -7,8 +7,8 @@ import {
   markAllRead,
   getEnabledNotificationTypes,
 } from "@/app/lib/helpers/notificationsDb";
-import { UiNotification } from "../../page-sections/notifications/types";
-import { Icons } from "../../ui";
+import { UiNotification } from "@/components/page-sections/notifications/types";
+import { Icons } from "@/components/ui";
 import { iconMap } from ".";
 import { unreadCount } from "@/lib/helpers/notificationsDb";
 
@@ -57,10 +57,10 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
   const filteredNotifications =
     enabledTypes.length > 0
       ? mapped.filter(
-          (notification) =>
-            enabledTypes.includes(notification.type) ||
-            notification.type === "Hippius"
-        )
+        (notification) =>
+          enabledTypes.includes(notification.type) ||
+          notification.type === "Hippius"
+      )
       : mapped;
 
   set(notificationsAtom, filteredNotifications);

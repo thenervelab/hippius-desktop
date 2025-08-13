@@ -1,4 +1,4 @@
-import { Icons } from "../../ui";
+import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 
 type IpfsInfo = {

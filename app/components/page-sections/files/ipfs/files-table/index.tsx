@@ -38,8 +38,8 @@ import BlockTimestamp from "@/app/components/ui/block-timestamp";
 import { Icons } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { FileViewSharedState } from "../shared/FileViewUtils";
-import FileDetailsDialogContent from "../file-details-dialog-content";
+import { FileViewSharedState } from "@/components/page-sections/files/ipfs/shared/FileViewUtils";
+import FileDetailsDialogContent from "@/components/page-sections/files/ipfs/file-details-dialog-content";
 import SidebarDialog from "@/app/components/ui/SidebarDialog";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;

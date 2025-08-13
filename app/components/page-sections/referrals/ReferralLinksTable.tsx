@@ -26,7 +26,7 @@ import {
   ReferralLink,
   useReferralLinks
 } from "@/app/lib/hooks/api/useReferralLinks";
-import { Link } from "../../ui/icons";
+import { Link } from "@/components/ui/icons";
 
 const columnHelper = createColumnHelper<ReferralLink>();
 

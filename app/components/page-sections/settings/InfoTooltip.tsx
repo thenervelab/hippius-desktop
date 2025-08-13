@@ -1,6 +1,6 @@
 import React, { ReactNode } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import * as Icons from "../../ui/icons";
+import * as Icons from "@/components/ui/icons";
 
 interface InfoTooltipProps {
   children: ReactNode;

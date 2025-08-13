@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useEffect, useState, useMemo } from "react";
-import { Icons } from "../../ui";
+import { Icons } from "@/components/ui";
 import * as Switch from "@radix-ui/react-switch";
-import DashboardTitleWrapper from "../../dashboard-title-wrapper";
-import TabList from "../../ui/tabs/TabList";
+import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
+import TabList from "@/components/ui/tabs/TabList";
 import NotificationList from "./NotificationList";
 import NotificationDetailView from "./NotificationDetailView";
 import NoNotificationsFound from "./NoNotificationsFound";

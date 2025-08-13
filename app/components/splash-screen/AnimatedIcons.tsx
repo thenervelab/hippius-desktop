@@ -1,7 +1,7 @@
 import React from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { InView } from "react-intersection-observer";
-import { RevealTextLine } from "../ui";
+import { RevealTextLine } from "@/components/ui";
 
 type AnimatedProgressIconProps = {
   icon: React.ReactNode;

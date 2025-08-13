@@ -5,14 +5,14 @@ import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Icons, Input, RevealTextLine } from "../../ui";
-import { Eye, EyeOff, Key, OctagonAlert } from "../../ui/icons";
+import { Button, Icons, Input, RevealTextLine } from "@/components/ui";
+import { Eye, EyeOff, Key, OctagonAlert } from "@/components/ui/icons";
 import { InView } from "react-intersection-observer";
 import { encryptMnemonic, hashPasscode } from "@/app/lib/helpers/crypto";
 import { clearHippiusDesktopDB, saveWallet } from "@/app/lib/helpers/hippiusDesktopDB";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useAtomValue } from "jotai";
-import { phaseAtom } from "../../splash-screen/atoms";
+import { phaseAtom } from "@/components/splash-screen/atoms";
 import {
   addNotification,
   isFirstTime,

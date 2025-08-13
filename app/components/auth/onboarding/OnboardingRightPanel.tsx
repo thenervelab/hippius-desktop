@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import { ONBOARDING_SCREENS } from "./onboardingData";
 
-import HippiusHeader from "../HippiusHeader";
+import HippiusHeader from "@/components/auth/HippiusHeader";
 import { InView } from "react-intersection-observer";
 import ProgressBar from "./ProgressBar";
 

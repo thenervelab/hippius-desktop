@@ -1,9 +1,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React from "react";
-import DialogContainer from "../../ui/DialogContainer";
-import { AbstractIconWrapper, CardButton, Icons } from "../../ui";
+import DialogContainer from "@/components/ui/DialogContainer";
+import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import QRCode from "react-qr-code";
-import CopyText from "../../ui/copy-text";
+import CopyText from "@/components/ui/copy-text";
 
 export interface ReceiveBalanceDialogProps {
   open: boolean;

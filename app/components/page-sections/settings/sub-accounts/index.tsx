@@ -13,7 +13,7 @@ import GenerateNewAccountModal from "./GenerateNewAccountModal";
 
 import { ConfirmModal, Icons } from "@/app/components/ui";
 import { useSubAccounts } from "@/app/lib/hooks/api/useSubAccounts";
-import SectionHeader from "../SectionHeader";
+import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import {
   saveSubAccountSeed,
   hasSubAccountSeed,

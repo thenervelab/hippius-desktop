@@ -3,7 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import JSZip from "jszip";
 import { DB_FILENAME } from "./hippiusDesktopDB";
 
-export async function exportWalletAsZip(): Promise<boolean> {
+export async function exportHippiusDBDataAsZip(): Promise<boolean> {
   try {
     // Read the wallet database file
     const dbBytes = await readFile(DB_FILENAME, {

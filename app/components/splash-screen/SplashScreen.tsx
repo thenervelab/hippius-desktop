@@ -1,5 +1,5 @@
 import React from "react";
-import { AbstractCity, Graphsheet, RevealTextLine, Icons } from "../ui";
+import { AbstractCity, Graphsheet, RevealTextLine, Icons } from "@/components/ui";
 import { InView } from "react-intersection-observer";
 import Link from "next/link";
 import AnimatedRings from "./AnimatedRings";

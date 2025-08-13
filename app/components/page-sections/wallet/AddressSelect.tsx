@@ -2,7 +2,7 @@ import * as Menubar from "@radix-ui/react-menubar";
 import React, { useEffect, useState, useRef, KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
 import { getContacts } from "@/app/lib/helpers/addressBookDb";
-import { Icons } from "../../ui";
+import { Icons } from "@/components/ui";
 
 interface Address {
   id: number;
