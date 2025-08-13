@@ -27,11 +27,20 @@ const UpdateSyncFolder: React.FC = () => {
     (async () => {
       try {
         const privatefolderPath = await getPrivateSyncPath();
-        const publicfolderPath = await getPublicSyncPath();
         setSelectedPrivateFolderPath(privatefolderPath);
         setSelectedPrivateFolderName(
           privatefolderPath.split(/[\\/]/).pop() || ""
         );
+      } catch {
+        console.error("Failed to load sync folder");
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const publicfolderPath = await getPublicSyncPath();
         setSelectedPublicFolderPath(publicfolderPath);
         setSelectedPublicFolderName(
           publicfolderPath.split(/[\\/]/).pop() || ""

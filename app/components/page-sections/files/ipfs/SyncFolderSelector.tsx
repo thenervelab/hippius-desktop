@@ -46,7 +46,11 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!initialPath) return;
+    if (!initialPath) {
+      setSelected(null)
+      setSelected(null)
+      return;
+    }
     const key = (Object.keys(suggested) as Array<keyof typeof suggested>).find(
       (k) => suggested[k] === initialPath
     );
