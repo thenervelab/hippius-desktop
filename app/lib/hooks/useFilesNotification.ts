@@ -68,7 +68,7 @@ export function useFilesNotification() {
           await addNotification({
             notificationType: "Files",
             notificationSubtype: notificationSubtype,
-            notificationTitleText: "File Sync Complete!",
+            notificationTitleText: "Files Sync Complete!",
             notificationDescription: `All your files have been successfully synchronized. Your files are now up to date.`,
             notificationLinkText: "View Files",
             notificationLink: "/files",
