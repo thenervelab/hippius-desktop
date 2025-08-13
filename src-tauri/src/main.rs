@@ -27,7 +27,7 @@ use commands::ipfs_commands::{
     remove_file_from_public_folder, add_file_to_public_folder, remove_file_from_private_folder, add_file_to_private_folder, add_folder_to_public_folder,
     remove_folder_from_public_folder, add_folder_to_private_folder, remove_folder_from_private_folder
 };
-use commands::accounts::{create_encryption_key, get_encryption_keys, import_key};
+use commands::accounts::{create_encryption_key, get_encryption_keys, import_key, reset_app};
 use utils::file_operations::delete_and_unpin_file_by_name;
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
 use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_tauri, get_wss_endpoint, update_wss_endpoint_command, test_wss_endpoint_command};
@@ -93,6 +93,7 @@ fn main() {
             list_folder_contents,
             download_and_decrypt_folder,
             remove_file_from_public_folder,
+            reset_app,
             add_file_to_public_folder,
             remove_file_from_private_folder,
             add_file_to_private_folder,
