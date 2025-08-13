@@ -120,7 +120,7 @@ export async function hasWalletRecord(): Promise<boolean> {
 }
 
 /** Wipe the DB (recreate empty schema) */
-export async function clearWalletDb() {
+export async function clearHippiusDesktopDB() {
   const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
   const db = new SQL.Database();
   db.run(TABLE_SCHEMA);

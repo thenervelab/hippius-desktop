@@ -7,7 +7,7 @@ import { AlertCircle } from "lucide-react";
 import UpdateSuccessDialog from "../../../update-success-dialog";
 import { Eye, EyeOff } from "@/components/ui/icons";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { getWalletRecord, updateWallet } from "@/app/lib/helpers/walletDb";
+import { getWalletRecord, updateWallet } from "@/app/lib/helpers/hippiusDesktopDB";
 import {
   hashPasscode,
   decryptMnemonic,

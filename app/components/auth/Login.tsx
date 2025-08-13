@@ -5,7 +5,7 @@ import { AppVersion, RevealTextLine } from "../ui";
 import Link from "next/link";
 import AccessKeyForm from "./AccessKeyForm";
 import SetNewPassCodeForm from "./signup/SetNewPasscodeForm";
-import { hasWalletRecord } from "@/app/lib/helpers/walletDb";
+import { hasWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import LoginWithPassCodeForm from "./LoginWithPasscodeForm";
 import AuthLayout from "./AuthLayout";
 import { openUrl } from "@tauri-apps/plugin-opener";

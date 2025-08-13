@@ -179,7 +179,7 @@ export async function hasWalletRecord(): Promise<boolean> {
   return rows.length > 0 && rows[0].values.length > 0;
 }
 
-export async function clearWalletDb() {
+export async function clearHippiusDesktopDB() {
   const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
   const db = new SQL.Database();
   db.run(TABLE_SCHEMA);

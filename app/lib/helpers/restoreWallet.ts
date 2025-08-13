@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import { hashPasscode, decryptMnemonic } from "./crypto";
 import { isMnemonicValid } from "./validateMnemonic";
-import { saveBytes } from "./walletDb";
+import { saveBytes } from "./hippiusDesktopDB";
 import initSqlJs from "sql.js/dist/sql-wasm.js";
 
 export async function restoreWalletFromZip(

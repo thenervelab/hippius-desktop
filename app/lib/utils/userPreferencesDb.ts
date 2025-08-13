@@ -1,4 +1,4 @@
-import { initHippiusDesktopDB, saveBytes } from "../helpers/walletDb";
+import { initHippiusDesktopDB, saveBytes } from "../helpers/hippiusDesktopDB";
 
 type ViewMode = "list" | "card";
 

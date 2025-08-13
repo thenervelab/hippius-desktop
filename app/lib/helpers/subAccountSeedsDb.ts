@@ -1,4 +1,4 @@
-import { initHippiusDesktopDB, saveBytes, getWalletRecord } from "./walletDb";
+import { initHippiusDesktopDB, saveBytes, getWalletRecord } from "./hippiusDesktopDB";
 import { encryptMnemonic, decryptMnemonic, hashPasscode } from "./crypto";
 
 const TABLE_SCHEMA = `

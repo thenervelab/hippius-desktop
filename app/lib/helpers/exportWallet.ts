@@ -1,7 +1,7 @@
 import { readFile, writeFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { save } from "@tauri-apps/plugin-dialog";
 import JSZip from "jszip";
-import { DB_FILENAME } from "./walletDb";
+import { DB_FILENAME } from "./hippiusDesktopDB";
 
 export async function exportWalletAsZip(): Promise<boolean> {
   try {

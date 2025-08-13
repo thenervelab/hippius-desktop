@@ -9,7 +9,7 @@ import { Button, Icons, Input, RevealTextLine } from "../../ui";
 import { Eye, EyeOff, Key, OctagonAlert } from "../../ui/icons";
 import { InView } from "react-intersection-observer";
 import { encryptMnemonic, hashPasscode } from "@/app/lib/helpers/crypto";
-import { clearWalletDb, saveWallet } from "@/app/lib/helpers/walletDb";
+import { clearHippiusDesktopDB, saveWallet } from "@/app/lib/helpers/hippiusDesktopDB";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useAtomValue } from "jotai";
 import { phaseAtom } from "../../splash-screen/atoms";
@@ -98,7 +98,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
       return;
     }
     setLoggingIn(true);
-    await clearWalletDb();
+    await clearHippiusDesktopDB();
     if (await isFirstTime()) {
       const notifications = await listNotifications(1);
       if (notifications.length === 0) {
@@ -117,7 +117,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
       const encryptedMnemonic = encryptMnemonic(mnemonic, passCode.newPassCode);
       const passcodeHash = hashPasscode(passCode.newPassCode);
 
-      // Store in walletDb (SQLite/sql.js)
+      // Store in hippiusDesktopDB (SQLite/sql.js)
       await saveWallet(encryptedMnemonic, passcodeHash);
       await setSession(mnemonic);
       await router.push("/");
@@ -184,7 +184,7 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                           type={showPasscode ? "text" : "password"}
                           value={
                             passCode[
-                              item?.name as "newPassCode" | "confirmPassCode"
+                            item?.name as "newPassCode" | "confirmPassCode"
                             ]
                           }
                           onChange={(e) =>
@@ -257,8 +257,8 @@ const SetNewPassCodeForm: React.FC<PassCodeFormProps> = ({ mnemonic }) => {
                     {logginIn
                       ? "Creating Account..."
                       : phase !== "ready"
-                      ? "Initializing..."
-                      : "Create Account"}
+                        ? "Initializing..."
+                        : "Create Account"}
                   </Button>
                 </RevealTextLine>
               </div>

@@ -1,5 +1,5 @@
 import type initSqlJsType from "sql.js/dist/sql-wasm.js";
-import { initHippiusDesktopDB, saveBytes } from "./walletDb";
+import { initHippiusDesktopDB, saveBytes } from "./hippiusDesktopDB";
 
 /* ── schemas ─────────────────────────────── */
 

@@ -19,7 +19,7 @@ import {
   hasSubAccountSeed,
   deleteSubAccountSeed,
 } from "@/app/lib/helpers/subAccountSeedsDb";
-import { getWalletRecord } from "@/app/lib/helpers/walletDb";
+import { getWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import SeedPasscodeModal from "./SeedPasscodeModal";
 import { generateMnemonic } from "@/app/lib/helpers/mnemonic";
