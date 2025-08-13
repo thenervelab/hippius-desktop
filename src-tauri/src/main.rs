@@ -49,6 +49,7 @@ fn main() {
             sync: Mutex::new(SyncState::default()),
         }))
         // Remove tauri_plugin_process unless you specifically need it
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
