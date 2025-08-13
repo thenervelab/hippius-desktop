@@ -33,7 +33,7 @@ use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemo
 use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_tauri, get_wss_endpoint, update_wss_endpoint_command, test_wss_endpoint_command};
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
-use tauri::{Builder, Manager};
+use tauri::{Builder, Manager, AppHandle};
 use tokio::sync::Mutex;
 use std::sync::Arc;
 
@@ -73,7 +73,6 @@ fn main() {
             read_file,
             get_sync_path,
             set_sync_path,
-            start_user_profile_sync_tauri,
             start_folder_sync_tauri,
             start_public_folder_sync_tauri,
             cleanup_sync,
