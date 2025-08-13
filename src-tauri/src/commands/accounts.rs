@@ -2,6 +2,7 @@ use crate::utils::accounts::{create_and_store_encryption_key, list_encryption_ke
 use base64;
 use crate::folder_sync;
 use crate::public_folder_sync;
+use crate::constants::substrate::WSS_ENDPOINT;
 
 #[tauri::command]
 pub async fn create_encryption_key() -> Result<(), String> {
@@ -61,7 +62,7 @@ pub async fn reset_app() -> Result<(), String> {
             // Continue to next table even if one fails, to attempt a partial reset.
         }
     }
-    
+
     println!("[Reset App] All tables cleared.");
 
     // Clear in-memory state for public sync
@@ -84,6 +85,22 @@ pub async fn reset_app() -> Result<(), String> {
         println!("[Reset App] Cleared private RECENTLY_UPLOADED.");
     }
 
-    println!("[Reset App] App reset completed. Please restart the application.");
+    println!("[Reset App] Restoring default WSS endpoint...");
+    if let Err(e) = sqlx::query("INSERT OR REPLACE INTO wss_endpoint (id, endpoint) VALUES (1, ?)")
+        .bind(WSS_ENDPOINT)
+        .execute(pool)
+        .await
+    {
+        eprintln!("[Reset App] Failed to restore default WSS endpoint: {}", e);
+    }
+
+    println!("[Reset App] Creating new initial encryption key...");
+    if let Err(e) = crate::utils::accounts::create_and_store_encryption_key().await {
+        eprintln!("[Reset App] Failed to create initial encryption key: {}", e);
+    } else {
+        println!("[Reset App] Initial encryption key created successfully.");
+    }
+
+    println!("[Reset App] App reset completed.");
     Ok(())
 }
