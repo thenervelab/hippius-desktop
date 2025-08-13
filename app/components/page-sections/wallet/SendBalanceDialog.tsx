@@ -2,7 +2,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React, { useState } from "react";
 import { Label } from "@/components/ui/label";
-import DialogContainer from "../../ui/dialog-container";
+import DialogContainer from "../../ui/DialogContainer";
 import { AbstractIconWrapper, CardButton, Icons, Input } from "../../ui";
 import { AlertCircle } from "lucide-react";
 import AddressSelect from "./AddressSelect";
@@ -230,9 +230,8 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                     type="text"
                     value={amount}
                     onChange={handleAmountChange}
-                    className={`pr-24 border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${
-                      errors.amount ? "border-error-50" : ""
-                    }`}
+                    className={`pr-24 border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${errors.amount ? "border-error-50" : ""
+                      }`}
                     disabled={loading}
                   />
                   <div className="absolute right-3 top-[29px] -translate-y-1/2 flex items-center gap-2 text-base font-medium">

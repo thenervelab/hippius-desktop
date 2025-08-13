@@ -6,7 +6,7 @@ import WalletBalanceWidgetWithGraph from "./WalletBalanceWidgetWithGraph";
 import DashboardTitleWrapper from "../../dashboard-title-wrapper";
 import TransactionHistoryTable from "./TransactionHistoryTable";
 import HippiusBalance from "./HippiusBalance";
-import TabList, { TabOption } from "../../ui/tabs/tab-list";
+import TabList, { TabOption } from "../../ui/tabs/TabList";
 import { CardButton, Icons } from "../../ui";
 import { PlusCircle } from "lucide-react";
 import AddNewAddressDialog from "./AddNewAddressDialog";

@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React from "react";
-import DialogContainer from "../../ui/dialog-container";
+import DialogContainer from "../../ui/DialogContainer";
 import { AbstractIconWrapper, CardButton, Icons } from "../../ui";
 import QRCode from "react-qr-code";
 import CopyText from "../../ui/copy-text";

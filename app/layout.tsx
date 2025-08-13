@@ -8,7 +8,7 @@ import NextTopLoader from "nextjs-toploader";
 import { WalletAuthProvider } from "./lib/wallet-auth-context";
 import { metadata as appMetadata } from "./metadata";
 import { Suspense } from "react";
-import PageLoader from "@/components/page-loader";
+import PageLoader from "@/app/components/PageLoader";
 import SplashWrapper from "./components/splash-screen";
 import UpdateDialogWrapper from "./components/updater/UpdateDialogWrapper";
 

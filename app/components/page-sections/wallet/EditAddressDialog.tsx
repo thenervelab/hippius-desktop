@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React, { useState, useEffect } from "react";
 import { Label } from "@/components/ui/label";
-import DialogContainer from "../../ui/dialog-container";
+import DialogContainer from "../../ui/DialogContainer";
 import { AbstractIconWrapper, CardButton, Icons, Input } from "../../ui";
 import { AlertCircle } from "lucide-react";
 import { isAddress } from "@polkadot/util-crypto";
@@ -150,9 +150,8 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
                 type="text"
                 value={name}
                 onChange={handleNameChange}
-                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${
-                  errors.name ? "border-error-50" : ""
-                }`}
+                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${errors.name ? "border-error-50" : ""
+                  }`}
                 disabled={loading}
               />
               {errors.name && (
@@ -177,9 +176,8 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
                 type="text"
                 value={address}
                 onChange={handleAddressChange}
-                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${
-                  errors.address ? "border-error-50" : ""
-                }`}
+                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${errors.address ? "border-error-50" : ""
+                  }`}
                 disabled={loading}
               />
               {errors.address && (

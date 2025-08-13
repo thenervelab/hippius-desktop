@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Edit, MoreVertical, Trash } from "lucide-react";
 import { Loader2 } from "lucide-react";
 import { Icons } from "@/app/components/ui";
-import TableActionMenu from "@/components/ui/alt-table/table-action-menu";
+import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import { toast } from "sonner";
 import { deleteContact } from "@/app/lib/helpers/addressBookDb";
 import EditAddressDialog from "./EditAddressDialog";

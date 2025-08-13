@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React, { useState } from "react";
 import { ArrowLeft } from "lucide-react";
-import DialogContainer from "../../ui/dialog-container";
+import DialogContainer from "../../ui/DialogContainer";
 import { CardButton, Graphsheet, Icons } from "../../ui";
 import { exportWalletAsZip } from "../../../lib/helpers/exportWallet";
 import { toast } from "sonner";

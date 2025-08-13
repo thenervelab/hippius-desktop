@@ -1,5 +1,5 @@
-import { SubMenuItemData } from "./nav-data";
-import SubMenuItem from "./sub-menu-item";
+import { SubMenuItemData } from "./NavData";
+import SubMenuItem from "./SubMenuItem";
 
 interface SubMenuListProps {
   items: SubMenuItemData[];

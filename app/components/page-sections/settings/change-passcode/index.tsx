@@ -4,7 +4,7 @@ import { CardButton, Icons, Input } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
 import { PASSWORD_FIELDS } from "./PasscodeFieldsContent";
 import { AlertCircle } from "lucide-react";
-import UpdateSuccessDialog from "../../../update-success-dialog";
+import UpdateSuccessDialog from "../../../UpdateSuccessDialog";
 import { Eye, EyeOff } from "@/components/ui/icons";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getWalletRecord, updateWallet } from "@/app/lib/helpers/hippiusDesktopDB";

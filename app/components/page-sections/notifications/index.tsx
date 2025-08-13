@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import { Icons } from "../../ui";
 import * as Switch from "@radix-ui/react-switch";
 import DashboardTitleWrapper from "../../dashboard-title-wrapper";
-import TabList from "../../ui/tabs/tab-list";
+import TabList from "../../ui/tabs/TabList";
 import NotificationList from "./NotificationList";
 import NotificationDetailView from "./NotificationDetailView";
 import NoNotificationsFound from "./NoNotificationsFound";
@@ -150,17 +150,17 @@ const Notifications = () => {
 
   const detail = selected
     ? {
-        id: selected.id,
-        icon: selected.icon,
-        type: selected.type,
-        title: selected.title ?? "",
-        description: selected.description ?? "",
-        time: selected.time,
-        timestamp: selected.timestamp,
-        actionText: selected.buttonText,
-        actionLink: selected.buttonLink,
-        unread: selected.unread,
-      }
+      id: selected.id,
+      icon: selected.icon,
+      type: selected.type,
+      title: selected.title ?? "",
+      description: selected.description ?? "",
+      time: selected.time,
+      timestamp: selected.timestamp,
+      actionText: selected.buttonText,
+      actionLink: selected.buttonLink,
+      unread: selected.unread,
+    }
     : null;
 
   const handleAllRead = async () => {

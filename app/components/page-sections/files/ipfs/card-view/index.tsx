@@ -16,14 +16,14 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
-import TableActionMenu from "@/components/ui/alt-table/table-action-menu";
+import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import * as TableModule from "@/components/ui/alt-table";
 import { useRouter } from "next/navigation";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { FileViewSharedState } from "../shared/file-view-utils";
+import { FileViewSharedState } from "../shared/FileViewUtils";
 import FileDetailsDialogContent from "../file-details-dialog-content";
-import SidebarDialog from "@/app/components/ui/sidebar-dialog";
+import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
 
