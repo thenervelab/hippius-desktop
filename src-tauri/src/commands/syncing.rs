@@ -59,6 +59,7 @@ pub async fn initialize_sync(
 
 #[tauri::command]
 pub async fn cleanup_sync(app: tauri::AppHandle) -> Result<(), String> {
+    println!("Ressting app");
     let state = app.state::<Arc<AppState>>();
     let mut sync_state = state.sync.lock().await;
     

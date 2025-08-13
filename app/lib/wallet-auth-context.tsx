@@ -50,7 +50,13 @@ export function WalletAuthProvider({
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
   const syncInitialized = useRef(false);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      await invoke("cleanup_sync");
+    } catch (error) {
+      console.error("Failed to cleanup sync on logout:", error);
+    }
+  
     setMnemonic(null);
     setPolkadotAddress(null);
     setWalletManager(null);
@@ -67,20 +73,6 @@ export function WalletAuthProvider({
       logout();
     }, INACTIVITY_TIMEOUT);
   }, [logout]);
-
-  // close previous syncing operations
-  useEffect(() => {
-    const initializeCleanup = async () => {
-      try {
-        await invoke("cleanup_sync");
-      } catch (error) {
-        console.error("Failed to cleanup sync on mount:", error);
-      }
-    };
-
-    initializeCleanup();
-
-  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) {
