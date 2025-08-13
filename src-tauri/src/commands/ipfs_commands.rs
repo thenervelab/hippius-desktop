@@ -29,6 +29,9 @@ use crate::utils::file_operations::sanitize_name;
 use rayon::prelude::*;
 use crate::utils::folder_tree::FolderNode;
 use std::collections::HashMap;
+use tauri::{AppHandle, Manager};
+use crate::events::AppEvent;
+use tauri::Emitter;
 
 // Helper function to format file sizes
 fn format_file_size(size_bytes: usize) -> String {
@@ -2722,6 +2725,7 @@ pub async fn remove_file_from_public_folder(
 
 #[tauri::command]
 pub async fn encrypt_and_upload_file_sync(
+    app_handle: AppHandle,
     account_id: String,
     file_path: String,
     seed_phrase: String,
@@ -2732,19 +2736,35 @@ pub async fn encrypt_and_upload_file_sync(
     let k = DEFAULT_K;
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE;
-
+    let app_handle_clone = app_handle.clone();  // Clone for use in closure
     let file_path_p = Path::new(&file_path);
     let file_name = file_path_p
         .file_name()
         .and_then(|s| s.to_str())
-        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?
+        .ok_or_else(|| {
+            let err_msg = "Invalid file path, cannot extract file name".to_string();
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "File Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
+            err_msg
+        })?
         .to_string();
-
 
     let (file_data, original_file_hash, encrypted_size, file_id, shards_to_upload) = tokio::task::spawn_blocking({
         let file_path_clone = file_path.clone();
+        let app_handle_clone = app_handle_clone.clone();  // Clone for the blocking task
         move || {
-            let file_data = std::fs::read(&file_path_clone).map_err(|e| e.to_string())?;
+            let file_data = std::fs::read(&file_path_clone).map_err(|e| {
+                let err_msg = format!("Failed to read file {}: {}", file_path_clone, e);
+                let _ = app_handle_clone.emit("app-event", AppEvent {
+                    event_type: "error".to_string(),
+                    message: "File Upload Failed".to_string(),
+                    details: Some(err_msg.clone()),
+                });
+                err_msg
+            })?;
             
             let mut hasher = Sha256::new();
             hasher.update(&file_data);
@@ -2788,7 +2808,13 @@ pub async fn encrypt_and_upload_file_sync(
             Ok::<(Vec<u8>, String, usize, String, Vec<(String, Vec<u8>)>), String>((file_data, original_file_hash, encrypted_size, file_id, all_shards))
         }
     }).await.map_err(|e| {
-        // Remove record on error
+        let err_msg = format!("Task join error during file encryption: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "File Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        // Also clean up DB record
         if let Some(pool) = DB_POOL.get() {
             let _ = sqlx::query(
                 "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
@@ -2797,8 +2823,26 @@ pub async fn encrypt_and_upload_file_sync(
             .bind(&file_name)
             .execute(pool);
         }
-        e.to_string()
-    })??;
+        err_msg
+    })?
+    .map_err(|e| {
+        let err_msg = format!("Error during file processing/encryption: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "File Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        // Also clean up DB record
+        if let Some(pool) = DB_POOL.get() {
+            let _ = sqlx::query(
+                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
+            )
+            .bind(&account_id)
+            .bind(&file_name)
+            .execute(pool);
+        }
+        err_msg
+    })?;
 
     let all_chunk_info = Arc::new(Mutex::new(Vec::new()));
     let chunk_pairs = Arc::new(Mutex::new(Vec::new()));
@@ -2890,19 +2934,24 @@ pub async fn encrypt_and_upload_file_sync(
             println!("[encrypt_and_upload_file_sync] Storage request successful: {}", res);
         },
         Err(e) => {
+            let err_msg = format!("Storage request error: {}", e);
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "File Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
             // Remove record on error
             if let Some(pool) = DB_POOL.get() {
-                sqlx::query(
+                let _ = sqlx::query(
                     "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
                 )
                 .bind(&account_id)
                 .bind(&file_name)
                 .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to delete record for '{}': {}", file_name, e))?;
+                .await;
             }
             println!("[encrypt_and_upload_file_sync] Storage request error: {}", e);
-            return Err(format!("Storage request error: {}", e));
+            return Err(err_msg);
         },
     }
 
@@ -2911,6 +2960,7 @@ pub async fn encrypt_and_upload_file_sync(
 
 #[tauri::command]
 pub async fn upload_file_public_sync(
+    app_handle: AppHandle,
     account_id: String,
     file_path: String,
     seed_phrase: String
@@ -2921,7 +2971,15 @@ pub async fn upload_file_public_sync(
     let file_name = Path::new(&file_path)
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
+        .ok_or_else(|| {
+            let err_msg = "Invalid file path, cannot extract file name".to_string();
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Public File Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
+            err_msg
+        })?;
 
     // Check if this file is already recorded in the sync database.
     if let Some(pool) = DB_POOL.get() {
@@ -2982,33 +3040,28 @@ pub async fn upload_file_public_sync(
 
     let file_path_cloned = file_path.clone();
     let api_url_cloned = api_url.to_string();
+    let app_handle_clone = app_handle.clone();
     let file_cid = tokio::task::spawn_blocking(move || {
         upload_to_ipfs(&api_url_cloned, &file_path_cloned)
     })
     .await
     .map_err(|e| {
-        // Remove record on error
-        if let Some(pool) = DB_POOL.get() {
-            let _ = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
-            )
-            .bind(&account_id)
-            .bind(&file_name)
-            .execute(pool);
-        }
-        format!("Task spawn error: {}", e)
+        let err_msg = format!("Task spawn error during IPFS upload: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public File Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        err_msg
     })?
     .map_err(|e| {
-        // Remove record on error
-        if let Some(pool) = DB_POOL.get() {
-            let _ = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
-            )
-            .bind(&account_id)
-            .bind(&file_name)
-            .execute(pool);
-        }
-        format!("Upload error: {}", e)
+        let err_msg = format!("IPFS upload failed: {}", e);
+         let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public File Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        err_msg
     })?;
 
     println!("[upload_file_public_sync] File CID: {}", file_cid);
@@ -3020,19 +3073,14 @@ pub async fn upload_file_public_sync(
             println!("[upload_file_public_sync] Storage request result: {}", res);
         },
         Err(e) => {
-            // Remove record on error
-            if let Some(pool) = DB_POOL.get() {
-                sqlx::query(
-                    "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
-                )
-                .bind(&account_id)
-                .bind(&file_name)
-                .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to delete record for '{}': {}", file_name, e))?;
-            }
+            let err_msg = format!("Storage request error: {}", e);
+            let _ = app_handle_clone.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Public File Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
             println!("[upload_file_public_sync] Storage request error: {}", e);
-            return Err(format!("Storage request error: {}", e));
+            return Err(err_msg);
         },
     }
 
@@ -3041,6 +3089,7 @@ pub async fn upload_file_public_sync(
 
 #[tauri::command]
 pub async fn encrypt_and_upload_folder_sync(
+    app_handle: AppHandle,
     account_id: String,
     folder_path: String,
     seed_phrase: String,
@@ -3054,7 +3103,13 @@ pub async fn encrypt_and_upload_folder_sync(
 
     let folder_path = Path::new(&folder_path);
     if !folder_path.is_dir() {
-        return Err("Provided path is not a directory".to_string());
+        let err_msg = "Provided path is not a directory".to_string();
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        return Err(err_msg);
     }
 
     let folder_name = folder_path
@@ -3064,7 +3119,13 @@ pub async fn encrypt_and_upload_folder_sync(
         .to_string();
 
     if folder_name.is_empty() {
-        return Err("Invalid folder path, cannot extract folder name".to_string());
+        let err_msg = "Invalid folder path, cannot extract folder name".to_string();
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        return Err(err_msg);
     }
 
     // Small-folder fast path: adjust parameters for tiny folders
@@ -3101,8 +3162,14 @@ pub async fn encrypt_and_upload_folder_sync(
     }
 
     let folder_tree = FolderNode::build_tree(folder_path).map_err(|e| {
+        let err_msg = format!("Failed to build folder tree: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
         cleanup_db_on_error(&account_id, &folder_name);
-        e.to_string()
+        err_msg
     })?;
 
     let encryption_key_arc = encryption_key.map(Arc::new);
@@ -3330,9 +3397,15 @@ pub async fn encrypt_and_upload_folder_sync(
             Ok(root_metadata_cid)
         }
         Err(e) => {
+            let err_msg = format!("Storage request error: {}", e);
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Folder Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
             cleanup_db_on_error(&account_id, &folder_name);
             println!("[encrypt_and_upload_folder_sync] Storage request error: {}", e);
-            Err(format!("Storage request error: {}", e))
+            Err(err_msg)
         }
     }
 }
@@ -3520,6 +3593,7 @@ async fn process_single_file_for_sync(
 
 #[tauri::command]
 pub async fn public_upload_folder_sync(
+    app_handle: AppHandle,
     account_id: String,
     folder_path: String,
     seed_phrase: String,
@@ -3528,13 +3602,27 @@ pub async fn public_upload_folder_sync(
     
     let folder_path = Path::new(&folder_path);
     if !folder_path.is_dir() {
-        return Err("Provided path is not a directory".to_string());
+        let err_msg = "Provided path is not a directory".to_string();
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        return Err(err_msg);
     }
 
     let folder_name = folder_path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| "Invalid folder path, cannot extract folder name".to_string())?;
+        .ok_or_else(|| {
+            let err_msg = "Invalid folder path, cannot extract folder name".to_string();
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Public Folder Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
+            err_msg
+        })?;
 
     // Check if this folder is already recorded in the sync database.
     if let Some(pool) = DB_POOL.get() {
@@ -3702,7 +3790,13 @@ pub async fn public_upload_folder_sync(
     })
     .await
     .map_err(|e| {
-        // Remove record on error
+        let err_msg = format!("Task join error during public folder upload: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        // Also clean up DB record
         if let Some(pool) = DB_POOL.get() {
             let _ = sqlx::query(
                 "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
@@ -3711,8 +3805,26 @@ pub async fn public_upload_folder_sync(
             .bind(&folder_name)
             .execute(pool);
         }
-        format!("Task join error: {}", e)
-    })??;
+        err_msg
+    })?
+    .map_err(|e| {
+        let err_msg = format!("Error during public folder processing: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        // Also clean up DB record
+        if let Some(pool) = DB_POOL.get() {
+            let _ = sqlx::query(
+                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
+            )
+            .bind(&account_id)
+            .bind(&folder_name)
+            .execute(pool);
+        }
+        err_msg
+    })?;
 
     let meta_folder_name = format!("{}{}", folder_name_from_task, if folder_name_from_task.ends_with(".folder") { "" } else { ".folder" });
     
@@ -3729,25 +3841,29 @@ pub async fn public_upload_folder_sync(
             println!("[public_upload_folder_sync] Storage request result: {}", res);
         },
         Err(e) => {
-            // Remove record on error
+            let err_msg = format!("Storage request error: {}", e);
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Public Folder Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
+            // Also clean up DB record
             if let Some(pool) = DB_POOL.get() {
-                sqlx::query(
+                let _ = sqlx::query(
                     "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
                 )
                 .bind(&account_id)
                 .bind(&folder_name)
                 .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to delete record for '{}': {}", folder_name, e))?;
+                .await;
             }
             println!("[public_upload_folder_sync] Storage request error: {}", e);
-            return Err(format!("Storage request error: {}", e));
+            return Err(err_msg);
         },
     }
 
     Ok(root_metadata_cid)
 }
-
 
 #[tauri::command]
 pub async fn list_folder_contents(
@@ -3888,7 +4004,10 @@ pub async fn add_folder_to_public_folder(
     use std::path::Path;
     use std::sync::Arc;
 
-    println!("add_folder_to_public_folder subfolder_path: {:?}, folder_name: {:?}, folder_path: {:?}", subfolder_path, folder_name, folder_path);
+    println!(
+        "[add_folder_to_public_folder] subfolder_path: {:?}, folder_name: {}, folder_path: {}", 
+        subfolder_path, folder_name, folder_path
+    );
     let folder_name = sanitize_name(&folder_name);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_path_obj = Path::new(&folder_path);
@@ -3909,7 +4028,9 @@ pub async fn add_folder_to_public_folder(
 
         let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
             .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", current_metadata_cid, e))?;
-        println!("[public add folder] File entries for CID {}: {:?}", current_metadata_cid, file_entries);
+        println!("[add_folder_recursive_public] File entries for CID {}: {:?}", current_metadata_cid, file_entries);
+
+        let mut all_cids = Vec::new();
 
         if path.is_empty() {
             // At the target subfolder: add the folder
@@ -3927,7 +4048,7 @@ pub async fn add_folder_to_public_folder(
                 return Err(format!("Folder '{}' already exists in this folder.", folder_name));
             }
 
-            // Recursively upload the folder in a blocking task
+            // Recursively upload the folder
             let (_meta_name, meta_cid, total_size, all_files) = tokio::task::spawn_blocking({
                 let folder_path = folder_path.to_path_buf();
                 let api_url = api_url.to_string();
@@ -3940,7 +4061,7 @@ pub async fn add_folder_to_public_folder(
             .await
             .map_err(|e| format!("Task join error: {}", e))??;
 
-            // Sanitize meta_name to avoid self-referential nesting
+            // Add new folder to metadata
             let sanitized_meta_name = format!("{}.s.folder", folder_name);
             file_entries.push(FileEntry {
                 file_name: sanitized_meta_name.clone(),
@@ -3951,14 +4072,11 @@ pub async fn add_folder_to_public_folder(
             // Write updated metadata and upload
             let folder_metadata = serde_json::to_string_pretty(&file_entries)
                 .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
-
             let meta_name = if main_folder_name == current_folder_name {
                 format!("{}.folder", current_folder_name)
             } else {
                 format!("{}.s.folder", current_folder_name)
             };
-            println!("meta_name: {}, current_folder_name: {}, main_folder_name: {}", meta_name, current_folder_name, main_folder_name);
-
             let new_cid = tokio::task::spawn_blocking({
                 let folder_metadata = folder_metadata.clone();
                 let api_url = api_url.to_string();
@@ -3969,7 +4087,7 @@ pub async fn add_folder_to_public_folder(
                         .map_err(|e| format!("Failed to write folder metadata: {}", e))?;
                     let result = upload_to_ipfs(&api_url, meta_path.to_str().unwrap())
                         .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e));
-                    std::mem::forget(temp_dir); // Prevent premature drop
+                    std::mem::forget(temp_dir);
                     result
                 }
             })
@@ -3977,30 +4095,36 @@ pub async fn add_folder_to_public_folder(
             .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
             // Collect all CIDs, avoiding duplicates
-            let mut all_cids = file_entries.iter()
+            let unique_entries: Vec<(String, String)> = file_entries
+                .iter()
                 .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
-                .collect::<Vec<_>>();
-            all_cids.push((meta_name.clone(), new_cid.clone()));
-            let unique_files: Vec<(String, String)> = all_files.into_iter()
+                .filter(|(name, _)| !all_cids.iter().any(|(existing_name, _)| existing_name == name))
+                .collect();
+            all_cids.extend(unique_entries);
+            let unique_files: Vec<(String, String)> = all_files
+                .into_iter()
                 .filter(|(name, _)| !all_cids.iter().any(|(existing_name, _)| existing_name == name))
                 .collect();
             all_cids.extend(unique_files);
+            // Add current folder's metadata only at root level
+            if main_folder_name == current_folder_name {
+                all_cids.push((meta_name.clone(), new_cid.clone()));
+            }
+            println!("[add_folder_recursive_public] Final all_cids for {}: {:?}", current_metadata_cid, all_cids);
 
             Ok((meta_name, new_cid, all_cids))
         } else {
             // Traverse to next subfolder
             let subfolder = &path[0];
             let mut found = false;
-            let mut all_cids = Vec::new();
             for entry in &mut file_entries {
-                if entry.file_name.starts_with(subfolder) && (
-                    entry.file_name.ends_with(".s.folder") ||
-                    entry.file_name.ends_with(".s.folder.ec_metadata") ||
-                    entry.file_name.ends_with(".folder") ||
-                    entry.file_name.ends_with(".folder.ec_metadata") ||
-                    entry.file_name == *subfolder
-                ) {
-                    println!("[public add folder] Found subfolder entry: {} for CID {}", entry.file_name, entry.cid);
+                if entry.file_name.starts_with(subfolder)
+                    && (entry.file_name.ends_with(".s.folder")
+                        || entry.file_name.ends_with(".s.folder.ec_metadata")
+                        || entry.file_name.ends_with(".folder")
+                        || entry.file_name.ends_with(".folder.ec_metadata"))
+                {
+                    println!("[add_folder_recursive_public] Found subfolder entry: {} for CID {}", entry.file_name, entry.cid);
                     let (new_subfolder_name, new_subfolder_cid, subfolder_cids) = Box::pin(add_folder_recursive_public(
                         api_url,
                         &entry.cid,
@@ -4008,19 +4132,32 @@ pub async fn add_folder_to_public_folder(
                         folder_path,
                         subfolder,
                         main_folder_name,
-                    )).await?;
-                    entry.file_name = new_subfolder_name;
+                    ))
+                    .await?;
+                    entry.file_name = if new_subfolder_name.ends_with(".s.folder") || new_subfolder_name.ends_with(".folder") {
+                        new_subfolder_name
+                    } else {
+                        format!("{}.s.folder", subfolder)
+                    };
                     entry.cid = new_subfolder_cid;
-                    let unique_subfolder_cids: Vec<(String, String)> = subfolder_cids.into_iter()
+                    let unique_subfolder_cids: Vec<(String, String)> = subfolder_cids
+                        .into_iter()
                         .filter(|(name, _)| !all_cids.iter().any(|(existing_name, _)| existing_name == name))
                         .collect();
                     all_cids.extend(unique_subfolder_cids);
+                    println!(
+                        "[add_folder_recursive_public] After extending with subfolder_cids for {}: {:?}", 
+                        current_metadata_cid, all_cids
+                    );
                     found = true;
                     break;
                 }
             }
             if !found {
-                return Err(format!("Subfolder '{}' not found in metadata for CID {}. Available entries: {:?}", subfolder, current_metadata_cid, file_entries));
+                return Err(format!(
+                    "Subfolder '{}' not found in metadata for CID {}. Available entries: {:?}", 
+                    subfolder, current_metadata_cid, file_entries
+                ));
             }
 
             // Write updated parent metadata and upload
@@ -4031,8 +4168,6 @@ pub async fn add_folder_to_public_folder(
             } else {
                 format!("{}.s.folder", current_folder_name)
             };
-            println!("meta_name: {}, current_folder_name: {}, main_folder_name: {}", meta_name, current_folder_name, main_folder_name);
-
             let new_cid = tokio::task::spawn_blocking({
                 let folder_metadata = folder_metadata.clone();
                 let api_url = api_url.to_string();
@@ -4043,27 +4178,37 @@ pub async fn add_folder_to_public_folder(
                         .map_err(|e| format!("Failed to write folder metadata: {}", e))?;
                     let result = upload_to_ipfs(&api_url, meta_path.to_str().unwrap())
                         .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e));
-                    std::mem::forget(temp_dir); // Prevent premature drop
+                    std::mem::forget(temp_dir);
                     result
                 }
             })
             .await
             .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
 
-            let unique_entries: Vec<(String, String)> = file_entries.iter()
+            // Collect all CIDs, avoiding duplicates
+            let unique_entries: Vec<(String, String)> = file_entries
+                .iter()
                 .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
                 .filter(|(name, _)| !all_cids.iter().any(|(existing_name, _)| existing_name == name))
                 .collect();
             all_cids.extend(unique_entries);
-            all_cids.push((meta_name.clone(), new_cid.clone()));
+            // Add current folder's metadata only at root level
+            if main_folder_name == current_folder_name {
+                all_cids.push((meta_name.clone(), new_cid.clone()));
+            }
+            println!("[add_folder_recursive_public] Final all_cids for {}: {:?}", current_metadata_cid, all_cids);
 
             Ok((meta_name, new_cid, all_cids))
         }
     }
 
-    // --- Main logic ---
+    // Main logic
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
-    println!("subfolder_path: {:?} cid: {} normalized_subfolder: {:?}", subfolder_path, folder_metadata_cid, normalized_subfolder);
+    println!(
+        "[add_folder_to_public_folder] subfolder_path: {:?}, cid: {}, normalized_subfolder: {:?}", 
+        subfolder_path, folder_metadata_cid, normalized_subfolder
+    );
+
     let (meta_filename, new_folder_metadata_cid, all_cids) = if let Some(ref path) = normalized_subfolder {
         Box::pin(add_folder_recursive_public(
             &api_url,
@@ -4072,10 +4217,32 @@ pub async fn add_folder_to_public_folder(
             folder_path_obj,
             &folder_name,
             &folder_name,
-        )).await?
+        ))
+        .await?
     } else {
         // Add to root
-        let (_meta_name, meta_cid, _size, all_files) = tokio::task::spawn_blocking({
+        let metadata_bytes = download_from_ipfs_async(&api_url, &folder_metadata_cid)
+            .await
+            .map_err(|e| format!("Failed to download folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+        let mut file_entries: Vec<FileEntry> = serde_json::from_slice(&metadata_bytes)
+            .map_err(|e| format!("Failed to parse folder metadata for CID {}: {}", folder_metadata_cid, e))?;
+        println!("[add_folder_to_public_folder] Root file entries for CID {}: {:?}", folder_metadata_cid, file_entries);
+
+        let folder_name_from_path = folder_path_obj.file_name().unwrap().to_string_lossy().to_string();
+        let folder_entry_name = format!("{}.s.folder", folder_name_from_path);
+        if file_entries.iter().any(|entry| {
+            let variations = vec![
+                folder_entry_name.clone(),
+                format!("{}.s.folder.ec_metadata", folder_name_from_path),
+                format!("{}.folder", folder_name_from_path),
+                format!("{}.folder.ec_metadata", folder_name_from_path),
+            ];
+            variations.contains(&entry.file_name)
+        }) {
+            return Err(format!("Folder '{}' already exists in folder '{}'.", folder_name_from_path, folder_name));
+        }
+
+        let (_meta_name, meta_cid, total_size, all_files) = tokio::task::spawn_blocking({
             let folder_path = folder_path_obj.to_path_buf();
             let api_url = api_url.to_string();
             move || {
@@ -4086,20 +4253,59 @@ pub async fn add_folder_to_public_folder(
         })
         .await
         .map_err(|e| format!("Task join error: {}", e))??;
+
+        file_entries.push(FileEntry {
+            file_name: folder_entry_name.clone(),
+            file_size: total_size,
+            cid: meta_cid.clone(),
+        });
+
+        let folder_metadata = serde_json::to_string_pretty(&file_entries)
+            .map_err(|e| format!("Failed to serialize folder metadata: {}", e))?;
         let meta_filename = format!("{}.folder", folder_name);
-        let mut all_cids = all_files.into_iter()
-            .filter(|(name, _)| !name.contains(&folder_name))
+        let new_folder_metadata_cid = tokio::task::spawn_blocking({
+            let folder_metadata = folder_metadata.clone();
+            let api_url = api_url.to_string();
+            move || {
+                let temp_dir = tempfile::tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
+                let meta_path = temp_dir.path().join("folder_metadata.json");
+                std::fs::write(&meta_path, folder_metadata.as_bytes())
+                    .map_err(|e| format!("Failed to write folder metadata: {}", e))?;
+                let result = upload_to_ipfs(&api_url, meta_path.to_str().unwrap())
+                    .map_err(|e| format!("Failed to upload folder metadata to IPFS: {}", e));
+                std::mem::forget(temp_dir);
+                result
+            }
+        })
+        .await
+        .map_err(|e| format!("Failed to execute blocking task: {}", e))??;
+
+        // Combine existing entries with new folder's files
+        let mut all_cids = file_entries
+            .iter()
+            .map(|entry| (entry.file_name.clone(), entry.cid.clone()))
             .collect::<Vec<_>>();
-        all_cids.push((meta_filename.clone(), meta_cid.clone()));
-        (meta_filename, meta_cid, all_cids)
+        let unique_files: Vec<(String, String)> = all_files
+            .into_iter()
+            .filter(|(name, _)| !all_cids.iter().any(|(existing_name, _)| existing_name == name))
+            .collect();
+        all_cids.extend(unique_files);
+        all_cids.push((meta_filename.clone(), new_folder_metadata_cid.clone()));
+        println!("[add_folder_to_public_folder] Root all_cids: {:?}", all_cids);
+
+        (meta_filename, new_folder_metadata_cid, all_cids)
     };
 
     // Storage request and sync
     let _unpin_result = delete_and_unpin_user_file_records_from_folder(&folder_name, &seed_phrase)
         .await
-        .map_err(|e| format!("Failed to request file storage: {}", e))?;
+        .map_err(|e| format!("Failed to request unpinning: {}", e))?;
 
-    let storage_result = request_folder_storage(&meta_filename, &all_cids, &api_url, &seed_phrase).await;
+    println!("[add_folder_to_public_folder] all_cids for storage: {:?}", all_cids);
+    let storage_result = request_folder_storage(&meta_filename, &all_cids, &api_url, &seed_phrase)
+        .await
+        .map_err(|e| format!("Failed to request folder storage: {}", e))?;
+
     let sanitized_folder_name = sanitize_name(&folder_name);
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
         let mut full_path = std::path::PathBuf::from(&sanitized_folder_name);
@@ -4109,22 +4315,21 @@ pub async fn add_folder_to_public_folder(
         full_path.to_string_lossy().to_string()
     });
 
-    match storage_result {
-        Ok(res) => {
-            copy_to_sync_folder(
-                folder_path_obj,
-                &folder_name,
-                &account_id,
-                &new_folder_metadata_cid,
-                &res,
-                true,
-                true,
-                &meta_filename,
-                sync_subfolder_path,
-            ).await;
-        }
-        Err(e) => println!("[add_folder_to_public_folder] Storage request error: {}", e),
-    }
+    copy_to_sync_folder(
+        folder_path_obj,
+        &sanitized_folder_name,
+        &account_id,
+        &new_folder_metadata_cid,
+        &storage_result,
+        true,
+        true,
+        &meta_filename,
+        sync_subfolder_path,
+    )
+    .await;
+
+    println!("[add_folder_to_public_folder] Storage request result: {:?}", storage_result);
+    println!("[add_folder_to_public_folder] New folder metadata CID: {}", new_folder_metadata_cid);
 
     Ok(new_folder_metadata_cid)
 }

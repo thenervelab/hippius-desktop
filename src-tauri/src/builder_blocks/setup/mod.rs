@@ -171,8 +171,8 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-    pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
-        builder.setup(|app| {
+pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
+    builder.setup(|app| {
             println!("[Setup] .setup() closure called in setup.rs");
             
             let handle = app.handle().clone();

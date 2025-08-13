@@ -1,4 +1,3 @@
-
 use crate::user_profile_sync::{start_user_profile_sync_tauri};
 use crate::folder_sync::start_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
@@ -31,20 +30,23 @@ pub async fn initialize_sync(
     }
 
     // Start new sync tasks
+    let app_handle_clone = app.clone();
+    let app_handle_folder_sync = app.clone();
+    let app_handle_public_folder_sync = app.clone();
     let account_clone = account_id.clone();
     let account_clone2 = account_id.clone();
     let mnemonic_clone = mnemonic.clone();
     
     let user_profile_task = tokio::spawn(async move {
-        start_user_profile_sync_tauri(account_clone).await;
+        start_user_profile_sync_tauri(app_handle_clone, account_clone).await;
     });
     
     let folder_task = tokio::spawn(async move {
-        start_folder_sync_tauri(account_id, mnemonic).await;
+        start_folder_sync_tauri(app_handle_folder_sync, account_id, mnemonic).await;
     });
 
     let public_folder_task =  tokio::spawn(async move {
-        start_public_folder_sync_tauri(account_clone2, mnemonic_clone).await;
+        start_public_folder_sync_tauri(app_handle_public_folder_sync, account_clone2, mnemonic_clone).await;
     });
     
     // Store the task handles
