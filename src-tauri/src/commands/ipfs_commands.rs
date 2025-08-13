@@ -29,6 +29,9 @@ use crate::utils::file_operations::sanitize_name;
 use rayon::prelude::*;
 use crate::utils::folder_tree::FolderNode;
 use std::collections::HashMap;
+use tauri::{AppHandle, Manager};
+use crate::events::AppEvent;
+use tauri::Emitter;
 
 // Helper function to format file sizes
 fn format_file_size(size_bytes: usize) -> String {
@@ -2722,6 +2725,7 @@ pub async fn remove_file_from_public_folder(
 
 #[tauri::command]
 pub async fn encrypt_and_upload_file_sync(
+    app_handle: AppHandle,
     account_id: String,
     file_path: String,
     seed_phrase: String,
@@ -2732,19 +2736,35 @@ pub async fn encrypt_and_upload_file_sync(
     let k = DEFAULT_K;
     let m = DEFAULT_M;
     let chunk_size = DEFAULT_CHUNK_SIZE;
-
+    let app_handle_clone = app_handle.clone();  // Clone for use in closure
     let file_path_p = Path::new(&file_path);
     let file_name = file_path_p
         .file_name()
         .and_then(|s| s.to_str())
-        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?
+        .ok_or_else(|| {
+            let err_msg = "Invalid file path, cannot extract file name".to_string();
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "File Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
+            err_msg
+        })?
         .to_string();
-
 
     let (file_data, original_file_hash, encrypted_size, file_id, shards_to_upload) = tokio::task::spawn_blocking({
         let file_path_clone = file_path.clone();
+        let app_handle_clone = app_handle_clone.clone();  // Clone for the blocking task
         move || {
-            let file_data = std::fs::read(&file_path_clone).map_err(|e| e.to_string())?;
+            let file_data = std::fs::read(&file_path_clone).map_err(|e| {
+                let err_msg = format!("Failed to read file {}: {}", file_path_clone, e);
+                let _ = app_handle_clone.emit("app-event", AppEvent {
+                    event_type: "error".to_string(),
+                    message: "File Upload Failed".to_string(),
+                    details: Some(err_msg.clone()),
+                });
+                err_msg
+            })?;
             
             let mut hasher = Sha256::new();
             hasher.update(&file_data);
@@ -2788,7 +2808,13 @@ pub async fn encrypt_and_upload_file_sync(
             Ok::<(Vec<u8>, String, usize, String, Vec<(String, Vec<u8>)>), String>((file_data, original_file_hash, encrypted_size, file_id, all_shards))
         }
     }).await.map_err(|e| {
-        // Remove record on error
+        let err_msg = format!("Task join error during file encryption: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "File Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        // Also clean up DB record
         if let Some(pool) = DB_POOL.get() {
             let _ = sqlx::query(
                 "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
@@ -2797,8 +2823,26 @@ pub async fn encrypt_and_upload_file_sync(
             .bind(&file_name)
             .execute(pool);
         }
-        e.to_string()
-    })??;
+        err_msg
+    })?
+    .map_err(|e| {
+        let err_msg = format!("Error during file processing/encryption: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "File Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        // Also clean up DB record
+        if let Some(pool) = DB_POOL.get() {
+            let _ = sqlx::query(
+                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
+            )
+            .bind(&account_id)
+            .bind(&file_name)
+            .execute(pool);
+        }
+        err_msg
+    })?;
 
     let all_chunk_info = Arc::new(Mutex::new(Vec::new()));
     let chunk_pairs = Arc::new(Mutex::new(Vec::new()));
@@ -2890,19 +2934,24 @@ pub async fn encrypt_and_upload_file_sync(
             println!("[encrypt_and_upload_file_sync] Storage request successful: {}", res);
         },
         Err(e) => {
+            let err_msg = format!("Storage request error: {}", e);
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "File Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
             // Remove record on error
             if let Some(pool) = DB_POOL.get() {
-                sqlx::query(
+                let _ = sqlx::query(
                     "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'private'"
                 )
                 .bind(&account_id)
                 .bind(&file_name)
                 .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to delete record for '{}': {}", file_name, e))?;
+                .await;
             }
             println!("[encrypt_and_upload_file_sync] Storage request error: {}", e);
-            return Err(format!("Storage request error: {}", e));
+            return Err(err_msg);
         },
     }
 
@@ -2911,6 +2960,7 @@ pub async fn encrypt_and_upload_file_sync(
 
 #[tauri::command]
 pub async fn upload_file_public_sync(
+    app_handle: AppHandle,
     account_id: String,
     file_path: String,
     seed_phrase: String
@@ -2921,7 +2971,15 @@ pub async fn upload_file_public_sync(
     let file_name = Path::new(&file_path)
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| "Invalid file path, cannot extract file name".to_string())?;
+        .ok_or_else(|| {
+            let err_msg = "Invalid file path, cannot extract file name".to_string();
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Public File Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
+            err_msg
+        })?;
 
     // Check if this file is already recorded in the sync database.
     if let Some(pool) = DB_POOL.get() {
@@ -2982,33 +3040,28 @@ pub async fn upload_file_public_sync(
 
     let file_path_cloned = file_path.clone();
     let api_url_cloned = api_url.to_string();
+    let app_handle_clone = app_handle.clone();
     let file_cid = tokio::task::spawn_blocking(move || {
         upload_to_ipfs(&api_url_cloned, &file_path_cloned)
     })
     .await
     .map_err(|e| {
-        // Remove record on error
-        if let Some(pool) = DB_POOL.get() {
-            let _ = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
-            )
-            .bind(&account_id)
-            .bind(&file_name)
-            .execute(pool);
-        }
-        format!("Task spawn error: {}", e)
+        let err_msg = format!("Task spawn error during IPFS upload: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public File Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        err_msg
     })?
     .map_err(|e| {
-        // Remove record on error
-        if let Some(pool) = DB_POOL.get() {
-            let _ = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
-            )
-            .bind(&account_id)
-            .bind(&file_name)
-            .execute(pool);
-        }
-        format!("Upload error: {}", e)
+        let err_msg = format!("IPFS upload failed: {}", e);
+         let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public File Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        err_msg
     })?;
 
     println!("[upload_file_public_sync] File CID: {}", file_cid);
@@ -3020,19 +3073,14 @@ pub async fn upload_file_public_sync(
             println!("[upload_file_public_sync] Storage request result: {}", res);
         },
         Err(e) => {
-            // Remove record on error
-            if let Some(pool) = DB_POOL.get() {
-                sqlx::query(
-                    "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
-                )
-                .bind(&account_id)
-                .bind(&file_name)
-                .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to delete record for '{}': {}", file_name, e))?;
-            }
+            let err_msg = format!("Storage request error: {}", e);
+            let _ = app_handle_clone.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Public File Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
             println!("[upload_file_public_sync] Storage request error: {}", e);
-            return Err(format!("Storage request error: {}", e));
+            return Err(err_msg);
         },
     }
 
@@ -3041,6 +3089,7 @@ pub async fn upload_file_public_sync(
 
 #[tauri::command]
 pub async fn encrypt_and_upload_folder_sync(
+    app_handle: AppHandle,
     account_id: String,
     folder_path: String,
     seed_phrase: String,
@@ -3054,7 +3103,13 @@ pub async fn encrypt_and_upload_folder_sync(
 
     let folder_path = Path::new(&folder_path);
     if !folder_path.is_dir() {
-        return Err("Provided path is not a directory".to_string());
+        let err_msg = "Provided path is not a directory".to_string();
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        return Err(err_msg);
     }
 
     let folder_name = folder_path
@@ -3064,7 +3119,13 @@ pub async fn encrypt_and_upload_folder_sync(
         .to_string();
 
     if folder_name.is_empty() {
-        return Err("Invalid folder path, cannot extract folder name".to_string());
+        let err_msg = "Invalid folder path, cannot extract folder name".to_string();
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        return Err(err_msg);
     }
 
     // Small-folder fast path: adjust parameters for tiny folders
@@ -3101,8 +3162,14 @@ pub async fn encrypt_and_upload_folder_sync(
     }
 
     let folder_tree = FolderNode::build_tree(folder_path).map_err(|e| {
+        let err_msg = format!("Failed to build folder tree: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
         cleanup_db_on_error(&account_id, &folder_name);
-        e.to_string()
+        err_msg
     })?;
 
     let encryption_key_arc = encryption_key.map(Arc::new);
@@ -3330,9 +3397,15 @@ pub async fn encrypt_and_upload_folder_sync(
             Ok(root_metadata_cid)
         }
         Err(e) => {
+            let err_msg = format!("Storage request error: {}", e);
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Folder Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
             cleanup_db_on_error(&account_id, &folder_name);
             println!("[encrypt_and_upload_folder_sync] Storage request error: {}", e);
-            Err(format!("Storage request error: {}", e))
+            Err(err_msg)
         }
     }
 }
@@ -3520,6 +3593,7 @@ async fn process_single_file_for_sync(
 
 #[tauri::command]
 pub async fn public_upload_folder_sync(
+    app_handle: AppHandle,
     account_id: String,
     folder_path: String,
     seed_phrase: String,
@@ -3528,13 +3602,27 @@ pub async fn public_upload_folder_sync(
     
     let folder_path = Path::new(&folder_path);
     if !folder_path.is_dir() {
-        return Err("Provided path is not a directory".to_string());
+        let err_msg = "Provided path is not a directory".to_string();
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        return Err(err_msg);
     }
 
     let folder_name = folder_path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
-        .ok_or_else(|| "Invalid folder path, cannot extract folder name".to_string())?;
+        .ok_or_else(|| {
+            let err_msg = "Invalid folder path, cannot extract folder name".to_string();
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Public Folder Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
+            err_msg
+        })?;
 
     // Check if this folder is already recorded in the sync database.
     if let Some(pool) = DB_POOL.get() {
@@ -3702,7 +3790,13 @@ pub async fn public_upload_folder_sync(
     })
     .await
     .map_err(|e| {
-        // Remove record on error
+        let err_msg = format!("Task join error during public folder upload: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        // Also clean up DB record
         if let Some(pool) = DB_POOL.get() {
             let _ = sqlx::query(
                 "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
@@ -3711,8 +3805,26 @@ pub async fn public_upload_folder_sync(
             .bind(&folder_name)
             .execute(pool);
         }
-        format!("Task join error: {}", e)
-    })??;
+        err_msg
+    })?
+    .map_err(|e| {
+        let err_msg = format!("Error during public folder processing: {}", e);
+        let _ = app_handle.emit("app-event", AppEvent {
+            event_type: "error".to_string(),
+            message: "Public Folder Upload Failed".to_string(),
+            details: Some(err_msg.clone()),
+        });
+        // Also clean up DB record
+        if let Some(pool) = DB_POOL.get() {
+            let _ = sqlx::query(
+                "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
+            )
+            .bind(&account_id)
+            .bind(&folder_name)
+            .execute(pool);
+        }
+        err_msg
+    })?;
 
     let meta_folder_name = format!("{}{}", folder_name_from_task, if folder_name_from_task.ends_with(".folder") { "" } else { ".folder" });
     
@@ -3729,25 +3841,29 @@ pub async fn public_upload_folder_sync(
             println!("[public_upload_folder_sync] Storage request result: {}", res);
         },
         Err(e) => {
-            // Remove record on error
+            let err_msg = format!("Storage request error: {}", e);
+            let _ = app_handle.emit("app-event", AppEvent {
+                event_type: "error".to_string(),
+                message: "Public Folder Upload Failed".to_string(),
+                details: Some(err_msg.clone()),
+            });
+            // Also clean up DB record
             if let Some(pool) = DB_POOL.get() {
-                sqlx::query(
+                let _ = sqlx::query(
                     "DELETE FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public'"
                 )
                 .bind(&account_id)
                 .bind(&folder_name)
                 .execute(pool)
-                .await
-                .map_err(|e| format!("Failed to delete record for '{}': {}", folder_name, e))?;
+                .await;
             }
             println!("[public_upload_folder_sync] Storage request error: {}", e);
-            return Err(format!("Storage request error: {}", e));
+            return Err(err_msg);
         },
     }
 
     Ok(root_metadata_cid)
 }
-
 
 #[tauri::command]
 pub async fn list_folder_contents(

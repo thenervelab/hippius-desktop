@@ -20,13 +20,7 @@ use sqlx::SqlitePool;
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 use tauri::Emitter;
-
-#[derive(Clone, serde::Serialize)]
-struct AppEvent {
-    event_type: String, // e.g., "error", "status_update"
-    message: String,
-    details: Option<String>,
-}
+use crate::events::AppEvent;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

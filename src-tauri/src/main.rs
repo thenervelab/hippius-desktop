@@ -11,6 +11,7 @@ mod user_profile_sync;
 mod sync_shared;
 mod utils;
 mod ipfs;
+mod events;
 
 use crate::sync_shared::{get_sync_status, app_close};
 use crate::folder_sync::{start_folder_sync_tauri};
