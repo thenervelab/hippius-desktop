@@ -7,10 +7,13 @@ use tokio::{
     process::Command,
 };
 
-use crate::constants::ipfs::{AppSetupPhase, APP_SETUP_EVENT};
+use crate::constants::ipfs::{AppSetupPhase, APP_SETUP_EVENT, API_URL};
 use crate::utils::binary::ensure_ipfs_binary;
 use std::time::Duration;
 use tokio::time::sleep;
+use tokio::net::TcpStream;
+use tokio::time::timeout;
+use reqwest::Client;
 
 static IPFS_HANDLE: OnceCell<Mutex<Option<tokio::process::Child>>> = OnceCell::new();
 
@@ -67,6 +70,18 @@ pub fn spawn_ipfs_command(bin_path: &std::path::Path, args: &[&str]) -> tokio::p
     cmd
 }
 
+async fn is_ipfs_api_up() -> bool {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let response = client.get(format!("{}/api/v0/version", API_URL)).send().await;
+    match response {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
 #[tauri::command]
 pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
     // Check if IPFS daemon is already running
@@ -77,6 +92,13 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
             println!("[IPFS] Daemon already running, skipping start");
             return Ok(());
         }
+    }
+
+    // If a daemon is already running (e.g., from another process), skip starting a new one
+    if is_ipfs_api_up().await {
+        println!("[IPFS] Existing IPFS daemon detected on {}. Skipping start.", API_URL);
+        emit_and_update_phase(app.clone(), AppSetupPhase::Ready).await;
+        return Ok(());
     }
 
     sleep(Duration::from_secs(LARGE_SLEEP)).await;
