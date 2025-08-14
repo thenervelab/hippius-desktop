@@ -58,6 +58,8 @@ export async function exportHippiusDBDataAsZip(passcode?: string): Promise<boole
       // Fetch data from backend
       const backendData = await fetchBackendData();
 
+      console.log("Fetched backend data:", backendData);
+
       // Save to local database with encryption
       await saveBackendData(backendData, passcode);
     }
@@ -90,6 +92,8 @@ export async function exportHippiusDBDataAsZip(passcode?: string): Promise<boole
       await writeFile(filePath, zipBlob);
       return true;
     }
+
+
 
     return false;
   } catch (error) {

@@ -142,7 +142,7 @@ const Home: React.FC = () => {
           Monitor your IPFS node status and performance
         </p>
       </section>
-      {/* <ImportAppDataDemo/> */}
+      {/* <ImportAppDataDemo /> */}
       {/* Stats Cards */}
       <DetailList ipfsInfo={ipfsInfo} upload={upload} download={download} />
 

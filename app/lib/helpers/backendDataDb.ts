@@ -27,20 +27,24 @@ async function ensureBackendDataTable() {
 export async function saveBackendData(data: BackendData, passcode: string): Promise<void> {
     const db = await ensureBackendDataTable();
 
+    // Clear the backend_data table before saving new record
+    db.run(`DELETE FROM backend_data`);
+
     // Convert data to string for encryption
     const dataString = JSON.stringify(data);
 
     // Encrypt the data using the same method as mnemonic encryption
     const encryptedData = encryptMnemonic(dataString, passcode);
 
-    // Save to database (replacing any existing record)
-    db.run(`
-    INSERT OR REPLACE INTO backend_data (data_type, encrypted_data, last_updated)
-    VALUES (?, ?, ?)
-  `, ['main', encryptedData, Date.now()]);
+    // Save to database
+    db.run(
+        `INSERT INTO backend_data (data_type, encrypted_data, last_updated)
+         VALUES (?, ?, ?)`,
+        ['main', encryptedData, Date.now()]
+    );
 
     await saveBytes(db.export());
-    console.log("Backend data saved to database successfully");
+    console.log("Backend data table cleared and new data saved successfully");
 }
 
 /**
