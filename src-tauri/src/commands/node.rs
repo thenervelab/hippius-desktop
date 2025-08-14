@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
+use reqwest::Client;
 
 static IPFS_HANDLE: OnceCell<Mutex<Option<tokio::process::Child>>> = OnceCell::new();
 
@@ -69,20 +70,15 @@ pub fn spawn_ipfs_command(bin_path: &std::path::Path, args: &[&str]) -> tokio::p
     cmd
 }
 
-// Quick probe to see if the IPFS API is already responding on the configured address.
 async fn is_ipfs_api_up() -> bool {
-    // API_URL is like "http://127.0.0.1:5001". We need host:port for TcpStream::connect.
-    let mut addr = API_URL.trim();
-    if let Some(rest) = addr.strip_prefix("http://") {
-        addr = rest;
-    } else if let Some(rest) = addr.strip_prefix("https://") {
-        addr = rest;
-    }
-
-    // Best-effort quick connect with a short timeout
-    match timeout(Duration::from_secs(2), TcpStream::connect(addr)).await {
-        Ok(Ok(_)) => true,
-        _ => false,
+    let client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let response = client.get(format!("{}/api/v0/version", API_URL)).send().await;
+    match response {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
     }
 }
 
