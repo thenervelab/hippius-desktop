@@ -4,18 +4,18 @@ import BaseAuthLayout from "@/components/auth/BaseAuthLayout";
 import Onboarding from ".";
 
 const OnBoardingPage: React.FC<{
-    onboardingCompleted: boolean | null;
-    setOnboardingCompleted: (completed: boolean) => void;
+  onboardingCompleted: boolean | null;
+  setOnboardingCompleted: (completed: boolean) => void;
 }> = ({ onboardingCompleted, setOnboardingCompleted }) => {
-    if (!onboardingCompleted) {
-        return (
-            <BaseAuthLayout onboardingCompleted={onboardingCompleted}>
-                <Onboarding setOnboardingCompleted={setOnboardingCompleted} />
-            </BaseAuthLayout>
-        );
-    }
+  if (!onboardingCompleted) {
+    return (
+      <BaseAuthLayout onboardingCompleted={onboardingCompleted}>
+        <Onboarding setOnboardingCompleted={setOnboardingCompleted} />
+      </BaseAuthLayout>
+    );
+  }
 
-    return null;
+  return null;
 };
 
 export default OnBoardingPage;
