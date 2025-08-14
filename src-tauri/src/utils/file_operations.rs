@@ -8,7 +8,7 @@ use crate::sync_shared::collect_files_recursively;
 use hex;
 use crate::ipfs::get_ipfs_file_size;
 use crate::sync_shared::insert_file_if_not_exists;
-use crate::folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, PRIVATE_SYNC_STATUS};
+use crate::private_folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, PRIVATE_SYNC_STATUS};
 use crate::public_folder_sync::{RECENTLY_UPLOADED as PUBLIC_RECENTLY_UPLOADED, PUBLIC_SYNC_STATUS};
 use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
@@ -629,9 +629,8 @@ pub async fn request_erasure_storage(
     }
 
     let json_string = build_storage_json(files);
-    println!("[request_erasure_storage] JSON CID requesting is: {}", json_string);
+
     let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
-    println!("[request_erasure_storage] JSON CID requested: {}", json_cid);
 
     let file_input = FileInputWrapper {
         file_hash: json_cid.as_bytes().to_vec(),
@@ -659,9 +658,8 @@ pub async fn request_folder_storage(
     }
 
     let json_string = build_storage_json(files);
-    println!("[request_folder_storage] JSON CID requesting is: {}", json_string);
+
     let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
-    println!("[request_folder_storage] JSON CID requested: {}", json_cid);
 
     let file_input = FileInputWrapper {
         file_hash: json_cid.as_bytes().to_vec(),
@@ -808,7 +806,6 @@ pub async fn copy_to_sync_folder(
             0
         }
     };
-    println!("setting to user profile on add where folder_name {:?} , request_cid {:?}",meta_folder_name, request_cid);
     if let Some(pool) = DB_POOL.get() {
         // Check if folder record already exists
         let exists: Option<(String,)> = sqlx::query_as(
@@ -846,7 +843,6 @@ pub async fn copy_to_sync_folder(
         } else {
             let source = target_folder.to_string_lossy().to_string();
             // Insert new record
-            println!("Inserting new record for folder {} with request_cid: {}", folder_name, request_cid);
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -871,7 +867,6 @@ pub async fn copy_to_sync_folder(
         let folder_relative_path = PathBuf::from(folder_name).join(&file_name);
         insert_file_if_not_exists(pool, &folder_relative_path, account_id, is_public, is_folder).await;
     }
-    println!("copying file to sync folder {}", dest_path.display());
     if is_folder {
         if !dest_path.exists() {
             if let Err(e) = std::fs::create_dir_all(&dest_path) {
@@ -1031,7 +1026,6 @@ pub async fn remove_from_sync_folder(
 
     let cid_vec = folder_manifest_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec);
-    println!("setting to user profile on remove where folder_name {:?} request_cid {:?}",meta_folder_name, folder_manifest_cid);
     if let Some(pool) = DB_POOL.get() {
         // Check if folder record already exists
         let exists: Option<(String,)> = sqlx::query_as(
@@ -1045,7 +1039,6 @@ pub async fn remove_from_sync_folder(
 
         if let Some(_) = exists {
             // Update existing record
-            println!("Updating record for folder {} with request_cid: {}", folder_name, folder_manifest_cid);
             let _ = sqlx::query(
                 "UPDATE user_profiles SET 
                     cid = ?, 
@@ -1073,7 +1066,6 @@ pub async fn remove_from_sync_folder(
                 source =  target_folder.to_string_lossy().to_string()
             }
             // Insert new record
-            println!("Inserting new record for folder {} with request_cid: {}", folder_name, folder_manifest_cid);
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -1134,7 +1126,6 @@ pub async fn insert_file_if_not_exists_in_folder(
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
-    println!("exists: {:#?}, file_name: {}, file_type: {}, account_id: {}", exists, file_name, file_type, account_id);
     if exists.is_none() {
         let _ = sqlx::query(
             "INSERT INTO sync_folder_files (file_name, type, owner, entry_type, created_at) VALUES (?, ?, ?, ?, ?)"

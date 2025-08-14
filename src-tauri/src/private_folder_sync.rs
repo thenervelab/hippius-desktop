@@ -30,7 +30,7 @@ pub static RECENTLY_UPLOADED: Lazy<Arc<Mutex<HashSet<String>>>> =
 pub static CREATE_BATCH: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static CREATE_BATCH_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
 
-pub async fn start_folder_sync(app_handle: AppHandle, account_id: String, seed_phrase: String) {
+pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String, seed_phrase: String) {
     let mut is_initial_startup = true;
     loop {
         // Check global cancellation token first
@@ -1336,6 +1336,6 @@ async fn replace_path_and_db_records(path: &Path, account_id: &str, seed_phrase:
 }
 
 #[tauri::command]
-pub async fn start_folder_sync_tauri(app_handle: AppHandle, account_id: String, seed_phrase: String) {
-    start_folder_sync(app_handle, account_id, seed_phrase).await;
+pub async fn start_private_folder_sync_tauri(app_handle: AppHandle, account_id: String, seed_phrase: String) {
+    start_private_folder_sync(app_handle, account_id, seed_phrase).await;
 }

@@ -1,5 +1,5 @@
 use crate::user_profile_sync::{start_user_profile_sync_tauri};
-use crate::folder_sync::start_folder_sync_tauri;
+use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
 use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync};
 use tauri::Manager;
@@ -52,7 +52,7 @@ pub async fn initialize_sync(
     });
     
     let folder_task = tokio::spawn(async move {
-        start_folder_sync_tauri(app_handle_folder_sync, account_id, mnemonic).await;
+        start_private_folder_sync_tauri(app_handle_folder_sync, account_id, mnemonic).await;
     });
 
     let public_folder_task =  tokio::spawn(async move {
