@@ -5,7 +5,7 @@ mod builder_blocks;
 mod commands;
 mod constants;
 mod events;
-mod folder_sync;
+mod private_folder_sync;
 mod ipfs;
 mod public_folder_sync;
 mod substrate_client;
@@ -14,7 +14,7 @@ mod user_profile_sync;
 mod utils;
 
 use crate::commands::syncing::{cleanup_sync, initialize_sync, AppState, SyncState};
-use crate::folder_sync::start_folder_sync_tauri;
+use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::public_folder_sync::start_public_folder_sync_tauri;
 use crate::sync_shared::{app_close, get_sync_status};
@@ -82,7 +82,7 @@ fn main() {
             read_file,
             get_sync_path,
             set_sync_path,
-            start_folder_sync_tauri,
+            start_private_folder_sync_tauri,
             start_public_folder_sync_tauri,
             cleanup_sync,
             get_user_synced_files,

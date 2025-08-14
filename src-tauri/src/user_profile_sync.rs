@@ -159,7 +159,6 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
             let storage = loop {
                 match api.storage().at_latest().await {
                     Ok(storage) => {
-                        println!("[UserSync] Successfully got latest storage");
                         retry_count = 0;
                         break storage;
                     }
@@ -207,7 +206,6 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
             let profile_cid = match profile_res {
                 Ok(Some(bounded_vec)) => bounded_vec_to_string(&bounded_vec.0),
                 Ok(None) => {
-                    println!("[UserSync] No user profile found for account: {}", account_id);
                     let _ = app_handle_clone.emit("app-event", AppEvent {
                         event_type: "error".to_string(),
                         message: "User profile not available".to_string(),
@@ -227,8 +225,6 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                     continue;
                 }
             };
-
-            println!("[UserSync] Profile CID: {}", profile_cid);
 
             if !profile_cid.is_empty() {
                 let ipfs_url = format!("https://get.hippius.network/ipfs/{}", profile_cid);
@@ -540,7 +536,6 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                     Ok(StorageKeyValuePair { value, .. }) => {
                         if let Some(storage_request) = value {
                             if storage_request.owner == account {
-                                println!("[UserSync] Found storage request for account: {}", account);
                                 let file_name = bounded_vec_to_string(&storage_request.file_name.0);
 
                                 // Skip files ending with .ff.ec_metadata, .ff, or .ec
@@ -791,7 +786,6 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                         source = private_path;
                                     }
                                 }
-                                println!("[UserSync] File hash for storage request : {}, main req hash is : {}", file_hash, decoded_hash);
                                 let file_key = (file_hash.clone(), file_name.clone());
                                 if seen_files.insert(file_key) {
                                     records_to_insert.push(UserProfileFile {
@@ -943,7 +937,6 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                         }
                     }
 
-                    println!("[UserSync] Total records inserted: {}", records_to_insert.len());
                     for record in records_to_insert {
                         let insert_result = sqlx::query(
                             "INSERT INTO user_profiles (

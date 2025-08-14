@@ -1,5 +1,5 @@
 use crate::constants::substrate::WSS_ENDPOINT;
-use crate::folder_sync;
+use crate::private_folder_sync;
 use crate::public_folder_sync;
 use crate::utils::accounts::{
     create_and_store_encryption_key, import_encryption_key, list_encryption_keys,
@@ -251,11 +251,11 @@ pub async fn reset_app() -> Result<(), String> {
     }
 
     // Clear in-memory state for private sync
-    if let Ok(mut uploading) = folder_sync::UPLOADING_FILES.lock() {
+    if let Ok(mut uploading) = private_folder_sync::UPLOADING_FILES.lock() {
         uploading.clear();
         println!("[Reset App] Cleared private UPLOADING_FILES.");
     }
-    if let Ok(mut recently) = folder_sync::RECENTLY_UPLOADED.lock() {
+    if let Ok(mut recently) = private_folder_sync::RECENTLY_UPLOADED.lock() {
         recently.clear();
         println!("[Reset App] Cleared private RECENTLY_UPLOADED.");
     }
