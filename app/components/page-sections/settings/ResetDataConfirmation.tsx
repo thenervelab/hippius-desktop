@@ -5,6 +5,7 @@ import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Graphsheet, Icons } from "@/components/ui";
 import { exportHippiusDBDataAsZip } from "@/app/lib/helpers/exportHippiusDB";
 import { toast } from "sonner";
+import PasscodeInput from "@/components/page-sections/settings/encryption-key/PasscodeInput";
 
 export interface ResetDataConfirmationProps {
   open: boolean;
@@ -22,114 +23,194 @@ const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
   loading = false
 }) => {
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [showPasscodeModal, setShowPasscodeModal] = useState(false);
+  const [passcode, setPasscode] = useState("");
+  const [showPasscode, setShowPasscode] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleBackupData = async () => {
+  const handleBackupClick = () => {
+    setShowPasscodeModal(true);
+  };
+
+  const handleBackupData = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passcode) {
+      setError("Please enter your passcode");
+      return;
+    }
+
     setIsBackingUp(true);
+    setError(null);
+
     try {
-      const success = await exportHippiusDBDataAsZip();
+      const success = await exportHippiusDBDataAsZip(passcode);
       if (success) {
         toast.success("Backup exported successfully.", { duration: 3000 });
+        closePasscodeModal();
       }
     } catch (error) {
       console.error("Backup export failed:", error);
+      if ((error as Error).message === "Invalid passcode") {
+        setError("Incorrect passcode. Please try again.");
+      } else {
+        toast.error("Backup failed.");
+        closePasscodeModal();
+      }
     } finally {
       setIsBackingUp(false);
     }
   };
 
+  const closePasscodeModal = () => {
+    setShowPasscodeModal(false);
+    setPasscode("");
+    setShowPasscode(false);
+    setError(null);
+  };
+
   return (
-    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
-        <Dialog.Title className="sr-only">Reset App Data</Dialog.Title>
+    <>
+      <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+        <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
+          <Dialog.Title className="sr-only">Reset App Data</Dialog.Title>
 
-        {/* Top accent bar (mobile only) */}
-        <div className="h-4 bg-primary-50 md:hidden block" />
+          {/* Top accent bar (mobile only) */}
+          <div className="h-4 bg-primary-50 md:hidden block" />
 
-        <div className="px-4">
-          {/* Desktop Header */}
-          <div className="text-2xl font-medium text-grey-10 hidden md:flex flex-col items-center justify-center pb-2 pt-4 gap-4">
-            <div className="size-14 flex justify-center items-center relative">
-              <Graphsheet
-                majorCell={{
-                  lineColor: [31, 80, 189, 1.0],
-                  lineWidth: 2,
-                  cellDim: 200
-                }}
-                minorCell={{
-                  lineColor: [49, 103, 211, 1.0],
-                  lineWidth: 1,
-                  cellDim: 20
-                }}
-                className="absolute w-full h-full duration-500 opacity-30 z-0"
-              />
-              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-              <div className="h-8 w-8 bg-error-50 rounded-lg flex items-center justify-center z-20">
-                <Icons.Trash className="size-6 text-grey-100" />
+          <div className="px-4">
+            {/* Desktop Header */}
+            <div className="text-2xl font-medium text-grey-10 hidden md:flex flex-col items-center justify-center pb-2 pt-4 gap-4">
+              <div className="size-14 flex justify-center items-center relative">
+                <Graphsheet
+                  majorCell={{
+                    lineColor: [31, 80, 189, 1.0],
+                    lineWidth: 2,
+                    cellDim: 200
+                  }}
+                  minorCell={{
+                    lineColor: [49, 103, 211, 1.0],
+                    lineWidth: 1,
+                    cellDim: 20
+                  }}
+                  className="absolute w-full h-full duration-500 opacity-30 z-0"
+                />
+                <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
+                <div className="h-8 w-8 bg-error-50 rounded-lg flex items-center justify-center z-20">
+                  <Icons.Trash className="size-6 text-grey-100" />
+                </div>
               </div>
+              <span className="text-center text-2xl text-grey-10 font-medium">
+                Reset app data on this device?
+              </span>
             </div>
-            <span className="text-center text-2xl text-grey-10 font-medium">
-              Reset app data on this device?
-            </span>
-          </div>
 
-          {/* Mobile Header */}
-          <div className="flex py-4 items-center justify-between text-grey-10 relative w-full md:hidden">
-            <button onClick={onBack} className="mr-2">
-              <ArrowLeft className="size-6 text-grey-10" />
-            </button>
-            <div className="text-lg font-medium relative">
-              <span className="capitalize">Reset App Data</span>
+            {/* Mobile Header */}
+            <div className="flex py-4 items-center justify-between text-grey-10 relative w-full md:hidden">
+              <button onClick={onBack} className="mr-2">
+                <ArrowLeft className="size-6 text-grey-10" />
+              </button>
+              <div className="text-lg font-medium relative">
+                <span className="capitalize">Reset App Data</span>
+              </div>
+              <button onClick={onClose}>
+                <Icons.CloseCircle className="size-6 relative" />
+              </button>
             </div>
-            <button onClick={onClose}>
-              <Icons.CloseCircle className="size-6 relative" />
-            </button>
-          </div>
 
-          {/* Message */}
-          <div className="font-medium text-base text-grey-20 mb-4 text-center">
-            This clears all Hippius data stored on this device. This includes
-            your encrypted seed, sub‑account seeds, and notifications. On‑chain
-            data and IPFS files stay intact and can be restored. Back up before
-            you proceed.
-          </div>
-
-          {/* Backup Button */}
-          <CardButton
-            className="w-full mb-4 h-10"
-            variant="secondary"
-            onClick={handleBackupData}
-            disabled={loading || isBackingUp}
-          >
-            <div className="flex items-center gap-2">
-              <Icons.Backup className="size-5" />
-              {isBackingUp ? "Backing up..." : "Back up app data"}
+            {/* Message */}
+            <div className="font-medium text-base text-grey-20 mb-4 text-center">
+              This clears all Hippius data stored on this device. This includes
+              your encrypted seed, sub‑account seeds, backend data, and notifications. On‑chain
+              data and IPFS files stay intact and can be restored. Back up before
+              you proceed.
             </div>
-          </CardButton>
 
-          {/* Action Buttons */}
-          <div className="flex gap-4 mb-6">
+            {/* Backup Button */}
             <CardButton
-              className="text-base w-full"
-              variant="error"
-              onClick={onConfirm}
-              disabled={loading}
-              loading={loading}
-            >
-              {loading ? "Resetting..." : "Reset Now"}
-            </CardButton>
-
-            <CardButton
-              className="w-full"
+              className="w-full mb-4 h-10"
               variant="secondary"
-              onClick={onBack}
-              disabled={loading}
+              onClick={handleBackupClick}
+              disabled={loading || isBackingUp}
             >
-              Cancel
+              <div className="flex items-center gap-2">
+                <Icons.Backup className="size-5" />
+                {isBackingUp ? "Backing up..." : "Back up app data"}
+              </div>
             </CardButton>
+
+            {/* Action Buttons */}
+            <div className="flex gap-4 mb-6">
+              <CardButton
+                className="text-base w-full"
+                variant="error"
+                onClick={onConfirm}
+                disabled={loading}
+                loading={loading}
+              >
+                {loading ? "Resetting..." : "Reset Now"}
+              </CardButton>
+
+              <CardButton
+                className="w-full"
+                variant="secondary"
+                onClick={onBack}
+                disabled={loading}
+              >
+                Cancel
+              </CardButton>
+            </div>
           </div>
-        </div>
-      </DialogContainer>
-    </Dialog.Root>
+        </DialogContainer>
+      </Dialog.Root>
+
+      <Dialog.Root open={showPasscodeModal} onOpenChange={setShowPasscodeModal}>
+        <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
+          <Dialog.Title className="text-center text-2xl text-grey-10 font-medium pt-4">
+            Enter Passcode
+          </Dialog.Title>
+
+          <div className="p-4 pt-0">
+            <div className="text-grey-20 text-center">
+              Enter your passcode to backup your app data.
+            </div>
+
+            <form onSubmit={handleBackupData}>
+              <PasscodeInput
+                passcode={passcode}
+                onPasscodeChange={setPasscode}
+                showPasscode={showPasscode}
+                onToggleShowPasscode={() => setShowPasscode(!showPasscode)}
+                error={error}
+                inView={true}
+                placeholder="Enter your passcode"
+                label="Enter your passcode"
+              />
+
+              <div className="flex gap-4 mt-6">
+                <CardButton
+                  className="w-full"
+                  variant="secondary"
+                  onClick={closePasscodeModal}
+                  disabled={isBackingUp}
+                >
+                  Cancel
+                </CardButton>
+
+                <CardButton
+                  className="w-full"
+                  variant="primary"
+                  type="submit"
+                  disabled={isBackingUp}
+                  loading={isBackingUp}
+                >
+                  {isBackingUp ? "Creating Backup..." : "Backup Now"}
+                </CardButton>
+              </div>
+            </form>
+          </div>
+        </DialogContainer>
+      </Dialog.Root>
+    </>
   );
 };
 
