@@ -694,47 +694,74 @@ fn collect_paths_recursively(dir: &Path, paths: &mut Vec<PathBuf>) {
 }
 
 async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_path: &Path, app_handle: AppHandle) {
-    let filtered_paths = event.paths.into_iter()
-    .filter(|path| {
-        // First filter out temp files
-        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-            if file_name.starts_with('.') || file_name.contains("goutputstream") {
-                // Mark filtered files as processed
-                let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
-                status.processed_files += 1;
-                if status.processed_files >= status.total_files && status.total_files > 0 {
-                    status.in_progress = false;
-                    println!("[PrivateFolderSync] Filtered path marked as processed: {}", path.display());
+    // General filtering for temporary/hidden files and ensuring paths are within the sync directory.
+    let paths = event.paths.into_iter()
+        .filter(|path| {
+            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                if file_name.starts_with('.') || file_name.contains("goutputstream") {
+                    let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
+                    status.processed_files += 1;
+                    if status.processed_files >= status.total_files && status.total_files > 0 {
+                        status.in_progress = false;
+                        println!("[PrivateFolderSync] Filtered path marked as processed: {}", path.display());
+                    }
+                    return false;
                 }
-                return false;
             }
-        }
-        
-        // Then check if it's a direct child of the sync directory
-        path.parent().map(|p| p == sync_path).unwrap_or(false)
-        // path.starts_with(sync_path)
-    })
-    .collect::<Vec<_>>();
+            path.starts_with(sync_path)
+        })
+        .collect::<Vec<_>>();
 
-    if filtered_paths.is_empty() {
-        println!("[PrivateWatcher] Skipping event with only temporary or invalid paths.");
+    if paths.is_empty() {
+        println!("[PrivateWatcher] Skipping event with no relevant paths.");
         return;
     }
 
     match event.kind {
         EventKind::Create(CreateKind::File) | EventKind::Create(CreateKind::Folder) => {
-            let mut folder_paths = HashSet::new();
-            let mut file_paths = HashSet::new();
-            println!("[PrivateWatcher][Create] Detected new paths: {:?}", filtered_paths);
+            let mut paths_to_batch = HashSet::new();
 
-            // Check sync_folder_files database for each path
-            if let Some(pool) = crate::DB_POOL.get() {
-                for path in filtered_paths.iter() {
-                    let path_str = path.to_string_lossy().to_string();
-                    let file_name = match path.file_name().and_then(|s| s.to_str()) {
+            for path in paths {
+                let path_str = path.to_string_lossy().to_string();
+
+                // Skip if recently uploaded or already uploading
+                {
+                    let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+                    if recently_uploaded.contains(&path_str) {
+                        println!("[PrivateWatcher][Create] Skipping recently uploaded: {}", path_str);
+                        continue;
+                    }
+                }
+                {
+                    let uploading_files = UPLOADING_FILES.lock().unwrap();
+                    if uploading_files.contains(&path_str) {
+                        println!("[PrivateWatcher][Create] Path {} is already being uploaded, skipping.", path_str);
+                        continue;
+                    }
+                }
+
+                // Determine the effective path to re-sync
+                let effective_path = if path.parent() == Some(sync_path) {
+                    path.clone()
+                } else if let Some(top_level) = find_top_level_folder(&path, sync_path) {
+                    top_level
+                } else {
+                    println!("[PrivateWatcher][Create] Path {} is not in a top-level folder or file, skipping.", path_str);
+                    continue;
+                };
+
+                let effective_path_str = effective_path.to_string_lossy().to_string();
+                // Check if the effective path is already in the batch to avoid duplicates
+                if paths_to_batch.contains(&effective_path) {
+                    println!("[PrivateWatcher][Create] Effective path {} already in batch, skipping.", effective_path_str);
+                    continue;
+                }
+
+                if let Some(pool) = crate::DB_POOL.get() {
+                    let file_name = match effective_path.file_name().and_then(|s| s.to_str()) {
                         Some(name) => name.to_string(),
                         None => {
-                            println!("[PrivateWatcher][Create] Could not extract file name from path: {}", path_str);
+                            println!("[PrivateWatcher][Create] Could not extract file name from effective path: {}", effective_path.to_string_lossy());
                             continue;
                         }
                     };
@@ -750,64 +777,43 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                     {
                         Ok(result) => result,
                         Err(e) => {
-                            eprintln!("[PublicWatcher][Create] DB error while checking sync status for '{}': {}", file_name, e);
+                            eprintln!("[PrivateWatcher][Create] DB error while checking sync status for '{}': {}", file_name, e);
                             None
                         }
                     };
 
-                    if is_synced.is_some() {
-                        println!("[PrivateWatcher][Create] Path '{}' is already in sync DB, skipping.", file_name);
-                        continue;
-                    }
-
-                    // Additional checks for recently uploaded or uploading files
-                    {
-                        let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
-                        if recently_uploaded.contains(&path_str) {
-                            println!("[PrivateWatcher][Create] Skipping recently uploaded: {}", path_str);
-                            continue;
+                    if let Some(_) = is_synced {
+                        println!("[PrivateWatcher][Create] Effective path '{}' exists in sync DB, cleaning up before re-sync.", file_name);
+                        let should_delete_folder = false;
+                        if let Err(e) = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await {
+                            eprintln!("[PrivateWatcher][Create] Warning: Failed to delete/unpin old records for '{}', proceeding with upload anyway. Error: {:?}", file_name, e);
+                        } else {
+                            println!("[PrivateWatcher][Create] Successfully cleaned up old records for '{}'", file_name);
                         }
+                    } else {
+                        println!("[PrivateWatcher][Create] New effective path detected: {}", file_name);
                     }
-                    {
-                        let uploading_files = UPLOADING_FILES.lock().unwrap();
-                        if uploading_files.contains(&path_str) {
-                            println!("[PrivateWatcher][Create] Path {} is already being uploaded, skipping.", path_str);
-                            continue;
-                        }
-                    }
-
-                    if path.is_dir() {
-                        folder_paths.insert(path.clone());
-                    } else if path.is_file() {
-                        file_paths.insert(path.clone());
-                    }
-                    println!("[PrivateWatcher][Create] Detected new path: {}", path_str);
+                } else {
+                    eprintln!("[PrivateWatcher][Create] DB_POOL not initialized, cannot check sync status.");
+                    continue;
                 }
 
-                let filtered_paths: Vec<(PathBuf, bool)> = folder_paths.clone()
-                    .into_iter()
-                    .map(|path| (path, true))
-                    .chain(
-                        file_paths.into_iter().filter(|file_path| {
-                            !folder_paths.iter().any(|folder_path| {
-                                file_path.starts_with(folder_path) && file_path != folder_path
-                            })
-                        }).map(|path| (path, false))
-                    )
-                    .collect();
+                paths_to_batch.insert(effective_path);
+            }
 
+            // Add to batch
+            if !paths_to_batch.is_empty() {
                 {
                     let mut batch = CREATE_BATCH.lock().unwrap();
-                    for (path, is_folder) in &filtered_paths {
-                        println!("[PrivateWatcher][Create] Adding to batch: {} (is_folder: {})", path.to_string_lossy(), is_folder);
-                        batch.push(path.clone());
+                    for path in paths_to_batch {
+                        println!("[PrivateWatcher][Create] Adding to batch: {} (is_folder: {})", path.to_string_lossy(), path.is_dir());
+                        batch.push(path);
                     }
                 }
 
                 if !CREATE_BATCH_TIMER_RUNNING.swap(true, Ordering::SeqCst) {
                     let account_id = account_id.to_string();
                     let seed_phrase = seed_phrase.to_string();
-                    let sync_path = sync_path.to_path_buf();
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         let mut paths = Vec::new();
@@ -831,12 +837,7 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                                             is_stable
                                         });
                                         if stable {
-                                            let is_inside_folder = paths.iter().any(|(p, is_folder)| {
-                                                *is_folder && path.starts_with(p) && path != *p
-                                            });
-                                            if !is_inside_folder {
-                                                paths.push((path.clone(), false));
-                                            }
+                                            paths.push((path.clone(), false));
                                         }
                                     } else if path.is_dir() {
                                         paths.push((path.clone(), true));
@@ -851,7 +852,6 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                             {
                                 let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
                                 status.total_files += paths.len(); 
-                                // status.synced_files = 0;
                                 status.in_progress = true;
                             }
                             if let Some(sender) = UPLOAD_SENDER.get() {
@@ -872,22 +872,13 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         CREATE_BATCH_TIMER_RUNNING.store(false, Ordering::SeqCst);
                     });
                 }
-            } else {
-                eprintln!("[PrivateWatcher][Create] DB_POOL not initialized, cannot check sync status.");
             }
         }
         EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::To)) => {
             let mut paths_to_batch = HashSet::new();
 
-            for path in filtered_paths {
+            for path in paths {
                 let path_str = path.to_string_lossy().to_string();
-                let file_name = match path.file_name().and_then(|s| s.to_str()) {
-                    Some(name) => name.to_string(),
-                    None => {
-                        println!("[PrivateWatcher][Modify] Could not extract file name from path: {}", path_str);
-                        continue;
-                    }
-                };
 
                 // Skip if recently uploaded or already uploading
                 {
@@ -915,7 +906,6 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                     continue;
                 };
 
-                // Skip if top-level path is recently uploaded
                 let top_level_path_str = top_level_path.to_string_lossy().to_string();
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
@@ -925,8 +915,8 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                     }
                 }
 
-                // Check if path is already in sync_folder_files
                 if let Some(pool) = crate::DB_POOL.get() {
+                    let file_name = top_level_path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
 
                     let is_synced: Option<(String,)> = match sqlx::query_as(
                         "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?"
@@ -943,16 +933,14 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                             None
                         }
                     };
-                    
+
                     if is_synced.is_some() {
-                        // Path exists in sync DB, delete old records before re-uploading
                         println!("[PrivateWatcher][Modify] Path '{}' exists in sync DB, cleaning up before re-sync.", file_name);
                         let should_delete_folder = false;
-                        let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await;
-                        if delete_result.is_err() {
-                            eprintln!("[PrivateWatcher][Modify] Warning: Failed to delete/unpin old records for '{}', proceeding with upload anyway.", file_name);
+                        if let Err(e) = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await {
+                            eprintln!("[PrivateWatcher][Modify] Warning: Failed to delete/unpin old records for '{}', proceeding with upload anyway. Error: {:?}", file_name, e);
                         } else {
-                            println!("[PrivateWatcher][Modify] Successfully cleaned up old records for '{}'", file_name);
+                             println!("[PrivateWatcher][Modify] Successfully cleaned up old records for '{}'", file_name);
                         }
                     }
                 } else {
@@ -1025,7 +1013,6 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                             {
                                 let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
                                 status.total_files += final_paths_to_upload.len();
-                                // status.synced_files = 0;
                                 status.in_progress = true;
                             }
                             if let Some(sender) = UPLOAD_SENDER.get() {
@@ -1049,21 +1036,89 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
             }
         }
         EventKind::Remove(RemoveKind::File) | EventKind::Remove(RemoveKind::Folder) | EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::From)) => {
-            for path in filtered_paths {
-                let file_name = path.file_name().and_then(|s| s.to_str());
-                if let Some(file_name) = file_name {
-                    println!("[PrivateWatcher][Remove] Path deleted from sync folder: {} (is_folder: {})", file_name, path.is_dir());
-                    let should_delete_folder = false;
-                    let delete_result = delete_and_unpin_user_file_records_by_name(file_name, seed_phrase, false, should_delete_folder).await;
-                    if delete_result.is_ok() {
-                        println!("[PrivateWatcher][Remove] Successfully deleted records for '{}'", file_name);
-                    } else {
-                        eprintln!("[PrivateWatcher][Remove] Failed to delete/unpin records for '{}': {:?}", file_name, delete_result.err());
+            let mut paths_to_handle = HashSet::new();
+
+            for path in paths {
+                let path_str = path.to_string_lossy().to_string();
+
+                let effective_path = if path.parent() == Some(sync_path) {
+                    Some((path.clone(), true)) // (path, is_direct)
+                } else if let Some(top_level) = find_top_level_folder(&path, sync_path) {
+                    Some((top_level, false))
+                } else {
+                    println!("[PrivateWatcher][Remove] Path {} is not in a top-level folder or file, skipping.", path_str);
+                    None
+                };
+
+                if let Some(eff) = effective_path {
+                    paths_to_handle.insert(eff);
+                }
+            }
+
+            for (effective_path, is_direct) in paths_to_handle {
+                let file_name = effective_path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()).unwrap_or_default();
+
+                if file_name.is_empty() {
+                    continue;
+                }
+
+                println!("[PrivateWatcher][Remove] Handling removal for effective path: {} (is_direct: {})", file_name, is_direct);
+
+                let should_delete_folder = false;
+                let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await;
+
+                if delete_result.is_ok() {
+                    println!("[PrivateWatcher][Remove] Successfully deleted records for '{}'", file_name);
+                } else {
+                    eprintln!("[PrivateWatcher][Remove] Failed to delete/unpin records for '{}': {:?}", file_name, delete_result.err());
+                }
+
+                if !is_direct {
+                    // For internal removal, re-upload the updated folder
+                    let effective_path_str = effective_path.to_string_lossy().to_string();
+                    {
+                        let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
+                        if recently_uploaded.contains(&effective_path_str) {
+                            println!("[PrivateWatcher][Remove] Skipping recently uploaded effective path: {}", effective_path_str);
+                            continue;
+                        }
+                    }
+                    {
+                        let uploading_files = UPLOADING_FILES.lock().unwrap();
+                        if uploading_files.contains(&effective_path_str) {
+                            println!("[PrivateWatcher][Remove] Effective path {} is already being uploaded, skipping.", effective_path_str);
+                            continue;
+                        }
+                    }
+
+                    if let Some(sender) = UPLOAD_SENDER.get() {
+                        if let Err(e) = sender.send(UploadJob {
+                            account_id: account_id.to_string(),
+                            seed_phrase: seed_phrase.to_string(),
+                            file_path: effective_path_str.clone(),
+                            is_folder: true,
+                        }) {
+                            eprintln!("[PrivateWatcher][Remove] Failed to enqueue re-upload for '{}': {}", effective_path_str, e);
+                        } else {
+                            println!("[PrivateWatcher][Remove] Enqueued re-upload for updated folder: {}", effective_path_str);
+                            let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
+                            status.total_files += 1;
+                            status.in_progress = true;
+                        }
                     }
                 }
             }
         }
         EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::Both)) => {
+            // For rename events, we also only care about direct children.
+            let filtered_paths = paths.into_iter()
+                .filter(|path| path.parent().map(|p| p == sync_path).unwrap_or(false))
+                .collect::<Vec<_>>();
+            
+            if filtered_paths.is_empty() {
+                return;
+            }
+    
             for path in filtered_paths {
                 let path_str = path.to_string_lossy().to_string();
                 {
