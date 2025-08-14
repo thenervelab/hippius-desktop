@@ -1,4 +1,4 @@
-import { Icons } from "../ui";
+import { Icons } from "@/components/ui";
 import { LockKeyhole, LockKeyholeOpen, Share2Icon } from "lucide-react";
 
 export interface SubMenuItemData {

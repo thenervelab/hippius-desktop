@@ -2,6 +2,7 @@ import React from "react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { IconComponent } from "@/app/lib/types";
 import InfoTooltip from "./InfoTooltip";
+import cn from "@/app/lib/utils/cn";
 
 interface SectionHeaderProps {
   Icon: IconComponent;
@@ -23,8 +24,8 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
 
   return (
     <div className="flex items-center gap-2">
-      <AbstractIconWrapper className={`${wrapperSize} bg-grey-10 relative`}>
-        <Icon className={`absolute ${iconSizeClass} text-primary-50`} />
+      <AbstractIconWrapper className={cn(wrapperSize, "relative")}>
+        <Icon className={cn("absolute", iconSizeClass, "text-primary-50")} />
       </AbstractIconWrapper>
       <div className="flex flex-col">
         <div className="flex gap-2 mb-0.5">

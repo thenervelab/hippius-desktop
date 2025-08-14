@@ -1,96 +1,112 @@
-// import { open } from "@tauri-apps/plugin-dialog";
-// import { invoke } from '@tauri-apps/api/core';
-// import { useState } from 'react';
-// import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+"use client";
 
-// const UploadFileComponent = () => {
-//   const [status, setStatus] = useState<string>('');
-//   const [folderContents, setFolderContents] = useState<any[]>([]);
-//   const { polkadotAddress, mnemonic } = useWalletAuth();
-//   const accountId = polkadotAddress;
-//   const seedPhrase = mnemonic;
+import React, { useState } from "react";
+// import { importAppData, type ImportDataParams } from "@/lib/helpers/restoreWallet";
 
-//   const handleFileUpload = async () => {
-//     try {
-//       // Open file picker dialog
-//       const selected = await open({
-//         multiple: false, // Set to true if you want to allow multiple files
-//         filters: [{ name: 'All Files', extensions: ['*'] }], // Adjust filters as needed
-//       });
+export default function ImportAppDataDemo() {
+  const [publicPath, setPublicPath] = useState<string>("");
+  const [privatePath, setPrivatePath] = useState<string>("");
+  const [keysCsv, setKeysCsv] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-//       if (typeof selected === 'string') {
-//         // Single file selected, pass the path to the Tauri command
-//         setStatus('Uploading...');
-//         const result = await invoke('encrypt_and_upload_file', {
-//           accountId: accountId,
-//           filePath: selected, // Pass the absolute file path
-//           seedPhrase: seedPhrase,
-//           encryptionKey: null, // Adjust as needed
-//         });
-//         setStatus(`File uploaded successfully. CID: ${result}`);
-//       } else if (Array.isArray(selected)) {
-//         // Handle multiple files if needed
-//         setStatus('Multiple files not supported in this example.');
-//       } else {
-//         setStatus('No file selected.');
-//       }
-//     } catch (error) {
-//       setStatus(`Error: ${error}`);
-//     }
-//   };
+  // const params: ImportDataParams = useMemo(
+  //   () => ({
+  //     public_sync_path: publicPath.trim() ? publicPath.trim() : null,
+  //     private_sync_path: privatePath.trim() ? privatePath.trim() : null,
+  //     encryption_keys: keysCsv
+  //       .split(",")
+  //       .map((s) => s.trim())
+  //       .filter((s) => s.length > 0),
+  //   }),
+  //   [publicPath, privatePath, keysCsv]
+  // );
 
-//   const testListFolderContents = async () => {
-//     try {
-//       setStatus('Fetching folder contents...');
-//       const folderName = 'test-folder'; // You can make this dynamic if needed
-//       const folderMetadataCid = 'bafkreiclfqhwzmhtcjlbju4yn3h23pqckpd24mo3fn6erxhjrphe2epemm';
-      
-//       const contents = await invoke('list_folder_contents', {
-//         folderName: folderName,
-//         folderMetadataCid: folderMetadataCid
-//       });
-      
-//       setFolderContents(contents as any[]);
-//       setStatus(`Found ${(contents as any[]).length} items in folder`);
-//     } catch (error) {
-//       setStatus(`Error listing folder contents: ${error}`);
-//       console.error('Error listing folder:', error);
-//     }
-//   };
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      // const res = await importAppData(params);
+      setResult(null);
+    } catch (err) {
+      console.error("import_app_data failed", err);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
 
-//   return (
-//     <div style={{ padding: '20px' }}>
-//       <div style={{ marginBottom: '20px' }}>
-//         <h3>File Upload</h3>
-//         <button onClick={handleFileUpload} style={{ marginRight: '10px' }}>Select and Upload File</button>
-//       </div>
-      
-//       <div style={{ marginTop: '20px' }}>
-//         <h3>Test Folder Listing</h3>
-//         <button onClick={testListFolderContents} style={{ marginBottom: '10px' }}>
-//           Test List Folder Contents
-//         </button>
-        
-//         {folderContents.length > 0 && (
-//           <div style={{ marginTop: '10px' }}>
-//             <h4>Folder Contents:</h4>
-//             <ul>
-//               {folderContents.map((item, index) => (
-//                 <li key={index}>
-//                   {item.file_name} (Size: {item.file_size} bytes)
-//                 </li>
-//               ))}
-//             </ul>
-//           </div>
-//         )}
-//       </div>
-      
-//       <div style={{ marginTop: '20px' }}>
-//         <h4>Status:</h4>
-//         <p>{status}</p>
-//       </div>
-//     </div>
-//   );
-// };
+  return (
+    <div style={{ maxWidth: 640 }}>
+      <h2 style={{ fontSize: "1.25rem", fontWeight: 600, marginBottom: 12 }}>
+        Import App Data (Demo)
+      </h2>
+      <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Public sync path (optional)</span>
+          <input
+            type="text"
+            value={publicPath}
+            onChange={(e) => setPublicPath(e.target.value)}
+            placeholder="/path/to/public"
+            style={{ padding: 8, border: "1px solid #ccc", borderRadius: 6 }}
+          />
+        </label>
 
-// export default UploadFileComponent;
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Private sync path (optional)</span>
+          <input
+            type="text"
+            value={privatePath}
+            onChange={(e) => setPrivatePath(e.target.value)}
+            placeholder="/path/to/private"
+            style={{ padding: 8, border: "1px solid #ccc", borderRadius: 6 }}
+          />
+        </label>
+
+        <label style={{ display: "grid", gap: 6 }}>
+          <span>Encryption keys (comma separated, base64)</span>
+          <input
+            type="text"
+            value={keysCsv}
+            onChange={(e) => setKeysCsv(e.target.value)}
+            placeholder="base64Key1, base64Key2"
+            style={{ padding: 8, border: "1px solid #ccc", borderRadius: 6 }}
+          />
+        </label>
+
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 6,
+            border: "1px solid #444",
+            background: loading ? "#888" : "#222",
+            color: "#fff",
+            cursor: loading ? "not-allowed" : "pointer",
+          }}
+        >
+          {loading ? "Importing..." : "Call import_app_data"}
+        </button>
+      </form>
+
+      {result && (
+        <div style={{ marginTop: 12, color: "#0a7" }}>
+          <strong>Result: </strong>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{result}</pre>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ marginTop: 12, color: "#c00" }}>
+          <strong>Error: </strong>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{error}</pre>
+        </div>
+      )}
+    </div>
+  );
+}

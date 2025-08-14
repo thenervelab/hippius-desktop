@@ -1,10 +1,10 @@
 import { Check } from "lucide-react";
-import { AbstractIconWrapper, Icons } from "../../ui";
+import { AbstractIconWrapper, Icons } from "@/components/ui";
 import { IconComponent } from "@/app/lib/types";
 import { cn } from "@/app/lib/utils";
 import { useState } from "react";
 import { toast } from "sonner";
-import InfoTooltip from "../../ui/info-tooltip";
+import InfoTooltip from "@/components/ui/InfoTooltip";
 
 interface DetailsCardProps {
   icon: IconComponent;

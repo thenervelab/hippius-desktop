@@ -1,16 +1,16 @@
 import React, { useState } from "react";
 import { IconComponent } from "@/app/lib/types";
-import { AbstractIconWrapper, Icons } from "../../ui";
+import { AbstractIconWrapper, Icons } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
 import { handleButtonLink } from "@/app/lib/utils/links";
 import { InView } from "react-intersection-observer";
-import RevealTextLine from "../../ui/reveal-text-line";
+import RevealTextLine from "@/components/ui/reveal-text-line";
 import TimeAgo from "react-timeago";
 import { useRouter } from "next/navigation";
-import NotificationType from "../../page-sections/notifications/NotificationType";
-import NotificationContextMenu from "../../page-sections/notifications/NotificationContextMenu";
+import NotificationType from "@/components/page-sections/notifications/NotificationType";
+import NotificationContextMenu from "@/components/page-sections/notifications/NotificationContextMenu";
 import { useSetAtom } from "jotai";
-import { activeSubMenuItemAtom } from "../../sidebar/sideBarAtoms";
+import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
 
 interface NotificationItemProps {
   id?: number;

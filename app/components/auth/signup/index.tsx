@@ -1,12 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { AppVersion, RevealTextLine } from "../../ui";
+import { AppVersion, RevealTextLine } from "@/components/ui";
 import Link from "next/link";
 import CreateAccountForm from "./CreateAccountForm";
 import PassCodeForm from "./SetNewPasscodeForm";
 import ConfirmAccessKey from "./ConfirmAccessKey";
-import AuthLayout from "../AuthLayout";
+import AuthLayout from "@/components/auth/AuthLayout";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { generateMnemonic } from "@/app/lib/helpers/mnemonic";
 

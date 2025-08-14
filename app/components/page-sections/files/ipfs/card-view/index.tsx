@@ -16,14 +16,16 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
-import TableActionMenu from "@/components/ui/alt-table/table-action-menu";
+import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import * as TableModule from "@/components/ui/alt-table";
 import { useRouter } from "next/navigation";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { FileViewSharedState } from "../shared/file-view-utils";
-import FileDetailsDialogContent from "../file-details-dialog-content";
-import SidebarDialog from "@/app/components/ui/sidebar-dialog";
+import { FileViewSharedState } from "@/components/page-sections/files/ipfs/shared/FileViewUtils";
+import FileDetailsDialogContent from "@/components/page-sections/files/ipfs/file-details-dialog-content";
+import SidebarDialog from "@/app/components/ui/SidebarDialog";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { buildFolderPath } from "@/app/utils/folderPathUtils";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 interface Filter {
@@ -59,6 +61,8 @@ const CardView: FC<CardViewProps> = ({
 }) => {
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
+  const { getParam } = useUrlParams();
+
 
   const [localFileDetailsFile, setLocalFileDetailsFile] =
     useState<FormattedUserIpfsFile | null>(null);
@@ -129,6 +133,8 @@ const CardView: FC<CardViewProps> = ({
     );
   }
 
+
+
   return (
     <div className="flex flex-col gap-y-8 relative">
       <div
@@ -153,6 +159,23 @@ const CardView: FC<CardViewProps> = ({
 
               const handleCardClick = () => {
 
+                // Get current path information for folder navigation
+                const folderActualName = file.isFolder ? file.actualFileName || "" : "";
+                const mainFolderCid = getParam("mainFolderCid", "");
+                const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
+                const subFolderPath = getParam("subFolderPath", "");
+                const effectiveMainFolderCid = mainFolderCid || file.cid;
+                const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
+
+
+                // Build the folder path for navigation
+                const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
+                  folderActualName,
+                  effectiveMainFolderCid,
+                  effectiveMainFolderActualName,
+                  subFolderPath
+                );
+
                 if (
                   fileType === "video" ||
                   fileType === "image" ||
@@ -161,7 +184,7 @@ const CardView: FC<CardViewProps> = ({
                   setSelectedFile?.(file);
                 } else if (file.isFolder) {
                   router.push(
-                    `/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}`
+                    `/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`
                   );
                 }
               };

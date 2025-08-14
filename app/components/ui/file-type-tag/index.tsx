@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { cn, DEFAULT_FILE_FORMAT, FileTypes } from "@/lib/utils";
 import { File, Image, Video } from "lucide-react";
-import { Directory } from "../icons";
+import { Directory } from "@/components/ui/icons";
 
 const getLabelData = (type: FileTypes) => {
   switch (type) {

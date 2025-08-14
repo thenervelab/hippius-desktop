@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
 import { createPortal } from "react-dom";
-import { Icons } from "../../ui";
+import { Icons } from "@/components/ui";
 
 interface NotificationContextMenuProps {
   x: number;

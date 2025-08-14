@@ -8,7 +8,7 @@ import {
   mkdir,
 } from "@tauri-apps/plugin-fs";
 
-export const DB_FILENAME = "wallet.db";
+export const DB_FILENAME = "hippius-desktop.db";
 const TABLE_SCHEMA = `
   CREATE TABLE IF NOT EXISTS wallet (
     id INTEGER PRIMARY KEY,
@@ -63,7 +63,7 @@ async function createSchema(db: initSqlJsType.Database) {
   }
 }
 
-export async function initWalletDb(): Promise<initSqlJsType.Database> {
+export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
   await ensureAppDirectory();
   const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
   const raw = await getBytes();
@@ -92,7 +92,7 @@ export async function initWalletDb(): Promise<initSqlJsType.Database> {
 
 export async function ensureWalletTable(): Promise<boolean> {
   try {
-    const db = await initWalletDb();
+    const db = await initHippiusDesktopDB();
     const result = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='wallet'");
     if (!result.length || !result[0].values.length) {
       await createSchema(db);
@@ -111,7 +111,7 @@ export async function saveWallet(
 ) {
   try {
     await ensureWalletTable();
-    const db = await initWalletDb();
+    const db = await initHippiusDesktopDB();
 
     db.run("INSERT INTO wallet (encryptedMnemonic, passcodeHash) VALUES (?, ?)", [
       encryptedMnemonic,
@@ -130,7 +130,7 @@ export async function updateWallet(
   encryptedMnemonic: string,
   passcodeHash: string
 ) {
-  const db = await initWalletDb();
+  const db = await initHippiusDesktopDB();
   // Get the latest wallet record id
   const res = db.exec("SELECT id FROM wallet ORDER BY id DESC LIMIT 1");
   if (!res[0]?.values.length) {
@@ -152,7 +152,7 @@ export async function getWalletRecord(): Promise<{
 } | null> {
   try {
     await ensureWalletTable();
-    const db = await initWalletDb();
+    const db = await initHippiusDesktopDB();
 
     const res = db.exec(
       "SELECT encryptedMnemonic, passcodeHash FROM wallet ORDER BY id DESC LIMIT 1"
@@ -179,7 +179,7 @@ export async function hasWalletRecord(): Promise<boolean> {
   return rows.length > 0 && rows[0].values.length > 0;
 }
 
-export async function clearWalletDb() {
+export async function clearHippiusDesktopDB() {
   const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
   const db = new SQL.Database();
   db.run(TABLE_SCHEMA);

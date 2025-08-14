@@ -1,4 +1,4 @@
-import { initWalletDb, saveBytes, getWalletRecord } from "./walletDb";
+import { initHippiusDesktopDB, saveBytes, getWalletRecord } from "./hippiusDesktopDB";
 import { encryptMnemonic, decryptMnemonic, hashPasscode } from "./crypto";
 
 const TABLE_SCHEMA = `
@@ -11,7 +11,7 @@ const TABLE_SCHEMA = `
 
 // Ensure the sub_account_seeds table exists in the wallet database
 async function ensureSubAccountSeedsTable() {
-    const db = await initWalletDb();
+    const db = await initHippiusDesktopDB();
     db.run(TABLE_SCHEMA);
     await saveBytes(db.export());
     return db;

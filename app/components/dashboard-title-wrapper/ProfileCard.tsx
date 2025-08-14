@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { toast } from "sonner";
-import BoxSimple from "../ui/icons/BoxSimple";
+import BoxSimple from "@/components/ui/icons/BoxSimple";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import dynamic from "next/dynamic";

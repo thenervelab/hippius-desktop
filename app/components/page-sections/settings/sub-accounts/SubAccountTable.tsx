@@ -22,7 +22,7 @@ import { SubAccount } from "@/app/lib/hooks/api/useSubAccounts";
 import { Icons } from "@/app/components/ui";
 import { ShieldSecurity } from "@/app/components/ui/icons";
 import { saveSubAccountSeed } from "@/app/lib/helpers/subAccountSeedsDb";
-import { getWalletRecord } from "@/app/lib/helpers/walletDb";
+import { getWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import SeedPasscodeModal from "./SeedPasscodeModal";
 import ViewSeedModal from "./ViewSeedModal";

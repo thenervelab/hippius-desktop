@@ -1,4 +1,4 @@
-import { NodeMetric } from "../types";
+import { NodeMetric } from "@/lib/types";
 
 export const avgLatency = (r: NodeMetric): number =>
   r.avg_response_time_ms ??

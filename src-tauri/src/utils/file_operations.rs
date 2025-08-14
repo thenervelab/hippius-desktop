@@ -8,7 +8,7 @@ use crate::sync_shared::collect_files_recursively;
 use hex;
 use crate::ipfs::get_ipfs_file_size;
 use crate::sync_shared::insert_file_if_not_exists;
-use crate::folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, PRIVATE_SYNC_STATUS};
+use crate::private_folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, PRIVATE_SYNC_STATUS};
 use crate::public_folder_sync::{RECENTLY_UPLOADED as PUBLIC_RECENTLY_UPLOADED, PUBLIC_SYNC_STATUS};
 use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
@@ -135,6 +135,18 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
                             .await
                             .map(|_| ())
                             .map_err(|e| format!("Unpin request error for variant '{}': {}", variant, e));
+                        
+                        let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
+                            .bind(variant)
+                            .execute(pool)
+                            .await
+                            .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
+
+                        // Also delete from file_paths table
+                        let _ = sqlx::query("DELETE FROM file_paths WHERE file_name = ?")
+                            .bind(variant)
+                            .execute(pool)
+                            .await;
                     }
                     return Err("Found empty hash result despite non-empty hashes".to_string());
                 },
@@ -179,13 +191,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
         .unwrap_or(false);
 
-        let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
-            .bind(file_name)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
-
-        let result2 = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
+        let result = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
             .bind(&sanitized_file_name)
             .bind(if is_public { "public" } else { "private" })
             .execute(pool)
@@ -220,7 +226,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         // Remove from sync folder
         remove_file_from_sync_and_db(&sanitized_file_name, is_public, is_folder, should_delete_folder).await;
 
-        let total_deleted = result1.rows_affected() + result2.rows_affected();
+        let total_deleted = result.rows_affected();
         Ok(total_deleted)
     } else {
         Err("DB_POOL not initialized".to_string())
@@ -414,7 +420,7 @@ pub async fn copy_to_sync_and_add_to_db(
             let mut source = "Hippius".to_string();
             println!("dest_path: {}", dest_path_str_clone);
             let sanitize_name = sanitize_name(&dest_path_str_clone);
-            source = dest_path_str_clone;
+            source = dest_path_str_clone.clone();
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -432,6 +438,17 @@ pub async fn copy_to_sync_and_add_to_db(
             .bind(source)   // source
             .bind(if is_public { "public" } else { "private" })  // type
             .bind(is_folder)
+            .execute(pool)
+            .await;
+
+            // Also insert into file_paths table
+            let _ = sqlx::query(
+                "INSERT INTO file_paths (file_name, file_hash, timestamp, path) VALUES (?, ?, ?, ?)"
+            )
+            .bind(&requested_file_name)
+            .bind(&file_hash)
+            .bind(chrono::Utc::now().timestamp())
+            .bind(&dest_path_str_clone)
             .execute(pool)
             .await;
         }
@@ -612,9 +629,8 @@ pub async fn request_erasure_storage(
     }
 
     let json_string = build_storage_json(files);
-    println!("[request_erasure_storage] JSON CID requesting is: {}", json_string);
+
     let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
-    println!("[request_erasure_storage] JSON CID requested: {}", json_cid);
 
     let file_input = FileInputWrapper {
         file_hash: json_cid.as_bytes().to_vec(),
@@ -642,9 +658,8 @@ pub async fn request_folder_storage(
     }
 
     let json_string = build_storage_json(files);
-    println!("[request_folder_storage] JSON CID requesting is: {}", json_string);
+
     let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
-    println!("[request_folder_storage] JSON CID requested: {}", json_cid);
 
     let file_input = FileInputWrapper {
         file_hash: json_cid.as_bytes().to_vec(),
@@ -791,7 +806,6 @@ pub async fn copy_to_sync_folder(
             0
         }
     };
-    println!("setting to user profile on add where folder_name {:?} , request_cid {:?}",meta_folder_name, request_cid);
     if let Some(pool) = DB_POOL.get() {
         // Check if folder record already exists
         let exists: Option<(String,)> = sqlx::query_as(
@@ -829,7 +843,6 @@ pub async fn copy_to_sync_folder(
         } else {
             let source = target_folder.to_string_lossy().to_string();
             // Insert new record
-            println!("Inserting new record for folder {} with request_cid: {}", folder_name, request_cid);
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -854,7 +867,6 @@ pub async fn copy_to_sync_folder(
         let folder_relative_path = PathBuf::from(folder_name).join(&file_name);
         insert_file_if_not_exists(pool, &folder_relative_path, account_id, is_public, is_folder).await;
     }
-    println!("copying file to sync folder {}", dest_path.display());
     if is_folder {
         if !dest_path.exists() {
             if let Err(e) = std::fs::create_dir_all(&dest_path) {
@@ -1014,7 +1026,6 @@ pub async fn remove_from_sync_folder(
 
     let cid_vec = folder_manifest_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec);
-    println!("setting to user profile on remove where folder_name {:?} request_cid {:?}",meta_folder_name, folder_manifest_cid);
     if let Some(pool) = DB_POOL.get() {
         // Check if folder record already exists
         let exists: Option<(String,)> = sqlx::query_as(
@@ -1028,7 +1039,6 @@ pub async fn remove_from_sync_folder(
 
         if let Some(_) = exists {
             // Update existing record
-            println!("Updating record for folder {} with request_cid: {}", folder_name, folder_manifest_cid);
             let _ = sqlx::query(
                 "UPDATE user_profiles SET 
                     cid = ?, 
@@ -1056,7 +1066,6 @@ pub async fn remove_from_sync_folder(
                 source =  target_folder.to_string_lossy().to_string()
             }
             // Insert new record
-            println!("Inserting new record for folder {} with request_cid: {}", folder_name, folder_manifest_cid);
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -1117,7 +1126,6 @@ pub async fn insert_file_if_not_exists_in_folder(
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
-    println!("exists: {:#?}, file_name: {}, file_type: {}, account_id: {}", exists, file_name, file_type, account_id);
     if exists.is_none() {
         let _ = sqlx::query(
             "INSERT INTO sync_folder_files (file_name, type, owner, entry_type, created_at) VALUES (?, ?, ?, ?, ?)"
@@ -1137,15 +1145,20 @@ pub async fn delete_and_unpin_user_file_records_from_folder(
     seed_phrase: &str,
 ) -> Result<u64, String> {
     if let Some(pool) = DB_POOL.get() {
-        unpin_user_file_by_name(folder_name, seed_phrase)
-            .await
-            .map_err(|e| format!("Unpin failed for '{}': {}", folder_name, e))?;
+        let _ = unpin_user_file_by_name(folder_name, seed_phrase)
+            .await;
 
         let result = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
             .bind(folder_name)
             .execute(pool)
             .await
             .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
+
+        // Also delete from file_paths table
+        let _ = sqlx::query("DELETE FROM file_paths WHERE file_name = ?")
+            .bind(folder_name)
+            .execute(pool)
+            .await;
 
         let total_deleted = result.rows_affected();
         Ok(total_deleted)

@@ -1,6 +1,6 @@
 import React, { useEffect } from "react";
-import { Icons, RevealTextLine } from "../../ui";
-import TabList, { TabOption } from "../../ui/tabs/tab-list";
+import { Icons, RevealTextLine } from "@/components/ui";
+import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import ChangePasscode from "./change-passcode";
 import BackupAppData from "./BackupAppData";
 import { InView } from "react-intersection-observer";

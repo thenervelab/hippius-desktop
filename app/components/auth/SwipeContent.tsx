@@ -3,8 +3,8 @@ import {
   SecureFilesWithBlockChain,
   SmartAffordableStorage,
   EarnWithRefferals,
-} from "../ui/icons";
-import CircularShield from "../ui/icons/CircularShield";
+} from "@/components/ui/icons";
+import CircularShield from "@/components/ui/icons/CircularShield";
 
 export const SWIPE_CONTENT = [
   {

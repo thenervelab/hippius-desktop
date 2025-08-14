@@ -1,10 +1,10 @@
 import Link from "next/link";
 import cn from "@/app/lib/utils/cn";
-import { Graphsheet, RevealTextLine } from "../ui";
+import { Graphsheet, RevealTextLine } from "@/components/ui";
 import { ChevronDown } from "lucide-react";
 import * as NavigationMenu from "@radix-ui/react-navigation-menu";
-import { SubMenuItemData } from "./nav-data";
-import SubMenuList from "./sub-menu-list";
+import { SubMenuItemData } from "./NavData";
+import SubMenuList from "./SubMenuList";
 import { activeSubMenuItemAtom } from "./sideBarAtoms";
 import { usePathname } from "next/navigation";
 
@@ -80,9 +80,9 @@ const NavItem: React.FC<NavItemProps> = ({
           "absolute left-[3px] bg-primary-50 w-0.5 h-[22px] rounded-3xl",
           !active && "opacity-0  transition-opacity duration-300",
           !active &&
-            label !== "Logout" &&
-            !comingSoon &&
-            "group-hover:opacity-100 group-[[data-state=open]]:opacity-100"
+          label !== "Logout" &&
+          !comingSoon &&
+          "group-hover:opacity-100 group-[[data-state=open]]:opacity-100"
         )}
       />
 

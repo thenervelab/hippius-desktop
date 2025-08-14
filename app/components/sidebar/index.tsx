@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { AppVersion, Icons, RevealTextLine } from "../ui";
+import { AppVersion, Icons, RevealTextLine } from "@/components/ui";
 import cn from "@/app/lib/utils/cn";
-import NavItem from "./nav-item";
-import { navItems, footerNavItems } from "./nav-data";
+import NavItem from "./NavItem";
+import { navItems, footerNavItems } from "./NavData";
 import { useAtom, useSetAtom } from "jotai";
 import {
   settingsDialogOpenAtom,
@@ -13,9 +13,9 @@ import {
   activeSettingsTabAtom
 } from "@/app/components/sidebar/sideBarAtoms";
 import { InView } from "react-intersection-observer";
-import FooterNavItem from "./footer-nav-items";
-import SettingsWidthDialog from "../page-sections/settings/SettingsDialog";
-import SettingsDialogContent from "../page-sections/settings/SettingsDialogContent";
+import FooterNavItem from "./FooterNavItems";
+import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
+import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();

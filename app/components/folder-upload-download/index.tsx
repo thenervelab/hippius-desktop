@@ -1,380 +1,302 @@
-"use client";
-import React, { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+'use client';
+
+import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
-// Define the FileEntry type to match backend
-interface FileEntry {
-  file_name: string;
-  manifestCid: string;
-  file_size: number;
-  cid: string;
+interface TestResult {
+  success: boolean;
+  message: string;
+  data?: any;
+  timestamp?: string;
 }
 
-export default function IpfsFolderDemo() {
-  const [folderPath, setFolderPath] = useState<string>("");
-  const [filePath, setFilePath] = useState<string>(""); // State for file to add
-  const [fileToRemove, setFileToRemove] = useState<string>(""); // State for file to remove
-  const [manifestCid, setManifestCid] = useState<string>("");
-  const [fileList, setFileList] = useState<FileEntry[]>([]);
-  const [uploadStatus, setUploadStatus] = useState<string>("");
-  const [downloadStatus, setDownloadStatus] = useState<string>("");
-  const [addFileStatus, setAddFileStatus] = useState<string>("");
-  const [removeFileStatus, setRemoveFileStatus] = useState<string>("");
-  const [isPrivateFolder, setIsPrivateFolder] = useState<boolean>(false); // Toggle for public/private folder
+export default function PrivateFolderTest() {
+  const [results, setResults] = useState<TestResult[]>([]);
+  const [loading, setLoading] = useState(false);
   const { polkadotAddress, mnemonic } = useWalletAuth();
-  const accountId = polkadotAddress;
-  const seedPhrase = mnemonic;
 
-  // Select a folder using Tauri dialog
-  const handleSelectFolder = async () => {
-    try {
-      const selected: string | null = await open({
-        directory: true,
-        multiple: false,
-      }) as string | null;
-
-      if (typeof selected === "string" && selected.trim() !== "") {
-        const sanitizedPath = selected.trim();
-        console.log("✅ Selected folder path:", sanitizedPath);
-        setFolderPath(sanitizedPath);
-        setFileList([]);
-        setManifestCid("");
-        setUploadStatus("");
-        setDownloadStatus("");
-        setAddFileStatus("");
-        setRemoveFileStatus("");
-      } else {
-        console.warn("⚠️ Folder selection was empty or cancelled.");
-        setUploadStatus("Folder selection was empty or cancelled.");
-      }
-    } catch (e: unknown) {
-      console.error("❌ Error selecting folder:", e);
-      setUploadStatus("Failed to select folder: " + (e instanceof Error ? e.message : String(e)));
-    }
+  // Hardcoded test values
+  const TEST_VALUES = {
+    accountId: polkadotAddress,
+    folderMetadataCid: 'bafkreieptq462643z6judqz27h2a4i6dy7cdbf5vstxkaavfpyw6z2j4qa',
+    folderName: 'testing-file-add122',
+    fileName: 'stranger.jpeg',
+    seedPhrase: mnemonic,
+    subfolderPath: ['testing-file-add122', '3-folder-inside-2'],
+    fileData: new TextEncoder().encode('This is test file content for testing purposes'),
   };
 
-  // Select a file to add to the folder
-  const handleSelectFile = async () => {
-    try {
-      const selected: string | null = await open({
-        directory: false,
-        multiple: false,
-      }) as string | null;
-
-      if (typeof selected === "string" && selected.trim() !== "") {
-        const sanitizedPath = selected.trim();
-        console.log("✅ Selected file path:", sanitizedPath);
-        setFilePath(sanitizedPath);
-        setAddFileStatus("");
-        setRemoveFileStatus("");
-      } else {
-        console.warn("⚠️ File selection was empty or cancelled.");
-        setAddFileStatus("File selection was empty or cancelled.");
-      }
-    } catch (e: unknown) {
-      console.error("❌ Error selecting file:", e);
-      setAddFileStatus("Failed to select file: " + (e instanceof Error ? e.message : String(e)));
-    }
+  const addResult = (result: TestResult) => {
+    setResults(prev => [...prev, { ...result, timestamp: new Date().toISOString() }]);
   };
 
-  // Upload the folder (public or private)
-  const handleUploadFolder = async () => {
-    if (!folderPath) {
-      setUploadStatus("No folder selected.");
-      return;
-    }
-
-    console.log("⏫ Uploading folder:", folderPath);
-    setUploadStatus(`Uploading ${isPrivateFolder ? "private" : "public"} folder...`);
-
-    try {
-      const command = isPrivateFolder ? "encrypt_and_upload_folder" : "public_upload_folder";
-      const params = isPrivateFolder
-        ? { accountId, folderPath, seedPhrase, encryptionKey: null }
-        : { accountId, folderPath, seedPhrase };
-
-      const result = await invoke<string>(command, params);
-
-      console.log("✅ Upload complete. Manifest CID:", result);
-      setManifestCid(result);
-      setUploadStatus(`Upload successful! Manifest CID: ${result}`);
-    } catch (e: unknown) {
-      console.error("❌ Upload failed:", e);
-      setUploadStatus("Upload failed: " + (e instanceof Error ? e.message : String(e)));
-    }
+  const clearResults = () => {
+    setResults([]);
   };
 
-  // List files in the uploaded folder
-  const handleListFiles = async () => {
-    if (!manifestCid) {
-      setUploadStatus("No manifest CID available.");
-      return;
-    }
-
-    setUploadStatus("Listing files...");
-
+  const testAddFileToPrivateFolder = async () => {
+    setLoading(true);
     try {
-      const folderName = folderPath.split("/").pop() || "uploaded_folder";
-      const files = await invoke<FileEntry[]>("list_folder_contents", {
-        folderMetadataCid: manifestCid,
-        folderName,
-        mainFolderName: null,
-        subfolderPath: null
+      console.log('Testing add_file_to_private_folder...');
+
+      const result = await invoke('add_file_to_private_folder', {
+        accountId: TEST_VALUES.accountId,
+        folderMetadataCid: TEST_VALUES.folderMetadataCid,
+        folderName: TEST_VALUES.folderName,
+        fileData: Array.from(TEST_VALUES.fileData), // Convert to number array
+        fileName: TEST_VALUES.fileName,
+        seedPhrase: TEST_VALUES.seedPhrase,
+        subfolderPath: TEST_VALUES.subfolderPath,
       });
 
-      setFileList(files);
-      setUploadStatus("Listed files successfully.");
-    } catch (e: unknown) {
-      console.error("❌ List files failed:", e);
-      setUploadStatus("List failed: " + (e instanceof Error ? e.message : String(e)));
+      addResult({
+        success: true,
+        message: 'add_file_to_private_folder completed successfully',
+        data: result,
+      });
+    } catch (error) {
+      addResult({
+        success: false,
+        message: `add_file_to_private_folder failed: ${error}`,
+        data: error,
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Add a file to the folder (public or private)
-  const handleAddFile = async () => {
-    if (!manifestCid) {
-      setAddFileStatus("No manifest CID available.");
-      return;
-    }
-    if (!filePath) {
-      setAddFileStatus("No file selected.");
-      return;
-    }
-
-    console.log("⏫ Adding file:", filePath);
-    setAddFileStatus(`Adding file to ${isPrivateFolder ? "private" : "public"} folder...`);
-
+  const testRemoveFileFromPrivateFolder = async () => {
+    setLoading(true);
     try {
-      const folderName = folderPath.split("/").pop() || "uploaded_folder";
-      const command = isPrivateFolder ? "add_file_to_private_folder" : "add_file_to_public_folder";
-      const params = isPrivateFolder
-        ? { accountId, folderMetadataCid: manifestCid, folderName, filePath, seedPhrase, subfolderPath: null, encryptionKey: null }
-        : { accountId, folderMetadataCid: manifestCid, folderName, filePath, seedPhrase, subfolderPath: null };
+      console.log('Testing remove_file_from_private_folder...');
 
-      const result = await invoke<string>(command, params);
+      const result = await invoke('remove_file_from_private_folder', {
+        accountId: TEST_VALUES.accountId,
+        folderMetadataCid: TEST_VALUES.folderMetadataCid,
+        folderName: TEST_VALUES.folderName,
+        fileName: TEST_VALUES.fileName,
+        seedPhrase: TEST_VALUES.seedPhrase,
+        subfolderPath: TEST_VALUES.subfolderPath,
+      });
 
-      console.log("✅ File added. New Manifest CID:", result);
-      setManifestCid(result);
-      setAddFileStatus(`File added successfully! New Manifest CID: ${result}`);
-      setFilePath(""); // Clear file path after successful add
-      await handleListFiles(); // Refresh file list
-    } catch (e: unknown) {
-      console.error("❌ Add file failed:", e);
-      setAddFileStatus("Add file failed: " + (e instanceof Error ? e.message : String(e)));
+      addResult({
+        success: true,
+        message: 'remove_file_from_private_folder completed successfully',
+        data: result,
+      });
+    } catch (error) {
+      addResult({
+        success: false,
+        message: `remove_file_from_private_folder failed: ${error}`,
+        data: error,
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Remove a file from the folder (public or private)
-  const handleRemoveFile = async () => {
-    if (!manifestCid) {
-      setRemoveFileStatus("No manifest CID available.");
-      return;
-    }
-    if (!fileToRemove) {
-      setRemoveFileStatus("No file selected for removal.");
-      return;
-    }
-
-    console.log("🗑️ Removing file:", fileToRemove);
-    setRemoveFileStatus(`Removing file from ${isPrivateFolder ? "private" : "public"} folder...`);
-
+  const testAddFileToRootFolder = async () => {
+    setLoading(true);
     try {
-      const folderName = folderPath.split("/").pop() || "uploaded_folder";
-      const command = isPrivateFolder ? "remove_file_from_private_folder" : "remove_file_from_public_folder";
-      const params = { accountId, folderMetadataCid: manifestCid, folderName, fileName: fileToRemove, seedPhrase, subfolderPath: null };
+      console.log('Testing add_file_to_private_folder (root folder)...');
 
-      console.log("params", params)
+      const result = await invoke('add_file_to_private_folder', {
+        accountId: TEST_VALUES.accountId,
+        folderMetadataCid: TEST_VALUES.folderMetadataCid,
+        folderName: TEST_VALUES.folderName,
+        fileData: Array.from(TEST_VALUES.fileData),
+        fileName: 'root-test-file.txt',
+        seedPhrase: TEST_VALUES.seedPhrase,
+        subfolderPath: null, // Root folder
+      });
 
-      const result = await invoke<string>(command, params);
-
-      console.log("✅ File removed. New Manifest CID:", result);
-      setManifestCid(result);
-      setRemoveFileStatus(`File removed successfully! New Manifest CID: ${result}`);
-      setFileToRemove(""); // Clear selection after successful remove
-      await handleListFiles(); // Refresh file list
-    } catch (e: unknown) {
-      console.error("❌ Remove file failed:", e);
-      setRemoveFileStatus("Remove file failed: " + (e instanceof Error ? e.message : String(e)));
+      addResult({
+        success: true,
+        message: 'add_file_to_private_folder (root) completed successfully',
+        data: result,
+      });
+    } catch (error) {
+      addResult({
+        success: false,
+        message: `add_file_to_private_folder (root) failed: ${error}`,
+        data: error,
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Download the folder (public or private)
-  const handleDownloadFolder = async () => {
-    if (!manifestCid) {
-      setDownloadStatus("No manifest CID available.");
-      return;
-    }
-
-    setDownloadStatus(`Downloading ${isPrivateFolder ? "private" : "public"} folder...`);
+  const testRemoveFileFromRootFolder = async () => {
+    setLoading(true);
     try {
-      const outputDir: string | null = await open({
-        directory: true,
-        multiple: false,
-      }) as string | null;
+      console.log('Testing remove_file_from_private_folder (root folder)...');
 
-      if (!outputDir || typeof outputDir !== "string") {
-        setDownloadStatus("No output directory selected.");
-        return;
-      }
+      const result = await invoke('remove_file_from_private_folder', {
+        accountId: TEST_VALUES.accountId,
+        folderMetadataCid: TEST_VALUES.folderMetadataCid,
+        folderName: TEST_VALUES.folderName,
+        fileName: 'stranger.jpeg',
+        seedPhrase: TEST_VALUES.seedPhrase,
+        subfolderPath: null, // Root folder
+      });
 
-      const sanitizedOutputDir = outputDir.trim();
-      console.log("📥 Downloading to:", sanitizedOutputDir);
+      addResult({
+        success: true,
+        message: 'remove_file_from_private_folder (root) completed successfully',
+        data: result,
+      });
+    } catch (error) {
+      addResult({
+        success: false,
+        message: `remove_file_from_private_folder (root) failed: ${error}`,
+        data: error,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      const command = isPrivateFolder ? "download_and_decrypt_folder" : "public_download_folder";
-      const params = isPrivateFolder
-        ? { accountId, folderMetadataCid: manifestCid, folderName: folderPath.split("/").pop() || "uploaded_folder", outputDir: sanitizedOutputDir, encryptionKey: null }
-        : { accountId, folderMetadataCid: manifestCid, folderName: folderPath.split("/").pop() || "uploaded_folder", outputDir: sanitizedOutputDir };
+  const testListFolderContents = async () => {
+    setLoading(true);
+    try {
+      console.log('Testing list_folder_contents...');
 
-      await invoke(command, params);
+      const result = await invoke('list_folder_contents', {
+        folderName: TEST_VALUES.folderName,
+        folderMetadataCid: TEST_VALUES.folderMetadataCid,
+        mainFolderName: null,
+        subfolderPath: TEST_VALUES.subfolderPath,
+      });
 
-      setDownloadStatus("Download successful!");
-    } catch (e: unknown) {
-      console.error("❌ Download failed:", e);
-      setDownloadStatus("Download failed: " + (e instanceof Error ? e.message : String(e)));
+      addResult({
+        success: true,
+        message: 'list_folder_contents completed successfully',
+        data: result,
+      });
+    } catch (error) {
+      addResult({
+        success: false,
+        message: `list_folder_contents failed: ${error}`,
+        data: error,
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="p-4 max-w-3xl mx-auto">
-      <h2 className="text-2xl font-bold mb-6">IPFS Folder Demo</h2>
+    <div className="p-6 max-w-4xl mx-auto">
+      <h1 className="text-3xl font-bold mb-6">Private Folder Operations Test</h1>
 
-      <div className="mb-6">
-        <label className="flex items-center gap-2 mb-2">
-          <input
-            type="checkbox"
-            checked={isPrivateFolder}
-            onChange={(e) => setIsPrivateFolder(e.target.checked)}
-            className="form-checkbox h-5 w-5 text-blue-600"
-          />
-          <span>Use Private Folder (No Encryption)</span>
-        </label>
-        <button
-          onClick={handleSelectFolder}
-          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
-        >
-          Select Folder
-        </button>
-        {folderPath && (
-          <div className="mt-2 text-gray-700">📁 Selected folder: {folderPath}</div>
-        )}
+      {/* Test Values Display */}
+      <div className="bg-gray-100 p-4 rounded-lg mb-6">
+        <h2 className="text-xl font-semibold mb-3">Test Values</h2>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div><strong>Account ID:</strong> {TEST_VALUES.accountId}</div>
+          <div><strong>Folder Metadata CID:</strong> {TEST_VALUES.folderMetadataCid}</div>
+          <div><strong>Folder Name:</strong> {TEST_VALUES.folderName}</div>
+          <div><strong>File Name:</strong> {TEST_VALUES.fileName}</div>
+          <div><strong>Subfolder Path:</strong> {TEST_VALUES.subfolderPath.join(' > ')}</div>
+          <div><strong>File Data:</strong> {TEST_VALUES.fileData.length} bytes</div>
+        </div>
       </div>
 
-      <div className="mb-6">
+      {/* Test Buttons */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
         <button
-          onClick={handleUploadFolder}
-          disabled={!folderPath}
-          className={`px-4 py-2 rounded transition ${folderPath
-              ? "bg-green-500 text-white hover:bg-green-600"
-              : "bg-gray-300 text-gray-600 cursor-not-allowed"
-            }`}
+          onClick={testAddFileToPrivateFolder}
+          disabled={loading}
+          className="bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white px-4 py-2 rounded"
         >
-          Upload Folder ({isPrivateFolder ? "Private" : "Public"})
+          {loading ? 'Testing...' : 'Add File (Subfolder)'}
         </button>
-        {uploadStatus && (
-          <div className="mt-2 text-blue-600">{uploadStatus}</div>
-        )}
+
+        <button
+          onClick={testRemoveFileFromPrivateFolder}
+          disabled={loading}
+          className="bg-red-500 hover:bg-red-600 disabled:bg-gray-400 text-white px-4 py-2 rounded"
+        >
+          {loading ? 'Testing...' : 'Remove File (Subfolder)'}
+        </button>
+
+        <button
+          onClick={testAddFileToRootFolder}
+          disabled={loading}
+          className="bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white px-4 py-2 rounded"
+        >
+          {loading ? 'Testing...' : 'Add File (Root)'}
+        </button>
+
+        <button
+          onClick={testRemoveFileFromRootFolder}
+          disabled={loading}
+          className="bg-orange-500 hover:bg-orange-600 disabled:bg-gray-400 text-white px-4 py-2 rounded"
+        >
+          {loading ? 'Testing...' : 'Remove File (Root)'}
+        </button>
+
+        <button
+          onClick={testListFolderContents}
+          disabled={loading}
+          className="bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white px-4 py-2 rounded"
+        >
+          {loading ? 'Testing...' : 'List Contents'}
+        </button>
+
+        <button
+          onClick={clearResults}
+          className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded"
+        >
+          Clear Results
+        </button>
       </div>
 
-      {manifestCid && (
-        <div className="mb-6">
-          <div className="mb-2">
-            <strong>📦 Manifest CID:</strong> {manifestCid}
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleListFiles}
-              className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600 transition"
-            >
-              List Files in Folder
-            </button>
-            <button
-              onClick={handleDownloadFolder}
-              className="bg-orange-500 text-white px-4 py-2 rounded hover:bg-orange-600 transition"
-            >
-              Download Folder ({isPrivateFolder ? "Private" : "Public"})
-            </button>
-          </div>
-          {downloadStatus && (
-            <div className="mt-2 text-green-600">{downloadStatus}</div>
-          )}
-        </div>
-      )}
-
-      {manifestCid && (
-        <div className="mb-6">
-          <h4 className="text-lg font-semibold mb-2">Add File to Folder</h4>
-          <div className="flex gap-2 items-center">
-            <button
-              onClick={handleSelectFile}
-              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition"
-            >
-              Select File to Add
-            </button>
-            {filePath && (
-              <span className="text-gray-700">📄 Selected: {filePath.split("/").pop()}</span>
-            )}
-          </div>
-          <button
-            onClick={handleAddFile}
-            disabled={!filePath || !manifestCid}
-            className={`mt-2 px-4 py-2 rounded transition ${filePath && manifestCid
-                ? "bg-green-500 text-white hover:bg-green-600"
-                : "bg-gray-300 text-gray-600 cursor-not-allowed"
-              }`}
-          >
-            Add File to Folder ({isPrivateFolder ? "Private" : "Public"})
-          </button>
-          {addFileStatus && (
-            <div className="mt-2 text-blue-600">{addFileStatus}</div>
-          )}
-        </div>
-      )}
-
-      {fileList.length > 0 && (
-        <div className="mb-6">
-          <h4 className="text-lg font-semibold mb-2">Remove File from Folder</h4>
-          <select
-            value={fileToRemove}
-            onChange={(e) => setFileToRemove(e.target.value)}
-            className="border rounded px-2 py-1 mb-2 w-full max-w-md"
-          >
-            <option value="">Select a file to remove</option>
-            {fileList.map((f, i) => (
-              <option key={i} value={f.file_name}>
-                {f.file_name}
-              </option>
+      {/* Results */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold">Test Results</h2>
+        {results.length === 0 ? (
+          <p className="text-gray-500">No test results yet. Click a button above to run tests.</p>
+        ) : (
+          <div className="space-y-3">
+            {results.map((result, index) => (
+              <div
+                key={index}
+                className={`p-4 rounded-lg border ${result.success
+                  ? 'bg-green-50 border-green-200'
+                  : 'bg-red-50 border-red-200'
+                  }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className={`font-semibold ${result.success ? 'text-green-800' : 'text-red-800'
+                      }`}>
+                      {result.success ? '✅ Success' : '❌ Error'}
+                    </div>
+                    <div className="text-sm text-gray-600 mt-1">
+                      {result.message}
+                    </div>
+                    {result.data && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer text-sm text-blue-600 hover:text-blue-800">
+                          View Data
+                        </summary>
+                        <pre className="mt-2 text-xs bg-gray-100 p-2 rounded overflow-auto max-h-40">
+                          {JSON.stringify(result.data, null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 ml-2">
+                    {new Date(result.timestamp || Date.now()).toLocaleTimeString()}
+                  </div>
+                </div>
+              </div>
             ))}
-          </select>
-          <button
-            onClick={handleRemoveFile}
-            disabled={!fileToRemove || !manifestCid}
-            className={`px-4 py-2 rounded transition ${fileToRemove && manifestCid
-                ? "bg-red-500 text-white hover:bg-red-600"
-                : "bg-gray-300 text-gray-600 cursor-not-allowed"
-              }`}
-          >
-            Remove File from Folder ({isPrivateFolder ? "Private" : "Public"})
-          </button>
-          {removeFileStatus && (
-            <div className="mt-2 text-red-600">{removeFileStatus}</div>
-          )}
-        </div>
-      )}
-
-      {fileList.length > 0 && (
-        <div className="mb-6">
-          <h4 className="text-lg font-semibold mb-2">📜 Files in Folder:</h4>
-          <ul className="list-disc pl-5">
-            {fileList.map((f, i) => (
-              <li key={i} className="my-1">
-                {f.file_name} ({f.file_size} bytes) - CID: {f.cid}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

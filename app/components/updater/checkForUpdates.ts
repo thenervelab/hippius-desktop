@@ -5,7 +5,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import {
   addNotification,
   hippusVersionNotificationExists,
-} from "../../lib/helpers/notificationsDb";
+} from "@/lib/helpers/notificationsDb";
 import { toast } from "sonner";
 import {
   openUpdateDialog,

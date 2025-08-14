@@ -4,10 +4,10 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { isOnboardingDone } from "@/app/lib/helpers/onboardingDb";
-import OnboardingPage from "@/app/components/auth/onboarding/onBoardingPage";
+import OnBoardingPage from "@/components/auth/onboarding/OnBoardingPage";
 
 export default function OnBoardingGuard({
-  children
+  children,
 }: {
   children: React.ReactNode;
 }) {
@@ -41,7 +41,7 @@ export default function OnBoardingGuard({
   if (!isAuthenticated) return null;
   if (done === false) {
     return (
-      <OnboardingPage
+      <OnBoardingPage
         onboardingCompleted={done}
         setOnboardingCompleted={setDone}
       />

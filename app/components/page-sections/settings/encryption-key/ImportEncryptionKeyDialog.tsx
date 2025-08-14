@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle } from "@/components/ui/icons";
 import { AbstractIconWrapper, Icons } from "@/app/components/ui";
 import PasscodeInput from "./PasscodeInput";
-import ImportantWarnings from "@/app/components/ui/important-warnings";
+import ImportantWarnings from "@/app/components/ui/ImportantWarnings";
 
 type Warning = {
   id: number;
@@ -73,7 +73,7 @@ export default function ImportEncryptionKeyDialog({
           <div>
             <PasscodeInput
               passcode={importedMnemonic}
-              onPasscodeChange={() => {}}
+              onPasscodeChange={() => { }}
               showPasscode={true}
               copied={copied}
               showCopy

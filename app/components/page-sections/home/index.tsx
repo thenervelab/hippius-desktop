@@ -12,8 +12,7 @@ import { useIpfsBandwidth } from "@/app/lib/hooks/api/useIpfsBandwidth";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
-
-import Ipfs from "../files/ipfs";
+import Ipfs from "@/components/page-sections/files/ipfs";
 import { getPrivateSyncPath } from "@/app/lib/utils/syncPathUtils";
 import { Icons } from "@/components/ui";
 
@@ -142,7 +141,6 @@ const Home: React.FC = () => {
           Monitor your IPFS node status and performance
         </p>
       </section>
-
       {/* Stats Cards */}
       <DetailList ipfsInfo={ipfsInfo} upload={upload} download={download} />
 

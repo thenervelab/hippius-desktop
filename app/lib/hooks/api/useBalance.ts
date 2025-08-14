@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { API_BASE_URL } from "../../constants";
+import { API_BASE_URL } from "@/lib/constants";
 
 // Define types based on the indexer API response
 export interface AccountData {

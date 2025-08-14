@@ -15,7 +15,7 @@ import {
 } from "@/lib/utils/fileTypeUtils";
 import { Folder2 } from "@/components/ui/icons";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { toBlobUrl } from "../files-table/VideoPlayer";
+import { toBlobUrl } from "@/components/page-sections/files/ipfs/files-table/VideoPlayer";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
 
@@ -47,16 +47,29 @@ const FileCard: React.FC<FileCardProps> = ({
   const { getParam } = useUrlParams();
 
   // Get current path information for folder navigation
-  const folderActualName = getParam("folderActualName", "");
-  const mainFolderActualName = getParam("mainFolderActualName", "");
+  const folderActualName = file.isFolder ? file.actualFileName || "" : "";
+  const mainFolderCid = getParam("mainFolderCid", "");
+  const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
   const subFolderPath = getParam("subFolderPath", "");
+  const effectiveMainFolderCid = mainFolderCid || file.cid;
+  const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
+
 
   // Build the folder path for navigation
-  const { mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
+  const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
     folderActualName,
-    mainFolderActualName || folderActualName,
+    effectiveMainFolderCid,
+    effectiveMainFolderActualName,
     subFolderPath
   );
+
+  // console.log("effectiveMainFolderActualName", effectiveMainFolderActualName);
+  // console.log("folderActualName", folderActualName);
+  // console.log("file", file);
+  // console.log("newMainFolder", newMainFolder)
+
+
+  // console.log("FileCard", `/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`)
 
   useEffect(() => {
     if (
@@ -230,7 +243,7 @@ const FileCard: React.FC<FileCardProps> = ({
 
       <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-[40px] w-full">
         {file.isFolder ? (
-          <Link href={`/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`}>
+          <Link href={`/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`}>
             <div className="flex items-center">
               <Icon className={cn("size-5 mr-1", color)} />
               <span

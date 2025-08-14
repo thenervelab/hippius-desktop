@@ -1,7 +1,7 @@
 {
   "name": "hippius",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0-beta",
   "type": "module",
   "scripts": {
     "dev": "next dev",
@@ -13,7 +13,6 @@
     "tauri:build": "next build && tauri build"
   },
   "dependencies": {
-    "@heroicons/react": "^2.2.0",
     "@polkadot/api": "^14.3.1",
     "@polkadot/keyring": "^13.5.2",
     "@polkadot/types": "^16.4.1",
@@ -39,7 +38,6 @@
     "@tauri-apps/plugin-opener": "^2.4.0",
     "@tauri-apps/plugin-process": "~2",
     "@tauri-apps/plugin-updater": "~2",
-    "@types/three": "^0.176.0",
     "@vidstack/react": "^1.12.13",
     "@visx/responsive": "2.4.1",
     "@visx/scale": "^3.12.0",

@@ -4,9 +4,9 @@ import { FC, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { AddCircle, Refresh, WalletAdd } from "@/components/ui/icons";
 import * as Typography from "@/components/ui/typography";
-import { AbstractIconWrapper, CardButton, Icons } from "../../ui";
+import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import Warning from "../../ui/icons/Warning";
+import Warning from "@/components/ui/icons/Warning";
 import TimeAgo from "react-timeago";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import BalanceTrends from "./balance-trends";
@@ -50,13 +50,13 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
 
     const balancePoints = balanceData
       ? [
-          {
-            timestamp: balanceData.timestamp,
-            date: new Date(balanceData.timestamp),
-            type: "balance",
-            value: balanceData.totalBalance,
-          },
-        ]
+        {
+          timestamp: balanceData.timestamp,
+          date: new Date(balanceData.timestamp),
+          type: "balance",
+          value: balanceData.totalBalance,
+        },
+      ]
       : [];
 
     // Combine and sort all data points chronologically
@@ -117,8 +117,8 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
                   {credits !== undefined
                     ? `${formatCreditBalance(credits)}`
                     : error
-                    ? "ERROR"
-                    : "- - - -"}
+                      ? "ERROR"
+                      : "- - - -"}
                   <span className="text-xs font-medium -translate-y-1 ml-1">
                     Credits
                   </span>

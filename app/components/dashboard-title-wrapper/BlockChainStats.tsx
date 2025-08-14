@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Database } from "lucide-react";
-import { RevealTextLine } from "../ui";
+import { RevealTextLine } from "@/components/ui";
 import { InView } from "react-intersection-observer";
 import { IPFS_NODE_CONFIG } from "@/app/lib/config";
 import NotificationMenu from "./notifications-menu";

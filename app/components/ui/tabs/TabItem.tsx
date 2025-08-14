@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React from "react";
 import { cn } from "@/lib/utils";
-import ActiveTabBg from "./active-tab-bg";
+import ActiveTabBg from "./ActiveTabBg";
 
 export interface TabItemProps {
   label: string;

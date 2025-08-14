@@ -1,4 +1,4 @@
-import AbstractIconWrapper from "../abstract-icon-wrapper";
+import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { cn } from "@/lib/utils";
 import { ReactNode } from "react";
 

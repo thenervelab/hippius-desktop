@@ -184,7 +184,7 @@ const CreditUsageTrends: React.FC<{
         <div ref={ref} className="w-full">
           <Card
             title={
-              <div className="flex justify-between gap-3 w-full py-1 px-2">
+              <div className="flex justify-between gap-3 w-full py-1 mb-1.5 px-2">
                 <div className="flex items-center group-x-2">
                   <AbstractIconWrapper
                     className={cn(
@@ -215,7 +215,7 @@ const CreditUsageTrends: React.FC<{
               </div>
             }
             className={cn("flex-1 rounded", className)}
-            contentClassName="relative h-[300px]"
+            contentClassName="relative h-[246px]"
           >
             <div className="relative w-full h-full flex">
               {isLoading ? (
@@ -230,9 +230,9 @@ const CreditUsageTrends: React.FC<{
                   </span>
                 </div>
               ) : (
-                <div className="w-full h-full pt-12 relative pr-4">
+                <div className="w-full h-full  relative pr-4">
                   {/* Total Credits Used Display - Added based on image */}
-                  <div className="absolute top-1 left-14 border border-grey-80 rounded bg-white px-2 py-1 z-50">
+                  <div className="absolute top-4 left-14 border border-grey-80 rounded bg-white px-2 py-1 z-10">
                     <div className="text-grey-60 text-base mb-1 font-medium">
                       Total Credits Used
                     </div>
@@ -240,7 +240,7 @@ const CreditUsageTrends: React.FC<{
                       {totalCreditsUsed}
                     </div>
                   </div>
-                  <ChartGridOverlay marginClasses="mt-[80px] ml-[45px] mb-[30px] mr-[21px]" />
+                  <ChartGridOverlay marginClasses="mt-[0px] ml-[45px] mb-[30px] mr-[21px]" />
                   <AreaLineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
                     data={formattedChartData}
@@ -256,7 +256,7 @@ const CreditUsageTrends: React.FC<{
                     ]}
                     xScaleType="band" // Always use band for every range
                     yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
-                    margin={{ top: 34, left: 45, bottom: 30, right: 5 }}
+                    margin={{ top: 0, left: 45, bottom: 30, right: 5 }}
                     showVerticalCrosshair={true}
                     showHorizontalCrosshair={true}
                     xAxisProps={{

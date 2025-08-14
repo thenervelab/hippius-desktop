@@ -32,22 +32,39 @@ const NameCell: FC<NameCellProps> = ({
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
 
+  const mainFolderCid = getParam("mainFolderCid", "");
   const folderActualName = isFolder ? actualName || "" : "";
   const mainFolderActualName = getParam("mainFolderActualName", isFolder ? actualName || "" : "");
   const subFolderPath = getParam("subFolderPath", "");
 
+  const effectiveMainFolderCid = mainFolderCid || cid;
+
   // Build the folder path for navigation
   const { mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
     folderActualName,
+    effectiveMainFolderCid,
     mainFolderActualName || folderActualName,
     subFolderPath
   );
 
 
+  const folderUrl = {
+    pathname: "/files",
+    query: {
+      mainFolderCid: effectiveMainFolderCid ?? "",
+      folderCid: decodeHexCid(cid) ?? "",
+      folderName: rawName ?? "",
+      folderActualName: actualName ?? "",
+      mainFolderActualName: newMainFolder ?? "",
+      subFolderPath: newSubFolderPath ?? "",
+    },
+  };
+
+
   return (
     <div className={className}>
       {isFolder ? (
-        <Link href={`/files?folderCid=${decodeHexCid(cid)}&folderName=${encodeURIComponent(rawName)}&folderActualName=${encodeURIComponent(actualName ?? "")}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`}>
+        <Link href={folderUrl} prefetch={false}>
           <div className="flex items-center">
             <Icon className={cn("size-5 mr-2", color)} />
             <span className="text-grey-20 hover:text-primary-40 hover:underline transition">

@@ -10,7 +10,7 @@ import React, {
   useCallback
 } from "react";
 import { Keyring } from "@polkadot/keyring";
-import { getWalletRecord, clearWalletDb } from "./helpers/walletDb";
+import { getWalletRecord, clearHippiusDesktopDB } from "./helpers/hippiusDesktopDB";
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
@@ -27,8 +27,8 @@ interface WalletContextType {
   } | null;
   setSession: (mnemonic: string) => Promise<boolean>;
   unlockWithPasscode: (passcode: string) => Promise<boolean>;
-  logout: () => void;
-  resetWallet: () => void;
+  logout: () => Promise<void>;
+  resetHippiusDesktop: () => Promise<void>;
 }
 const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 
@@ -50,7 +50,18 @@ export function WalletAuthProvider({
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
   const syncInitialized = useRef(false);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      console.log("[WalletAuth] Starting sync cleanup...");
+      await invoke("cleanup_sync");
+      // Add a longer delay to ensure all cleanup operations complete
+      // This includes global cancellation, state cleanup, and task abortion
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      console.log("[WalletAuth] Sync cleanup completed");
+    } catch (error) {
+      console.error("Failed to cleanup sync on logout:", error);
+    }
+  
     setMnemonic(null);
     setPolkadotAddress(null);
     setWalletManager(null);
@@ -63,25 +74,11 @@ export function WalletAuthProvider({
     if (logoutTimer.current) {
       clearTimeout(logoutTimer.current);
     }
-    logoutTimer.current = setTimeout(() => {
-      logout();
+    logoutTimer.current = setTimeout(async () => {
+      await logout();
     }, INACTIVITY_TIMEOUT);
   }, [logout]);
 
-  // close previous syncing operations
-  useEffect(() => {
-    const initializeCleanup = async () => {
-      try {
-        await invoke("cleanup_sync");
-      } catch (error) {
-        console.error("Failed to cleanup sync on mount:", error);
-      }
-    };
-    
-    initializeCleanup();
-
-  }, []);
-  
   useEffect(() => {
     if (!isAuthenticated) {
       if (logoutTimer.current) clearTimeout(logoutTimer.current);
@@ -105,7 +102,6 @@ export function WalletAuthProvider({
       );
     };
   }, [isAuthenticated, resetLogoutTimer]);
-
 
   const unlockWithPasscode = async (passcode: string): Promise<boolean> => {
     setIsLoading(true);
@@ -170,9 +166,9 @@ export function WalletAuthProvider({
   };
 
   // Full reset: clear session + wallet storage
-  const resetWallet = async () => {
-    await clearWalletDb();
-    logout();
+  const resetHippiusDesktop = async () => {
+    await clearHippiusDesktopDB();
+    await logout();
   };
 
   useTrayInit();
@@ -188,7 +184,7 @@ export function WalletAuthProvider({
         setSession,
         unlockWithPasscode,
         logout,
-        resetWallet
+        resetHippiusDesktop
       }}
     >
       {children}

@@ -1,13 +1,13 @@
 import React from "react";
-import { AbstractCity, Graphsheet, RevealTextLine, Icons } from "../ui";
+import { AbstractCity, Graphsheet, RevealTextLine, Icons } from "@/components/ui";
 import { InView } from "react-intersection-observer";
 import Link from "next/link";
-import AnimatedRings from "./animated-rings";
-import { PHASE_CONTENT } from "./splash-content";
-import AnimatedProgressIcon from "./animated-icons";
+import AnimatedRings from "./AnimatedRings";
+import { PHASE_CONTENT } from "./SplashContent";
+import AnimatedProgressIcon from "./AnimatedIcons";
 import { AnimatePresence, motion } from "framer-motion";
-import ProgressDisplay from "./progress-display";
-import ProgressBarDisplay from "./progress-bar-display";
+import ProgressDisplay from "./ProgressDisplay";
+import ProgressBarDisplay from "./ProgressBarDisplay";
 import { useAtomValue } from "jotai";
 import { stepAtom } from "./atoms";
 

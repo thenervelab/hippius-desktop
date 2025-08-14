@@ -13,13 +13,13 @@ import GenerateNewAccountModal from "./GenerateNewAccountModal";
 
 import { ConfirmModal, Icons } from "@/app/components/ui";
 import { useSubAccounts } from "@/app/lib/hooks/api/useSubAccounts";
-import SectionHeader from "../SectionHeader";
+import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import {
   saveSubAccountSeed,
   hasSubAccountSeed,
   deleteSubAccountSeed,
 } from "@/app/lib/helpers/subAccountSeedsDb";
-import { getWalletRecord } from "@/app/lib/helpers/walletDb";
+import { getWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import SeedPasscodeModal from "./SeedPasscodeModal";
 import { generateMnemonic } from "@/app/lib/helpers/mnemonic";

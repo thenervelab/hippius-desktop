@@ -4,7 +4,7 @@ import { useEffect, useCallback, useRef, ReactNode, useState } from "react";
 import { ApiPromise, WsProvider } from "@polkadot/api";
 import { RECONNECT_INTERVAL, MAX_RETRIES } from "@/config/constants";
 import { useAtomValue, useSetAtom } from "jotai";
-import { polkadotApiAtom } from "../global-atoms/polkadotApiAtom";
+import { polkadotApiAtom } from "@/lib/global-atoms/polkadotApiAtom";
 import { phaseAtom } from "@/components/splash-screen/atoms";
 import { invoke } from "@tauri-apps/api/core";
 

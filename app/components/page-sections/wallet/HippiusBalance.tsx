@@ -4,9 +4,9 @@ import { FC, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Refresh, WalletAdd } from "@/components/ui/icons";
 import * as Typography from "@/components/ui/typography";
-import { AbstractIconWrapper, CardButton, Icons } from "../../ui";
+import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
-import Warning from "../../ui/icons/Warning";
+import Warning from "@/components/ui/icons/Warning";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 
 import SendBalanceDialog, { TRANSACTION_FEE } from "./SendBalanceDialog";

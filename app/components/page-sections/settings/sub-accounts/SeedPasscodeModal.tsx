@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle, ShieldSecurity } from "@/components/ui/icons";
 import { AbstractIconWrapper, RevealTextLine } from "@/app/components/ui";
-import PasscodeInput from "../encryption-key/PasscodeInput";
+import PasscodeInput from "@/components/page-sections/settings/encryption-key/PasscodeInput";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";

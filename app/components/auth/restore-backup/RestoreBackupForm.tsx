@@ -166,7 +166,7 @@ const RestoreBackupForm: React.FC = () => {
               {/* File Drop Zone */}
               <div className="flex flex-col xl:gap-4 gap-2">
                 <RevealTextLine rotate reveal={inView} className="delay-300">
-                  <BackButton href={"login"} text="Upload your file" />
+                  <BackButton href={"login"} text="Back" />
                 </RevealTextLine>
                 <RevealTextLine
                   rotate

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import SplashScreen from "./splash-screen";
+import SplashScreen from "./SplashScreen";
 import { AppSetupPhases } from "@/app/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { APP_SETUP_EVENT } from "@/app/lib/constants";
@@ -27,7 +27,7 @@ export default function SplashWrapper({
           if (parsedPhase) {
             setPhase(parsedPhase as AppSetupPhases);
           }
-        } catch {}
+        } catch { }
       });
     }
   }, [phase, setPhase]);

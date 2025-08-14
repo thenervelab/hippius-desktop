@@ -10,6 +10,22 @@ use crate::{
     constants::substrate::WSS_ENDPOINT,
 };
 
+// #[cfg(target_os = "macos")]
+// use tauri::api::dialog::blocking::message;
+
+#[cfg(target_os = "macos")]
+fn request_macos_permissions() {
+    use std::process::Command;
+    
+    // Request file access permissions programmatically
+    let _ = Command::new("osascript")
+        .args(&[
+            "-e", 
+            "tell application \"System Events\" to authorize \"Hippius\" for \"Files and Folders\""
+        ])
+        .output();
+}
+
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas
     const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
@@ -58,6 +74,16 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("miner_ids", "TEXT"),
                 ("type", "TEXT"),
                 ("is_folder", "BOOLEAN"),
+            ],
+        ),
+        (
+            "file_paths",
+            &[
+                ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+                ("file_name", "TEXT NOT NULL"),
+                ("file_hash", "TEXT NOT NULL"),
+                ("timestamp", "INTEGER NOT NULL"),
+                ("path", "TEXT NOT NULL"),
             ],
         ),
     ];
@@ -130,14 +156,58 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS file_paths (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_name TEXT NOT NULL,
+            file_hash TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            path TEXT NOT NULL
+        )"
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
-    pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
-        builder.setup(|app| {
+pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
+    builder.setup(|app| {
             println!("[Setup] .setup() closure called in setup.rs");
             
             let handle = app.handle().clone();
+            let win = app.get_webview_window("main").expect("main window not found");
+
+            if let Some(m) = win.current_monitor()? {
+               
+                let phys   = m.size();
+                let origin = m.position();        // PhysicalPosition<i32>
+
+                
+                let w = (phys.width as f64 * 0.8) as u32;
+                let h = (phys.height as f64 * 0.9) as u32;
+
+              
+                let pos_x = origin.x + ((phys.width  as i32 - w as i32) / 2);
+                let pos_y = origin.y + ((phys.height as i32 - h as i32) / 2);
+
+                
+                win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
+                win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
+                win.show()?;       
+            }
+            // Show macOS permission guidance on first run
+            #[cfg(target_os = "macos")]
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    
+                    // Request permissions programmatically
+                    request_macos_permissions();
+                });
+            }
+            
             // Spawn async task for database initialization and IPFS daemon
             tauri::async_runtime::spawn(async move {
                 println!("[Setup] async block started in setup.rs");

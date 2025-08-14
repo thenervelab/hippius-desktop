@@ -1,6 +1,6 @@
 import { useAtomValue } from "jotai";
-import { ProgressBar } from "../progress-bar";
-import { PHASE_CONTENT } from "./splash-content";
+import { ProgressBar } from "@/components/progress-bar";
+import { PHASE_CONTENT } from "./SplashContent";
 import { progressAtom } from "./atoms";
 
 const contentArr = Object.values(PHASE_CONTENT);

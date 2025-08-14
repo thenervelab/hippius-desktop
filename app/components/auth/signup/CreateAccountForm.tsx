@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Icons, RevealTextLine, ImportantWarnings } from "../../ui";
+import { Button, Icons, RevealTextLine, ImportantWarnings } from "@/components/ui";
 import { InView } from "react-intersection-observer";
 import { isMnemonicValid } from "@/app/lib/helpers/validateMnemonic";
 import { ShieldSecurity } from "@/components/ui/icons";

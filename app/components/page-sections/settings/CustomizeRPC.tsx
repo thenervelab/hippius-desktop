@@ -14,7 +14,7 @@ import { AlertCircle, ShieldCheck } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
-import { Edit } from "../../ui/icons";
+import { Edit } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 
 // Function to format error messages in a more user-friendly way
@@ -251,8 +251,8 @@ const CustomizeRPC: React.FC = () => {
                         {testing
                           ? "Verifying..."
                           : saving
-                          ? "Saving..."
-                          : "Save"}
+                            ? "Saving..."
+                            : "Save"}
                       </span>
                     </div>
                   </CardButton>

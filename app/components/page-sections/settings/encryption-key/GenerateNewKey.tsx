@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { Icons, RevealTextLine, IconButton, BackButton } from "@/components/ui";
 import { toast } from "sonner";
-import SectionHeader from "../SectionHeader";
-import { getWalletRecord } from "@/app/lib/helpers/walletDb";
+import SectionHeader from "@/components/page-sections/settings/SectionHeader";
+import { getWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import PasscodeInput from "./PasscodeInput";
 import { invoke } from "@tauri-apps/api/core";

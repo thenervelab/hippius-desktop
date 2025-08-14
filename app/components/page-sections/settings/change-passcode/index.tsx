@@ -4,17 +4,17 @@ import { CardButton, Icons, Input } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
 import { PASSWORD_FIELDS } from "./PasscodeFieldsContent";
 import { AlertCircle } from "lucide-react";
-import UpdateSuccessDialog from "../../../update-success-dialog";
+import UpdateSuccessDialog from "@/components/UpdateSuccessDialog";
 import { Eye, EyeOff } from "@/components/ui/icons";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { getWalletRecord, updateWallet } from "@/app/lib/helpers/walletDb";
+import { getWalletRecord, updateWallet } from "@/app/lib/helpers/hippiusDesktopDB";
 import {
   hashPasscode,
   decryptMnemonic,
   encryptMnemonic,
 } from "@/app/lib/helpers/crypto";
 import { toast } from "sonner";
-import SectionHeader from "../SectionHeader";
+import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 
 type PasscodeFields = {
   currentPasscode: string;

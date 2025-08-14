@@ -8,7 +8,7 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { decodeHexCid } from "@/app/lib/utils/decodeHexCid";
-import { FileDetail } from "../files-table/UnpinFilesDialog";
+import { FileDetail } from "@/components/page-sections/files/ipfs/files-table/UnpinFilesDialog";
 import { useSearchParams } from "next/dist/client/components/navigation";
 import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";

@@ -3,7 +3,7 @@
 import React from "react";
 import { InView } from "react-intersection-observer";
 import { cn } from "@/app/lib/utils";
-import { HippiusLogo } from "../ui/icons";
+import { HippiusLogo } from "@/components/ui/icons";
 
 interface HippiusHeaderProps {
   isVerify?: boolean;

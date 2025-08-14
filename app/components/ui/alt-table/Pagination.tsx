@@ -2,7 +2,7 @@
 
 import React from "react";
 import { cn, getPaginationPageList } from "@/lib/utils";
-import AbstractIconWrapper from "../abstract-icon-wrapper";
+import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { Icons } from "..";
 
 interface TablePaginationProps {

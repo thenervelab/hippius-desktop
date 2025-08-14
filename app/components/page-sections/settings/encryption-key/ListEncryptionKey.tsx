@@ -1,12 +1,12 @@
 import React, { useState } from "react";
 import { Icons, RevealTextLine, IconButton, CardButton } from "@/components/ui";
 import { toast } from "sonner";
-import SectionHeader from "../SectionHeader";
+import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import { PlusCircle } from "lucide-react";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
 import { Eye, Key } from "@/components/ui/icons";
-import { getWalletRecord } from "@/app/lib/helpers/walletDb";
+import { getWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import { cn } from "@/lib/utils";
 import PasscodeInput from "./PasscodeInput";

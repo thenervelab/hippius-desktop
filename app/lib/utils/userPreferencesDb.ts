@@ -1,4 +1,4 @@
-import { initWalletDb, saveBytes } from "../helpers/walletDb";
+import { initHippiusDesktopDB, saveBytes } from "@/lib/helpers/hippiusDesktopDB";
 
 type ViewMode = "list" | "card";
 
@@ -15,7 +15,7 @@ const TABLE_SCHEMA = `
 `;
 
 async function ensurePreferencesTable() {
-    const db = await initWalletDb();
+    const db = await initHippiusDesktopDB();
     db.run(TABLE_SCHEMA);
     await saveBytes(db.export());
     return db;

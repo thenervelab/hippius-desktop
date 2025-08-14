@@ -17,23 +17,22 @@ import IPFSNoEntriesFound from "./files-table/IpfsNoEntriesFound";
 import FileDetailsDialog, { FileDetail } from "./files-table/UnpinFilesDialog";
 import InsufficientCreditsDialog from "./InsufficientCreditsDialog";
 import UploadStatusWidget from "./UploadStatusWidget";
-import SidebarDialog from "@/components/ui/sidebar-dialog";
+import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import FilterDialogContent from "./filter-dialog-content";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import { FileTypes } from "@/lib/types/fileTypes";
-import DeleteConfirmationDialog from "@/components/delete-confirmation-dialog";
+import DeleteConfirmationDialog from "@/app/components/DeleteConfirmationDialog";
 import SidebarDialogContent from "./file-details-dialog-content";
 import VideoDialog from "./files-table/VideoDialog";
 import ImageDialog from "./files-table/ImageDialog";
 import PdfDialog from "./files-table/PdfDialog";
 import { toast } from "sonner";
-import { useFileViewShared } from "./shared/file-view-utils";
+import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import EncryptionKeyDialog from "./EncryptionKeyDialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { HardDrive } from "lucide-react";
-import { CloudArrowUpIcon } from "@heroicons/react/24/outline";
+import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -350,7 +349,7 @@ const FilesContent: FC<FilesContentProps> = ({
                             )}
                         >
                             <div className="size-15 p-2 rounded-full flex items-center justify-center">
-                                <CloudArrowUpIcon className="size-10 text-[#3167dc] animate-slide-up" />
+                                <CloudUploadIcon className="size-10 text-[#3167dc] animate-slide-up" />
                             </div>
                         </div>
 

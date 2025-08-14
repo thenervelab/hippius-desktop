@@ -1,7 +1,7 @@
 "use client";
 
 import React, { ReactNode, Suspense } from "react";
-import { RevealTextLine } from "../ui";
+import { RevealTextLine } from "@/components/ui";
 import LeftCarouselPanel from "./LeftCarouselPanel";
 import { LucideLoader2 } from "lucide-react";
 import BaseAuthLayout from "./BaseAuthLayout";

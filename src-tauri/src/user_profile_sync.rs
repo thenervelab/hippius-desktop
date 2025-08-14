@@ -18,6 +18,11 @@ use sqlx::Row;
 use std::str;
 use sqlx::SqlitePool;
 use std::path::Path;
+use tauri::{AppHandle, Manager};
+use tauri::Emitter;
+use crate::events::AppEvent;
+use crate::sync_shared::{GLOBAL_CANCEL_TOKEN, reset_all_sync_state};
+use std::sync::atomic::Ordering;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +32,13 @@ pub struct FileSizeBreakdown {
 }
 
 static SYNCING_ACCOUNTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+// Function to clean up user profile sync state
+pub fn cleanup_user_profile_sync_state() {
+    println!("[UserSync] Cleaning up user profile sync state");
+    let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+    syncing_accounts.clear();
+}
 
 #[derive(Debug, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -87,7 +99,7 @@ pub fn decode_file_hash(file_hash_bytes: &[u8]) -> Result<String, String> {
     Ok(decoded_str.to_string())
 }
 
-pub fn start_user_sync(account_id: &str) {
+pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(account_id) {
@@ -97,6 +109,7 @@ pub fn start_user_sync(account_id: &str) {
         syncing_accounts.insert(account_id.to_string());
     }
 
+    let app_handle_clone = app_handle.clone();
     let account_id = account_id.to_string();
     tokio::spawn(async move {
         let client = Client::builder()
@@ -122,6 +135,16 @@ pub fn start_user_sync(account_id: &str) {
         };
 
         loop {
+            // Check global cancellation token
+            if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
+                println!("[UserSync] Global cancellation detected, stopping sync for account {}", account_id);
+                {
+                    let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+                    syncing_accounts.remove(&account_id);
+                }
+                return;
+            }
+            
             println!("[UserSync] Periodic check: scanning for unsynced data...");
 
             let account: AccountId32 = match account_id.parse() {
@@ -136,7 +159,6 @@ pub fn start_user_sync(account_id: &str) {
             let storage = loop {
                 match api.storage().at_latest().await {
                     Ok(storage) => {
-                        println!("[UserSync] Successfully got latest storage");
                         retry_count = 0;
                         break storage;
                     }
@@ -184,17 +206,25 @@ pub fn start_user_sync(account_id: &str) {
             let profile_cid = match profile_res {
                 Ok(Some(bounded_vec)) => bounded_vec_to_string(&bounded_vec.0),
                 Ok(None) => {
-                    println!("[UserSync] No user profile found for account: {}", account_id);
+                    let _ = app_handle_clone.emit("app-event", AppEvent {
+                        event_type: "error".to_string(),
+                        message: "User profile not available".to_string(),
+                        details: Some(format!("No profile found on-chain for account: {}", account_id)),
+                    });
+                    profile_parsed_successfully = true;
                     String::new()
                 }
                 Err(e) => {
                     eprintln!("[UserSync] Error fetching UserProfile: {e}");
+                    let _ = app_handle_clone.emit("app-event", AppEvent {
+                        event_type: "error".to_string(),
+                        message: "Failed to fetch user profile".to_string(),
+                        details: Some(e.to_string()),
+                    });
                     time::sleep(Duration::from_secs(120)).await;
                     continue;
                 }
             };
-
-            println!("[UserSync] Profile CID: {}", profile_cid);
 
             if !profile_cid.is_empty() {
                 let ipfs_url = format!("https://get.hippius.network/ipfs/{}", profile_cid);
@@ -320,7 +350,13 @@ pub fn start_user_sync(account_id: &str) {
                                                                     }
                                                                 }
                                                                 Err(e) => {
+                                                                    let error_message = format!("[UserSync] Failed to fetch metadata for {}: {}", file_hash, e);
                                                                     eprintln!("[UserSync] Failed to fetch metadata for {}: {}", file_hash, e);
+                                                                    let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                                        event_type: "error".to_string(),
+                                                                        message: "Failed to fetch metadata".to_string(),
+                                                                        details: Some(format!("File: {}, Error: {}", file_hash, e)),
+                                                                    });
                                                                 }
                                                             }
                                                         } else if is_folder {
@@ -342,7 +378,13 @@ pub fn start_user_sync(account_id: &str) {
                                                                     }
                                                                 }
                                                                 Err(e) => {
+                                                                    let error_message = format!("[UserSync] Failed to fetch folder content for {}: {}", file_hash, e);
                                                                     eprintln!("[UserSync] Failed to fetch folder content for {}: {}", file_hash, e);
+                                                                    let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                                        event_type: "error".to_string(),
+                                                                        message: "Failed to fetch folder content".to_string(),
+                                                                        details: Some(format!("File: {}, Error: {}", file_hash, e)),
+                                                                    });
                                                                 }
                                                             }
                                                         }
@@ -387,12 +429,24 @@ pub fn start_user_sync(account_id: &str) {
                                                 }
                                             }
                                             Err(e) => {
+                                                let error_message = format!("[UserSync] Invalid JSON for CID {}: {}. Error: {}", profile_cid, data, e);
                                                 eprintln!("[UserSync] Invalid JSON for CID {}: {}. Error: {}", profile_cid, data, e);
+                                                let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                    event_type: "error".to_string(),
+                                                    message: "Invalid JSON in profile data".to_string(),
+                                                    details: Some(format!("CID: {}, Error: {}", profile_cid, e)),
+                                                });
                                             }
                                         }
                                     }
                                     Err(e) => {
+                                        let error_message = format!("[UserSync] Failed to get text from IPFS response for CID {}: {}", profile_cid, e);
                                         eprintln!("[UserSync] Failed to get text from IPFS response for CID {}: {}", profile_cid, e);
+                                        let _ = app_handle_clone.emit("app-event", AppEvent {
+                                            event_type: "error".to_string(),
+                                            message: "Failed to parse IPFS response".to_string(),
+                                            details: Some(format!("CID: {}, Error: {}", profile_cid, e)),
+                                        });
                                         ipfs_retry_count += 1;
                                         if ipfs_retry_count < max_ipfs_retries {
                                             let wait_time = 5 * ipfs_retry_count;
@@ -402,7 +456,13 @@ pub fn start_user_sync(account_id: &str) {
                                     }
                                 }
                             } else {
+                                let error_message = format!("[UserSync] IPFS request failed for CID {}: Status {}", profile_cid, resp.status());
                                 eprintln!("[UserSync] IPFS request failed for CID {}: Status {}", profile_cid, resp.status());
+                                let _ = app_handle_clone.emit("app-event", AppEvent {
+                                    event_type: "error".to_string(),
+                                    message: "Failed to fetch from IPFS".to_string(),
+                                    details: Some(format!("CID: {}, Status: {}", profile_cid, resp.status())),
+                                });
                                 ipfs_retry_count += 1;
                                 if ipfs_retry_count < max_ipfs_retries {
                                     let wait_time = 5 * ipfs_retry_count;
@@ -412,7 +472,13 @@ pub fn start_user_sync(account_id: &str) {
                             }
                         }
                         Err(e) => {
+                            let error_message = format!("[UserSync] Failed to fetch from IPFS for CID {}: {}", profile_cid, e);
                             eprintln!("[UserSync] Failed to fetch from IPFS for CID {}: {}", profile_cid, e);
+                            let _ = app_handle_clone.emit("app-event", AppEvent {
+                                event_type: "error".to_string(),
+                                message: "Failed to fetch from IPFS".to_string(),
+                                details: Some(format!("CID: {}, Error: {}", profile_cid, e)),
+                            });
                             ipfs_retry_count += 1;
                             if ipfs_retry_count < max_ipfs_retries {
                                 let wait_time = 5 * ipfs_retry_count;
@@ -424,7 +490,13 @@ pub fn start_user_sync(account_id: &str) {
                 }
 
                 if !profile_fetched {
+                    let error_message = format!("[UserSync] Failed to fetch profile for CID {} after {} retries, continuing with storage requests", profile_cid, max_ipfs_retries);
                     eprintln!("[UserSync] Failed to fetch profile for CID {} after {} retries, continuing with storage requests", profile_cid, max_ipfs_retries);
+                    let _ = app_handle_clone.emit("app-event", AppEvent {
+                        event_type: "error".to_string(),
+                        message: "Failed to fetch profile from IPFS".to_string(),
+                        details: Some(format!("CID: {}, Retries: {}", profile_cid, max_ipfs_retries)),
+                    });
                 }
             } else {
                 println!("[UserSync] Profile CID is empty, proceeding with storage requests");
@@ -434,7 +506,13 @@ pub fn start_user_sync(account_id: &str) {
             let mut iter = match storage.iter(custom_runtime::storage().ipfs_pallet().user_storage_requests_iter()).await {
                 Ok(i) => i,
                 Err(e) => {
+                    let error_message = format!("[UserSync] Error fetching storage requests iterator: {e}");
                     eprintln!("[UserSync] Error fetching storage requests iterator: {e}");
+                    let _ = app_handle_clone.emit("app-event", AppEvent {
+                        event_type: "error".to_string(),
+                        message: "Failed to fetch storage requests".to_string(),
+                        details: Some(e.to_string()),
+                    });
                     time::sleep(Duration::from_secs(120)).await;
                     continue;
                 }
@@ -444,11 +522,20 @@ pub fn start_user_sync(account_id: &str) {
             let max_storage_retries = 5;
 
             while let Some(result) = iter.next().await {
+                // Check global cancellation during iteration
+                if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
+                    println!("[UserSync] Global cancellation detected during storage iteration, stopping sync for account {}", account_id);
+                    {
+                        let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+                        syncing_accounts.remove(&account_id);
+                    }
+                    return;
+                }
+                
                 match result {
                     Ok(StorageKeyValuePair { value, .. }) => {
                         if let Some(storage_request) = value {
                             if storage_request.owner == account {
-                                println!("[UserSync] Found storage request for account: {}", account);
                                 let file_name = bounded_vec_to_string(&storage_request.file_name.0);
 
                                 // Skip files ending with .ff.ec_metadata, .ff, or .ec
@@ -525,23 +612,47 @@ pub fn start_user_sync(account_id: &str) {
                                                                             let cid_vec = cid.to_string().as_bytes().to_vec();
                                                                             file_hash = hex::encode(cid_vec);
                                                                         } else {
+                                                                            let error_message = format!("[UserSync] CID not found in JSON for decoded hash: {}", decoded_hash);
                                                                             eprintln!("[UserSync] CID not found in JSON for decoded hash: {}", decoded_hash);
+                                                                            let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                                                event_type: "error".to_string(),
+                                                                                message: "CID not found in IPFS data".to_string(),
+                                                                                details: Some(format!("File: {}, Error: {}", decoded_hash, error_message)),
+                                                                            });
                                                                         }
                                                                     }
                                                                 }
                                                             }
                                                             Err(e) => {
+                                                                let error_message = format!("[UserSync] Failed to parse JSON from IPFS for {}: {}", decoded_hash, e);
                                                                 eprintln!("[UserSync] Failed to parse JSON from IPFS for {}: {}", decoded_hash, e);
+                                                                let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                                    event_type: "error".to_string(),
+                                                                    message: "Failed to parse IPFS content".to_string(),
+                                                                    details: Some(format!("File: {}, Error: {}", decoded_hash, e)),
+                                                                });
                                                             }
                                                         }
                                                     }
                                                     Err(e) => {
+                                                        let error_message = format!("[UserSync] Failed to convert IPFS bytes to string for {}: {}", decoded_hash, e);
                                                         eprintln!("[UserSync] Failed to convert IPFS bytes to string for {}: {}", decoded_hash, e);
+                                                        let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                            event_type: "error".to_string(),
+                                                            message: "Invalid IPFS content format".to_string(),
+                                                            details: Some(format!("File: {}, Error: {}", decoded_hash, e)),
+                                                        });
                                                     }
                                                 }
                                             }
                                             Err(e) => {
+                                                let error_message = format!("[UserSync] Failed to download IPFS content for {}: {}", decoded_hash, e);
                                                 eprintln!("[UserSync] Failed to download IPFS content for {}: {}", decoded_hash, e);
+                                                let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                    event_type: "error".to_string(),
+                                                    message: "Failed to download from IPFS".to_string(),
+                                                    details: Some(format!("File: {}, Error: {}", decoded_hash, e)),
+                                                });
                                             }
                                         }
                                     }
@@ -555,7 +666,6 @@ pub fn start_user_sync(account_id: &str) {
                                                         match serde_json::from_str::<serde_json::Value>(&json_str) {
                                                             Ok(json_value) => {
                                                                 if let Some(files) = json_value.as_array() {
-                                                                    println!("file: {:?}", files);
                                                                     let target_extensions = if file_name.ends_with(".folder.ec_metadata") {
                                                                         vec![".folder.ec_metadata"]
                                                                     } else if file_name.ends_with("-folder.ec_metadata") {
@@ -612,7 +722,13 @@ pub fn start_user_sync(account_id: &str) {
                                                                                                 }
                                                                                             }
                                                                                             Err(e) => {
+                                                                                                let error_message = format!("[UserSync] Failed to download .ec_metadata IPFS content for {}: {}", cid, e);
                                                                                                 eprintln!("[UserSync] Failed to download .ec_metadata IPFS content for {}: {}", cid, e);
+                                                                                                let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                                                                    event_type: "error".to_string(),
+                                                                                                    message: "Failed to download metadata from IPFS".to_string(),
+                                                                                                    details: Some(format!("File: {}, Error: {}", cid, e)),
+                                                                                                });
                                                                                             }
                                                                                         }
                                                                                         break;
@@ -624,17 +740,35 @@ pub fn start_user_sync(account_id: &str) {
                                                                 }
                                                             }
                                                             Err(e) => {
+                                                                let error_message = format!("[UserSync] Failed to parse folder JSON from IPFS for {}: {}", decoded_hash, e);
                                                                 eprintln!("[UserSync] Failed to parse folder JSON from IPFS for {}: {}", decoded_hash, e);
+                                                                let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                                    event_type: "error".to_string(),
+                                                                    message: "Failed to parse folder data from IPFS".to_string(),
+                                                                    details: Some(format!("File: {}, Error: {}", decoded_hash, e)),
+                                                                });
                                                             }
                                                         }
                                                     }
                                                     Err(e) => {
+                                                        let error_message = format!("[UserSync] Failed to convert folder IPFS bytes to string for {}: {}", decoded_hash, e);
                                                         eprintln!("[UserSync] Failed to convert folder IPFS bytes to string for {}: {}", decoded_hash, e);
+                                                        let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                            event_type: "error".to_string(),
+                                                            message: "Invalid folder data from IPFS".to_string(),
+                                                            details: Some(format!("File: {}, Error: {}", decoded_hash, e)),
+                                                        });
                                                     }
                                                 }
                                             }
                                             Err(e) => {
+                                                let error_message = format!("[UserSync] Failed to download folder IPFS content for {}: {}", decoded_hash, e);
                                                 eprintln!("[UserSync] Failed to download folder IPFS content for {}: {}", decoded_hash, e);
+                                                let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                    event_type: "error".to_string(),
+                                                    message: "Failed to download folder from IPFS".to_string(),
+                                                    details: Some(format!("File: {}, Error: {}", decoded_hash, e)),
+                                                });
                                             }
                                         }
                                     }
@@ -652,7 +786,6 @@ pub fn start_user_sync(account_id: &str) {
                                         source = private_path;
                                     }
                                 }
-                                println!("[UserSync] File hash for storage request : {}, main req hash is : {}", file_hash, decoded_hash);
                                 let file_key = (file_hash.clone(), file_name.clone());
                                 if seen_files.insert(file_key) {
                                     records_to_insert.push(UserProfileFile {
@@ -682,34 +815,50 @@ pub fn start_user_sync(account_id: &str) {
                     Err(e) => {
                         if format!("{e}").contains("RestartNeeded") {
                             storage_retry_count += 1;
-                            eprintln!(
+                            let error_message = format!(
                                 "[UserSync] Connection reset during storage iteration (attempt {}/{}): {e}",
                                 storage_retry_count, max_storage_retries
                             );
+                            eprintln!("[UserSync] Connection reset during storage iteration (attempt {}/{}): {e}", storage_retry_count, max_storage_retries);
+                            let _ = app_handle_clone.emit("app-event", AppEvent {
+                                event_type: "error".to_string(),
+                                message: "Connection to node was reset".to_string(),
+                                details: Some(error_message),
+                            });
                             crate::substrate_client::clear_substrate_client();
                             match get_substrate_client().await {
                                 Ok(new_api) => {
                                     api = new_api;
                                     println!("[UserSync] Successfully reconnected to substrate node");
                                     // Reinitialize the iterator after reconnection
+                                    let new_storage_query = custom_runtime::storage()
+                                        .ipfs_pallet()
+                                        .user_storage_requests_iter();
                                     match api.storage().at_latest().await {
                                         Ok(new_storage) => {
-                                            // Recreate storage_query to avoid move issue
-                                            let new_storage_query = custom_runtime::storage()
-                                                .ipfs_pallet()
-                                                .user_storage_requests_iter();
                                             iter = match new_storage.iter(new_storage_query).await {
                                                 Ok(i) => i,
                                                 Err(e) => {
+                                                    let error_message = format!("[UserSync] Failed to reinitialize storage iterator: {e}");
                                                     eprintln!("[UserSync] Failed to reinitialize storage iterator: {e}");
+                                                    let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                        event_type: "error".to_string(),
+                                                        message: "Failed to restart sync after node reset".to_string(),
+                                                        details: Some(error_message),
+                                                    });
                                                     time::sleep(Duration::from_secs(120)).await;
                                                     continue;
                                                 }
                                             };
-                                            storage_retry_count = 0;
                                         }
                                         Err(e) => {
+                                            let error_message = format!("[UserSync] Failed to get latest storage after reconnect: {e}");
                                             eprintln!("[UserSync] Failed to get latest storage after reconnect: {e}");
+                                            let _ = app_handle_clone.emit("app-event", AppEvent {
+                                                event_type: "error".to_string(),
+                                                message: "Failed to reconnect to node".to_string(),
+                                                details: Some(error_message),
+                                            });
                                             if storage_retry_count >= max_storage_retries {
                                                 eprintln!("[UserSync] Max storage retries reached, waiting 5 minutes");
                                                 time::sleep(Duration::from_secs(300)).await;
@@ -724,7 +873,13 @@ pub fn start_user_sync(account_id: &str) {
                                     }
                                 }
                                 Err(e) => {
+                                    let error_message = format!("[UserSync] Failed to reconnect to substrate client: {e}");
                                     eprintln!("[UserSync] Failed to reconnect to substrate client: {e}");
+                                    let _ = app_handle_clone.emit("app-event", AppEvent {
+                                        event_type: "error".to_string(),
+                                        message: "Failed to reconnect to node client".to_string(),
+                                        details: Some(error_message),
+                                    });
                                     if storage_retry_count >= max_storage_retries {
                                         eprintln!("[UserSync] Max storage retries reached, waiting 5 minutes");
                                         time::sleep(Duration::from_secs(300)).await;
@@ -738,7 +893,13 @@ pub fn start_user_sync(account_id: &str) {
                                 }
                             }
                         } else {
+                            let error_message = format!("[UserSync] Error decoding storage request entry: {e}");
                             eprintln!("[UserSync] Error decoding storage request entry: {e}");
+                            let _ = app_handle_clone.emit("app-event", AppEvent {
+                                event_type: "error".to_string(),
+                                message: "Failed to read on-chain data".to_string(),
+                                details: Some(error_message),
+                            });
                             storage_retry_count += 1;
                             if storage_retry_count >= max_storage_retries {
                                 eprintln!("[UserSync] Max storage retries reached, waiting 5 minutes");
@@ -764,13 +925,18 @@ pub fn start_user_sync(account_id: &str) {
                     {
                         Ok(_) => println!("[UserSync] Cleared user_profiles table"),
                         Err(e) => {
+                            let error_message = format!("[UserSync] Failed to clear user_profiles table: {e}");
                             eprintln!("[UserSync] Failed to clear user_profiles table: {e}");
+                            let _ = app_handle_clone.emit("app-event", AppEvent {
+                                event_type: "error".to_string(),
+                                message: "Failed to clear user profiles table".to_string(),
+                                details: Some(e.to_string()),
+                            });
                             time::sleep(Duration::from_secs(120)).await;
                             continue;
                         }
                     }
 
-                    println!("[UserSync] Total records inserted: {}", records_to_insert.len());
                     for record in records_to_insert {
                         let insert_result = sqlx::query(
                             "INSERT INTO user_profiles (
@@ -801,10 +967,13 @@ pub fn start_user_sync(account_id: &str) {
                         .await;
 
                         if let Err(e) = insert_result {
-                            eprintln!(
-                                "[UserSync] Failed to insert record for file '{}': {e}",
-                                record.file_name
-                            );
+                            let error_message = format!("[UserSync] Failed to insert record for file '{}': {e}", record.file_name);
+                            eprintln!("[UserSync] Failed to insert record for file '{}': {e}", record.file_name);
+                            let _ = app_handle_clone.emit("app-event", AppEvent {
+                                event_type: "error".to_string(),
+                                message: "Failed to insert record into user profiles table".to_string(),
+                                details: Some(format!("File: {}, Error: {}", record.file_name, e)),
+                            });
                         }
                     }
                 } else {
@@ -895,6 +1064,21 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                         }
                     }
 
+                    // If source is still "Hippius", check file_paths table
+                    if source == "Hippius" {
+                        if let Ok(path_record) = sqlx::query_as::<_, (String,)>(
+                            "SELECT path FROM file_paths WHERE file_name = ? LIMIT 1"
+                        )
+                        .bind(&file_name)
+                        .fetch_optional(pool)
+                        .await
+                        {
+                            if let Some((path,)) = path_record {
+                                source = path;
+                            }
+                        }
+                    }
+
                     files.push(UserProfileFileWithType {
                         owner: row.get("owner"),
                         cid: row.get("cid"),
@@ -963,7 +1147,7 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
 }
 
 #[tauri::command]
-pub async fn start_user_profile_sync_tauri(account_id: String) {
-    println!("[UserSync] Starting sync for account: {}", account_id);
-    start_user_sync(&account_id);
+pub async fn start_user_profile_sync_tauri(app_handle: AppHandle, account_id: String) {
+    println!("[UserSync] Received request to start sync for account: {}", account_id);
+    start_user_sync(app_handle, &account_id);
 }

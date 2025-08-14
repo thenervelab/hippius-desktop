@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import { CardButton, Icons, RevealTextLine } from "../../ui";
-import { Trash } from "../../ui/icons";
+import { CardButton, Icons, RevealTextLine } from "@/components/ui";
+import { Trash } from "@/components/ui/icons";
 import { InView } from "react-intersection-observer";
 import ResetDataConfirmation from "./ResetDataConfirmation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -8,11 +8,12 @@ import { toast } from "sonner";
 import SectionHeader from "./SectionHeader";
 import { useSetAtom } from "jotai";
 import { settingsDialogOpenAtom } from "@/app/components/sidebar/sideBarAtoms";
+import { invoke } from "@tauri-apps/api/core";
 
 const ResetAppData = () => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
-  const { resetWallet } = useWalletAuth();
+  const { resetHippiusDesktop } = useWalletAuth();
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
 
   const openDialog = () => setIsDialogOpen(true);
@@ -21,7 +22,8 @@ const ResetAppData = () => {
   const handleResetLocalData = async () => {
     setIsResetting(true);
     try {
-      await resetWallet();
+      await invoke("reset_app");
+      await resetHippiusDesktop();
       toast.success(
         "Local data cleared. You can restore everything with your backup.",
         {

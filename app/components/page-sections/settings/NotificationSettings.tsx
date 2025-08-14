@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
-import { CardButton, Icons, RevealTextLine } from "../../ui";
+import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import SectionHeader from "./SectionHeader";
 import { toast } from "sonner";
 import { InView } from "react-intersection-observer";
@@ -76,7 +76,6 @@ const NotificationSettings: React.FC = () => {
               Icon={Icons.Notification}
               title="Notification Preferences"
               subtitle="Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you."
-              iconSize="small"
               info="Customize which events trigger notifications to stay informed about activity relevant to you. Your preferences can be updated anytime."
             />
           </RevealTextLine>

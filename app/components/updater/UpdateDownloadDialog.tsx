@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle, HippiusLogo } from "@/components/ui/icons";
 import { X } from "lucide-react";
 import Image from "next/image";
-import { CardButton, Graphsheet, Icons } from "../ui";
+import { CardButton, Graphsheet, Icons } from "@/components/ui";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
   updateStore,
@@ -14,7 +14,7 @@ import {
   confirmUpdate,
   closeUpdateDialog,
 } from "@/app/components/updater/updateStore";
-import RevealTextLine from "../ui/reveal-text-line";
+import RevealTextLine from "@/components/ui/reveal-text-line";
 import { InView } from "react-intersection-observer";
 
 type Props = {

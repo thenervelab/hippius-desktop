@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle } from "@/components/ui/icons";
 import { Graphsheet, RevealTextLine } from "@/app/components/ui";
-import PasscodeInput from "../encryption-key/PasscodeInput";
+import PasscodeInput from "@/components/page-sections/settings/encryption-key/PasscodeInput";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";

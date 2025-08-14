@@ -1,9 +1,9 @@
 "use client";
 
-import BaseAuthLayout from "../BaseAuthLayout";
+import BaseAuthLayout from "@/components/auth/BaseAuthLayout";
 import Onboarding from ".";
 
-const OnboardingPage: React.FC<{
+const OnBoardingPage: React.FC<{
   onboardingCompleted: boolean | null;
   setOnboardingCompleted: (completed: boolean) => void;
 }> = ({ onboardingCompleted, setOnboardingCompleted }) => {
@@ -18,4 +18,4 @@ const OnboardingPage: React.FC<{
   return null;
 };
 
-export default OnboardingPage;
+export default OnBoardingPage;
