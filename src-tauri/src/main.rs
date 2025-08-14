@@ -4,23 +4,27 @@
 mod builder_blocks;
 mod commands;
 mod constants;
+mod events;
 mod folder_sync;
+mod ipfs;
 mod public_folder_sync;
 mod substrate_client;
-mod user_profile_sync;
 mod sync_shared;
+mod user_profile_sync;
 mod utils;
-mod ipfs;
-mod events;
 
-use crate::sync_shared::{get_sync_status, app_close};
-use crate::folder_sync::{start_folder_sync_tauri};
+use crate::commands::syncing::{cleanup_sync, initialize_sync, AppState, SyncState};
+use crate::folder_sync::start_folder_sync_tauri;
+use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::public_folder_sync::start_public_folder_sync_tauri;
+use crate::sync_shared::{app_close, get_sync_status};
+
 use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size};
-use crate::user_profile_sync::start_user_profile_sync_tauri;
-use crate::ipfs::{get_ipfs_node_info, get_ipfs_bandwidth, get_ipfs_peers};
-use crate::commands::syncing::{initialize_sync, cleanup_sync, AppState, SyncState};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
+use commands::accounts::{
+    create_encryption_key, export_app_data, get_encryption_keys, import_app_data, import_key,
+    reset_app,
+};
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
     upload_file_public, download_file_public, public_download_with_erasure, public_upload_with_erasure,
@@ -28,15 +32,18 @@ use commands::ipfs_commands::{
     remove_file_from_public_folder, add_file_to_public_folder, remove_file_from_private_folder, add_file_to_private_folder, add_folder_to_public_folder,
     remove_folder_from_public_folder, add_folder_to_private_folder, remove_folder_from_private_folder
 };
-use commands::accounts::{create_encryption_key, get_encryption_keys, import_key, reset_app};
 use utils::file_operations::delete_and_unpin_file_by_name;
 use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
-use commands::substrate_tx::{get_sync_path, set_sync_path, transfer_balance_tauri, get_wss_endpoint, update_wss_endpoint_command, test_wss_endpoint_command};
+use commands::substrate_tx::{
+    get_sync_path, get_wss_endpoint, set_sync_path, test_wss_endpoint_command,
+    transfer_balance_tauri, update_wss_endpoint_command,
+};
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
-use tauri::{Builder, Manager, AppHandle};
-use tokio::sync::Mutex;
 use std::sync::Arc;
+use tauri::{AppHandle, Builder, Manager};
+use tokio::sync::Mutex;
+
 
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
@@ -101,6 +108,8 @@ fn main() {
             create_encryption_key,
             get_encryption_keys,
             import_key,
+            import_app_data,
+            export_app_data,
             transfer_balance_tauri,
             get_user_total_file_size,
             get_wss_endpoint,
