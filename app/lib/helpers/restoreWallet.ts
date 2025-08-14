@@ -3,6 +3,7 @@ import { hashPasscode, decryptMnemonic } from "./crypto";
 import { isMnemonicValid } from "./validateMnemonic";
 import { saveBytes } from "./hippiusDesktopDB";
 import initSqlJs from "sql.js/dist/sql-wasm.js";
+import { invoke } from "@tauri-apps/api/core";
 
 export async function restoreWalletFromZip(
   zipFile: File,
@@ -68,4 +69,17 @@ export async function restoreWalletFromZip(
           : "Failed to restore wallet backup",
     };
   }
+}
+
+// Types and helper to call the Tauri command `import_app_data`
+export type ImportDataParams = {
+  public_sync_path?: string | null;
+  private_sync_path?: string | null;
+  encryption_keys: string[]; // base64 encoded keys
+};
+
+export async function importAppData(params: ImportDataParams): Promise<string> {
+  // Calls the Rust command: #[tauri::command] pub async fn import_app_data(params: ImportDataParams)
+  // Returns Ok(String) on success, throws on Err(String)
+  return await invoke<string>("import_app_data", { params });
 }
