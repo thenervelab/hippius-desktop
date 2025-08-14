@@ -4,7 +4,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { isOnboardingDone } from "@/app/lib/helpers/onboardingDb";
-import OnBoardingPage from "@/components/auth/onboarding/onBoardingPage";
+import OnBoardingPage from "@/components/auth/onboarding/OnBoardingPage";
 
 export default function OnBoardingGuard({
   children,
