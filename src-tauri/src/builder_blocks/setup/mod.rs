@@ -176,7 +176,26 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             println!("[Setup] .setup() closure called in setup.rs");
             
             let handle = app.handle().clone();
-            
+            let win = app.get_webview_window("main").expect("main window not found");
+
+            if let Some(m) = win.current_monitor()? {
+               
+                let phys   = m.size();
+                let origin = m.position();        // PhysicalPosition<i32>
+
+                
+                let w = (phys.width as f64 * 0.8) as u32;
+                let h = (phys.height as f64 * 0.9) as u32;
+
+              
+                let pos_x = origin.x + ((phys.width  as i32 - w as i32) / 2);
+                let pos_y = origin.y + ((phys.height as i32 - h as i32) / 2);
+
+                
+                win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
+                win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
+                win.show()?;       
+            }
             // Show macOS permission guidance on first run
             #[cfg(target_os = "macos")]
             {
