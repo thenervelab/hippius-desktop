@@ -21,14 +21,14 @@ export async function importBackendData(backendData: BackendData): Promise<{ suc
 
     // Send the backend data to the Tauri backend using the invoke function
     console.log("Sending backend data to Tauri backend:", {
-      public_sync_path: backendData.public_sync_path,
-      private_sync_path: backendData.private_sync_path,
-      encryption_keys: backendData.encryption_keys,
+      publicSyncPath: backendData.public_sync_path,
+      privateSyncPath: backendData.private_sync_path,
+      encryptionKeys: backendData.encryption_keys,
     });
     await invoke('import_app_data', {
-      public_sync_path: backendData.public_sync_path,
-      private_sync_path: backendData.private_sync_path,
-      encryption_keys: backendData.encryption_keys,
+      publicSyncPath: backendData.public_sync_path,
+      privateSyncPath: backendData.private_sync_path,
+      encryptionKeys: backendData.encryption_keys,
     });
 
     console.log("Backend data imported successfully");
