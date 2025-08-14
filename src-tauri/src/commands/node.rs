@@ -7,10 +7,12 @@ use tokio::{
     process::Command,
 };
 
-use crate::constants::ipfs::{AppSetupPhase, APP_SETUP_EVENT};
+use crate::constants::ipfs::{AppSetupPhase, APP_SETUP_EVENT, API_URL};
 use crate::utils::binary::ensure_ipfs_binary;
 use std::time::Duration;
 use tokio::time::sleep;
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 static IPFS_HANDLE: OnceCell<Mutex<Option<tokio::process::Child>>> = OnceCell::new();
 
@@ -67,6 +69,23 @@ pub fn spawn_ipfs_command(bin_path: &std::path::Path, args: &[&str]) -> tokio::p
     cmd
 }
 
+// Quick probe to see if the IPFS API is already responding on the configured address.
+async fn is_ipfs_api_up() -> bool {
+    // API_URL is like "http://127.0.0.1:5001". We need host:port for TcpStream::connect.
+    let mut addr = API_URL.trim();
+    if let Some(rest) = addr.strip_prefix("http://") {
+        addr = rest;
+    } else if let Some(rest) = addr.strip_prefix("https://") {
+        addr = rest;
+    }
+
+    // Best-effort quick connect with a short timeout
+    match timeout(Duration::from_secs(2), TcpStream::connect(addr)).await {
+        Ok(Ok(_)) => true,
+        _ => false,
+    }
+}
+
 #[tauri::command]
 pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
     // Check if IPFS daemon is already running
@@ -77,6 +96,13 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
             println!("[IPFS] Daemon already running, skipping start");
             return Ok(());
         }
+    }
+
+    // If a daemon is already running (e.g., from another process), skip starting a new one
+    if is_ipfs_api_up().await {
+        println!("[IPFS] Existing IPFS daemon detected on {}. Skipping start.", API_URL);
+        emit_and_update_phase(app.clone(), AppSetupPhase::Ready).await;
+        return Ok(());
     }
 
     sleep(Duration::from_secs(LARGE_SLEEP)).await;
