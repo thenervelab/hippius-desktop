@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
-import { importAppData, type ImportDataParams } from "@/lib/helpers/restoreWallet";
+import React, { useState } from "react";
+// import { importAppData, type ImportDataParams } from "@/lib/helpers/restoreWallet";
 
 export default function ImportAppDataDemo() {
   const [publicPath, setPublicPath] = useState<string>("");
@@ -11,17 +11,17 @@ export default function ImportAppDataDemo() {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const params: ImportDataParams = useMemo(
-    () => ({
-      public_sync_path: publicPath.trim() ? publicPath.trim() : null,
-      private_sync_path: privatePath.trim() ? privatePath.trim() : null,
-      encryption_keys: keysCsv
-        .split(",")
-        .map((s) => s.trim())
-        .filter((s) => s.length > 0),
-    }),
-    [publicPath, privatePath, keysCsv]
-  );
+  // const params: ImportDataParams = useMemo(
+  //   () => ({
+  //     public_sync_path: publicPath.trim() ? publicPath.trim() : null,
+  //     private_sync_path: privatePath.trim() ? privatePath.trim() : null,
+  //     encryption_keys: keysCsv
+  //       .split(",")
+  //       .map((s) => s.trim())
+  //       .filter((s) => s.length > 0),
+  //   }),
+  //   [publicPath, privatePath, keysCsv]
+  // );
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,8 +29,8 @@ export default function ImportAppDataDemo() {
     setError(null);
     setResult(null);
     try {
-      const res = await importAppData(params);
-      setResult(res);
+      // const res = await importAppData(params);
+      setResult(null);
     } catch (err) {
       console.error("import_app_data failed", err);
       setError(err instanceof Error ? err.message : String(err));
