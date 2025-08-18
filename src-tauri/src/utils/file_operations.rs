@@ -116,9 +116,8 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
         let mut last_error = None;
 
         for variant in variations {
-            
             let hashes_result = sqlx::query_as::<_, (String,)>(
-                "SELECT main_req_hash FROM user_profiles WHERE file_name = ?"
+                "SELECT file_hash FROM user_profiles WHERE file_name = ?"
             )
             .bind(&variant)
             .fetch_all(pool)
@@ -126,12 +125,12 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 
             match hashes_result {
                 Ok(hashes) if !hashes.is_empty() => {
-                    if let Some((main_req_hash,)) = hashes.first() {                        
+                    if let Some((file_hash,)) = hashes.first() {                        
                         let file_hash_wrapper = FileHashWrapper {
-                            file_hash: main_req_hash.as_bytes().to_vec(),
+                            file_hash: file_hash.as_bytes().to_vec(),
                         };
                         
-                        return storage_unpin_request_tauri(file_hash_wrapper, seed_phrase.to_string())
+                        return storage_unpin_request_tauri(file_hash_wrapper, seed_phrase.to_string(), variant.clone())
                             .await
                             .map(|_| ())
                             .map_err(|e| format!("Unpin request error for variant '{}': {}", variant, e));

@@ -918,7 +918,7 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
 
             // Step 3: Clear and insert into user_profiles table
             if let Some(pool) = DB_POOL.get() {
-                if records_to_insert.len() > 0 || profile_parsed_successfully {
+                if records_to_insert.len() > 0 && profile_parsed_successfully {
                     match sqlx::query("DELETE FROM user_profiles")
                         .execute(pool)
                         .await
