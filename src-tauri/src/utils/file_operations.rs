@@ -8,8 +8,8 @@ use crate::sync_shared::collect_files_recursively;
 use hex;
 use crate::ipfs::get_ipfs_file_size;
 use crate::sync_shared::insert_file_if_not_exists;
-use crate::private_folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, PRIVATE_SYNC_STATUS};
-use crate::public_folder_sync::{RECENTLY_UPLOADED as PUBLIC_RECENTLY_UPLOADED, PUBLIC_SYNC_STATUS};
+use crate::private_folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, PRIVATE_SYNC_STATUS, RECENTLY_DELETED as PRIVATE_RECENTLY_DELETED};
+use crate::public_folder_sync::{RECENTLY_UPLOADED as PUBLIC_RECENTLY_UPLOADED, PUBLIC_SYNC_STATUS, RECENTLY_DELETED as PUBLIC_RECENTLY_DELETED};
 use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
 use tokio::time::{Duration, sleep};
@@ -531,6 +531,43 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
             }
         }
     }
+    
+    // --- Add paths to RECENTLY_DELETED before deletion ---
+    let mut paths_to_delete = Vec::new();
+    if sync_file_path.is_dir() || is_folder {
+        paths_to_delete.push(sync_file_path.to_string_lossy().to_string());
+        let mut files_in_folder = Vec::new();
+        let _ = collect_files_recursively(&sync_file_path, &mut files_in_folder);
+        for file in files_in_folder {
+            paths_to_delete.push(file.to_string_lossy().to_string());
+        }
+    } else {
+        paths_to_delete.push(sync_file_path.to_string_lossy().to_string());
+    }
+
+    {
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
+        };
+        for path in &paths_to_delete {
+            recently_deleted.insert(path.clone());
+        }
+    }
+
+    let paths_to_remove_later = paths_to_delete.clone();
+    tokio::spawn(async move {
+        sleep(Duration::from_secs(300)).await;
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
+        };
+        for path in paths_to_remove_later {
+            recently_deleted.remove(&path);
+        }
+    });
 
     // Handle folder deletion
     if sync_file_path.is_dir() || is_folder {
@@ -934,6 +971,43 @@ pub async fn remove_from_sync_folder(
     };
     let sync_file_path = target_folder.join(file_name);
 
+    // --- Add paths to RECENTLY_DELETED before deletion ---
+    let mut paths_to_delete = Vec::new();
+    if sync_file_path.is_dir() || is_folder {
+        paths_to_delete.push(sync_file_path.to_string_lossy().to_string());
+        let mut files_in_folder = Vec::new();
+        let _ = collect_files_recursively(&sync_file_path, &mut files_in_folder);
+        for file in files_in_folder {
+            paths_to_delete.push(file.to_string_lossy().to_string());
+        }
+    } else {
+        paths_to_delete.push(sync_file_path.to_string_lossy().to_string());
+    }
+
+    {
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
+        };
+        for path in &paths_to_delete {
+            recently_deleted.insert(path.clone());
+        }
+    }
+
+    let paths_to_remove_later = paths_to_delete.clone();
+    tokio::spawn(async move {
+        sleep(Duration::from_secs(300)).await;
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
+        };
+        for path in paths_to_remove_later {
+            recently_deleted.remove(&path);
+        }
+    });
+
     // Update sync status before any async operations
     {
         let mut sync_status = if is_public {
@@ -1103,7 +1177,6 @@ pub async fn remove_from_sync_folder(
         recently_uploaded_folders.remove(&sync_file_path.to_string_lossy().to_string());
     }
 }
-
 
 pub async fn insert_file_if_not_exists_in_folder(
     pool: &sqlx::Pool<sqlx::Sqlite>,

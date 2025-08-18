@@ -27,6 +27,8 @@ pub static UPLOADING_FILES: Lazy<Arc<Mutex<HashSet<String>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
 pub static RECENTLY_UPLOADED: Lazy<Arc<Mutex<HashSet<String>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
+pub static RECENTLY_DELETED: Lazy<Arc<Mutex<HashSet<String>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
 pub static CREATE_BATCH: Lazy<Mutex<Vec<PathBuf>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub static CREATE_BATCH_TIMER_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -100,6 +102,10 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
                 {
                     let mut recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     recently_uploaded.clear();
+                }
+                {
+                    let mut recently_deleted = RECENTLY_DELETED.lock().unwrap();
+                    recently_deleted.clear();
                 }
                 {
                     let mut status = PRIVATE_SYNC_STATUS.lock().unwrap();
@@ -1063,7 +1069,14 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                 }
 
                 println!("[PrivateWatcher][Remove] Handling removal for effective path: {} (is_direct: {})", file_name, is_direct);
-
+                {
+                    let recently_deleted = RECENTLY_DELETED.lock().unwrap();
+                    let effective_path_str = effective_path.to_string_lossy().to_string();
+                    if recently_deleted.contains(&effective_path_str) {
+                        println!("[PrivateWatcher][Remove] Skipping recently deleted effective path: {}", effective_path_str);
+                        continue;
+                    }
+                }
                 let should_delete_folder = false;
                 let delete_result = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await;
 
