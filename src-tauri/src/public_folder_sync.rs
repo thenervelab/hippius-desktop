@@ -905,14 +905,20 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                 };
 
                 let top_level_path_str = top_level_path.to_string_lossy().to_string();
+                // Skip if recently uploaded, deleted, or already uploading
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
-                    if recently_uploaded.contains(&top_level_path_str) {
-                        println!("[PublicWatcher][Modify] Skipping recently uploaded top-level path: {}", top_level_path_str);
+                    if recently_uploaded.contains(&path_str) {
+                        println!("[PublicWatcher][Modify] Skipping recently uploaded: {}", path_str);
+                        continue;
+                    }
+                    let recently_deleted = RECENTLY_DELETED.lock().unwrap();
+                    if recently_deleted.contains(&path_str) {
+                        println!("[PublicWatcher][Modify] Skipping recently deleted: {}", path_str);
                         continue;
                     }
                 }
-
+                
                 if let Some(pool) = crate::DB_POOL.get() {
                     let file_name = top_level_path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
 
@@ -1126,13 +1132,20 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
     
             for path in filtered_paths {
                 let path_str = path.to_string_lossy().to_string();
+                // Skip if recently uploaded, deleted, or already uploading
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&path_str) {
-                        println!("[PublicWatcher][Rename] Skipping recently uploaded: {}", path_str);
+                        println!("[PublicWatcher][Modify] Skipping recently uploaded: {}", path_str);
+                        continue;
+                    }
+                    let recently_deleted = RECENTLY_DELETED.lock().unwrap();
+                    if recently_deleted.contains(&path_str) {
+                        println!("[PublicWatcher][Modify] Skipping recently deleted: {}", path_str);
                         continue;
                     }
                 }
+                
                 {
                     let uploading_files = UPLOADING_FILES.lock().unwrap();
                     if uploading_files.contains(&path_str) {

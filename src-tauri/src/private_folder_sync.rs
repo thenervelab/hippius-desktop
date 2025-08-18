@@ -886,11 +886,16 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
             for path in paths {
                 let path_str = path.to_string_lossy().to_string();
 
-                // Skip if recently uploaded or already uploading
+                // Skip if recently uploaded, deleted, or already uploading
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&path_str) {
                         println!("[PrivateWatcher][Modify] Skipping recently uploaded: {}", path_str);
+                        continue;
+                    }
+                    let recently_deleted = RECENTLY_DELETED.lock().unwrap();
+                    if recently_deleted.contains(&path_str) {
+                        println!("[PrivateWatcher][Modify] Skipping recently deleted: {}", path_str);
                         continue;
                     }
                 }
@@ -946,7 +951,7 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
                         if let Err(e) = delete_and_unpin_user_file_records_by_name(&file_name, seed_phrase, false, should_delete_folder).await {
                             eprintln!("[PrivateWatcher][Modify] Warning: Failed to delete/unpin old records for '{}', proceeding with upload anyway. Error: {:?}", file_name, e);
                         } else {
-                             println!("[PrivateWatcher][Modify] Successfully cleaned up old records for '{}'", file_name);
+                            println!("[PrivateWatcher][Modify] Successfully cleaned up old records for '{}'", file_name);
                         }
                     }
                 } else {
@@ -1134,13 +1139,19 @@ async fn handle_event(event: Event, account_id: &str, seed_phrase: &str, sync_pa
     
             for path in filtered_paths {
                 let path_str = path.to_string_lossy().to_string();
+                // Skip if recently uploaded, deleted, or already uploading
                 {
                     let recently_uploaded = RECENTLY_UPLOADED.lock().unwrap();
                     if recently_uploaded.contains(&path_str) {
-                        println!("[PrivateWatcher][Rename] Skipping recently uploaded: {}", path_str);
+                        println!("[PrivateWatcher][Modify] Skipping recently uploaded: {}", path_str);
                         continue;
                     }
-                }
+                    let recently_deleted = RECENTLY_DELETED.lock().unwrap();
+                    if recently_deleted.contains(&path_str) {
+                        println!("[PrivateWatcher][Modify] Skipping recently deleted: {}", path_str);
+                        continue;
+                    }
+                }                
                 {
                     let uploading_files = UPLOADING_FILES.lock().unwrap();
                     if uploading_files.contains(&path_str) {
