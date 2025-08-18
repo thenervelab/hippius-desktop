@@ -16,6 +16,8 @@ import { InView } from "react-intersection-observer";
 import FooterNavItem from "./FooterNavItems";
 import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
 import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
+import { openAppLink } from "@/app/lib/utils/links";
+
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
@@ -27,6 +29,10 @@ const Sidebar: React.FC = () => {
 
   const toggleSidebar = () => {
     setCollapsed(!collapsed);
+  };
+
+  const submitABug = () => {
+    openAppLink("https://github.com/thenervelab/hippius-desktop/issues/new");
   };
 
   const openSettingsWithDefaultTab = () => {
@@ -143,7 +149,7 @@ const Sidebar: React.FC = () => {
             <RevealTextLine
               reveal={inView}
               className={cn(
-                "flex w-full text-xs font-digital text-grey-40 transition-all duration-300",
+                "flex w-full text-xs font-digital text-grey-40 transition-all duration-300 border-b border-gray-80",
                 collapsed ? "justify-center p-2" : "px-4 py-2"
               )}
             >
@@ -156,6 +162,21 @@ const Sidebar: React.FC = () => {
                     <AppVersion />
                   </span>
                 )}
+              </>
+            </RevealTextLine>
+
+            <RevealTextLine
+              reveal={inView}
+              className={cn(
+                "flex w-full text-xs text-grey-70 transition-all duration-300 font-medium hover:text-primary-50 cursor-pointer",
+                collapsed ? "justify-center p-2" : "px-4 py-2"
+              )}
+              onClick={() => submitABug()}
+            >
+              <>
+                <span className={cn(collapsed ? "text-[10px]" : "")}>
+                  {!collapsed ? "Submit a Bug" : "Bug"}
+                </span>
               </>
             </RevealTextLine>
           </div>

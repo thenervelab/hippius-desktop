@@ -8,8 +8,8 @@ use crate::sync_shared::collect_files_recursively;
 use hex;
 use crate::ipfs::get_ipfs_file_size;
 use crate::sync_shared::insert_file_if_not_exists;
-use crate::private_folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, PRIVATE_SYNC_STATUS};
-use crate::public_folder_sync::{RECENTLY_UPLOADED as PUBLIC_RECENTLY_UPLOADED, PUBLIC_SYNC_STATUS};
+use crate::private_folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, PRIVATE_SYNC_STATUS, RECENTLY_DELETED as PRIVATE_RECENTLY_DELETED};
+use crate::public_folder_sync::{RECENTLY_UPLOADED as PUBLIC_RECENTLY_UPLOADED, PUBLIC_SYNC_STATUS, RECENTLY_DELETED as PUBLIC_RECENTLY_DELETED};
 use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
 use tokio::time::{Duration, sleep};
@@ -531,6 +531,43 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
             }
         }
     }
+    
+    // --- Add paths to RECENTLY_DELETED before deletion ---
+    let mut paths_to_delete = Vec::new();
+    if sync_file_path.is_dir() || is_folder {
+        paths_to_delete.push(sync_file_path.to_string_lossy().to_string());
+        let mut files_in_folder = Vec::new();
+        let _ = collect_files_recursively(&sync_file_path, &mut files_in_folder);
+        for file in files_in_folder {
+            paths_to_delete.push(file.to_string_lossy().to_string());
+        }
+    } else {
+        paths_to_delete.push(sync_file_path.to_string_lossy().to_string());
+    }
+
+    {
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
+        };
+        for path in &paths_to_delete {
+            recently_deleted.insert(path.clone());
+        }
+    }
+
+    let paths_to_remove_later = paths_to_delete.clone();
+    tokio::spawn(async move {
+        sleep(Duration::from_secs(300)).await;
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
+        };
+        for path in paths_to_remove_later {
+            recently_deleted.remove(&path);
+        }
+    });
 
     // Handle folder deletion
     if sync_file_path.is_dir() || is_folder {
@@ -718,79 +755,81 @@ pub async fn copy_to_sync_folder(
         .unwrap()
         .to_string_lossy()
         .to_string();
-    let dest_path = target_folder.join(&file_name);
+        let dest_path = target_folder.join(&file_name);
 
-    // Track this file/folder
-    let mut files_in_folder = Vec::new();
-    {
+        // --- Track this file/folder to prevent redundant watcher events ---
+        let dest_path_str = dest_path.to_string_lossy().to_string();
+        let mut files_to_track = Vec::new();
+    
+        if is_folder {
+            // If it's a folder, we also need to track all the files inside it.
+            let mut files_in_folder = Vec::new();
+            if collect_files_recursively(original_path, &mut files_in_folder).is_ok() {
+                for file_path in &files_in_folder {
+                    if let Ok(relative_path) = file_path.strip_prefix(original_path) {
+                        let target_path = target_folder.join(relative_path);
+                        files_to_track.push(target_path.to_string_lossy().to_string());
+                    }
+                }
+            }
+        } else {
+            files_to_track.push(dest_path_str.clone());
+        }
+    
+        {
         let mut recently_uploaded = if is_public {
             PUBLIC_RECENTLY_UPLOADED.lock().unwrap()
         } else {
             PRIVATE_RECENTLY_UPLOADED.lock().unwrap()
         };
-        let mut recently_uploaded_folders = if is_public {
-            PUBLIC_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
         } else {
-            PRIVATE_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
         };
 
-        if is_folder {
-            recently_uploaded_folders.insert(dest_path.to_string_lossy().to_string());
+        for path in &files_to_track {
+            recently_uploaded.insert(path.clone());
+            recently_deleted.insert(path.clone());
+        }
 
-            let _ = collect_files_recursively(&original_path, &mut files_in_folder);
-            for file_path in &files_in_folder {
-                let file_path_str = target_folder
-                    .join(file_path.strip_prefix(original_path).unwrap())
-                    .to_string_lossy()
-                    .to_string();
-                recently_uploaded.insert(file_path_str.clone());
-            }
-        } else {
-            recently_uploaded.insert(dest_path.to_string_lossy().to_string());
+        if is_folder {
+            let mut recently_uploaded_folders = if is_public {
+                PUBLIC_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
+            } else {
+                PRIVATE_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
+            };
+            recently_uploaded_folders.insert(dest_path_str.clone());
         }
     }
 
-    // Update sync status before await
-    {
-        let mut sync_status = if is_public {
-            PUBLIC_SYNC_STATUS.lock().unwrap()
-        } else {
-            PRIVATE_SYNC_STATUS.lock().unwrap()
-        };
-        sync_status.total_files += 1;
-        sync_status.in_progress = true;
-    }
-
-    // Remove from recently uploaded after 30 seconds
-    let dest_path_str = dest_path.to_string_lossy().to_string();
-    let files_to_remove = files_in_folder
-        .iter()
-        .map(|file_path| {
-            target_folder
-                .join(file_path.strip_prefix(original_path).unwrap())
-                .to_string_lossy()
-                .to_string()
-        })
-        .collect::<Vec<String>>();
+    // --- Spawn a task to remove these from the tracking sets after a timeout ---
     tokio::spawn(async move {
-        sleep(Duration::from_secs(30)).await;
+        sleep(Duration::from_secs(300)).await; // 5-minute timeout
+        
         let mut recently_uploaded = if is_public {
             PUBLIC_RECENTLY_UPLOADED.lock().unwrap()
         } else {
             PRIVATE_RECENTLY_UPLOADED.lock().unwrap()
         };
-        let mut recently_uploaded_folders = if is_public {
-            PUBLIC_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
         } else {
-            PRIVATE_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
         };
+
+        for path in &files_to_track {
+            recently_uploaded.remove(path);
+            recently_deleted.remove(path);
+        }
+
         if is_folder {
-            recently_uploaded_folders.remove(&dest_path_str.clone());
-            for file_path_str in files_to_remove {
-                recently_uploaded.remove(&file_path_str);
-            }
-        } else {
-            recently_uploaded.remove(&dest_path_str.clone());
+            let mut recently_uploaded_folders = if is_public {
+                PUBLIC_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
+            } else {
+                PRIVATE_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
+            };
+            recently_uploaded_folders.remove(&dest_path_str);
         }
     });
 
@@ -934,6 +973,43 @@ pub async fn remove_from_sync_folder(
     };
     let sync_file_path = target_folder.join(file_name);
 
+    // --- Add paths to RECENTLY_DELETED before deletion ---
+    let mut paths_to_delete = Vec::new();
+    if sync_file_path.is_dir() || is_folder {
+        paths_to_delete.push(sync_file_path.to_string_lossy().to_string());
+        let mut files_in_folder = Vec::new();
+        let _ = collect_files_recursively(&sync_file_path, &mut files_in_folder);
+        for file in files_in_folder {
+            paths_to_delete.push(file.to_string_lossy().to_string());
+        }
+    } else {
+        paths_to_delete.push(sync_file_path.to_string_lossy().to_string());
+    }
+
+    {
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
+        };
+        for path in &paths_to_delete {
+            recently_deleted.insert(path.clone());
+        }
+    }
+
+    let paths_to_remove_later = paths_to_delete.clone();
+    tokio::spawn(async move {
+        sleep(Duration::from_secs(300)).await;
+        let mut recently_deleted = if is_public {
+            PUBLIC_RECENTLY_DELETED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_DELETED.lock().unwrap()
+        };
+        for path in paths_to_remove_later {
+            recently_deleted.remove(&path);
+        }
+    });
+
     // Update sync status before any async operations
     {
         let mut sync_status = if is_public {
@@ -953,13 +1029,35 @@ pub async fn remove_from_sync_folder(
         }
     }
 
+    // --- Temporarily mark the parent folder as recently uploaded to prevent re-sync ---
+    let parent_folder_path = target_folder.join(folder_name);
+    let parent_folder_path_str = parent_folder_path.to_string_lossy().to_string();
+    {
+        let mut recently_uploaded = if is_public {
+            PUBLIC_RECENTLY_UPLOADED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_UPLOADED.lock().unwrap()
+        };
+        recently_uploaded.insert(parent_folder_path_str.clone());
+    }
+
+    tokio::spawn(async move {
+        sleep(Duration::from_secs(300)).await;
+        let mut recently_uploaded = if is_public {
+            PUBLIC_RECENTLY_UPLOADED.lock().unwrap()
+        } else {
+            PRIVATE_RECENTLY_UPLOADED.lock().unwrap()
+        };
+        recently_uploaded.remove(&parent_folder_path_str);
+    });
+
     if sync_file_path.is_dir() || is_folder {
         let mut files = Vec::new();
         let _ = collect_files_recursively(&sync_file_path, &mut files);
 
         if let Some(pool) = DB_POOL.get() {
             for file in &files {
-                if let Some(_file_name_inner) = file.file_name().and_then(|s| s.to_str()) {
+                if let Some(file_name_inner) = file.file_name().and_then(|s| s.to_str()) {
                     let relative_path = file.strip_prefix(&sync_folder).unwrap_or(file);
                     let relative_path_str = relative_path.to_string_lossy().to_string();
                     if let Err(e) = sqlx::query(
@@ -1086,24 +1184,7 @@ pub async fn remove_from_sync_folder(
             .await;
         }
     }
-
-    // Remove from recently uploaded
-    {
-        let mut recently_uploaded = if is_public {
-            PUBLIC_RECENTLY_UPLOADED.lock().unwrap()
-        } else {
-            PRIVATE_RECENTLY_UPLOADED.lock().unwrap()
-        };
-        let mut recently_uploaded_folders = if is_public {
-            PUBLIC_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
-        } else {
-            PRIVATE_RECENTLY_UPLOADED_FOLDERS.lock().unwrap()
-        };
-        recently_uploaded.remove(&sync_file_path.to_string_lossy().to_string());
-        recently_uploaded_folders.remove(&sync_file_path.to_string_lossy().to_string());
-    }
 }
-
 
 pub async fn insert_file_if_not_exists_in_folder(
     pool: &sqlx::Pool<sqlx::Sqlite>,
