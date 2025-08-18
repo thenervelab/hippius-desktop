@@ -25,7 +25,7 @@ export const ONBOARDING_SCREENS = [
       "Automatic Sync",
       "Security Controls",
       "Built-In Preview",
-      "Advance Search",
+      "Advanced Search",
     ],
     imagePath: "/assets/onboarding/files.png",
     imageMarginBottom: "mb-[75px]",
