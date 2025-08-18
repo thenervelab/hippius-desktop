@@ -188,6 +188,7 @@ pub async fn storage_unpin_request_tauri(
 
     // Pin the JSON to IPFS
     let new_cid = pin_json_to_ipfs_local(&json_payload.to_string(), ipfs_api_url).await?;
+    println!("new_cid for unpin request: {}", new_cid);
     // Use the new CID for the unpin request
     let file_hash_bytes = new_cid.as_bytes().to_vec();
     let file_hash_wrapper = FileHashWrapper {
@@ -387,3 +388,14 @@ pub async fn update_wss_endpoint_command(endpoint: String) -> Result<String, Str
 pub async fn test_wss_endpoint_command(endpoint: String) -> Result<bool, String> {
     test_wss_endpoint(endpoint).await
 }
+
+
+// ⚠ Invalid next.config.ts options detected: 
+// ⚠     Unrecognized key(s) in object: 'swcMinify'
+// ⚠ See more info here: https://nextjs.org/docs/messages/invalid-next-config
+// ✓ Ready in 3.6s
+// Valid IPFS binary found at "/home/faiz/.hippius/bin/ipfs"
+// IPFS repo already initialized at "/home/faiz/.ipfs/config"
+// Failed to set CORS header Access-Control-Allow-Origin: Error: context deadline exceeded
+
+// Failed to set CORS header Access-Control-Allow-Methods: Error: context deadline exceeded

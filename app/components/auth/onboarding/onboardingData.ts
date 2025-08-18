@@ -5,9 +5,15 @@ export const ONBOARDING_SCREENS = [
     description:
       "Hippius is a secure, blockchain-powered platform for file storage, management, and collaboration.",
     screentTitleText: "Get Started",
+    bulletPoints: [
+      "Fast access to files",
+      "Encrypted and secure",
+      "Optimized functionality",
+      "Easy to use",
+    ],
     imagePath: "/assets/onboarding/home.png",
     imageMarginBottom: "mb-[75px]",
-    imageClassName: "pl-4"
+    imageClassName: "pl-4",
   },
   {
     id: 2,
@@ -19,11 +25,11 @@ export const ONBOARDING_SCREENS = [
       "Automatic Sync",
       "Security Controls",
       "Built-In Preview",
-      "Advance Search"
+      "Advance Search",
     ],
     imagePath: "/assets/onboarding/files.png",
     imageMarginBottom: "mb-[75px]",
-    imageClassName: "px-4"
+    imageClassName: "px-4",
   },
   {
     id: 3,
@@ -34,7 +40,7 @@ export const ONBOARDING_SCREENS = [
     bulletPoints: ["Extra Layer of Security", "Faster Login", "User Control"],
     imagePath: "/assets/onboarding/passcode.png",
     imageMarginBottom: "mb-[75px]",
-    imageClassName: "px-4"
+    imageClassName: "px-4",
   },
   {
     id: 4,
@@ -45,11 +51,11 @@ export const ONBOARDING_SCREENS = [
     bulletPoints: [
       "Role Assignment to Sub Accounts",
       "Effective Management of Permissions",
-      "Securely Save Sub Account Seed"
+      "Securely Save Sub Account Seed",
     ],
     imagePath: "/assets/onboarding/subaccounts.png",
     imageMarginBottom: "mb-[75px]",
-    imageClassName: "pl-4"
+    imageClassName: "pl-4",
   },
   {
     id: 5,
@@ -60,10 +66,10 @@ export const ONBOARDING_SCREENS = [
     bulletPoints: [
       "Secure File Storage",
       "Encryption Backed Security",
-      "Decrypt and Download on Demand"
+      "Decrypt and Download on Demand",
     ],
     imagePath: "/assets/onboarding/encryption-key.png",
     imageMarginBottom: "mb-[75px]",
-    imageClassName: "px-4"
-  }
+    imageClassName: "px-4",
+  },
 ];
