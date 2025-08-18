@@ -48,6 +48,10 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [shouldResetPagination, setShouldResetPagination] = useState(false);
+  const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] =
+    useState("");
+  const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState("");
+
 
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -241,12 +245,35 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   }, []);
 
   useEffect(() => {
+    (async () => {
+      try {
+        const publicfolderPath = await getPublicSyncPath();
+        setSelectedPublicFolderPath(publicfolderPath);
+      } catch {
+        console.error("Failed to load sync folder");
+      }
+    })();
+  }, [isPrivateView]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const privatefolderPath = await getPrivateSyncPath();
+        setSelectedPrivateFolderPath(privatefolderPath);
+      } catch {
+        console.error("Failed to load sync folder");
+      }
+    })();
+  }, [isPrivateView]);
+
+  useEffect(() => {
+
     const checkSyncPath = async () => {
       try {
         setIsCheckingSyncPath(true);
         const syncPath = isPrivateView
-          ? await getPrivateSyncPath()
-          : await getPublicSyncPath();
+          ? selectedPrivateFolderPath
+          : selectedPublicFolderPath;
 
         setIsSyncPathConfigured(!!syncPath);
       } catch (error) {
@@ -261,20 +288,22 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     };
 
     checkSyncPath();
-  }, [isPrivateView]);
+  }, [isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath]);
+
+
 
   // Handle folder selection from SyncFolderSelector
   const handleFolderSelected = useCallback(
     async (path: string) => {
       try {
         if (isPrivateView) {
-          if (path === (await getPublicSyncPath())) {
+          if (path === selectedPublicFolderPath) {
             toast.error("Private sync folder cannot be the same as public sync folder");
             return;
           }
           await setPrivateSyncPath(path);
         } else {
-          if (path === (await getPrivateSyncPath())) {
+          if (path === selectedPrivateFolderPath) {
             toast.error("Public sync folder cannot be the same as private sync folder");
             return;
           }
@@ -296,7 +325,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         );
       }
     },
-    [refetchUserFiles, isPrivateView]
+    [refetchUserFiles, isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath]
   );
 
   // Load the table once on mount and set up interval refresh
