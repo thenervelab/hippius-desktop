@@ -8,6 +8,9 @@ use crate::DB_POOL;
 use chrono::Utc;
 use serde::Serialize;
 use sqlx::Row;
+use crate::utils::ipfs::{pin_json_to_ipfs_local, download_content_from_ipfs};
+use serde_json::{json, Value};
+use hex;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -115,23 +118,91 @@ pub async fn storage_request_tauri(
 #[tauri::command]
 pub async fn storage_unpin_request_tauri(
     file_hash_wrapper: FileHashWrapper,
-    seed_phrase: String
+    seed_phrase: String,
+    file_name: String,
 ) -> Result<String, String> {
     // Acquire the global lock
     let _lock = SUBSTRATE_TX_LOCK.lock().await;
 
+    println!("Processing file: {}", file_name);
     let pair = sr25519::Pair::from_string(&seed_phrase, None).map_err(|e| e.to_string())?;
     let signer = PairSigner::new(pair);
     let api = get_substrate_client().await?;
+    let ipfs_api_url = "http://127.0.0.1:5001";
 
+    // Decode the hex-encoded file_hash
+    let decoded_bytes = hex::decode(&file_hash_wrapper.file_hash)
+        .map_err(|e| format!("Failed to decode hex string: {}", e))?;
+
+    // Convert the decoded bytes to a string representation of the CID
+    let cid_str = String::from_utf8(decoded_bytes)
+        .map_err(|e| format!("Failed to convert file_hash to string: {}", e))?;
+
+    let json_payload;
+
+    if file_name.trim().ends_with(".folder") || file_name.trim().ends_with(".folder.ec_metadata") {
+        let mut files_to_unpin = Vec::new();
+        collect_folder_files_recursively(
+            ipfs_api_url,
+            &cid_str,
+            &file_name,
+            &mut files_to_unpin,
+        )
+        .await?;
+        json_payload = Value::Array(files_to_unpin);
+    } else if file_name.trim().ends_with(".ec_metadata") {
+        let content_bytes = download_content_from_ipfs(ipfs_api_url, &cid_str).await?;
+        let metadata: Value = serde_json::from_slice(&content_bytes)
+            .map_err(|e| format!("Failed to parse metadata JSON: {}", e))?;
+
+        let mut files_to_unpin = Vec::new();
+
+        if let Some(chunks) = metadata["chunks"].as_array() {
+            for chunk in chunks {
+                if let (Some(chunk_cid), Some(chunk_filename)) = (
+                    chunk["cid"]["cid"].as_str(),
+                    chunk["cid"]["filename"].as_str(),
+                ) {
+                    files_to_unpin.push(json!({
+                        "cid": chunk_cid,
+                        "filename": chunk_filename
+                    }));
+                }
+            }
+        }
+
+        // Add the original metadata file itself to the list
+        files_to_unpin.push(json!({
+            "cid": cid_str,
+            "filename": file_name
+        }));
+
+        json_payload = Value::Array(files_to_unpin);
+    } else {
+        // Corrected logic for non-metadata files
+        json_payload = json!([{
+            "cid": cid_str,
+            "filename": file_name
+        }]);
+    }
+
+    // Pin the JSON to IPFS
+    let new_cid = pin_json_to_ipfs_local(&json_payload.to_string(), ipfs_api_url).await?;
+    println!("new_cid for unpin request: {}", new_cid);
+    // Use the new CID for the unpin request
+    let file_hash_bytes = new_cid.as_bytes().to_vec();
+    let file_hash_wrapper = FileHashWrapper {
+        file_hash: file_hash_bytes,
+    };
     let file_hash = FileHash::try_from(file_hash_wrapper)
         .map_err(|e| format!("FileHash conversion error: {}", e))?;
-    let tx = custom_runtime::tx().marketplace().storage_unpin_request(file_hash);
+
+    let unpin_tx = custom_runtime::tx().marketplace().storage_unpin_request(file_hash);
 
     println!("Submitting unpin request transaction");
     let tx_hash = api
         .tx()
-        .sign_and_submit_then_watch_default(&tx, &signer)
+        .sign_and_submit_then_watch_default(&unpin_tx, &signer)
         .await
         .map_err(|e| format!("Failed to submit transaction: {}", e))?
         .wait_for_finalized_success()
@@ -143,6 +214,64 @@ pub async fn storage_unpin_request_tauri(
     // we should wait 6 secs so that this block is passed before doing next tx
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
     Ok(format!("storage_unpin_request submitted: {:?}", tx_hash))
+}
+
+fn collect_folder_files_recursively<'a>(
+    ipfs_api_url: &'a str,
+    cid: &'a str,
+    file_name: &'a str,
+    files_to_unpin: &'a mut Vec<Value>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+    Box::pin(async move {
+        // Add the current folder/file itself to the list.
+        files_to_unpin.push(json!({
+            "cid": cid,
+            "filename": file_name
+        }));
+
+        if file_name.trim().ends_with(".folder") || file_name.trim().ends_with(".folder.ec_metadata") {
+            // It's a folder, so process its contents recursively.
+            let content_bytes = download_content_from_ipfs(ipfs_api_url, cid).await?;
+            let folder_contents: Vec<Value> = serde_json::from_slice(&content_bytes)
+                .map_err(|e| format!("Failed to parse folder JSON for {}: {}", cid, e))?;
+
+            for item in folder_contents {
+                if let (Some(item_cid), Some(item_filename)) = (
+                    item["cid"].as_str(),
+                    item["file_name"].as_str(),
+                ) {
+                    collect_folder_files_recursively(
+                        ipfs_api_url,
+                        item_cid,
+                        item_filename,
+                        files_to_unpin,
+                    )
+                    .await?;
+                }
+            }
+        } else if file_name.trim().ends_with(".ec_metadata") {
+            // It's a metadata file, so process its chunks.
+            let content_bytes = download_content_from_ipfs(ipfs_api_url, cid).await?;
+            let metadata: Value = serde_json::from_slice(&content_bytes)
+                .map_err(|e| format!("Failed to parse metadata JSON: {}", e))?;
+
+            if let Some(chunks) = metadata["chunks"].as_array() {
+                for chunk in chunks {
+                    if let (Some(chunk_cid), Some(chunk_filename)) = (
+                        chunk["cid"]["cid"].as_str(),
+                        chunk["cid"]["filename"].as_str(),
+                    ) {
+                        files_to_unpin.push(json!({
+                            "cid": chunk_cid,
+                            "filename": chunk_filename
+                        }));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -259,3 +388,14 @@ pub async fn update_wss_endpoint_command(endpoint: String) -> Result<String, Str
 pub async fn test_wss_endpoint_command(endpoint: String) -> Result<bool, String> {
     test_wss_endpoint(endpoint).await
 }
+
+
+// ⚠ Invalid next.config.ts options detected: 
+// ⚠     Unrecognized key(s) in object: 'swcMinify'
+// ⚠ See more info here: https://nextjs.org/docs/messages/invalid-next-config
+// ✓ Ready in 3.6s
+// Valid IPFS binary found at "/home/faiz/.hippius/bin/ipfs"
+// IPFS repo already initialized at "/home/faiz/.ipfs/config"
+// Failed to set CORS header Access-Control-Allow-Origin: Error: context deadline exceeded
+
+// Failed to set CORS header Access-Control-Allow-Methods: Error: context deadline exceeded
