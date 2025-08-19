@@ -1,88 +1,102 @@
 "use client";
 
-import React, { useState } from "react";
-// import { importAppData, type ImportDataParams } from "@/lib/helpers/restoreWallet";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
-export default function ImportAppDataDemo() {
-  const [publicPath, setPublicPath] = useState<string>("");
-  const [privatePath, setPrivatePath] = useState<string>("");
-  const [keysCsv, setKeysCsv] = useState<string>("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+type RecentItem = {
+  name: string;
+  path: string;
+  scope: "public" | "private" | string;
+  action: "uploaded" | "deleted" | "uploading" | "queued" | string;
+  kind: "file" | "folder" | "unknown" | string;
+};
+
+type SyncActivityResponse = {
+  recent: RecentItem[];
+  uploading: RecentItem[];
+  queued: RecentItem[];
+};
+
+export default function RecentSyncItemsDemo() {
+  const [recent, setRecent] = useState<RecentItem[]>([]);
+  const [uploading, setUploading] = useState<RecentItem[]>([]);
+  const [queued, setQueued] = useState<RecentItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [limit, setLimit] = useState<number>(5);
+  const [noLimit, setNoLimit] = useState<boolean>(false);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // const params: ImportDataParams = useMemo(
-  //   () => ({
-  //     public_sync_path: publicPath.trim() ? publicPath.trim() : null,
-  //     private_sync_path: privatePath.trim() ? privatePath.trim() : null,
-  //     encryption_keys: keysCsv
-  //       .split(",")
-  //       .map((s) => s.trim())
-  //       .filter((s) => s.length > 0),
-  //   }),
-  //   [publicPath, privatePath, keysCsv]
-  // );
-
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const fetchItems = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setResult(null);
     try {
-      // const res = await importAppData(params);
-      setResult(null);
-    } catch (err) {
-      console.error("import_app_data failed", err);
-      setError(err instanceof Error ? err.message : String(err));
+      const args = noLimit ? {} : { limit };
+      const res = (await invoke("get_sync_activity", args)) as SyncActivityResponse;
+      setRecent(Array.isArray(res?.recent) ? res.recent : []);
+      setUploading(Array.isArray(res?.uploading) ? res.uploading : []);
+      setQueued(Array.isArray(res?.queued) ? res.queued : []);
+    } catch (e) {
+      console.error("get_sync_activity failed", e);
+      setError(e instanceof Error ? e.message : String(e));
+      setRecent([]);
+      setUploading([]);
+      setQueued([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [limit, noLimit]);
+
+  useEffect(() => {
+    if (autoRefresh) {
+      fetchItems();
+      timerRef.current = setInterval(fetchItems, 3000);
+    } else if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [autoRefresh, fetchItems]);
+
+  const counts = useMemo(
+    () => `Recent: ${recent.length} · Uploading: ${uploading.length} · Queued: ${queued.length}`,
+    [recent.length, uploading.length, queued.length]
+  );
 
   return (
-    <div style={{ maxWidth: 640 }}>
-      <h2 style={{ fontSize: "1.25rem", fontWeight: 600, marginBottom: 12 }}>
-        Import App Data (Demo)
-      </h2>
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Public sync path (optional)</span>
+    <div style={{ marginTop: 24 }}>
+      <h3 style={{ fontSize: "1.1rem", fontWeight: 600, marginBottom: 8 }}>Sync Activity</h3>
+      <div style={{ color: "#666", marginBottom: 6 }}>{counts}</div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <label style={{ display: "flex", gap: 6, alignItems: "center", opacity: noLimit ? 0.5 : 1 }}>
+          <span>Limit</span>
           <input
-            type="text"
-            value={publicPath}
-            onChange={(e) => setPublicPath(e.target.value)}
-            placeholder="/path/to/public"
-            style={{ padding: 8, border: "1px solid #ccc", borderRadius: 6 }}
+            type="number"
+            min={1}
+            max={25}
+            value={limit}
+            disabled={noLimit}
+            onChange={(e) => setLimit(Math.max(1, Math.min(25, Number(e.target.value) || 1)))}
+            style={{ width: 72, padding: 6, border: "1px solid #ccc", borderRadius: 6 }}
           />
         </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Private sync path (optional)</span>
+        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <input
-            type="text"
-            value={privatePath}
-            onChange={(e) => setPrivatePath(e.target.value)}
-            placeholder="/path/to/private"
-            style={{ padding: 8, border: "1px solid #ccc", borderRadius: 6 }}
+            type="checkbox"
+            checked={noLimit}
+            onChange={(e) => setNoLimit(e.target.checked)}
           />
+          <span>No limit (return all)</span>
         </label>
-
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Encryption keys (comma separated, base64)</span>
-          <input
-            type="text"
-            value={keysCsv}
-            onChange={(e) => setKeysCsv(e.target.value)}
-            placeholder="base64Key1, base64Key2"
-            style={{ padding: 8, border: "1px solid #ccc", borderRadius: 6 }}
-          />
-        </label>
-
         <button
-          type="submit"
+          onClick={fetchItems}
           disabled={loading}
           style={{
-            padding: "10px 14px",
+            padding: "8px 12px",
             borderRadius: 6,
             border: "1px solid #444",
             background: loading ? "#888" : "#222",
@@ -90,22 +104,96 @@ export default function ImportAppDataDemo() {
             cursor: loading ? "not-allowed" : "pointer",
           }}
         >
-          {loading ? "Importing..." : "Call import_app_data"}
+          {loading ? "Refreshing..." : "Refresh"}
         </button>
-      </form>
-
-      {result && (
-        <div style={{ marginTop: 12, color: "#0a7" }}>
-          <strong>Result: </strong>
-          <pre style={{ whiteSpace: "pre-wrap" }}>{result}</pre>
-        </div>
-      )}
+        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="checkbox"
+            checked={autoRefresh}
+            onChange={(e) => setAutoRefresh(e.target.checked)}
+          />
+          <span>Auto refresh (3s)</span>
+        </label>
+      </div>
 
       {error && (
-        <div style={{ marginTop: 12, color: "#c00" }}>
+        <div style={{ marginTop: 8, color: "#c00" }}>
           <strong>Error: </strong>
           <pre style={{ whiteSpace: "pre-wrap" }}>{error}</pre>
         </div>
+      )}
+
+      {/* Uploading */}
+      <h4 style={{ margin: "12px 0 6px", fontWeight: 600 }}>Uploading</h4>
+      {uploading.length === 0 ? (
+        <div style={{ color: "#666" }}>No items currently uploading.</div>
+      ) : (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>
+          {uploading.map((it, idx) => (
+            <li key={`up-${it.path}-${idx}`} style={{ border: "1px solid #ddd", borderRadius: 6, padding: 8, background: "#fff7e6" }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span>{it.scope === "public" ? "🌐" : "🔒"}</span>
+                <strong>{it.name}</strong>
+                <span style={{ color: "#b35c00" }}>uploading</span>
+                <span style={{ color: "#555" }}>({it.kind})</span>
+              </div>
+              <div style={{ color: "#555", fontSize: 12 }}>{it.path}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Queued */}
+      <h4 style={{ margin: "12px 0 6px", fontWeight: 600 }}>Queued</h4>
+      {queued.length === 0 ? (
+        <div style={{ color: "#666" }}>No items in queue.</div>
+      ) : (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>
+          {queued.map((it, idx) => (
+            <li key={`q-${it.path}-${idx}`} style={{ border: "1px solid #ddd", borderRadius: 6, padding: 8, background: "#eef6ff" }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span>{it.scope === "public" ? "🌐" : "🔒"}</span>
+                <strong>{it.name}</strong>
+                <span style={{ color: "#0a5" }}>queued</span>
+                <span style={{ color: "#555" }}>({it.kind})</span>
+              </div>
+              <div style={{ color: "#555", fontSize: 12 }}>{it.path}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Recent */}
+      <h4 style={{ margin: "12px 0 6px", fontWeight: 600 }}>Recent</h4>
+      {recent.length === 0 && !error ? (
+        <div style={{ color: "#666" }}>No recent items.</div>
+      ) : null}
+      {recent.length > 0 && (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 6 }}>
+          {recent.map((it, idx) => (
+            <li
+              key={`r-${it.path}-${idx}`}
+              style={{
+                border: "1px solid #ddd",
+                borderRadius: 6,
+                padding: 8,
+                display: "grid",
+                gap: 2,
+                background: "#fafafa",
+              }}
+            >
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span>{it.scope === "public" ? "🌐" : "🔒"}</span>
+                <strong>{it.name}</strong>
+                <span style={{ color: it.action === "deleted" ? "#b00" : "#0a7" }}>
+                  {it.action}
+                </span>
+                <span style={{ color: "#555" }}>({it.kind})</span>
+              </div>
+              <div style={{ color: "#555", fontSize: 12 }}>{it.path}</div>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
