@@ -71,7 +71,7 @@ pub fn get_sync_status() -> SyncStatusResponse {
     let in_progress = private_status.in_progress || public_status.in_progress;
 
     let percent = if total_files > 0 {
-        (processed_files as f32 / total_files as f32) * 100.0
+        (synced_files as f32 / total_files as f32) * 100.0
     } else if in_progress {
         0.0
     } else {

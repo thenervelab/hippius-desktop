@@ -58,12 +58,6 @@ pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String
         match output {
             Ok(_) => {
                 println!("Valid IPFS binary found at {:?}", binary_path);
-                // Emit DownloadingBinary event even when binary exists (for frontend consistency)
-                app.emit(
-                    crate::constants::ipfs::APP_SETUP_EVENT,
-                    crate::constants::ipfs::AppSetupPhase::DownloadingBinary,
-                )
-                .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
                 return Ok(binary_path);
             }
             Err(e) => {
@@ -89,12 +83,6 @@ pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String
     };
 
     if should_download {
-        // Emit DownloadingBinary event
-        app.emit(
-            crate::constants::ipfs::APP_SETUP_EVENT,
-            crate::constants::ipfs::AppSetupPhase::DownloadingBinary,
-        )
-        .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
 
         println!("Starting IPFS binary download");
         // We're the downloading thread
@@ -107,13 +95,6 @@ pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String
         *download_state = None;
 
         return Ok(result);
-    } else {
-        // Emit DownloadingBinary event
-        app.emit(
-            crate::constants::ipfs::APP_SETUP_EVENT,
-            crate::constants::ipfs::AppSetupPhase::DownloadingBinary,
-        )
-        .unwrap_or_else(|e| eprintln!("Emit failed: {e}"));
     }
 
     // We're not the downloading thread, wait for the download to complete
