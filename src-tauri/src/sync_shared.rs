@@ -7,6 +7,17 @@ use once_cell::sync::Lazy;
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// Import recent activity sets from public/private modules
+use crate::public_folder_sync::{RECENTLY_UPLOADED as PUBLIC_RECENTLY_UPLOADED, RECENTLY_DELETED as PUBLIC_RECENTLY_DELETED};
+use crate::private_folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, RECENTLY_DELETED as PRIVATE_RECENTLY_DELETED};
+use crate::public_folder_sync::{
+    UPLOADING_FILES as PUBLIC_UPLOADING_FILES,
+    CREATE_BATCH as PUBLIC_CREATE_BATCH,
+};
+use crate::private_folder_sync::{
+    UPLOADING_FILES as PRIVATE_UPLOADING_FILES,
+    CREATE_BATCH as PRIVATE_CREATE_BATCH,
+};
 
 // Global sync status tracking (split by sync type)
 pub static PRIVATE_SYNC_STATUS: Lazy<Arc<Mutex<SyncStatus>>> =
@@ -33,6 +44,22 @@ pub struct UploadJob {
     pub is_folder: bool,
 }
 
+// Types for recent activity to expose to the frontend
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct RecentItem {
+    pub name: String,
+    pub path: String,
+    pub scope: String,   // "public" | "private"
+    pub action: String,  // "uploaded" | "deleted"
+    pub kind: String,    // "file" | "folder" | "unknown"
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct SyncActivityResponse {
+    pub recent: Vec<RecentItem>,
+    pub uploading: Vec<RecentItem>
+}
+
 #[tauri::command]
 pub fn get_sync_status() -> SyncStatusResponse {
     let private_status = PRIVATE_SYNC_STATUS.lock().unwrap();
@@ -57,6 +84,114 @@ pub fn get_sync_status() -> SyncStatusResponse {
         in_progress,
         percent,
     }
+}
+
+#[tauri::command]
+pub fn get_recent_sync_items(limit: Option<usize>) -> Vec<RecentItem> {
+    let limit_opt = limit; // None => return all
+
+    // Helper to map a path string to RecentItem
+    fn map_item(path: &str, scope: &str, action: &str) -> RecentItem {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path)
+            .to_string();
+        let kind = std::fs::metadata(path)
+            .map(|m| if m.is_dir() { "folder" } else { "file" })
+            .unwrap_or("unknown")
+            .to_string();
+        RecentItem {
+            name,
+            path: path.to_string(),
+            scope: scope.to_string(),
+            action: action.to_string(),
+            kind,
+        }
+    }
+
+    let mut items: Vec<RecentItem> = Vec::new();
+
+    {
+        let set = PUBLIC_RECENTLY_UPLOADED.lock().unwrap();
+        for p in set.iter() {
+            items.push(map_item(p, "public", "uploaded"));
+        }
+    }
+    {
+        let set = PRIVATE_RECENTLY_UPLOADED.lock().unwrap();
+        for p in set.iter() {
+            items.push(map_item(p, "private", "uploaded"));
+        }
+    }
+    {
+        let set = PUBLIC_RECENTLY_DELETED.lock().unwrap();
+        for p in set.iter() {
+            items.push(map_item(p, "public", "deleted"));
+        }
+    }
+    {
+        let set = PRIVATE_RECENTLY_DELETED.lock().unwrap();
+        for p in set.iter() {
+            items.push(map_item(p, "private", "deleted"));
+        }
+    }
+
+    // Sort newest-ish first by name/path for determinism; we don't track timestamps, so just stable sort by path desc
+    items.sort_by(|a, b| b.path.cmp(&a.path));
+    if let Some(l) = limit_opt {
+        if items.len() > l {
+            items.truncate(l);
+        }
+    }
+    items
+}
+
+#[tauri::command]
+pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
+    // helper to map to RecentItem
+    fn map_item(path: &str, scope: &str, action: &str) -> RecentItem {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(path)
+            .to_string();
+        let kind = std::fs::metadata(path)
+            .map(|m| if m.is_dir() { "folder" } else { "file" })
+            .unwrap_or("unknown")
+            .to_string();
+        RecentItem {
+            name,
+            path: path.to_string(),
+            scope: scope.to_string(),
+            action: action.to_string(),
+            kind,
+        }
+    }
+
+    // Build recent using existing command for consistency
+    let mut recent = get_recent_sync_items(limit);
+
+    // Uploading (in-progress)
+    let mut uploading: Vec<RecentItem> = Vec::new();
+    {
+        let set = PUBLIC_UPLOADING_FILES.lock().unwrap();
+        for p in set.iter() {
+            uploading.push(map_item(p, "public", "uploading"));
+        }
+    }
+    {
+        let set = PRIVATE_UPLOADING_FILES.lock().unwrap();
+        for p in set.iter() {
+            uploading.push(map_item(p, "private", "uploading"));
+        }
+    }
+    uploading.sort_by(|a, b| b.path.cmp(&a.path));
+    if let Some(l) = limit {
+        if uploading.len() > l { uploading.truncate(l); }
+    }
+
+    SyncActivityResponse { recent, uploading }
 }
 
 #[tauri::command]
@@ -161,7 +296,7 @@ pub fn collect_files_with_relative_paths(
     Ok(())
 }
 
-
+// Helper to collect files recursively
 pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;

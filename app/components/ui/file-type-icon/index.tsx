@@ -1,12 +1,11 @@
 import React from 'react';
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { FileTypes } from "@/lib/types/fileTypes";
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { getFileIconForThumbnail } from '@/lib/utils/fileTypeUtils';
 import { FormattedUserIpfsFile } from '@/app/lib/hooks/use-user-ipfs-files';
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
-import { buildFolderPath } from '@/app/utils/folderPathUtils';
+import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 
 interface FileTypeIconProps {
     fileType?: FileTypes;
@@ -34,26 +33,13 @@ const FileTypeIcon: React.FC<FileTypeIconProps> = ({
     const iconSizeClass = sizeClassMap[size];
     const { icon: Icon, color: iconColor } = getFileIconForThumbnail(fileType, !!file.isFolder);
 
-    const mainFolderCid = getParam("mainFolderCid", "");
-    const folderActualName = file.isFolder ? file.actualFileName || "" : "";
-    const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
-    const subFolderPath = getParam("subFolderPath", "");
-    const effectiveMainFolderCid = mainFolderCid || file.cid;
-    const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
-
-
-    // Build the folder path for navigation
-    const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
-        folderActualName,
-        effectiveMainFolderCid,
-        effectiveMainFolderActualName,
-        subFolderPath
-    );
+    // Get folder URL from the utility function
+    const { url: folderUrl } = file.isFolder ? generateFolderUrl(file, getParam) : { url: '' };
 
     return (
         <div className={cn(className)}>
             {file.isFolder ? (
-                <Link href={`/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`}>
+                <Link href={folderUrl}>
                     <div className="flex items-center justify-center">
                         <Icon className={cn("text-grey-100", iconSizeClass, iconClassName)} />
                     </div>

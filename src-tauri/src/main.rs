@@ -17,8 +17,7 @@ use crate::commands::syncing::{cleanup_sync, initialize_sync, AppState, SyncStat
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{app_close, get_sync_status};
-
+use crate::sync_shared::{app_close, get_sync_status, get_recent_sync_items,get_sync_activity};
 use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::accounts::{
@@ -44,7 +43,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Builder, Manager};
 use tokio::sync::Mutex;
 
-
+// Register the new get_recent_sync_items Tauri command so the frontend can invoke it.
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
 fn main() {
@@ -118,7 +117,9 @@ fn main() {
             add_folder_to_public_folder,
             remove_folder_from_public_folder,
             add_folder_to_private_folder,
-            remove_folder_from_private_folder
+            remove_folder_from_private_folder,
+            get_recent_sync_items,
+            get_sync_activity
         ]);
 
     let builder = setup(builder);

@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -30,6 +31,53 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to get commit messages
+
+      # Get PR or commit details for the release notes
+      - name: Get release notes
+        id: release_notes
+        shell: bash
+        run: |
+          # Try to get PR info first (for merge commits)
+          PR_NUMBER=$(git log -1 --pretty=format:'%s' | grep -oP '#\K([0-9]+)' || echo '')
+          
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Found PR #$PR_NUMBER"
+            # Get PR title and body using GitHub API
+            PR_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER")
+            
+            PR_TITLE=$(echo "$PR_INFO" | jq -r '.title')
+            PR_BODY=$(echo "$PR_INFO" | jq -r '.body')
+            
+            if [ "$PR_TITLE" != "null" ]; then
+              echo "title=$(echo "$PR_TITLE" | sed 's/"/\\"/g')" >> $GITHUB_OUTPUT
+              echo "Using PR title: $PR_TITLE"
+              
+              if [ "$PR_BODY" != "null" ]; then
+                # Limit body length and escape special characters
+                TRIMMED_BODY=$(echo "$PR_BODY" | head -c 3000 | sed 's/"/\\"/g' | sed 's/%/%25/g' | sed 's/\n/%0A/g' | sed 's/\r/%0D/g')
+                echo "body=$TRIMMED_BODY" >> $GITHUB_OUTPUT
+              else
+                echo "body=See the assets to download this version and install." >> $GITHUB_OUTPUT
+              fi
+            else
+              # Fallback to commit message
+              echo "PR info not found, using commit message"
+              COMMIT_TITLE=$(git log -1 --pretty=format:'%s')
+              COMMIT_BODY=$(git log -1 --pretty=format:'%b')
+              echo "title=$COMMIT_TITLE" >> $GITHUB_OUTPUT
+              echo "body=${COMMIT_BODY:-See the assets to download this version and install.}" >> $GITHUB_OUTPUT
+            fi
+          else
+            # Use commit info
+            echo "Using commit info for release notes"
+            COMMIT_TITLE=$(git log -1 --pretty=format:'%s')
+            COMMIT_BODY=$(git log -1 --pretty=format:'%b')
+            echo "title=$COMMIT_TITLE" >> $GITHUB_OUTPUT
+            echo "body=${COMMIT_BODY:-See the assets to download this version and install.}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Linux deps
         if: matrix.platform == 'ubuntu-22.04'
@@ -85,8 +133,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
-          releaseName: 'Hippius v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
+          releaseName: 'Hippius v__VERSION__: ${{ steps.release_notes.outputs.title }}'
+          releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           overwrite: true
