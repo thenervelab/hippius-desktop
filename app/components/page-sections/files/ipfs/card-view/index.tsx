@@ -25,7 +25,8 @@ import { FileViewSharedState } from "@/components/page-sections/files/ipfs/share
 import FileDetailsDialogContent from "@/components/page-sections/files/ipfs/file-details-dialog-content";
 import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
-import { buildFolderPath } from "@/app/utils/folderPathUtils";
+import { Folder } from "@/app/components/ui/icons";
+import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 interface Filter {
@@ -157,25 +158,14 @@ const CardView: FC<CardViewProps> = ({
                 }
               }
 
+              // Get folder URL if file is a folder
+              let folderUrl = "";
+              if (file.isFolder) {
+                const { url } = generateFolderUrl(file, getParam);
+                folderUrl = url;
+              }
+
               const handleCardClick = () => {
-
-                // Get current path information for folder navigation
-                const folderActualName = file.isFolder ? file.actualFileName || "" : "";
-                const mainFolderCid = getParam("mainFolderCid", "");
-                const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
-                const subFolderPath = getParam("subFolderPath", "");
-                const effectiveMainFolderCid = mainFolderCid || file.cid;
-                const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
-
-
-                // Build the folder path for navigation
-                const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
-                  folderActualName,
-                  effectiveMainFolderCid,
-                  effectiveMainFolderActualName,
-                  subFolderPath
-                );
-
                 if (
                   fileType === "video" ||
                   fileType === "image" ||
@@ -183,9 +173,7 @@ const CardView: FC<CardViewProps> = ({
                 ) {
                   setSelectedFile?.(file);
                 } else if (file.isFolder) {
-                  router.push(
-                    `/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`
-                  );
+                  router.push(folderUrl);
                 }
               };
 
@@ -205,6 +193,17 @@ const CardView: FC<CardViewProps> = ({
                         dropdownTitle="IPFS Options"
                         dropDownMenuTriggerClass="size-5 text-grey-60 flex items-center"
                         items={[
+                          ...(file.isFolder && folderUrl
+                            ? [
+                              {
+                                icon: <Folder className="size-4" />,
+                                itemTitle: "Open",
+                                onItemClick: () => {
+                                  router.push(folderUrl);
+                                }
+                              }
+                            ]
+                            : []),
                           {
                             icon: <Download className="size-4" />,
                             itemTitle: "Download",

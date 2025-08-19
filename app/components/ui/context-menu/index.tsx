@@ -11,9 +11,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Link from "next/link";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
-import { buildFolderPath } from "@/app/utils/folderPathUtils";
+import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import {
-    Folder2,
+  Folder
 } from "@/components/ui/icons";
 
 interface ContextMenuProps {
@@ -102,33 +102,8 @@ export default function FileContextMenu({
   };
 
 
-  const mainFolderCid = getParam("mainFolderCid", "");
-  const folderActualName = file.isFolder ? file.actualFileName || "" : "";
-  const mainFolderActualName = getParam("mainFolderActualName", file.isFolder ? file.actualFileName || "" : "");
-  const subFolderPath = getParam("subFolderPath", "");
 
-  const effectiveMainFolderCid = mainFolderCid || cid;
-
-  // Build the folder path for navigation
-  const { mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
-    folderActualName,
-    effectiveMainFolderCid,
-    mainFolderActualName || folderActualName,
-    subFolderPath
-  );
-
-
-  const folderUrl = {
-    pathname: "/files",
-    query: {
-      mainFolderCid: effectiveMainFolderCid ?? "",
-      folderCid: decodeHexCid(cid) ?? "",
-      folderName: file.name ?? "",
-      folderActualName: file.actualFileName ?? "",
-      mainFolderActualName: newMainFolder ?? "",
-      subFolderPath: newSubFolderPath ?? "",
-    },
-  };
+  const { url: folderUrl } = generateFolderUrl(file, getParam);
 
   return createPortal(
     <div
@@ -143,7 +118,7 @@ export default function FileContextMenu({
             href={folderUrl} prefetch={false}
             className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
           >
-            <Folder2 className="size-4" />
+            <Folder className="size-4" />
             <span>Open</span>
           </Link>)}
           <button
