@@ -22,7 +22,8 @@ import {
   Download,
   LinkIcon,
   MoreVertical,
-  Share
+  Share,
+  Folder
 } from "lucide-react";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { toast } from "sonner";
@@ -41,6 +42,9 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/components/page-sections/files/ipfs/shared/FileViewUtils";
 import FileDetailsDialogContent from "@/components/page-sections/files/ipfs/file-details-dialog-content";
 import SidebarDialog from "@/app/components/ui/SidebarDialog";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { useRouter } from "next/navigation";
+import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
@@ -102,6 +106,9 @@ const FilesTable: FC<FilesTableProps> = memo(({
   handleFileDownload
 }) => {
   const { polkadotAddress } = useWalletAuth();
+  const { getParam } = useUrlParams();
+  const router = useRouter();
+
 
   const [localFileDetailsFile, setLocalFileDetailsFile] =
     useState<FormattedUserIpfsFile | null>(null);
@@ -169,9 +176,26 @@ const FilesTable: FC<FilesTableProps> = memo(({
     setFileToDelete?.(file);
     setOpenDeleteModal?.(true);
   }, [setFileToDelete, setOpenDeleteModal]);
-
   const createTableItems = useCallback((file: FormattedUserIpfsFile, fileType: string | null, decodedCid: string) => {
+    // Compute folderUrl if file is a folder
+    let folderUrl: string | undefined = undefined;
+    if (file.isFolder) {
+      const { url } = generateFolderUrl(file, getParam);
+      folderUrl = url;
+    }
+
     return [
+      ...(file.isFolder && folderUrl
+        ? [
+          {
+            icon: <Folder className="size-4" />,
+            itemTitle: "Open",
+            onItemClick: () => {
+              router.push(folderUrl);
+            }
+          }
+        ]
+        : []),
       {
         icon: <Download className="size-4" />,
         itemTitle: "Download",
@@ -217,7 +241,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
         ]
         : [])
     ];
-  }, [handleDownload, handleSetSelectedFile, localHandleShowFileDetails, handleDeleteFile]);
+  }, [handleDownload, handleSetSelectedFile, localHandleShowFileDetails, handleDeleteFile, getParam, router]);
 
   // Create a stable memo of columns that doesn't depend on every prop
   const columns = useMemo(() => [

@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 concurrency:
   group: publish-${{ github.ref }}
@@ -30,7 +31,61 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history to get commit messages
 
+      # Get PR or commit details for the release notes
+      - name: Get release notes
+        id: release_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Commit data
+          SHA="$(git rev-parse HEAD)"
+
+          # Try to read PR number from commit subject like "... (#123)"
+          PR_NUMBER="$(git log -1 --pretty=format:'%s' | grep -oE '#[0-9]+' | tr -d '# ' || true)"
+
+          if [[ -z "${PR_NUMBER:-}" ]]; then
+            # Better: ask GitHub which PR(s) are linked to this commit
+            PR_NUMBER="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/${SHA}/pulls" \
+              | jq -r '.[0].number // empty')"
+          fi
+
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            echo "Found PR #$PR_NUMBER"
+            PR_INFO="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}")"
+
+            TITLE="$(jq -r '.title // empty' <<<"$PR_INFO")"
+            BODY="$(jq -r '.body // empty'  <<<"$PR_INFO")"
+          else
+            echo "No PR found. Using last commit."
+            TITLE="$(git log -1 --pretty=%s)"
+            BODY="$(git log -1 --pretty=%b)"
+          fi
+
+          # Normalize endings and guard empties
+          TITLE="${TITLE//$'\r'/}"
+          BODY="${BODY//$'\r'/}"
+          if [[ -z "${BODY:-}" ]]; then
+            BODY="See the assets to download this version and install."
+          fi
+
+          # Optional: trim very large bodies (example: 30000 chars)
+          BODY="$(printf '%s' "$BODY" | head -c 30000)"
+
+          # Write to $GITHUB_OUTPUT using multiline-safe heredoc
+          {
+            echo "title<<__TITLE__"
+            echo "$TITLE"
+            echo "__TITLE__"
+            echo "body<<__BODY__"
+            echo "$BODY"
+            echo "__BODY__"
+          } >> "$GITHUB_OUTPUT"
       - name: Linux deps
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -85,8 +140,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
-          releaseName: 'Hippius v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
+          releaseName: '${{ steps.release_notes.outputs.title }}'
+          releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           overwrite: true
