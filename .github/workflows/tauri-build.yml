@@ -39,46 +39,53 @@ jobs:
         id: release_notes
         shell: bash
         run: |
-          # Try to get PR info first (for merge commits)
-          PR_NUMBER=$(git log -1 --pretty=format:'%s' | grep -oP '#\K([0-9]+)' || echo '')
-          
-          if [ -n "$PR_NUMBER" ]; then
-            echo "Found PR #$PR_NUMBER"
-            # Get PR title and body using GitHub API
-            PR_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER")
-            
-            PR_TITLE=$(echo "$PR_INFO" | jq -r '.title')
-            PR_BODY=$(echo "$PR_INFO" | jq -r '.body')
-            
-            if [ "$PR_TITLE" != "null" ]; then
-              echo "title=$(echo "$PR_TITLE" | sed 's/"/\\"/g')" >> $GITHUB_OUTPUT
-              echo "Using PR title: $PR_TITLE"
-              
-              if [ "$PR_BODY" != "null" ]; then
-                # Limit body length and escape special characters
-                TRIMMED_BODY=$(echo "$PR_BODY" | head -c 3000 | sed 's/"/\\"/g' | sed 's/%/%25/g' | sed 's/\n/%0A/g' | sed 's/\r/%0D/g')
-                echo "body=$TRIMMED_BODY" >> $GITHUB_OUTPUT
-              else
-                echo "body=See the assets to download this version and install." >> $GITHUB_OUTPUT
-              fi
-            else
-              # Fallback to commit message
-              echo "PR info not found, using commit message"
-              COMMIT_TITLE=$(git log -1 --pretty=format:'%s')
-              COMMIT_BODY=$(git log -1 --pretty=format:'%b')
-              echo "title=$COMMIT_TITLE" >> $GITHUB_OUTPUT
-              echo "body=${COMMIT_BODY:-See the assets to download this version and install.}" >> $GITHUB_OUTPUT
-            fi
-          else
-            # Use commit info
-            echo "Using commit info for release notes"
-            COMMIT_TITLE=$(git log -1 --pretty=format:'%s')
-            COMMIT_BODY=$(git log -1 --pretty=format:'%b')
-            echo "title=$COMMIT_TITLE" >> $GITHUB_OUTPUT
-            echo "body=${COMMIT_BODY:-See the assets to download this version and install.}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+
+          # Commit data
+          SHA="$(git rev-parse HEAD)"
+
+          # Try to read PR number from commit subject like "... (#123)"
+          PR_NUMBER="$(git log -1 --pretty=format:'%s' | grep -oE '#[0-9]+' | tr -d '# ' || true)"
+
+          if [[ -z "${PR_NUMBER:-}" ]]; then
+            # Better: ask GitHub which PR(s) are linked to this commit
+            PR_NUMBER="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/${SHA}/pulls" \
+              | jq -r '.[0].number // empty')"
           fi
 
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            echo "Found PR #$PR_NUMBER"
+            PR_INFO="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}")"
+
+            TITLE="$(jq -r '.title // empty' <<<"$PR_INFO")"
+            BODY="$(jq -r '.body // empty'  <<<"$PR_INFO")"
+          else
+            echo "No PR found. Using last commit."
+            TITLE="$(git log -1 --pretty=%s)"
+            BODY="$(git log -1 --pretty=%b)"
+          fi
+
+          # Normalize endings and guard empties
+          TITLE="${TITLE//$'\r'/}"
+          BODY="${BODY//$'\r'/}"
+          if [[ -z "${BODY:-}" ]]; then
+            BODY="See the assets to download this version and install."
+          fi
+
+          # Optional: trim very large bodies (example: 30000 chars)
+          BODY="$(printf '%s' "$BODY" | head -c 30000)"
+
+          # Write to $GITHUB_OUTPUT using multiline-safe heredoc
+          {
+            echo "title<<__TITLE__"
+            echo "$TITLE"
+            echo "__TITLE__"
+            echo "body<<__BODY__"
+            echo "$BODY"
+            echo "__BODY__"
+          } >> "$GITHUB_OUTPUT"
       - name: Linux deps
         if: matrix.platform == 'ubuntu-22.04'
         run: |
