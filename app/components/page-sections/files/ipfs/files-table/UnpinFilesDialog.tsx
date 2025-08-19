@@ -264,7 +264,7 @@ const FileDetailsDialog: React.FC<FileDetailsDialogProps> = ({
                     isExpanded ? "opacity-100 translate-x-0" : "opacity-0 -translate-x-4 absolute"
                   )}
                 >
-                  <span className="text-base font-medium text-grey-10">Upload Queue</span>
+                  <span className="text-base font-medium text-grey-10">Pinning Queue</span>
                   <InfoTooltip className="ml-2">
                     Your files are now recorded on‐chain and are being pinned to IPFS. Pinning can take a few minutes. Thank you for your patience!
                   </InfoTooltip>
@@ -300,7 +300,7 @@ const FileDetailsDialog: React.FC<FileDetailsDialogProps> = ({
               <div className="flex w-full mt-4 ml-4">
                 <div className="w-fit px-2 py-0.5 bg-primary-100/40 border border-primary-80 rounded">
                   <div className="text-sm text-primary-40">
-                    0 of {totalChunks} files uploaded
+                    0 of {totalChunks} files pinned
                   </div>
                 </div>
               </div>
