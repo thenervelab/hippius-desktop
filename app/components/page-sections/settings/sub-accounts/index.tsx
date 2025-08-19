@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { PlusCircle, RefreshCw, AlertCircle } from "lucide-react";
 import GenerateNewAccountModal from "./GenerateNewAccountModal";
 
-import { ConfirmModal, Icons } from "@/app/components/ui";
+import { ConfirmModal, Icons, RevealTextLine } from "@/app/components/ui";
 import { useSubAccounts } from "@/app/lib/hooks/api/useSubAccounts";
 import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import {
@@ -23,6 +23,7 @@ import { getWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import SeedPasscodeModal from "./SeedPasscodeModal";
 import { generateMnemonic } from "@/app/lib/helpers/mnemonic";
+import { InView } from "react-intersection-observer";
 
 const SubAccounts: React.FC = () => {
   const { subs, loading: tableLoading, reload } = useSubAccounts();
@@ -310,140 +311,171 @@ const SubAccounts: React.FC = () => {
   }, []);
 
   return (
-    <div className="w-full space-y-6 border broder-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
-      <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center flex-wrap gap-2">
-        <div className="flex justify-between w-full sm:w-auto">
-          <SectionHeader
-            Icon={Icons.KeySquare}
-            title="Sub Accounts"
-            info="Sub-accounts let you assign upload and delete rights while using their own seed. All files still belong to your main account, providing secure collaboration without compromising control."
-            subtitle="Manage your sub accounts for delegated access and permissions."
-          />
-          <button
-            onClick={reload}
-            title="Reload"
-            className="block sm:hidden ml-auto bg-grey-100 hover:bg-grey-90 p-2 text-grey-10 hover:text-grey-20 border border-grey-80 rounded transition"
-          >
-            <RefreshCw className="size-4" />
-          </button>
-        </div>
-        <div className="w-full sm:w-auto flex items-center justify-end gap-2 sm:gap-4">
-          <button
-            onClick={reload}
-            title="Reload"
-            className="hidden sm:block bg-grey-100 hover:bg-grey-90 p-2 text-grey-10 hover:text-grey-20 border border-grey-80 rounded transition"
-          >
-            <RefreshCw className="size-4" />
-          </button>
-          <button
-            onClick={handleGenerateWallet}
-            disabled={generatingKey}
-            className="border border-grey-80 p-2.5 sm:px-3 sm:py-2.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
-          >
-            Generate New Account
-          </button>
-          <button
-            onClick={handleOpenEmptySubAccountForm}
-            className="p-1 bg-primary-50 text-white border border-primary-40 rounded hover:bg-primary-40 transition text-base font-medium"
-          >
-            <div className="flex items-center gap-2 px-1 sm:px-2 py-1 border rounded border-primary-40">
-              <PlusCircle className="size-4" />
-              <span>
-                <span className="hidden sm:inline-block">New</span> Sub Account
-              </span>
+    <InView triggerOnce>
+      {({ inView, ref }) => (
+        <div
+          ref={ref}
+          className="w-full space-y-6 border broder-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover"
+        >
+          <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center flex-wrap gap-2">
+            <div className="flex justify-between w-full sm:w-auto">
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                parentClassName="w-full"
+                className="delay-300 w-full"
+              >
+                <SectionHeader
+                  Icon={Icons.KeySquare}
+                  title="Sub Accounts"
+                  info="Sub-accounts let you assign upload and delete rights while using their own seed. All files still belong to your main account, providing secure collaboration without compromising control."
+                  subtitle="Manage your sub accounts for delegated access and permissions."
+                />
+              </RevealTextLine>
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 block sm:hidden ml-auto"
+              >
+                <button
+                  onClick={reload}
+                  title="Reload"
+                  className="bg-grey-100 hover:bg-grey-90 p-2 text-grey-10 hover:text-grey-20 border border-grey-80 rounded transition"
+                >
+                  <RefreshCw className="size-4" />
+                </button>
+              </RevealTextLine>
             </div>
-          </button>
+            <div className="w-full sm:w-auto flex items-center justify-end gap-2 sm:gap-4">
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 hidden sm:block"
+              >
+                <button
+                  onClick={reload}
+                  title="Reload"
+                  className="bg-grey-100 hover:bg-grey-90 p-2 text-grey-10 hover:text-grey-20 border border-grey-80 rounded transition"
+                >
+                  <RefreshCw className="size-4" />
+                </button>
+              </RevealTextLine>
+              <RevealTextLine rotate reveal={inView} className="delay-300">
+                <button
+                  onClick={handleGenerateWallet}
+                  disabled={generatingKey}
+                  className="border border-grey-80 p-2.5 sm:px-3 sm:py-2.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
+                >
+                  Generate New Account
+                </button>
+              </RevealTextLine>
+              <RevealTextLine rotate reveal={inView} className="delay-300">
+                <button
+                  onClick={handleOpenEmptySubAccountForm}
+                  className="p-1 bg-primary-50 text-white border border-primary-40 rounded hover:bg-primary-40 transition text-base font-medium"
+                >
+                  <div className="flex items-center gap-2 px-1 sm:px-2 py-1 border rounded border-primary-40">
+                    <PlusCircle className="size-4" />
+                    <span>
+                      <span className="hidden sm:inline-block">New</span> Sub
+                      Account
+                    </span>
+                  </div>
+                </button>
+              </RevealTextLine>
+            </div>
+          </div>
+
+          <SubAccountTable
+            subs={subs}
+            loading={tableLoading}
+            onDelete={onDelete}
+            hasSeed={checkHasSeed}
+            onSeedUpdated={handleSeedUpdated}
+          />
+
+          <SubAccountModal
+            open={formOpen && !confirmOpen}
+            address={draftAddress}
+            role={draftRole}
+            onAddressChange={setDraftAddress}
+            onRoleChange={setDraftRole}
+            onClose={() => setFormOpen(false)}
+            onSubmit={onCreate}
+          />
+
+          {pending && (
+            <ConfirmModal
+              open={confirmOpen}
+              title={pending.title}
+              description={
+                pending.title === "Create Sub Account" ? (
+                  <div className="space-y-1">
+                    <p className="font-medium">
+                      You are about to create a sub account with the address:
+                    </p>
+                    <p className="tracking-wide break-all font-bold">
+                      {pending.description}
+                    </p>
+                  </div>
+                ) : (
+                  pending.description
+                )
+              }
+              loading={txLoading}
+              onConfirm={sendQueued}
+              onCancel={() => {
+                setConfirmOpen(false);
+                if (!pending.title.startsWith("Delete")) {
+                  setFormOpen(true);
+                }
+              }}
+              variant={pending.title.startsWith("Delete") ? "delete" : "create"}
+            />
+          )}
+
+          <GenerateNewAccountModal
+            open={openNewAccountModal}
+            onClose={() => setOpenNewAccountModal(false)}
+            copyToClipboard={copyToClipboard}
+            generatedMnemonic={generatedMnemonic}
+            copied={copied}
+            onAddAsSubAccount={handleAddAsSubAccount}
+          />
+
+          <SeedPasscodeModal
+            open={isPasscodeModalOpen}
+            onClose={() => setIsPasscodeModalOpen(false)}
+            onSubmit={handlePasscodeSubmit}
+            title="Save Sub Account Seed"
+            description="Enter your passcode to encrypt and save the seed for the newly created sub account"
+            address={addressForSeed}
+            seedInputRequired={false}
+            cancelLabel="Skip"
+            submitLabel="Save Seed"
+          />
+
+          <SeedPasscodeModal
+            open={isSeedEntryModalOpen}
+            onClose={() => setIsSeedEntryModalOpen(false)}
+            onSubmit={handleSeedAndPasscodeSubmit}
+            title="Save Sub Account Seed"
+            description="Enter the seed phrase for your sub account and your passcode to encrypt it"
+            address={addressForSeed}
+            seedInputRequired={true}
+            cancelLabel="Skip"
+            submitLabel="Save Seed"
+          />
+
+          {error && (
+            <div className="flex text-error-70 text-sm font-medium mt-2 items-center gap-2">
+              <AlertCircle className="size-4 !relative" />
+              <span>{error}</span>
+            </div>
+          )}
         </div>
-      </div>
-
-      <SubAccountTable
-        subs={subs}
-        loading={tableLoading}
-        onDelete={onDelete}
-        hasSeed={checkHasSeed}
-        onSeedUpdated={handleSeedUpdated}
-      />
-
-      <SubAccountModal
-        open={formOpen && !confirmOpen}
-        address={draftAddress}
-        role={draftRole}
-        onAddressChange={setDraftAddress}
-        onRoleChange={setDraftRole}
-        onClose={() => setFormOpen(false)}
-        onSubmit={onCreate}
-      />
-
-      {pending && (
-        <ConfirmModal
-          open={confirmOpen}
-          title={pending.title}
-          description={
-            pending.title === "Create Sub Account" ? (
-              <div className="space-y-1">
-                <p className="font-medium">
-                  You are about to create a sub account with the address:
-                </p>
-                <p className="tracking-wide break-all font-bold">
-                  {pending.description}
-                </p>
-              </div>
-            ) : (
-              pending.description
-            )
-          }
-          loading={txLoading}
-          onConfirm={sendQueued}
-          onCancel={() => {
-            setConfirmOpen(false);
-            if (!pending.title.startsWith("Delete")) {
-              setFormOpen(true);
-            }
-          }}
-          variant={pending.title.startsWith("Delete") ? "delete" : "create"}
-        />
       )}
-
-      <GenerateNewAccountModal
-        open={openNewAccountModal}
-        onClose={() => setOpenNewAccountModal(false)}
-        copyToClipboard={copyToClipboard}
-        generatedMnemonic={generatedMnemonic}
-        copied={copied}
-        onAddAsSubAccount={handleAddAsSubAccount}
-      />
-
-      <SeedPasscodeModal
-        open={isPasscodeModalOpen}
-        onClose={() => setIsPasscodeModalOpen(false)}
-        onSubmit={handlePasscodeSubmit}
-        title="Save Sub Account Seed"
-        description="Enter your passcode to encrypt and save the seed for the newly created sub account"
-        address={addressForSeed}
-        seedInputRequired={false}
-        cancelLabel="Skip"
-        submitLabel="Save Seed"
-      />
-
-      <SeedPasscodeModal
-        open={isSeedEntryModalOpen}
-        onClose={() => setIsSeedEntryModalOpen(false)}
-        onSubmit={handleSeedAndPasscodeSubmit}
-        title="Save Sub Account Seed"
-        description="Enter the seed phrase for your sub account and your passcode to encrypt it"
-        address={addressForSeed}
-        seedInputRequired={true}
-        cancelLabel="Skip"
-        submitLabel="Save Seed"
-      />
-
-      {error && (
-        <div className="flex text-error-70 text-sm font-medium mt-2 items-center gap-2">
-          <AlertCircle className="size-4 !relative" />
-          <span>{error}</span>
-        </div>
-      )}
-    </div>
+    </InView>
   );
 };
 
