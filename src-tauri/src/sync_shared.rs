@@ -363,10 +363,6 @@ pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<V
     }
 }
 
-/// Store/Upsert S3 bucket listing results into user_profiles.
-/// - owner: account_id
-/// - scope: "public" | "private" -> maps to column `type`
-/// - main_req_hash is set to "s3" to mark origin
 pub async fn store_bucket_listing_in_db(
     pool: &SqlitePool,
     owner: &str,
@@ -379,15 +375,9 @@ pub async fn store_bucket_listing_in_db(
     let mut stored = 0usize;
 
     for it in items {
-        // Extract filename from key
-        let file_name = it
-            .path
-            .rsplit('/')
-            .next()
-            .unwrap_or(&it.path)
-            .to_string();
+        let file_name = it.path.clone();
 
-        let source = format!("s3://{}/{}", bucket, it.path);
+         let source = format!("s3://{}/{}", bucket, it.path);
 
         // Check existence in user_profiles
         let exists: Option<(String,)> = sqlx::query_as(
@@ -408,15 +398,15 @@ pub async fn store_bucket_listing_in_db(
             )
             .bind(&file_name)
             .bind(owner)
-            .bind("")
-            .bind("")
+            .bind("s3")
+            .bind("s3")
             .bind(it.size as i64)
-            .bind(false)
+            .bind(true)
             .bind(0i64)
             .bind("s3")
             .bind("")
             .bind(0i64)
-            .bind(0i64) // block_number is NOT NULL in schema; set 0 for S3 inventory rows
+            .bind(0i64) 
             .bind("")
             .bind(&source)
             .bind("")
