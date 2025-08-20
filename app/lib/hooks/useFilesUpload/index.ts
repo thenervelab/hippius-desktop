@@ -12,19 +12,6 @@ export type UploadFilesHandlers = {
   onError?: (err: Error | unknown) => void;
 };
 
-export const readFileAsArrayBuffer = (file: File): Promise<number[]> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const arrayBuffer = reader.result as ArrayBuffer;
-      const uint8Array = new Uint8Array(arrayBuffer);
-      resolve(Array.from(uint8Array));
-    };
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsArrayBuffer(file);
-  });
-};
-
 export function useFilesUpload(handlers: UploadFilesHandlers) {
   const { onSuccess, onError } = handlers;
   const setProgress = useSetAtom(uploadProgressAtom);
@@ -45,17 +32,16 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   );
 
   async function upload(
-    files: FileList,
+    filePaths: string[],
     isPrivateView: boolean,
-    useErasureCoding: boolean = false,
     encryptionKey?: string
   ) {
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
     // start toast and progress
     const toastId = toast.loading(
-      files.length > 1
-        ? `Uploading ${files.length} files: 0%`
+      filePaths.length > 1
+        ? `Uploading ${filePaths.length} files: 0%`
         : "Uploading file: 0%"
     );
     setRequestState("uploading");
@@ -67,49 +53,36 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         throw new Error("Insufficient Credits. Please add credits.");
       }
 
-      const arr = Array.from(files);
       const cids: string[] = [];
 
-      // encrypt & upload each file via Tauri
-      for (let i = 0; i < arr.length; i++) {
-        const file = arr[i];
-
-        const fileData = await readFileAsArrayBuffer(file);
+      // upload each file via Tauri using file paths
+      for (let i = 0; i < filePaths.length; i++) {
+        const filePath = filePaths[i];
 
         let cid;
-        // encrypt & upload
+        console.log("Uploading file:", filePath);
         if (isPrivateView) {
           cid = await invoke<string>("encrypt_and_upload_file", {
             accountId: polkadotAddress,
-            fileData: fileData,
-            fileName: file.name,
+            filePath: filePath,
             seedPhrase: mnemonic,
             encryptionKey: encryptionKey || null
-          });
-          console.log("cid", cid)
-        } else if (!isPrivateView && useErasureCoding) {
-          cid = await invoke<string>("public_upload_with_erasure", {
-            accountId: polkadotAddress,
-            fileData: fileData,
-            fileName: file.name,
-            seedPhrase: mnemonic
           });
         } else {
           cid = await invoke<string>("upload_file_public", {
             accountId: polkadotAddress,
-            fileData: fileData,
-            fileName: file.name,
+            filePath: filePath,
             seedPhrase: mnemonic
           });
         }
         cids.push(cid);
 
         // update progress
-        const percent = Math.round(((i + 1) / arr.length) * 100);
+        const percent = Math.round(((i + 1) / filePaths.length) * 100);
         setProgress(percent);
         const msg =
-          files.length > 1
-            ? `Uploading ${files.length} files: ${percent}%`
+          filePaths.length > 1
+            ? `Uploading ${filePaths.length} files: ${percent}%`
             : `Uploading file: ${percent}%`;
         toast.loading(msg, { id: toastId });
       }
@@ -120,8 +93,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         refetchUserFiles();
         onSuccess?.();
         toast.success(
-          files.length > 1
-            ? `${files.length} files successfully uploaded!`
+          filePaths.length > 1
+            ? `${filePaths.length} files successfully uploaded!`
             : `File successfully uploaded!`,
           { id: toastId }
         );
@@ -132,8 +105,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       onError?.(err);
       console.log("error", err);
       toast.error(
-        files.length > 1
-          ? `${files.length} files failed to upload!`
+        filePaths.length > 1
+          ? `${filePaths.length} files failed to upload!`
           : `File failed to upload!`,
         { id: toastId }
       );

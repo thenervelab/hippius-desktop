@@ -127,7 +127,7 @@ const IPFSNoEntriesFound: React.FC<{ isRecentFiles?: boolean }> = ({
                 <>
                   You currently do not have any entries uploaded to Hippius.{" "}
                   <span className="text-primary-50">
-                    Drop files here or use the button
+                    Please use the button to upload files
                   </span>
                 </>
               ) : (

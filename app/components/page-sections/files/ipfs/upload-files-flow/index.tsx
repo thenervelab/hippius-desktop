@@ -6,15 +6,15 @@ import { Label } from "@/components/ui/label";
 import FileDropzone from "./FileDropzone";
 import { useSetAtom } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "@/components/page-sections/files/ipfs/atoms/query-atoms";
-import { Trash2, Check, AlertCircle } from "lucide-react";
-import * as Checkbox from "@radix-ui/react-checkbox";
+import { Trash2, AlertCircle } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { basename } from '@tauri-apps/api/path';
 
 
 interface UploadFilesFlowProps {
   reset: () => void;
-  initialFiles?: FileList | null;
+  initialFiles?: string[];
   isPrivateView: boolean;
 }
 
@@ -23,21 +23,23 @@ interface EncryptionKey {
   key: string;
 }
 
+interface FilePathInfo {
+  path: string;
+  name: string;
+}
+
 const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
   reset,
   initialFiles,
   isPrivateView
 }) => {
   const [revealFiles, setRevealFiles] = useState(false);
-  const [files, setFiles] = useState<FileList | null>(null);
-  const [erasureCoding, setErasureCoding] = useState(false);
+  const [files, setFiles] = useState<FilePathInfo[]>([]);
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
   const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(
     null
   );
   const [encryptionKey, setEncryptionKey] = useState("");
-
-
 
   const { upload } = useFilesUpload({
     onError(err) {
@@ -54,45 +56,62 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
   });
 
   useEffect(() => {
-    if (initialFiles && initialFiles.length > 0) {
-      setFiles(initialFiles);
-      if (initialFiles.length > 1) setRevealFiles(true);
-    }
+    const loadInitialFiles = async () => {
+      if (initialFiles && initialFiles.length > 0) {
+        const pathInfos = await Promise.all(
+          initialFiles.map(async (path) => ({
+            path,
+            name: await basename(path)
+          }))
+        );
+        setFiles(pathInfos);
+        if (pathInfos.length > 1) setRevealFiles(true);
+      }
+    };
+
+    loadInitialFiles();
   }, [initialFiles]);
 
-  const appendFiles = useCallback((newFiles: FileList | null) => {
-    if (!newFiles?.length) return;
-    setFiles((prev) => {
-      if (!prev) return newFiles;
-      const seen = new Set(
-        Array.from(prev).map((f) => `${f.name}-${f.size}-${f.lastModified}`)
+  const appendFiles = useCallback(async (newFilePaths: string[]) => {
+    if (!newFilePaths?.length) return;
+
+    try {
+      const newPathInfos = await Promise.all(
+        newFilePaths.map(async (path) => ({
+          path,
+          name: await basename(path)
+        }))
       );
-      const unique = Array.from(newFiles).filter(
-        (f) => !seen.has(`${f.name}-${f.size}-${f.lastModified}`)
-      );
-      if (!unique.length) return prev;
-      const combined = [...Array.from(prev), ...unique];
-      const dt = new DataTransfer();
-      combined.forEach((f) => dt.items.add(f));
-      if (combined.length > 1) setRevealFiles(true);
-      return dt.files;
-    });
+
+      setFiles((prev) => {
+        if (!prev.length) return newPathInfos;
+
+        // Create a Set of existing paths to avoid duplicates
+        const seen = new Set(prev.map(f => f.path));
+        const unique = newPathInfos.filter(f => !seen.has(f.path));
+
+        if (!unique.length) return prev;
+
+        const combined = [...prev, ...unique];
+        if (combined.length > 1) setRevealFiles(true);
+        return combined;
+      });
+    } catch (error) {
+      console.error("Error processing file paths:", error);
+      toast.error("Failed to process selected files");
+    }
   }, []);
 
   const removeFile = useCallback(
     (idx: number) => {
-      if (!files) return;
-      const arr = Array.from(files).filter((_, i) => i !== idx);
-      if (!arr.length) return void setFiles(null);
-      const dt = new DataTransfer();
-      arr.forEach((f) => dt.items.add(f));
-      setFiles(dt.files);
-      if (arr.length === 1) setRevealFiles(false);
+      const newFiles = files.filter((_, i) => i !== idx);
+      setFiles(newFiles);
+      if (newFiles.length === 1) setRevealFiles(false);
     },
     [files]
   );
 
-  const uploadFiles = async (files: FileList): Promise<void> => {
+  const uploadFiles = async (files: FilePathInfo[]): Promise<void> => {
     // Validate encryption key if provided
     if (encryptionKey) {
       try {
@@ -114,15 +133,17 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
         return;
       }
     }
+
     reset();
-    upload(files, isPrivateView, erasureCoding, encryptionKey);
+    const filePaths = files.map(f => f.path);
+    upload(filePaths, isPrivateView, encryptionKey);
   };
 
   return (
     <div className="w-full">
       <FileDropzone setFiles={appendFiles} />
 
-      {files?.length && (
+      {files.length > 0 && (
         <div className="bg-grey-90 max-h-[200px] overflow-y-auto custom-scrollbar-thin pr-2 rounded-[8px] mt-4">
           <div className="flex items-center font-medium px-2 gap-x-3 pr-1.5 py-1.5">
             <div className="text-grey-10 flex items-center justify-start w-0 grow">
@@ -156,48 +177,23 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
 
           {revealFiles && (
             <div className="px-2 flex flex-col w-full gap-y-1 pb-1 font-medium text-grey-10">
-              {Array.from(files)
-                .slice(1)
-                .map((f, i) => (
-                  <div
-                    key={`${f.name}-${f.lastModified}-${f.size}`}
-                    className="w-full flex items-center justify-between"
+              {files.slice(1).map((file, i) => (
+                <div
+                  key={file.path}
+                  className="w-full flex items-center justify-between"
+                >
+                  <div className="w-0 grow truncate">{file.name}</div>
+                  <button
+                    onClick={() => removeFile(i + 1)}
+                    className="ml-2 text-grey-60 hover:text-error-50 flex-shrink-0"
+                    title="Remove file"
                   >
-                    <div className="w-0 grow truncate">{f.name}</div>
-                    <button
-                      onClick={() => removeFile(i + 1)}
-                      className="ml-2 text-grey-60 hover:text-error-50 flex-shrink-0"
-                      title="Remove file"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
-                  </div>
-                ))}
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
-        </div>
-      )}
-
-      {!isPrivateView && (
-        <div className="flex items-start mt-3">
-          <Checkbox.Root
-            className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 mt-[3px] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors"
-            checked={erasureCoding}
-            onCheckedChange={() => setErasureCoding((prev) => !prev)}
-            id="erasureCoding"
-          >
-            <Checkbox.Indicator>
-              <Check className="h-3.5 w-3.5 text-white" />
-            </Checkbox.Indicator>
-          </Checkbox.Root>
-          <div className="ml-2">
-            <label
-              htmlFor="erasureCoding"
-              className="text-[15px] font-medium text-grey-20 leading-[22px]"
-            >
-              Use Erasure Coding
-            </label>
-          </div>
         </div>
       )}
 
@@ -243,14 +239,14 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
       <div className="mt-3 flex flex-col gap-y-3">
         <CardButton
           onClick={() => {
-            if (files) {
+            if (files.length > 0) {
               uploadFiles(files)
             }
           }}
-          disabled={!files?.length}
+          disabled={files.length === 0}
           className="w-full"
         >
-          Upload File{files && files.length > 1 ? "s" : ""}
+          Upload File{files.length > 1 ? "s" : ""}
         </CardButton>
         <CardButton onClick={reset} className="w-full" variant="secondary">
           Cancel

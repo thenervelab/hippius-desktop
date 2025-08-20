@@ -50,15 +50,13 @@ export const downloadIpfsFile = async (
       );
     }
     return;
-  } else if (isPrivateView && file.isErasureCoded) {
+  } else if (isPrivateView) {
     console.log("downloadEncryptedIpfsFile", downloadEncryptedIpfsFile)
     return downloadEncryptedIpfsFile(
       file,
       polkadotAddress ?? "",
       encryptionKey
     );
-  } else if (!isPrivateView && file.isErasureCoded) {
-    return downloadPublicErasureCodedFile(file, polkadotAddress ?? "");
   } else {
     return downloadRegularIpfsFile(file);
   }
@@ -87,48 +85,6 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
     return { success: true };
   } catch (err) {
     console.error("Download failed:", err);
-    toast.error(
-      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
-      }`,
-      { id: toastId }
-    );
-    return { success: false, error: "DOWNLOAD_FAILED", message: String(err) };
-  }
-};
-
-const downloadPublicErasureCodedFile = async (
-  file: FormattedUserIpfsFile,
-  polkadotAddress: string
-) => {
-  const { name, cid } = file;
-  const toastId = toast.loading(`Preparing download: ${name}`);
-
-  try {
-    ensureWalletConnected(polkadotAddress);
-
-    const savePath = await getFileSavePath(name);
-
-    if (!savePath) {
-      toast.dismiss(toastId);
-      return { success: false, error: "Download cancelled" };
-    }
-
-    toast.loading(`Downloading file: ${name}...`, {
-      id: toastId
-    });
-
-    await invoke("public_download_with_erasure", {
-      accountId: polkadotAddress,
-      metadataCid: cid,
-      outputFile: savePath
-    });
-
-    toast.success(`Download complete: ${name}`, {
-      id: toastId
-    });
-    return { success: true };
-  } catch (err) {
-    console.error("Public erasure-coded download failed:", err);
     toast.error(
       `Download failed: ${err instanceof Error ? err.message : "Unknown error"
       }`,

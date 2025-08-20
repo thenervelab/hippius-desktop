@@ -5,51 +5,61 @@ import {
   useCallback,
   FC,
   DragEvent,
-  ChangeEvent,
-  useRef,
 } from "react";
 import { toast } from "sonner";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { cn } from "@/lib/utils";
 import { Icons, AbstractIconWrapper, P } from "@/components/ui";
 
 const FileDropzone: FC<{
-  setFiles: (files: FileList | null) => void;
+  setFiles: (filePaths: string[]) => void;
 }> = ({ setFiles }) => {
   const [isDragging, setIsDragging] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFiles = useCallback(
-    (files: FileList) => {
-      if (!files.length) {
+  const handleFilePaths = useCallback(
+    (paths: string[]) => {
+      if (!paths.length) {
         toast.error("No Files Found");
         return;
       }
-      setFiles(files);
+      setFiles(paths);
     },
     [setFiles]
   );
 
-  const handleOnChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const targetFiles = e.target.files;
+  const handleSelectFiles = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: true,
+        directory: false,
+      });
 
-    if (targetFiles) {
-      handleFiles(targetFiles);
+      if (selected === null) {
+        return; // User canceled the selection
+      }
+
+      // Handle both array of paths and single path
+      const paths = Array.isArray(selected) ? selected : [selected];
+      handleFilePaths(paths);
+    } catch (error) {
+      console.error("File selection error:", error);
+      toast.error("Failed to select files");
     }
-  };
+  }, [handleFilePaths]);
 
+  // This is just a visual handler for drag & drop
+  // The actual file selection will happen through the Tauri dialog
   const handleDrop = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
       setIsDragging(false);
 
-      const targetFiles = e.dataTransfer.files;
-      if (targetFiles) {
-        handleFiles(targetFiles);
-      }
+      // We'll open the dialog instead of handling dropped files
+      handleSelectFiles();
     },
-    [handleFiles]
+    [handleSelectFiles]
   );
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -61,6 +71,7 @@ const FileDropzone: FC<{
   const handleDragLeave = () => {
     setIsDragging(false);
   };
+
   return (
     <div
       className="w-full h-full border border-grey-80 rounded-[8px] p-2"
@@ -69,7 +80,7 @@ const FileDropzone: FC<{
       onDragLeave={handleDragLeave}
     >
       <button
-        onClick={() => fileInputRef.current?.click()}
+        onClick={handleSelectFiles}
         className={cn(
           "h-full w-full flex border border-dashed border-grey-80 justify-center py-10 px-10 bg-white cursor-pointer hover:bg-grey-90 duration-300 rounded-[8px]",
           isDragging && "bg-grey-90"
@@ -82,24 +93,17 @@ const FileDropzone: FC<{
 
           <div className="mt-2 flex flex-col">
             <P className="font-semibold text-grey-10" size="md">
-              Upload a File Here
+              Select Files to Upload
             </P>
             <P
               size="sm"
               className="mt-2 text-center text-grey-60 max-w-[264px]"
             >
-              Drag and drop or click to add one or more files here to upload
+              Click to select one or more files from your computer
             </P>
           </div>
         </div>
       </button>
-      <input
-        multiple
-        type="file"
-        ref={fileInputRef}
-        onChange={handleOnChange}
-        className="hidden"
-      />
     </div>
   );
 };
