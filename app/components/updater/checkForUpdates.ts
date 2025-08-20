@@ -44,7 +44,7 @@ export async function checkForUpdates(notifyOnce = false) {
       });
     }
 
-    if (notifyOnce && notified) return;
+    if (notifyOnce && !notified) return;
 
     // Open the update dialog with the update info
     openUpdateDialog({
