@@ -45,7 +45,9 @@ async function getBytes(): Promise<Uint8Array | null> {
 export async function saveBytes(bytes: Uint8Array) {
   try {
     await ensureAppDirectory();
-    await writeFile(DB_FILENAME, bytes, { baseDir: BaseDirectory.AppLocalData });
+    await writeFile(DB_FILENAME, bytes, {
+      baseDir: BaseDirectory.AppLocalData,
+    });
     return true;
   } catch (err) {
     console.error("Failed to save database:", err);
@@ -65,26 +67,44 @@ async function createSchema(db: initSqlJsType.Database) {
 
 export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
   await ensureAppDirectory();
-  const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
-  const raw = await getBytes();
-
-  let db: initSqlJsType.Database;
-
-  if (raw) {
-    db = new SQL.Database(raw);
-  } else {
-    db = new SQL.Database();
+  let SQL: any;
+  try {
+    SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
+  } catch {
+    console.error("Failed to initialize SQL.js");
   }
-
-  // Always ensure the schema exists, regardless of whether we loaded an existing DB
-  await createSchema(db);
-
+  let raw: any;
+  try {
+    raw = await getBytes();
+  } catch {
+    console.error("Failed to get database bytes");
+  }
+  let db: initSqlJsType.Database | undefined;
+  try {
+    if (raw) {
+      db = new SQL.Database(raw);
+    } else {
+      db = new SQL.Database();
+    }
+    // Always ensure the schema exists, regardless of whether we loaded an existing DB
+    if (db) {
+      await createSchema(db);
+    }
+  } catch {
+    console.error("Failed to create schema");
+  }
+  if (!db) {
+    console.error("Failed to initialize database");
+    throw new Error("Database initialization failed");
+  }
   // Verify the table exists
   try {
     db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet'");
   } catch (err) {
     console.error("Failed to verify wallet table:", err);
-    throw new Error("Database initialization failed: could not verify wallet table");
+    throw new Error(
+      "Database initialization failed: could not verify wallet table"
+    );
   }
 
   return db;
@@ -93,7 +113,9 @@ export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
 export async function ensureWalletTable(): Promise<boolean> {
   try {
     const db = await initHippiusDesktopDB();
-    const result = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='wallet'");
+    const result = db.exec(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='wallet'"
+    );
     if (!result.length || !result[0].values.length) {
       await createSchema(db);
       await saveBytes(db.export());
@@ -113,10 +135,10 @@ export async function saveWallet(
     await ensureWalletTable();
     const db = await initHippiusDesktopDB();
 
-    db.run("INSERT INTO wallet (encryptedMnemonic, passcodeHash) VALUES (?, ?)", [
-      encryptedMnemonic,
-      passcodeHash,
-    ]);
+    db.run(
+      "INSERT INTO wallet (encryptedMnemonic, passcodeHash) VALUES (?, ?)",
+      [encryptedMnemonic, passcodeHash]
+    );
 
     await saveBytes(db.export());
     return true;
