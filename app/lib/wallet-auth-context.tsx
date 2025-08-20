@@ -7,10 +7,16 @@ import React, {
   useState,
   useEffect,
   useRef,
-  useCallback
+  useCallback,
 } from "react";
 import { Keyring } from "@polkadot/keyring";
-import { getWalletRecord, clearHippiusDesktopDB } from "./helpers/hippiusDesktopDB";
+import {
+  getWalletRecord,
+  clearHippiusDesktopDB,
+  updateLogoutTime,
+  getLogoutTime,
+  LOGOUT_TIMES,
+} from "./helpers/hippiusDesktopDB";
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
@@ -29,13 +35,14 @@ interface WalletContextType {
   unlockWithPasscode: (passcode: string) => Promise<boolean>;
   logout: () => Promise<void>;
   resetHippiusDesktop: () => Promise<void>;
+  updateSessionTimeout: (timeoutValue: number) => Promise<boolean>;
+  logoutTimeValue: number;
 }
-const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
 export function WalletAuthProvider({
-  children
+  children,
 }: {
   children: React.ReactNode;
 }) {
@@ -46,7 +53,9 @@ export function WalletAuthProvider({
   const [walletManager, setWalletManager] = useState<{
     polkadotPair: any;
   } | null>(null);
-
+  const [logoutTimeValue, setLogoutTimeValue] = useState<number>(
+    LOGOUT_TIMES.HOURS_24
+  );
   const logoutTimer = useRef<NodeJS.Timeout | null>(null);
   const syncInitialized = useRef(false);
 
@@ -54,14 +63,11 @@ export function WalletAuthProvider({
     try {
       console.log("[WalletAuth] Starting sync cleanup...");
       await invoke("cleanup_sync");
-      // Add a longer delay to ensure all cleanup operations complete
-      // This includes global cancellation, state cleanup, and task abortion
-      await new Promise(resolve => setTimeout(resolve, 2500));
       console.log("[WalletAuth] Sync cleanup completed");
     } catch (error) {
       console.error("Failed to cleanup sync on logout:", error);
     }
-  
+
     setMnemonic(null);
     setPolkadotAddress(null);
     setWalletManager(null);
@@ -69,15 +75,39 @@ export function WalletAuthProvider({
     syncInitialized.current = false; // Reset sync flag for next login
   }, []);
 
-  // Memoize resetLogoutTimer and depend on logout
+  // Update session timeout value
+  const updateSessionTimeout = async (
+    timeoutValue: number
+  ): Promise<boolean> => {
+    try {
+      const success = await updateLogoutTime(timeoutValue);
+      if (success) {
+        setLogoutTimeValue(timeoutValue);
+        resetLogoutTimer();
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error("Failed to update session timeout:", err);
+      return false;
+    }
+  };
+
+  // Memoize resetLogoutTimer and depend on logout and logoutTimeValue
   const resetLogoutTimer = useCallback(() => {
     if (logoutTimer.current) {
       clearTimeout(logoutTimer.current);
     }
+
+    // Don't set a timer if logout time is set to FOREVER (-1)
+    if (logoutTimeValue === LOGOUT_TIMES.FOREVER) {
+      return;
+    }
+
     logoutTimer.current = setTimeout(async () => {
       await logout();
-    }, INACTIVITY_TIMEOUT);
-  }, [logout]);
+    }, logoutTimeValue);
+  }, [logout, logoutTimeValue]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -89,7 +119,7 @@ export function WalletAuthProvider({
       "mousedown",
       "keydown",
       "touchstart",
-      "scroll"
+      "scroll",
     ];
     events.forEach((event) => window.addEventListener(event, resetLogoutTimer));
 
@@ -114,6 +144,9 @@ export function WalletAuthProvider({
       await cryptoWaitReady();
       const mnemonic = decryptMnemonic(record.encryptedMnemonic, passcode);
       if (!isMnemonicValid(mnemonic)) throw new Error("Decryption failed");
+
+      // Set the logout time from the database
+      setLogoutTimeValue(record.logoutTime);
 
       // check that session actually initialized
       const sessionOk = await setSession(mnemonic);
@@ -146,10 +179,16 @@ export function WalletAuthProvider({
       setWalletManager({ polkadotPair: pair });
       setIsAuthenticated(true);
 
+      // If logoutTimeValue hasn't been set yet, fetch it from the database
+      if (logoutTimeValue === LOGOUT_TIMES.HOURS_24) {
+        const timeout = await getLogoutTime();
+        setLogoutTimeValue(timeout);
+      }
+
       if (!syncInitialized.current) {
         await invoke("initialize_sync", {
           accountId: pair.address,
-          mnemonic: inputMnemonic
+          mnemonic: inputMnemonic,
         });
         syncInitialized.current = true;
       }
@@ -184,7 +223,9 @@ export function WalletAuthProvider({
         setSession,
         unlockWithPasscode,
         logout,
-        resetHippiusDesktop
+        resetHippiusDesktop,
+        updateSessionTimeout,
+        logoutTimeValue,
       }}
     >
       {children}

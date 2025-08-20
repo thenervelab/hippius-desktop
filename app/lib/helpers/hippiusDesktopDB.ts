@@ -7,15 +7,27 @@ import {
   BaseDirectory,
   mkdir,
 } from "@tauri-apps/plugin-fs";
+import { migrateSchema } from "./logoutTimerMigration";
 
 export const DB_FILENAME = "hippius-desktop.db";
-const TABLE_SCHEMA = `
+export const WALLET_TABLE_SCHEMA = `
   CREATE TABLE IF NOT EXISTS wallet (
     id INTEGER PRIMARY KEY,
     encryptedMnemonic TEXT,
-    passcodeHash TEXT
+    passcodeHash TEXT,
+    logoutTime INTEGER DEFAULT 86400000
   );
 `;
+
+// Default logout time values in milliseconds
+export const LOGOUT_TIMES = {
+  MINUTES_15: 15 * 60 * 1000,
+  HOUR_1: 60 * 60 * 1000,
+  HOURS_8: 8 * 60 * 60 * 1000,
+  HOURS_24: 24 * 60 * 60 * 1000,
+  DAYS_3: 3 * 24 * 60 * 60 * 1000,
+  FOREVER: -1, // Special value for no timeout
+};
 
 export async function ensureAppDirectory() {
   try {
@@ -57,7 +69,7 @@ export async function saveBytes(bytes: Uint8Array) {
 
 async function createSchema(db: initSqlJsType.Database) {
   try {
-    db.run(TABLE_SCHEMA);
+    db.run(WALLET_TABLE_SCHEMA);
     return true;
   } catch (err) {
     console.error("Failed to create schema:", err);
@@ -82,17 +94,19 @@ export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
   let db: initSqlJsType.Database | undefined;
   try {
     if (raw) {
-      db = new SQL.Database(raw);
+      db = await new SQL.Database(raw);
     } else {
-      db = new SQL.Database();
+      db = await new SQL.Database();
     }
     // Always ensure the schema exists, regardless of whether we loaded an existing DB
     if (db) {
       await createSchema(db);
+      await migrateSchema(db);
     }
   } catch {
     console.error("Failed to create schema");
   }
+  console.log(SQL, db, raw, "sql,db,raw");
   if (!db) {
     console.error("Failed to initialize database");
     throw new Error("Database initialization failed");
@@ -171,27 +185,31 @@ export async function updateWallet(
 export async function getWalletRecord(): Promise<{
   encryptedMnemonic: string;
   passcodeHash: string;
+  logoutTime: number;
 } | null> {
   try {
     await ensureWalletTable();
     const db = await initHippiusDesktopDB();
 
     const res = db.exec(
-      "SELECT encryptedMnemonic, passcodeHash FROM wallet ORDER BY id DESC LIMIT 1"
+      "SELECT encryptedMnemonic, passcodeHash, logoutTime FROM wallet ORDER BY id DESC LIMIT 1"
     );
 
     if (!res.length || !res[0]?.values.length) {
       return null;
     }
 
-    const [encryptedMnemonic, passcodeHash] = res[0].values[0] as string[];
-    return { encryptedMnemonic, passcodeHash };
+    const [encryptedMnemonic, passcodeHash, logoutTime] = res[0].values[0];
+    return {
+      encryptedMnemonic: encryptedMnemonic as string,
+      passcodeHash: passcodeHash as string,
+      logoutTime: (logoutTime as number) || LOGOUT_TIMES.HOURS_24,
+    };
   } catch (err) {
     console.error("Error fetching wallet record:", err);
     return null;
   }
 }
-
 export async function hasWalletRecord(): Promise<boolean> {
   const raw = await getBytes();
   if (!raw) return false;
@@ -201,9 +219,51 @@ export async function hasWalletRecord(): Promise<boolean> {
   return rows.length > 0 && rows[0].values.length > 0;
 }
 
+export async function getLogoutTime(): Promise<number> {
+  try {
+    await ensureWalletTable();
+    const db = await initHippiusDesktopDB();
+
+    const res = db.exec(
+      "SELECT logoutTime FROM wallet ORDER BY id DESC LIMIT 1"
+    );
+
+    if (!res.length || !res[0]?.values.length) {
+      return LOGOUT_TIMES.HOURS_24; // Default to 24 hours if no record exists
+    }
+
+    return (res[0].values[0][0] as number) || LOGOUT_TIMES.HOURS_24;
+  } catch (err) {
+    console.error("Error fetching logout time:", err);
+    return LOGOUT_TIMES.HOURS_24; // Default to 24 hours on error
+  }
+}
+
+export async function updateLogoutTime(logoutTime: number): Promise<boolean> {
+  try {
+    await ensureWalletTable();
+    const db = await initHippiusDesktopDB();
+
+    // Get the latest wallet record id
+    const res = db.exec("SELECT id FROM wallet ORDER BY id DESC LIMIT 1");
+    if (!res[0]?.values.length) {
+      throw new Error("No wallet record found to update logout time");
+    }
+    const id = res[0].values[0][0];
+
+    // Update the record with new logout time
+    db.run("UPDATE wallet SET logoutTime = ? WHERE id = ?", [logoutTime, id]);
+    await saveBytes(db.export());
+    return true;
+  } catch (err) {
+    console.error("Failed to update logout time:", err);
+    return false;
+  }
+}
+
 export async function clearHippiusDesktopDB() {
   const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
   const db = new SQL.Database();
-  db.run(TABLE_SCHEMA);
+  db.run(WALLET_TABLE_SCHEMA);
   await saveBytes(db.export());
 }
