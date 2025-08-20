@@ -11,12 +11,15 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useRouter } from "next/navigation";
 import { useAtomValue } from "jotai";
 import { phaseAtom } from "@/components/splash-screen/atoms";
+import * as Checkbox from "@radix-ui/react-checkbox";
+import { Check } from "lucide-react";
 
 const LoginWithPassCodeForm = () => {
   const [error, setError] = useState<string | null>(null);
   const [logginIn, setLoggingIn] = useState(false);
   const [showPasscode, setShowPasscode] = useState(false);
   const [passcode, setPasscode] = useState("");
+  const [keepMeLoggedIn, setKeepMeLoggedIn] = useState(false);
 
   const { unlockWithPasscode } = useWalletAuth();
   const router = useRouter();
@@ -34,7 +37,9 @@ const LoginWithPassCodeForm = () => {
     }
 
     try {
-      const success = await unlockWithPasscode(passcode);
+      // Pass keepMeLoggedIn flag to use -1 minutes (forever) if checked
+      const logoutTimeInMinutes = keepMeLoggedIn ? -1 : undefined;
+      const success = await unlockWithPasscode(passcode, logoutTimeInMinutes);
       if (success) {
         router.push("/");
       } else {
@@ -100,6 +105,29 @@ const LoginWithPassCodeForm = () => {
                 </RevealTextLine>
               </div>
 
+              <RevealTextLine rotate reveal={inView} className="delay-500">
+                <div className="flex items-start mt-3">
+                  <Checkbox.Root
+                    className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 mt-[3px] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors"
+                    checked={keepMeLoggedIn}
+                    onCheckedChange={() => setKeepMeLoggedIn((prev) => !prev)}
+                    id="keepMeLoggedIn"
+                  >
+                    <Checkbox.Indicator>
+                      <Check className="h-3.5 w-3.5 text-white" />
+                    </Checkbox.Indicator>
+                  </Checkbox.Root>
+                  <div className="ml-2">
+                    <label
+                      htmlFor="keepMeLoggedIn"
+                      className="text-[15px] font-medium text-grey-20 leading-[22px]"
+                    >
+                      Keep me logged in
+                    </label>
+                  </div>
+                </div>
+              </RevealTextLine>
+
               {error && (
                 <div className="flex text-error-70 text-sm font-medium mt-2 items-center gap-2">
                   <AlertCircle className="size-4 !relative" />
@@ -107,7 +135,7 @@ const LoginWithPassCodeForm = () => {
                 </div>
               )}
 
-              <div className="pt-5  flex flex-col w-full">
+              <div className="pt-3  flex flex-col w-full">
                 <RevealTextLine
                   rotate
                   reveal={inView}
@@ -124,8 +152,8 @@ const LoginWithPassCodeForm = () => {
                     {logginIn
                       ? "Logging in..."
                       : phase !== "ready"
-                        ? "Initializing..."
-                        : "Login"}
+                      ? "Initializing..."
+                      : "Login"}
                   </Button>
                 </RevealTextLine>
               </div>

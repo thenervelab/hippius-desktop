@@ -7,15 +7,24 @@ import React, {
   useState,
   useEffect,
   useRef,
-  useCallback
+  useCallback,
 } from "react";
 import { Keyring } from "@polkadot/keyring";
-import { getWalletRecord, clearHippiusDesktopDB } from "./helpers/hippiusDesktopDB";
+import {
+  getWalletRecord,
+  clearHippiusDesktopDB,
+  saveSession,
+  getSession,
+  clearSession,
+} from "./helpers/hippiusDesktopDB";
+import { useRouter } from "next/navigation";
+
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
+import { toast } from "sonner";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -25,20 +34,29 @@ interface WalletContextType {
   walletManager: {
     polkadotPair: any;
   } | null;
-  setSession: (mnemonic: string) => Promise<boolean>;
-  unlockWithPasscode: (passcode: string) => Promise<boolean>;
+  setSession: (
+    mnemonic: string,
+    logoutTimeInMinutes?: number
+  ) => Promise<boolean>;
+  unlockWithPasscode: (
+    passcode: string,
+    logoutTimeInMinutes?: number
+  ) => Promise<boolean>;
   logout: () => Promise<void>;
   resetHippiusDesktop: () => Promise<void>;
+  sessionTimeRemaining: number | null;
 }
-const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
+const MAX_DELAY = 2_147_483_647; // ~24.8 days
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
 export function WalletAuthProvider({
-  children
+  children,
 }: {
   children: React.ReactNode;
 }) {
+  const router = useRouter();
+
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [polkadotAddress, setPolkadotAddress] = useState<string | null>(null);
   const [mnemonic, setMnemonic] = useState<string | null>(null);
@@ -46,64 +64,101 @@ export function WalletAuthProvider({
   const [walletManager, setWalletManager] = useState<{
     polkadotPair: any;
   } | null>(null);
+  const [sessionTimeRemaining, setSessionTimeRemaining] = useState<
+    number | null
+  >(null);
 
-  const logoutTimer = useRef<NodeJS.Timeout | null>(null);
   const syncInitialized = useRef(false);
+  const logoutTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const logout = useCallback(async () => {
     try {
       console.log("[WalletAuth] Starting sync cleanup...");
       await invoke("cleanup_sync");
-      // Add a longer delay to ensure all cleanup operations complete
-      // This includes global cancellation, state cleanup, and task abortion
-      await new Promise(resolve => setTimeout(resolve, 2500));
       console.log("[WalletAuth] Sync cleanup completed");
+
+      // Clear session from database
+      await clearSession();
     } catch (error) {
       console.error("Failed to cleanup sync on logout:", error);
     }
-  
+
+    // Clear the logout timer if it exists
+    if (logoutTimerRef.current) {
+      clearTimeout(logoutTimerRef.current);
+      logoutTimerRef.current = null;
+    }
+
     setMnemonic(null);
     setPolkadotAddress(null);
     setWalletManager(null);
     setIsAuthenticated(false);
+    setSessionTimeRemaining(null);
     syncInitialized.current = false; // Reset sync flag for next login
   }, []);
 
-  // Memoize resetLogoutTimer and depend on logout
-  const resetLogoutTimer = useCallback(() => {
-    if (logoutTimer.current) {
-      clearTimeout(logoutTimer.current);
-    }
-    logoutTimer.current = setTimeout(async () => {
-      await logout();
-    }, INACTIVITY_TIMEOUT);
-  }, [logout]);
+  function scheduleLogout(ms: number) {
+    if (ms === Infinity) return; // keep me logged in
+
+    const delay = Math.min(Math.max(ms, 0), MAX_DELAY);
+    logoutTimerRef.current = setTimeout(() => {
+      if (ms > MAX_DELAY) {
+        scheduleLogout(ms - MAX_DELAY); // chain next chunk
+      } else {
+        logout();
+      }
+    }, delay);
+  }
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      if (logoutTimer.current) clearTimeout(logoutTimer.current);
-      return;
-    }
-    const events = [
-      "mousemove",
-      "mousedown",
-      "keydown",
-      "touchstart",
-      "scroll"
-    ];
-    events.forEach((event) => window.addEventListener(event, resetLogoutTimer));
+    const bootOnce = { done: false }; // local guard
 
-    resetLogoutTimer();
+    const setupSessionTimeout = async () => {
+      if (bootOnce.done) return;
+      bootOnce.done = true;
+
+      if (logoutTimerRef.current) {
+        clearTimeout(logoutTimerRef.current);
+        logoutTimerRef.current = null;
+      }
+
+      const session = await getSession();
+      toast.success(`Session Found: ${session?.mnemonic}`);
+      if (!session) {
+        setSessionTimeRemaining(null);
+        return;
+      }
+
+      // Don't leak mnemonic in logs/toasts
+      // toast.success("Session restored");  // optional
+
+      const timeRemaining = session.logoutTimeStamp - Date.now();
+      setSessionTimeRemaining(Math.max(timeRemaining, 0));
+
+      if (timeRemaining <= 0 && !isAuthenticated) {
+        await logout();
+        return;
+      }
+
+      // Re-adopt the session minutes to avoid -1 bug
+      const ok = await setSession(
+        session.mnemonic,
+        session.logoutTimeInMinutes
+      );
+      if (ok) router.push("/");
+    };
+
+    setupSessionTimeout();
 
     return () => {
-      if (logoutTimer.current) clearTimeout(logoutTimer.current);
-      events.forEach((event) =>
-        window.removeEventListener(event, resetLogoutTimer)
-      );
+      if (logoutTimerRef.current) clearTimeout(logoutTimerRef.current);
     };
-  }, [isAuthenticated, resetLogoutTimer]);
+  }, [logout, router]);
 
-  const unlockWithPasscode = async (passcode: string): Promise<boolean> => {
+  const unlockWithPasscode = async (
+    passcode: string,
+    logoutTimeInMinutes?: number
+  ): Promise<boolean> => {
     setIsLoading(true);
     try {
       const record = await getWalletRecord();
@@ -116,7 +171,7 @@ export function WalletAuthProvider({
       if (!isMnemonicValid(mnemonic)) throw new Error("Decryption failed");
 
       // check that session actually initialized
-      const sessionOk = await setSession(mnemonic);
+      const sessionOk = await setSession(mnemonic, logoutTimeInMinutes);
       if (!sessionOk) throw new Error("Session setup failed");
 
       return true;
@@ -130,12 +185,15 @@ export function WalletAuthProvider({
     }
   };
 
-  const setSession = async (inputMnemonic: string): Promise<boolean> => {
+  const setSession = async (
+    inputMnemonic: string,
+    logoutTimeInMinutes?: number
+  ): Promise<boolean> => {
     if (!isMnemonicValid(inputMnemonic)) {
       console.error("[setSession] Invalid mnemonic");
       return false;
     }
-
+    await cryptoWaitReady();
     try {
       const keyring = new Keyring({ type: "sr25519" });
       const pair = keyring.addFromMnemonic(inputMnemonic);
@@ -146,10 +204,32 @@ export function WalletAuthProvider({
       setWalletManager({ polkadotPair: pair });
       setIsAuthenticated(true);
 
+      if (logoutTimerRef.current) {
+        clearTimeout(logoutTimerRef.current);
+        logoutTimerRef.current = null;
+      }
+
+      // Persist session and get timestamp
+      const logoutTimeStamp = await saveSession(
+        inputMnemonic,
+        logoutTimeInMinutes
+      );
+
+      const timeRemaining = +logoutTimeStamp - Date.now();
+      setSessionTimeRemaining(timeRemaining);
+
+      // If minutes === -1, we won't schedule; else schedule in safe chunks
+      const effMinutes =
+        logoutTimeInMinutes ??
+        (await getSession())?.logoutTimeInMinutes ??
+        1440;
+
+      scheduleLogout(effMinutes === -1 ? Infinity : timeRemaining);
+
       if (!syncInitialized.current) {
         await invoke("initialize_sync", {
           accountId: pair.address,
-          mnemonic: inputMnemonic
+          mnemonic: inputMnemonic,
         });
         syncInitialized.current = true;
       }
@@ -184,7 +264,8 @@ export function WalletAuthProvider({
         setSession,
         unlockWithPasscode,
         logout,
-        resetHippiusDesktop
+        resetHippiusDesktop,
+        sessionTimeRemaining,
       }}
     >
       {children}
