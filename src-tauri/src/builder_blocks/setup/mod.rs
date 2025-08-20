@@ -86,6 +86,15 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("path", "TEXT NOT NULL"),
             ],
         ),
+        (
+            "sub_accounts",
+            &[
+                ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+                ("account_id", "TEXT NOT NULL"),
+                ("sub_account_seed_phrase", "TEXT NOT NULL"),
+                ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
     ];
 
     for (table_name, columns) in TABLE_SCHEMAS {
@@ -163,6 +172,17 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             file_hash TEXT NOT NULL,
             timestamp INTEGER NOT NULL,
             path TEXT NOT NULL
+        )"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sub_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            sub_account_seed_phrase TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )"
     )
     .execute(pool)

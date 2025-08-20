@@ -237,28 +237,8 @@ pub async fn reset_app() -> Result<(), String> {
             // Continue to next table even if one fails, to attempt a partial reset.
         }
     }
-
     println!("[Reset App] All tables cleared.");
 
-    // Clear in-memory state for public sync
-    if let Ok(mut uploading) = public_folder_sync::UPLOADING_FILES.lock() {
-        uploading.clear();
-        println!("[Reset App] Cleared public UPLOADING_FILES.");
-    }
-    if let Ok(mut recently) = public_folder_sync::RECENTLY_UPLOADED.lock() {
-        recently.clear();
-        println!("[Reset App] Cleared public RECENTLY_UPLOADED.");
-    }
-
-    // Clear in-memory state for private sync
-    if let Ok(mut uploading) = private_folder_sync::UPLOADING_FILES.lock() {
-        uploading.clear();
-        println!("[Reset App] Cleared private UPLOADING_FILES.");
-    }
-    if let Ok(mut recently) = private_folder_sync::RECENTLY_UPLOADED.lock() {
-        recently.clear();
-        println!("[Reset App] Cleared private RECENTLY_UPLOADED.");
-    }
 
     println!("[Reset App] Restoring default WSS endpoint...");
     if let Err(e) = sqlx::query("INSERT OR REPLACE INTO wss_endpoint (id, endpoint) VALUES (1, ?)")

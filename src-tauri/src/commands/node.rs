@@ -173,6 +173,16 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         }
     });
 
+    if !is_aws_cli_installed().await {
+        println!("[AWS CLI] Not found. Installing...");
+        match install_aws_cli().await {
+            Ok(_) => println!("[AWS CLI] Installed successfully."),
+            Err(e) => eprintln!("[AWS CLI] Install failed: {}", e),
+        }
+    } else {
+        println!("[AWS CLI] Already installed.");
+    }
+
     let mutex = IPFS_HANDLE.get_or_init(|| Mutex::new(None));
     let mut guard = mutex.lock().await;
     guard.replace(child);
@@ -276,4 +286,110 @@ async fn ensure_ipfs_not_running(bin_path: &Path) -> Result<(), String> {
 async fn ensure_ipfs_not_running(_bin_path: &Path) -> Result<(), String> {
     // No-op on other platforms
     Ok(())
+}
+
+
+#[cfg(target_os = "linux")]
+async fn install_aws_cli() -> Result<(), String> {
+    use tokio::fs;
+
+    // Download
+    let status = Command::new("curl")
+        .args(&["https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip", "-o", "awscliv2.zip"])
+        .status()
+        .await
+        .map_err(|e| format!("Curl failed: {e}"))?;
+    if !status.success() {
+        return Err("Failed to download AWS CLI".into());
+    }
+
+    // Unzip
+    let status = Command::new("unzip")
+        .args(&["-o", "awscliv2.zip"])
+        .status()
+        .await
+        .map_err(|e| format!("Unzip failed: {e}"))?;
+    if !status.success() {
+        return Err("Failed to unzip AWS CLI".into());
+    }
+
+    // Install
+    let status = Command::new("sudo")
+        .args(&["./aws/install"])
+        .status()
+        .await
+        .map_err(|e| format!("Install failed: {e}"))?;
+    if !status.success() {
+        return Err("Failed to install AWS CLI".into());
+    }
+
+    // Cleanup
+    let _ = fs::remove_file("awscliv2.zip").await;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+async fn install_aws_cli() -> Result<(), String> {
+    let status = Command::new("curl")
+        .args(&["https://awscli.amazonaws.com/AWSCLIV2.pkg", "-o", "AWSCLIV2.pkg"])
+        .status()
+        .await
+        .map_err(|e| format!("Curl failed: {e}"))?;
+    if !status.success() {
+        return Err("Failed to download AWS CLI".into());
+    }
+
+    let status = Command::new("sudo")
+        .args(&["installer", "-pkg", "AWSCLIV2.pkg", "-target", "/"])
+        .status()
+        .await
+        .map_err(|e| format!("Installer failed: {e}"))?;
+    if !status.success() {
+        return Err("Failed to install AWS CLI".into());
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+async fn install_aws_cli() -> Result<(), String> {
+    use tokio::fs;
+
+    // Download the MSI
+    let url = "https://awscli.amazonaws.com/AWSCLIV2.msi";
+    let status = Command::new("powershell")
+        .args(&["Invoke-WebRequest", "-Uri", url, "-OutFile", "AWSCLIV2.msi"])
+        .status()
+        .await
+        .map_err(|e| format!("Download failed: {e}"))?;
+    if !status.success() {
+        return Err("Failed to download AWS CLI".into());
+    }
+
+    // Install
+    let output = Command::new("msiexec.exe")
+        .args(&["/i", "AWSCLIV2.msi", "/quiet", "/norestart"])
+        .output()
+        .await
+        .map_err(|e| format!("Installer failed: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to install AWS CLI: {}", stderr));
+    }
+
+    // Cleanup
+    let _ = fs::remove_file("AWSCLIV2.msi").await;
+    Ok(())
+}
+
+async fn is_aws_cli_installed() -> bool {
+    let output = Command::new("aws")
+        .arg("--version")
+        .output()
+        .await;
+
+    match output {
+        Ok(o) => o.status.success(),
+        Err(_) => false,
+    }
 }

@@ -389,13 +389,52 @@ pub async fn test_wss_endpoint_command(endpoint: String) -> Result<bool, String>
     test_wss_endpoint(endpoint).await
 }
 
+type SubAccountRole = custom_runtime::runtime_types::pallet_subaccount::pallet::Role;
 
-// ⚠ Invalid next.config.ts options detected: 
-// ⚠     Unrecognized key(s) in object: 'swcMinify'
-// ⚠ See more info here: https://nextjs.org/docs/messages/invalid-next-config
-// ✓ Ready in 3.6s
-// Valid IPFS binary found at "/home/faiz/.hippius/bin/ipfs"
-// IPFS repo already initialized at "/home/faiz/.ipfs/config"
-// Failed to set CORS header Access-Control-Allow-Origin: Error: context deadline exceeded
+#[tauri::command]
+pub async fn add_sub_account_tauri(
+    main_seed: String,
+    sub_seed: String,
+) -> Result<String, String> {
+    // Acquire the global lock
+    let _lock = SUBSTRATE_TX_LOCK.lock().await;
 
-// Failed to set CORS header Access-Control-Allow-Methods: Error: context deadline exceeded
+    // Build signer from main seed
+    let main_pair = sr25519::Pair::from_string(&main_seed, None)
+        .map_err(|e| format!("Failed to create main signer pair: {e:?}"))?;
+    let signer = PairSigner::new(main_pair.clone()); // Clone the pair for the signer
+
+    // --- THE FIX IS HERE ---
+    // Derive main_id directly from the main_pair's public key. This is unambiguous.
+    let main_id: sp_core::crypto::AccountId32 = sp_core::crypto::AccountId32::from(main_pair.public());
+
+    // Build sub account id from sub seed
+    let sub_pair = sr25519::Pair::from_string(&sub_seed, None)
+        .map_err(|e| format!("Failed to create sub pair: {e:?}"))?;
+    let sub_id: sp_core::crypto::AccountId32 = sp_core::crypto::AccountId32::from(sub_pair.public());
+
+    let api = get_substrate_client()
+        .await
+        .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
+
+    // Hardcode role to UploadDelete
+    let role: SubAccountRole = SubAccountRole::UploadDelete;
+
+    // Submit tx
+    let tx = custom_runtime::tx().sub_account().add_sub_account(main_id.into(), sub_id.into(), role);
+    println!("[Substrate] Submitting add_sub_account transaction...");
+    let tx_hash = api
+        .tx()
+        .sign_and_submit_then_watch_default(&tx, &signer)
+        .await
+        .map_err(|e| format!("Failed to submit transaction: {}", e))?
+        .wait_for_finalized_success()
+        .await
+        .map_err(|e| format!("Transaction failed: {}", e))?
+        .extrinsic_hash();
+    println!("[Substrate] add_sub_account finalized: {:?}", tx_hash);
+
+    // small cooldown similar to other txs
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+    Ok(format!("✅ add_sub_account submitted! Finalized in block: {tx_hash}"))
+}
