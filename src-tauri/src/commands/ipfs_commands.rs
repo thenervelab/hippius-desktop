@@ -76,7 +76,6 @@ pub async fn encrypt_and_upload_file(
     account_id: String,
     file_path: String,
     seed_phrase: String,
-    encryption_key: Option<String>,
 ) -> Result<String, String> {
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
@@ -306,7 +305,6 @@ pub async fn encrypt_and_upload_folder(
     account_id: String,
     folder_path: String,
     seed_phrase: String,
-    encryption_key: Option<String>,
 ) -> Result<String, String> {
     println!("[+] Starting encrypted upload for folder: {}", folder_path);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
@@ -335,64 +333,6 @@ pub async fn encrypt_and_upload_folder(
 
     println!("[✔] Folder storage request successful");
     Ok(folder_name)
-}
-
-async fn process_single_file_for_folder_upload(
-    file_path: PathBuf,
-    base_folder_path: PathBuf,
-    api_url: Arc<String>,
-    encryption_key: Option<Arc<Vec<u8>>>,
-    results: Arc<Mutex<Vec<FileProcessingResult>>>,
-) -> Result<(), String> {
-    let k = DEFAULT_K;
-    let m = DEFAULT_M;
-    let chunk_size = DEFAULT_CHUNK_SIZE;
-
-    let file_data = tokio::fs::read(&file_path).await.map_err(|e| e.to_string())?;
-    let original_file_hash = format!("{:x}", Sha256::digest(&file_data));
-    let encrypted_data = encrypt_file(&file_data, encryption_key.map(|k| (*k).clone())).await?;
-    let encrypted_size = encrypted_data.len();
-    
-    let (uploaded_chunks_info, uploaded_chunk_pairs) = handle_erasure_coding_and_upload(
-        encrypted_data, k, m, chunk_size, &api_url
-    ).await?;
-
-    let file_name = file_path.file_name().unwrap().to_str().unwrap().to_string();
-    
-    let file_metadata = Metadata {
-        original_file: OriginalFileInfo {
-            name: format!("{}{}", file_name, ".ec_metadata"),
-            size: file_data.len(),
-            hash: original_file_hash,
-            extension: file_path.extension().and_then(|s| s.to_str()).unwrap_or_default().to_string(),
-        },
-        erasure_coding: ErasureCodingInfo {
-            k, m, chunk_size, encrypted: true, file_id: Uuid::new_v4().to_string(), encrypted_size
-        },
-        chunks: uploaded_chunks_info,
-        metadata_cid: None,
-    };
-
-    let metadata_json = serde_json::to_string_pretty(&file_metadata).map_err(|e| e.to_string())?;
-    let metadata_filename = format!("{}.file.metadata.json", Uuid::new_v4());
-    let metadata_cid = upload_bytes_to_ipfs(
-        &api_url,
-        metadata_json.as_bytes().to_vec(),
-        &metadata_filename
-    ).await?;
-
-    let result = FileProcessingResult {
-        file_entry: FileEntry {
-            file_name: format!("{}{}", file_name, ".ec_metadata"),
-            file_size: file_data.len(),
-            cid: metadata_cid,
-        },
-        chunk_pairs: uploaded_chunk_pairs,
-    };
-    
-    results.lock().await.push(result);
-    println!("[✔] Finished processing file: {}", file_name);
-    Ok(())
 }
 
 #[tauri::command]
@@ -896,42 +836,54 @@ pub async fn download_file_public(
     file_cid: String,
     output_file: String,
 ) -> Result<(), String> {
-    let api_url = "http://127.0.0.1:5001";
-    
-    println!("[download_file_public] Downloading file with CID: {} to: {}", file_cid, output_file);
+    let api_url = "http://127.0.0.1:5001"; 
+
+    println!("[download_file_public] Start: file_cid='{}', output_file='{}'", file_cid, output_file);
 
     // Special handling when the 'CID' indicates S3 source
     if file_cid == "s3" {
+        println!("[download_file_public] Detected 's3' source mode");
         // Extract filename from the output path
-        let file_name = std::path::Path::new(&output_file)
+        let output_path_ref = std::path::Path::new(&output_file);
+        println!(
+            "[download_file_public] Output path parsed. is_file_name_present={}",
+            output_path_ref.file_name().is_some()
+        );
+        let file_name = output_path_ref
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or("Failed to extract file name from output path")?
             .to_string();
+        println!("[download_file_public] Extracted file_name='{}'", file_name);
 
         // Lookup source from user_profiles
-        let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
+        let pool = DB_POOL.get().ok_or("[download_file_public] DB pool not initialized")?;
+        println!("[download_file_public] DB pool acquired. Querying source for file_name='{}'", file_name);
         let row: Option<(String,)> = sqlx::query_as(
             "SELECT source FROM user_profiles WHERE file_name = ? ORDER BY id DESC LIMIT 1",
         )
         .bind(&file_name)
         .fetch_optional(pool)
         .await
-        .map_err(|e| format!("DB error while fetching source: {}", e))?;
+        .map_err(|e| format!("[download_file_public] DB error while fetching source for '{}': {}", file_name, e))?;
 
         let source = match row {
             Some((src,)) => src,
-            None => return Err(format!("No source found in DB for file '{}'", file_name)),
+            None => return Err(format!("[download_file_public] No source found in DB for file '{}'", file_name)),
         };
+        println!("[download_file_public] DB returned source='{}'", source);
 
         // If source exists locally, copy; otherwise pull from S3 using aws cli
-        if std::path::Path::new(&source).exists() {
+        let source_exists = std::path::Path::new(&source).exists();
+        println!("[download_file_public] Source exists locally? {}", source_exists);
+        if source_exists {
             std::fs::copy(&source, &output_file)
-                .map_err(|e| format!("Failed to copy from '{}' to '{}': {}", source, output_file, e))?;
-            println!("[download_file_public] Copied locally from '{}' to '{}'", source, output_file);
+                .map_err(|e| format!("[download_file_public] Failed to copy from '{}' to '{}': {}", source, output_file, e))?;
+            println!("[download_file_public] Copied locally from '{}' to '{}'. Done.", source, output_file);
             return Ok(());
         } else {
             // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
+            println!("[download_file_public] Invoking 'aws s3 cp' for source='{}' -> '{}'", source, output_file);
             let status = Command::new("aws")
                 .arg("s3")
                 .arg("cp")
@@ -941,17 +893,17 @@ pub async fn download_file_public(
                 .arg("https://s3.hippius.com")
                 .status()
                 .await
-                .map_err(|e| format!("Failed to spawn aws s3 cp: {}", e))?;
+                .map_err(|e| format!("[download_file_public] Failed to spawn aws s3 cp (is AWS CLI on PATH?): {}", e))?;
 
             if !status.success() {
                 return Err(format!(
-                    "aws s3 cp failed for source '{}' to '{}' with status {:?}",
+                    "[download_file_public] aws s3 cp failed for source '{}' to '{}' with status {:?}",
                     source, output_file, status.code()
                 ));
             }
 
             println!(
-                "[download_file_public] Downloaded from S3 '{}' to '{}' via aws cli",
+                "[download_file_public] Downloaded from S3 '{}' to '{}' via aws cli. Done.",
                 source, output_file
             );
             return Ok(());
@@ -959,19 +911,23 @@ pub async fn download_file_public(
     }
     
     // Default IPFS path for non-S3
+    println!("[download_file_public] Proceeding with IPFS download. api_url='{}', cid='{}'", api_url, file_cid);
     let file_cid_cloned = file_cid.clone();
     let api_url_cloned = api_url.to_string();
+    println!("[download_file_public] Spawning blocking task to download from IPFS");
     let file_data = tokio::task::spawn_blocking(move || {
         download_from_ipfs(&api_url_cloned, &file_cid_cloned)
     })
     .await
-    .map_err(|e| format!("Task spawn error: {}", e))?
-    .map_err(|e| format!("Failed to download file from IPFS: {}", e))?;
+    .map_err(|e| format!("[download_file_public] Task join error during IPFS download: {}", e))?
+    .map_err(|e| format!("[download_file_public] Failed to download file from IPFS (cid='{}'): {}", file_cid, e))?;
+    println!("[download_file_public] IPFS download complete. Bytes received={}", file_data.len());
     
-    std::fs::write(&output_file, file_data)
-        .map_err(|e| format!("Failed to write file to {}: {}", output_file, e))?;
+    println!("[download_file_public] Writing {} bytes to '{}'", file_data.len(), output_file);
+    std::fs::write(&output_file, &file_data)
+        .map_err(|e| format!("[download_file_public] Failed to write file to '{}': {}", output_file, e))?;
     
-    println!("[download_file_public] Successfully downloaded file to: {}", output_file);
+    println!("[download_file_public] Success: File written to '{}'", output_file);
     Ok(())
 }
 

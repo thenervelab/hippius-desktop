@@ -27,6 +27,23 @@ pub struct AppState {
     pub sync: Mutex<SyncState>,
 }
 
+/// Public helper: resolve/create the subaccount seed and set AWS env vars accordingly
+/// This mirrors the credentials setup used by initialize_sync when starting folder syncs.
+pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
+    // Resolve or create subaccount seed (with encryption and chain-side handling)
+    let seed_to_use = resolve_or_create_subaccount_seed(account_id.clone(), mnemonic.clone()).await;
+
+    // Configure AWS env
+    let encoded_seed = encode(&seed_to_use);
+    println!(
+        "[SyncInit] Using encrypted subaccount seed from DB for seed_to_use={}, encoded_seed={}",
+        seed_to_use, encoded_seed
+    );
+    std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
+    std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
+    std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
+}
+
 #[tauri::command]
 pub async fn initialize_sync(
     app: tauri::AppHandle,
@@ -55,16 +72,6 @@ pub async fn initialize_sync(
     let account_for_bg = account_id.clone();
     let mnemonic_for_bg = mnemonic.clone();
     let parent_task = tokio::spawn(async move {
-        // Resolve or create subaccount seed (with encryption and chain-side handling)
-        let seed_to_use = resolve_or_create_subaccount_seed(account_for_bg.clone(), mnemonic_for_bg.clone()).await;
-
-        // Configure AWS env
-        let encoded_seed = encode(&seed_to_use);
-        println!("[SyncInit] Using encrypted subaccount seed from DB for seed_to_use={}, encoded_seed={}", seed_to_use, encoded_seed);
-        std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
-        std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
-        std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
-
         // Spawn sync tasks
         let app_handle_clone = app_for_bg.clone();
         let app_handle_folder_sync = app_for_bg.clone();
@@ -94,6 +101,13 @@ pub async fn initialize_sync(
                 false
             }
         };
+
+        // Only perform AWS credentials setup if at least one sync is enabled
+        if public_enabled || private_enabled {
+            ensure_aws_env(account_for_bg.clone(), mnemonic_for_bg.clone()).await;
+        } else {
+            println!("[SyncInit] Both public and private sync are disabled; skipping AWS credentials setup");
+        }
 
         let folder_task = if private_enabled {
             Some(tokio::spawn(async move {
@@ -196,6 +210,13 @@ pub async fn cleanup_sync(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// Public helper: register an externally spawned task so cleanup_sync can abort it on logout
+pub async fn register_task(app: tauri::AppHandle, handle: tokio::task::JoinHandle<()>) {
+    let state = app.state::<Arc<AppState>>();
+    let mut sync_state = state.sync.lock().await;
+    sync_state.tasks.push(handle);
+}
+
 // Helper: load first encryption key from DB
 async fn load_encryption_key(pool: &sqlx::SqlitePool) -> Option<SbKey> {
     match sqlx::query_as::<_, (Vec<u8>,)>("SELECT key FROM encryption_keys ORDER BY id ASC LIMIT 1")
@@ -250,24 +271,11 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 if let Some(key) = &maybe_key {
                     // Try decrypt; if fails, treat as legacy plaintext and migrate
                     if let Some(decrypted) = decrypt_phrase(&stored_str, key) {
-                        println!("[SyncInit] Using encrypted subaccount seed from DB for account_id={}, stored_str={}", account_id, stored_str);
                         return decrypted;
                     } else {
-                        println!("[SyncInit] Found legacy plaintext subaccount; re-encrypting for account_id={}", account_id);
-                        let enc = encrypt_phrase(&stored_str, key);
-                        if let Err(e) = sqlx::query(
-                            "UPDATE sub_accounts SET sub_account_seed_phrase = ? WHERE account_id = ?"
-                        )
-                        .bind(&enc)
-                        .bind(&account_id)
-                        .execute(pool)
-                        .await {
-                            eprintln!("[SyncInit] Failed to migrate plaintext subaccount to encrypted: {}", e);
-                        }
                         return stored_str;
                     }
                 } else {
-                    println!("[SyncInit] Encryption key unavailable; using stored subaccount as-is (account_id={})", account_id);
                     return stored_str;
                 }
             },
@@ -275,30 +283,12 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 // Create a new subaccount (sr25519) and store it encrypted
                 let (_pair, phrase, _seed) = sr25519::Pair::generate_with_phrase(None);
                 let public = sr25519::Pair::from_phrase(&phrase, None).map(|(p, _)| p.public()).ok();
-                if let Some(pubkey) = public {
-                    let ss58 = pubkey.to_ss58check();
-                    println!("[SyncInit] Created new subaccount for account_id={} ss58={}", account_id, ss58);
-                } else {
-                    println!("[SyncInit] Created new subaccount for account_id={} (public key derivation failed)", account_id);
-                }
-
-                // Ensure only one record per main account: delete existing then insert
-                if let Err(e) = sqlx::query("DELETE FROM sub_accounts WHERE account_id = ?")
-                    .bind(&account_id)
-                    .execute(pool)
-                    .await {
-                    eprintln!("[SyncInit] Failed to clear existing sub_account for {}: {}", account_id, e);
-                }
-
                 let to_store = if let Some(key) = &maybe_key {
                     let enc = encrypt_phrase(&phrase, key);
-                    println!("[SyncInit] Storing new subaccount seed encrypted for account_id={}", account_id);
                     enc
                 } else {
-                    println!("[SyncInit] Encryption key unavailable; storing new subaccount seed in plaintext (account_id={})", account_id);
                     phrase.clone()
                 };
-
                 if let Err(e) = sqlx::query(
                     "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase) VALUES (?, ?)"
                 )
@@ -360,55 +350,4 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
         println!("[SyncInit] DB pool unavailable; falling back to provided mnemonic for account_id={}", account_id);
         return mnemonic.clone();
     }
-}
-
-
-#[tauri::command]
-pub async fn start_s3_inventory_cron(
-    _app_handle: tauri::AppHandle,
-    account_id: String,
-    interval_secs: Option<u64>,
-) -> Result<(), String> {
-    let interval = interval_secs.unwrap_or(60); // default 1 minute
-
-    // Clone DB pool for use inside spawned task
-    let pool = match crate::DB_POOL.get() {
-        Some(p) => p.clone(),
-        None => return Err("DB pool unavailable; cannot start S3 inventory cron".to_string()),
-    };
-
-    let account = account_id.clone();
-
-    // Spawn a background task
-    tauri::async_runtime::spawn(async move {
-        loop {
-            // Public
-            match list_bucket_contents(account.clone(), "public".to_string()).await {
-                Ok(items) => {
-                    if let Err(e) = store_bucket_listing_in_db(&pool, &account, "public", &items).await {
-                        eprintln!("[S3InventoryCron] Failed storing public listing: {}", e);
-                    } else {
-                        println!("[S3InventoryCron] Stored {} public items for {}", items.len(), account);
-                    }
-                }
-                Err(e) => eprintln!("[S3InventoryCron] Public list failed: {}", e),
-            }
-
-            // Private
-            match list_bucket_contents(account.clone(), "private".to_string()).await {
-                Ok(items) => {
-                    if let Err(e) = store_bucket_listing_in_db(&pool, &account, "private", &items).await {
-                        eprintln!("[S3InventoryCron] Failed storing private listing: {}", e);
-                    } else {
-                        println!("[S3InventoryCron] Stored {} private items for {}", items.len(), account);
-                    }
-                }
-                Err(e) => eprintln!("[S3InventoryCron] Private list failed: {}", e),
-            }
-
-            tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-        }
-    });
-
-    Ok(())
 }
