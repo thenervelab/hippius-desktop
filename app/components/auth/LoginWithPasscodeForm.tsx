@@ -120,7 +120,7 @@ const LoginWithPassCodeForm = () => {
                   <div className="ml-2">
                     <label
                       htmlFor="keepMeLoggedIn"
-                      className="text-[15px] font-medium text-grey-20 leading-[22px]"
+                      className="text-[15px] font-medium text-grey-70 leading-[22px]"
                     >
                       Keep me logged in
                     </label>
