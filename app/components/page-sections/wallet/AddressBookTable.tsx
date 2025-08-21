@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   createColumnHelper,
   getCoreRowModel,
@@ -13,7 +13,8 @@ import {
   Th,
   THead,
   TBody,
-  CopyableCell
+  CopyableCell,
+  Pagination
 } from "@/components/ui/alt-table";
 import { Button } from "@/components/ui/button";
 import { Edit, MoreVertical, Trash } from "lucide-react";
@@ -38,6 +39,7 @@ interface AddressBookTableProps {
 }
 
 const columnHelper = createColumnHelper<Contact>();
+const ITEMS_PER_PAGE = 10;
 
 const AddressBookTable: React.FC<AddressBookTableProps> = ({
   contacts,
@@ -46,6 +48,18 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const totalPages = useMemo(
+    () => Math.ceil((contacts?.length || 0) / ITEMS_PER_PAGE),
+    [contacts?.length]
+  );
+
+  const paginatedData = useMemo(() => {
+    if (!contacts || contacts.length === 0) return [];
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return contacts.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [contacts, currentPage]);
 
   const handleEdit = (contact: Contact) => {
     setSelectedContact(contact);
@@ -92,7 +106,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
         }
       ];
     },
-    [handleCopy, handleDelete, handleEdit]
+    []
   );
 
   const columns = [
@@ -151,7 +165,7 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
 
   const table = useReactTable({
     columns,
-    data: contacts,
+    data: paginatedData,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel()
   });
@@ -199,6 +213,16 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
           </div>
         )}
       </TableWrapper>
+
+      {totalPages > 1 && (
+        <div className="my-4">
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setPage={setCurrentPage}
+          />
+        </div>
+      )}
 
       {selectedContact && (
         <EditAddressDialog

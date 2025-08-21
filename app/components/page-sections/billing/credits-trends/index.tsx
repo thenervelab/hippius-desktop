@@ -1,4 +1,3 @@
-// BalanceTrends.tsx
 import { useMemo, useState } from "react";
 import {
   Icons,
@@ -18,7 +17,7 @@ import {
   getQuarterDateLabels,
   MONTHS,
 } from "@/app/lib/utils/getXlablesForAccounts";
-import BalanceTrendsTooltip from "./BalanceTrendsTooltip";
+import BalanceTrendsTooltip from "./CreditsTrendsTooltip";
 import { COLORS } from "./constants";
 import { WalletAdd } from "@/app/components/ui/icons";
 
@@ -28,7 +27,7 @@ const timeRangeOptions: Option[] = [
   { value: "year", label: "This Year" },
 ];
 
-const BalanceTrends: React.FC<{
+const CreditsTrends: React.FC<{
   chartData?: Account[];
   isLoading?: boolean;
   className?: string;
@@ -58,9 +57,9 @@ const BalanceTrends: React.FC<{
 
   const yTicks = useMemo(() => {
     if (!formattedChartData.length) return [0, 1];
-    // Only consider balance values for the y-axis scale
-    const balanceValues = formattedChartData.map((d) => d.balance);
-    const mx = Math.max(...balanceValues, 0);
+    // Only consider credit values for the y-axis scale
+    const creditValues = formattedChartData.map((d) => d.credit);
+    const mx = Math.max(...creditValues, 0);
     return getNiceTicksAlways(0, mx, 5);
   }, [formattedChartData]);
 
@@ -118,7 +117,7 @@ const BalanceTrends: React.FC<{
                 <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
               </AbstractIconWrapper>
               <span className="text-base font-medium  text-grey-60">
-                Balance Overview
+                Credits Overview
               </span>
             </div>
 
@@ -129,6 +128,14 @@ const BalanceTrends: React.FC<{
             />
           </div>
           <div className="border border-grey-80 rounded-lg h-[225px] relative">
+            {/* <div className="absolute left-2  z-50">
+              <div className="flex ml-8 mt-2 text-grey-70 font-medium items-center gap-x-3 text-xs">
+                <div className="flex items-center gap-x-2">
+                  <div className="w-6 h-0.5 bg-primary-40" />
+                  Credits
+                </div>
+              </div>
+            </div> */}
 
             <div className="relative w-full h-full flex">
               {isLoading ? (
@@ -139,7 +146,7 @@ const BalanceTrends: React.FC<{
                 <div className="flex flex-col items-center justify-center w-full h-full font-medium">
                   <Icons.Search className="size-8 text-primary-60" />
                   <span className="mt-4 text-center text-grey-40">
-                    No Balance Data Available
+                    No Credits Data Available
                   </span>
                 </div>
               ) : (
@@ -187,11 +194,11 @@ const BalanceTrends: React.FC<{
                     }}
                     plots={[
                       {
-                        dataKey: "balance",
+                        dataKey: "credit",
                         xAccessor: (d: ChartPoint) => d.bandLabel ?? d.x,
-                        yAccessor: (d: ChartPoint) => d.balance,
-                        lineColor: COLORS.balance,
-                      },
+                        yAccessor: (d: ChartPoint) => d.credit,
+                        lineColor: COLORS.credit,
+                      }
                     ]}
                     renderTooltip={(td) => (
                       <BalanceTrendsTooltip tooltipData={td} />
@@ -207,4 +214,4 @@ const BalanceTrends: React.FC<{
   );
 };
 
-export default BalanceTrends;
+export default CreditsTrends;

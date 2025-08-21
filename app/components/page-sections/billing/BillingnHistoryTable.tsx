@@ -14,17 +14,13 @@ import {
   Th,
   THead,
   TBody,
-  CopyableCell,
   Pagination
 } from "@/components/ui/alt-table";
 import { Loader2 } from "lucide-react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { Dollar } from "@/components/ui/icons";
-import useBalanceTransactions, {
-  TransactionObject
-} from "@/app/lib/hooks/api/useBalanceTransactions";
+import useBillingTransactions, { TransactionObject } from "@/app/lib/hooks/api/useBillingTransactions";
 import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export const formatDate = (
   date: Date,
@@ -59,9 +55,8 @@ export const formatDate = (
 const columnHelper = createColumnHelper<TransactionObject>();
 const ITEMS_PER_PAGE = 10;
 
-const TransactionHistoryTable: React.FC = () => {
-  const { data: transactions, isPending } = useBalanceTransactions();
-  const { polkadotAddress } = useWalletAuth();
+const BillingHistoryTable: React.FC = () => {
+  const { data: transactions, isPending, error } = useBillingTransactions();
   const [currentPage, setCurrentPage] = useState(1);
 
   const totalPages = useMemo(
@@ -77,11 +72,20 @@ const TransactionHistoryTable: React.FC = () => {
 
   const baseColumns = useMemo(
     () => [
-      columnHelper.accessor("block", {
-        id: "block",
-        header: "BLOCK",
+      columnHelper.accessor("id", {
+        id: "id",
+        header: "ID",
         cell: (d) => d.getValue(),
         enableSorting: true
+      }),
+      columnHelper.accessor("transaction_type", {
+        id: "transaction_type",
+        header: "TYPE",
+        cell: (info) => (
+          <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
+            {info.getValue()}
+          </span>
+        ),
       }),
       columnHelper.accessor("amount", {
         id: "amount",
@@ -89,65 +93,14 @@ const TransactionHistoryTable: React.FC = () => {
         cell: (d) => `$ ${formatBalance(d.getValue(), 6)}`,
         enableSorting: true
       }),
-      columnHelper.accessor("from", {
-        id: "from",
-        header: "FROM",
-        cell: (info) => (
-          <CopyableCell
-            copyAbleText={info.getValue()}
-            title="Copy Account"
-            toastMessage="Account Copied Successfully!"
-            isTable={true}
-          />
-        ),
-        meta: {
-          cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]"
-        }
-      }),
-
-      columnHelper.accessor("to", {
-        id: "to",
-        header: "TO",
-        cell: (info) => (
-          <CopyableCell
-            copyAbleText={info.getValue()}
-            title="Copy Account"
-            toastMessage="Account Copied Successfully!"
-            isTable={true}
-          />
-        ),
-        meta: {
-          cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]"
-        }
-      }),
-
-      columnHelper.accessor(
-        (row) => {
-          if (row.from === polkadotAddress) {
-            return "Sent";
-          } else if (row.to === polkadotAddress) {
-            return "Received";
-          }
-          return "-";
-        },
-        {
-          id: "transactionType",
-          header: "TRANSACTION TYPE",
-          cell: (info) => (
-            <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
-              {info.getValue()}
-            </span>
-          )
-        }
-      ),
-      columnHelper.accessor("date", {
+      columnHelper.accessor("transaction_date", {
         id: "date",
         header: "TRANSACTION DATE",
         cell: (d) => formatDate(new Date(d.getValue())),
         enableSorting: true
       })
     ],
-    [polkadotAddress] // Add polkadotAddress as dependency
+    []
   );
 
   const columns = baseColumns;
@@ -189,14 +142,14 @@ const TransactionHistoryTable: React.FC = () => {
           </div>
         )}
 
-        {transactions && !transactions.length && (
+        {((transactions && !transactions.length) || error) && (
           <div className="w-full h-[350px] flex items-center justify-center p-6">
             <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
               <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
                 <Dollar className="absolute size-6" />
               </AbstractIconWrapper>
               <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
-                You have not received any transactions yet
+                You do not have any billing history yet
               </span>
             </div>
           </div>
@@ -216,4 +169,4 @@ const TransactionHistoryTable: React.FC = () => {
   );
 };
 
-export default TransactionHistoryTable;
+export default BillingHistoryTable;

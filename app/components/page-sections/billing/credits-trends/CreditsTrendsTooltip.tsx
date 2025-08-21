@@ -1,10 +1,9 @@
-// BalanceTrendsTooltip.tsx
 import { TooltipData } from "@visx/xychart";
 import { ChartPoint } from "@/app/lib/utils/getFormatDataForAccountsChart";
 
 const numberFmt = (val: number) => val.toFixed(10) || "0.00";
 
-const BalanceTrendsTooltip: React.FC<{
+const CreditsTrendsTooltip: React.FC<{
   tooltipData?: TooltipData<ChartPoint>;
 }> = ({ tooltipData }) => {
   if (!tooltipData?.nearestDatum) return null;
@@ -28,16 +27,16 @@ const BalanceTrendsTooltip: React.FC<{
         {dateDisplay}
       </p>
 
-      {/* balance row */}
+      {/* credit row */}
       <div className="flex items-center">
         <span className="inline-block w-2 h-2 rounded-full mr-1.5 bg-primary-40" />
         <div className="font-medium text-[10px] text-grey-10">
-          <span className="mr-1">Balance:</span>
-          <span>{numberFmt(datum.balance)}</span>
+          <span className="mr-1">Credits:</span>
+          <span>{numberFmt(datum.credit)}</span>
         </div>
       </div>
     </div>
   );
 };
 
-export default BalanceTrendsTooltip;
+export default CreditsTrendsTooltip;

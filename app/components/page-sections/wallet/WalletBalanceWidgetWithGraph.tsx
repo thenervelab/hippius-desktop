@@ -1,19 +1,21 @@
 "use client";
 
-import { FC, useMemo } from "react";
+import { FC, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { AddCircle, Refresh, WalletAdd } from "@/components/ui/icons";
+import { Refresh, WalletAdd } from "@/components/ui/icons";
 import * as Typography from "@/components/ui/typography";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
-import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import Warning from "@/components/ui/icons/Warning";
-import TimeAgo from "react-timeago";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import BalanceTrends from "./balance-trends";
-import useCredits from "@/app/lib/hooks/api/useCredits";
 import useBalance from "@/app/lib/hooks/api/useBalance";
 import { Account } from "@/app/lib/types";
-import { openLinkByKey } from "@/app/lib/utils/links";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { toast } from "sonner";
+import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
+import SendBalanceDialog, { TRANSACTION_FEE } from "./SendBalanceDialog";
+import ReceiveBalanceDialog from "./ReceiveBalanceDialog";
+
 
 interface WalletBalanceWidgetWithGraphProps {
   className?: string;
@@ -22,32 +24,19 @@ interface WalletBalanceWidgetWithGraphProps {
 const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
   className,
 }) => {
-  const {
-    data: credits,
-    isLoading,
-    error,
-    refetch,
-    dataUpdatedAt,
-  } = useUserCredits();
+  const { data: balanceInfo, isLoading, error, refetch } = useHippiusBalance();
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
+  const { mnemonic, polkadotAddress } = useWalletAuth();
 
-  // Use the new hooks for credits and balance
-  const { data: creditsData, isLoading: isCreditsLoading } = useCredits();
-
+  // Use the balance data for chart
   const { data: balanceData, isLoading: isBalanceLoading } = useBalance();
 
-  // Combine the data into a format that the chart expects
+  // Prepare data for the chart - only using balance data
   const chartData = useMemo(() => {
-    if (!creditsData?.length && !balanceData) return [];
+    if (!balanceData) return [];
 
-    // Create arrays of data points for each type
-    const creditPoints =
-      creditsData?.map((credit) => ({
-        timestamp: credit.date,
-        date: new Date(credit.date),
-        type: "credit",
-        value: credit.amount,
-      })) || [];
-
+    // Create balance data points
     const balancePoints = balanceData
       ? [
         {
@@ -59,78 +48,93 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
       ]
       : [];
 
-    // Combine and sort all data points chronologically
-    const allPoints = [...creditPoints, ...balancePoints].sort(
-      (a, b) => a.date.getTime() - b.date.getTime()
-    );
-
-    // Process the data points with carry-forward logic
+    // Process the data points
     const result: Account[] = [];
-    let currentBalance = "0";
-    let currentCredit = "0";
 
-    allPoints.forEach((point) => {
-      // Update the respective current value
-      if (point.type === "credit") {
-        currentCredit = point.value;
-      } else {
-        currentBalance = point.value;
-      }
-
-      // Add the data point with both current values
+    balancePoints.forEach((point) => {
+      // Add the data point with current balance value
       result.push({
         processed_timestamp: point.timestamp,
-        credit: currentCredit,
-        total_balance: currentBalance,
+        credit: "0", // We're not using credit data
+        total_balance: point.value,
       });
     });
 
     return result;
-  }, [creditsData, balanceData]);
+  }, [balanceData]);
 
-  const isChartDataLoading = isCreditsLoading || isBalanceLoading;
+  const isChartDataLoading = isBalanceLoading;
 
-  const handleOpenConsoleBillingPage = () => openLinkByKey("BILLING");
-  const handleOpenConsoleCreditsPage = () => openLinkByKey("CREDITS");
+  const handleSendBalance = () => {
+    // Check if balance is available
+    if (!balanceInfo?.data?.free) {
+      toast.error("Balance information not available. Please try again later.");
+      return;
+    }
+
+    const currentBalance = +formatCreditBalance(balanceInfo.data.free);
+
+    // Check if balance is zero
+    if (currentBalance <= 0) {
+      toast.error(
+        "Your balance is zero. Please add funds to your account first."
+      );
+      return;
+    }
+
+    // Check if balance is too low to cover transaction fee
+    if (currentBalance <= parseFloat(TRANSACTION_FEE)) {
+      toast.error(
+        `Your balance (${currentBalance} hALPHA) is too low to cover the transaction fee (${TRANSACTION_FEE} hALPHA). Please add funds to your account first.`
+      );
+      return;
+    }
+
+    setSendDialogOpen(true);
+  };
+
+  const handleReceiveBalance = () => {
+    setReceiveDialogOpen(true);
+  };
 
   return (
-    <div className="w-full  relative ">
+    <div className="w-full relative">
       <div
         className={cn(
-          " relative gap-4 overflow-hidden   h-[310px] grid grid-cols-[auto_minmax(0,1fr)]",
+          "relative gap-4 overflow-hidden h-[310px] grid grid-cols-[auto_minmax(0,1fr)]",
           className
         )}
       >
-        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between relative min-w-[298px] max-w-[300px] ">
+        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between relative min-w-[298px] max-w-[300px]">
           <div className="flex flex-col w-full items-start">
             <div className="flex gap-4 items-center">
               <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
                 <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
               </AbstractIconWrapper>
-              <span className="text-base font-medium  text-grey-60">
-                Total Credits
+              <span className="text-base font-medium text-grey-60">
+                Native Balance
               </span>
             </div>
-            <div className="flex justify-between  items-end mt-4 w-full">
-              <div className="flex flex-col  ">
-                <div className="text-2xl   font-medium text-grey-10">
-                  {credits !== undefined
-                    ? `${formatCreditBalance(credits)}`
+            <div className="flex justify-between items-end mt-4 w-full">
+              <div className="flex flex-col">
+                <div className="text-2xl font-medium text-grey-10">
+                  {balanceInfo !== undefined
+                    ? `${formatCreditBalance(balanceInfo.data.free)}`
                     : error
                       ? "ERROR"
                       : "- - - -"}
                   <span className="text-xs font-medium -translate-y-1 ml-1">
-                    Credits
+                    hALPHA
                   </span>
                 </div>
-                <div className="flex items-center  gap-x-2 mt-2">
+                <div className="flex items-center gap-x-2 mt-2">
                   {isLoading ? (
                     <Typography.P size="xs">Loading...</Typography.P>
-                  ) : error ? (
+                  ) : error && (
                     <>
                       <Warning className="size-4" />
                       <Typography.P size="xs" className="text-error-80">
-                        Credits not retrieved.
+                        Account balance not retrieved.
                       </Typography.P>
                       <button
                         className="size-4"
@@ -141,25 +145,6 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
                         <Refresh />
                       </button>
                     </>
-                  ) : (
-                    <>
-                      <button
-                        className="size-4 hover:-rotate-45 duration-300 hover:text-primary-50"
-                        onClick={() => {
-                          refetch();
-                        }}
-                      >
-                        <Refresh />
-                      </button>
-                      <Typography.P
-                        style={{
-                          fontSize: "12px",
-                        }}
-                        className="text-grey-60"
-                      >
-                        Last updated <TimeAgo date={dataUpdatedAt} />
-                      </Typography.P>
-                    </>
                   )}
                 </div>
               </div>
@@ -169,26 +154,42 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
             <CardButton
               className="w-full mt-4 h-[50px]"
               variant="secondary"
-              onClick={handleOpenConsoleCreditsPage}
+              onClick={handleSendBalance}
             >
               <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
-                <AddCircle className="size-4" />
-                Add Credits
+                <Icons.ArrowRight className="size-4 -rotate-90" />
+                Send Balance
               </div>
             </CardButton>
             <CardButton
               className="w-full mt-3 h-[50px]"
-              onClick={handleOpenConsoleBillingPage}
+              onClick={handleReceiveBalance}
             >
-              <div className="flex items-center gap-2 ">
-                <Icons.Tag2 className="size-4" />
+              <div className="flex items-center gap-2">
+                <Icons.ArrowRight className="size-4 rotate-90" />
                 <span className="flex items-center text-lg font-medium">
-                  Manage Subscription
+                  Receive Balance
                 </span>
               </div>
             </CardButton>
           </div>
         </div>
+        {/* Send Balance Dialog */}
+        <SendBalanceDialog
+          open={sendDialogOpen}
+          onClose={() => setSendDialogOpen(false)}
+          availableBalance={+formatCreditBalance(balanceInfo?.data?.free ?? null)}
+          mnemonic={mnemonic || ""}
+          refetchBalance={refetch}
+          polkadotAddress={polkadotAddress || ""}
+        />
+
+        {/* Receive Balance Dialog */}
+        <ReceiveBalanceDialog
+          open={receiveDialogOpen}
+          onClose={() => setReceiveDialogOpen(false)}
+          polkadotAddress={polkadotAddress || ""}
+        />
         <BalanceTrends
           className="min-w-0"
           chartData={chartData}
