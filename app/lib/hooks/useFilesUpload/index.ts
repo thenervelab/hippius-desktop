@@ -33,8 +33,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
   async function upload(
     filePaths: string[],
-    isPrivateView: boolean,
-    encryptionKey?: string
+    isPrivateView: boolean
   ) {
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
@@ -65,8 +64,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           cid = await invoke<string>("encrypt_and_upload_file", {
             accountId: polkadotAddress,
             filePath: filePath,
-            seedPhrase: mnemonic,
-            encryptionKey: encryptionKey || null
+            seedPhrase: mnemonic
           });
         } else {
           cid = await invoke<string>("upload_file_public", {

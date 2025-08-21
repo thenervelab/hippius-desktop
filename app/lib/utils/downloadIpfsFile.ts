@@ -31,8 +31,7 @@ const ensureWalletConnected = (polkadotAddress: string | undefined | null) => {
 export const downloadIpfsFile = async (
   file: FormattedUserIpfsFile,
   polkadotAddress: string,
-  isPrivateView: boolean,
-  encryptionKey?: string | null
+  isPrivateView: boolean
 ) => {
   if (file.isFolder) {
     console.log("isFolder", file)
@@ -40,8 +39,7 @@ export const downloadIpfsFile = async (
       folderCid: file.cid,
       folderName: file.name,
       polkadotAddress,
-      isPrivate: isPrivateView,
-      encryptionKey,
+      isPrivate: isPrivateView
     });
 
     if (result && !result.success) {
@@ -51,11 +49,9 @@ export const downloadIpfsFile = async (
     }
     return;
   } else if (isPrivateView) {
-    console.log("downloadEncryptedIpfsFile", downloadEncryptedIpfsFile)
     return downloadEncryptedIpfsFile(
       file,
-      polkadotAddress ?? "",
-      encryptionKey
+      polkadotAddress ?? ""
     );
   } else {
     return downloadRegularIpfsFile(file);
@@ -96,33 +92,13 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
 
 const downloadEncryptedIpfsFile = async (
   file: FormattedUserIpfsFile,
-  polkadotAddress: string,
-  encryptionKey?: string | null
+  polkadotAddress: string
 ) => {
   const { name, cid } = file;
   const toastId = toast.loading(`Preparing download: ${name}`);
 
   try {
     ensureWalletConnected(polkadotAddress);
-
-    if (encryptionKey) {
-      const savedKeys = await invoke<Array<{ id: number; key: string }>>(
-        "get_encryption_keys"
-      );
-
-      // Check if the base64 key exists exactly (compare base64 strings)
-      const keyExists = savedKeys.some((k) => k.key === encryptionKey);
-
-      if (!keyExists) {
-        toast.dismiss(toastId);
-        return {
-          success: false,
-          error: "INVALID_KEY",
-          message:
-            "Incorrect encryption key. Please try again with a correct one."
-        };
-      }
-    }
 
     const savePath = await getFileSavePath(name);
 
@@ -136,8 +112,7 @@ const downloadEncryptedIpfsFile = async (
     await invoke("download_and_decrypt_file", {
       accountId: polkadotAddress,
       metadataCid: cid,
-      outputFile: savePath,
-      encryptionKey: encryptionKey
+      outputFile: savePath
     });
 
     toast.success(`Download complete: ${name}`, {
@@ -147,31 +122,6 @@ const downloadEncryptedIpfsFile = async (
   } catch (err) {
     toast.dismiss(toastId);
     const errorMsg = String(err);
-
-    if (
-      errorMsg.includes("Hash mismatch") ||
-      errorMsg.includes("invalid") ||
-      errorMsg.includes("encryptionKey") ||
-      errorMsg.includes("Invalid")
-    ) {
-      return {
-        success: false,
-        error: "INVALID_KEY",
-        message: "Incorrect encryption key. Please try again."
-      };
-    }
-
-    if (errorMsg.includes("Decryption")) {
-      const error =
-        "Decryption failed. Please enter the correct encryption key.";
-
-      return {
-        success: false,
-        error: "INVALID_KEY",
-        message: error
-      };
-    }
-
     console.error("Encrypted download failed:", err);
     toast.error(
       `Download failed: ${err instanceof Error ? err.message : "Unknown error"

@@ -22,7 +22,6 @@ import { SearchInput } from "@/components/ui";
 import FilterChips from "@/components/page-sections/files/ipfs/filter-chips";
 import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
-import EncryptionKeyDialog from "@/components/page-sections/files/ipfs/EncryptionKeyDialog";
 import { downloadIpfsFolder } from "@/lib/utils/downloadIpfsFolder";
 import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFileToFolderButton";
 import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userPreferencesDb";
@@ -63,10 +62,6 @@ export default function FolderView({
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [viewMode, setViewMode] = useState<"list" | "card">("list");
     const [isDownloading, setIsDownloading] = useState(false);
-    const [isEncryptionDialogOpen, setIsEncryptionDialogOpen] = useState(false);
-    const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(
-        null
-    );
     const isPrivateFolder = activeSubMenuItem === "Private";
     const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
     const addFolderButtonRef = useRef<object>({});
@@ -88,8 +83,6 @@ export default function FolderView({
             fileSize: selectedFileSize
         });
     }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
-
-    // console.log("mainFolderActualName", mainFolderActualName);
 
     useEffect(() => {
         const newActiveFilters = generateActiveFilters(
@@ -194,60 +187,7 @@ export default function FolderView({
         if (!folderCid) return;
 
         try {
-            // For private folders, show encryption dialog first
-            if (isPrivateFolder) {
-                setEncryptionKeyError(null);
-                setIsEncryptionDialogOpen(true);
-            } else {
-                // For public folders, directly ask for output directory
-                const outputDir = await open({
-                    directory: true,
-                    multiple: false
-                }) as string | null;
-
-                if (!outputDir) {
-                    return; // User canceled directory selection
-                }
-
-                // Download public folder directly
-                await downloadFolder(outputDir, null);
-            }
-        } catch (error) {
-            console.error("Error initiating folder download:", error);
-            toast.error(
-                `Failed to initiate download: ${error instanceof Error ? error.message : String(error)}`
-            );
-        }
-    };
-
-    const handleEncryptedDownload = async (encryptionKey: string | null) => {
-        // Validate encryption key if provided
-        if (encryptionKey) {
-            try {
-                const savedKeys = await invoke<Array<{ id: number; key: string }>>(
-                    "get_encryption_keys"
-                );
-
-                const keyExists = savedKeys.some((k) => k.key === encryptionKey);
-
-                if (!keyExists) {
-                    setEncryptionKeyError(
-                        "Incorrect encryption key. Please try again with a correct one."
-                    );
-                    return;
-                }
-            } catch (error) {
-                console.error("Error validating encryption key:", error);
-                toast.error("Failed to validate encryption key");
-                return;
-            }
-        }
-
-        setIsEncryptionDialogOpen(false);
-
-
-        // After handling the encryption key, prompt for output directory
-        try {
+            // Ask for output directory
             const outputDir = await open({
                 directory: true,
                 multiple: false
@@ -257,54 +197,30 @@ export default function FolderView({
                 return; // User canceled directory selection
             }
 
-            // Now download with the previously obtained encryption key
-            await downloadFolder(outputDir, encryptionKey);
-        } catch (error) {
-            console.error("Error selecting download location:", error);
-            toast.error(
-                `Failed to select download location: ${error instanceof Error ? error.message : String(error)}`
-            );
-        }
-    };
+            // Download folder
+            setIsDownloading(true);
+            const result = await downloadIpfsFolder({
+                folderCid,
+                folderName,
+                polkadotAddress: polkadotAddress ?? "",
+                isPrivate: isPrivateFolder,
+                outputDir,
+            });
 
-    const downloadFolder = async (
-        outputDir: string,
-        encryptionKey: string | null
-    ) => {
-        if (!folderCid || !outputDir) return;
-
-        setIsDownloading(true);
-        const result = await downloadIpfsFolder({
-            folderCid,
-            folderName,
-            polkadotAddress: polkadotAddress ?? "",
-            isPrivate: isPrivateFolder,
-            encryptionKey,
-            outputDir,
-        });
-
-        if (result && !result.success) {
-            if (
-                result.error === "INVALID_KEY" ||
-                result.error === "INVALID_KEY_FORMAT"
-            ) {
-                setEncryptionKeyError(
-                    result.message || "Incorrect encryption key. Please try again."
+            if (result && !result.success) {
+                toast.error(
+                    `Failed to download folder: ${result.message || "Unknown error"}`
                 );
-                setIsEncryptionDialogOpen(true);
-                setIsDownloading(false);
-                return;
+            } else if (result && result.success) {
+                toast.success(`Folder downloaded successfully to ${outputDir}`);
             }
+        } catch (error) {
+            console.error("Error downloading folder:", error);
             toast.error(
-                `Failed to download folder: ${result.message || "Unknown error"}`
+                `Failed to download folder: ${error instanceof Error ? error.message : String(error)}`
             );
-        }
-
-        setIsDownloading(false);
-
-        // Show success message if download completed
-        if (result && result.success) {
-            toast.success(`Folder downloaded successfully to ${outputDir}`);
+        } finally {
+            setIsDownloading(false);
         }
     };
 
@@ -548,17 +464,7 @@ export default function FolderView({
                     )}
                 </>
             )}
-
-            <EncryptionKeyDialog
-                open={isEncryptionDialogOpen}
-                onClose={() => {
-                    setIsEncryptionDialogOpen(false);
-                    setEncryptionKeyError(null);
-                }}
-                onDownload={handleEncryptedDownload}
-                keyError={encryptionKeyError}
-                isFolder
-            />
         </div>
     );
 }
+
