@@ -38,11 +38,11 @@ function labelFor(value: number) {
 }
 
 export default function SessionTimeoutSettings() {
-  const { mnemonic, setSession } = useWalletAuth(); // to reschedule timer now
+  const { mnemonic, setSession } = useWalletAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [initialMinutes, setInitialMinutes] = useState<number>(1440);
-  const [selected, setSelected] = useState<string>("1440"); // keep Select value as string
+  const [selected, setSelected] = useState<string>("1440");
 
   const hasChanged = useMemo(
     () => Number(selected) !== initialMinutes,
@@ -57,7 +57,6 @@ export default function SessionTimeoutSettings() {
         setInitialMinutes(minutes);
         setSelected(String(minutes));
       } catch {
-        // if no session yet, default to 24h
         setInitialMinutes(1440);
         setSelected("1440");
       } finally {
@@ -71,7 +70,6 @@ export default function SessionTimeoutSettings() {
       setSaving(true);
       const minutes = Number(selected);
 
-      // Persist to DB
       const ok = await updateSessionTimeout(minutes);
       if (!ok) throw new Error("Failed to update");
       if (mnemonic) {
@@ -95,11 +93,9 @@ export default function SessionTimeoutSettings() {
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className={
-            "flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
-          }
+          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
         >
-          <div className="w-full flex flex-col ">
+          <div className="w-full flex flex-col">
             <div className="w-full">
               <RevealTextLine
                 rotate
@@ -130,28 +126,36 @@ export default function SessionTimeoutSettings() {
                 Duration
               </Label>
 
-              <div className="mt-1 w-full ">
+              <div className="mt-1 w-full">
                 <Select
                   disabled={loading}
                   value={selected}
                   onValueChange={(v) => setSelected(v)}
                 >
+                  {/* NOTE: Using `group` to target open state for child icon */}
                   <SelectTrigger
-                    className="
-                      w-full flex items-center justify-between relative
+                    className="group w-full flex items-center justify-between relative
                       bg-grey-100 border border-grey-80 rounded-[8px]
                       px-4 py-3 text-base font-medium text-grey-60
-                      h-[56px] focus:outline-none focus:border-grey-80
-                    "
+                      h-[56px] outline-none focus:outline-none focus-visible:outline-none
+                      ring-0 focus:ring-0 focus-visible:ring-0 shadow-none focus:shadow-none focus-visible:shadow-none focus-visible:border-grey-70 data-[state=open]:border-grey-70"
                   >
                     <SelectValue placeholder="Select duration" />
-                    <Icons.ChevronDown className="absolute size-5 right-4 top-1/2 -translate-y-1/2 text-grey-60 pointer-events-none" />
+                    {/* Chevron starts UP (rotate-180), rotates DOWN when open */}
+                    <Icons.ChevronDown
+                      className="
+                        absolute size-5 right-4 top-1/2 -translate-y-1/2
+                        text-grey-60 pointer-events-none
+                        transition-transform duration-200 ease-out
+                        rotate-180 group-data-[state=open]:rotate-0
+                      "
+                    />
                   </SelectTrigger>
 
                   <SelectContent
                     className="
                       mt-1 bg-grey-100 border border-grey-80 rounded-[8px]
-                      shadow-lg  overflow-auto z-50 p-0
+                      shadow-lg overflow-auto z-50 p-0
                     "
                   >
                     <SelectScrollUpButton />
@@ -164,8 +168,10 @@ export default function SessionTimeoutSettings() {
                             className="
                               relative flex items-center px-4 py-3
                               text-base font-medium text-grey-60 cursor-pointer
+                              outline-none
                               data-[highlighted]:bg-grey-90 data-[highlighted]:rounded
-                              data-[selected]:bg-grey-90 data-[selected]:rounded
+                              data-[state=checked]:bg-grey-90 data-[state=checked]:rounded
+                              focus-visible:bg-grey-90
                             "
                           >
                             <SelectPrimitive.ItemText>
