@@ -29,9 +29,11 @@ import FilesContent from "./FilesContent";
 import { useAtomValue } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userPreferencesDb";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { api } = usePolkadotApi();
+  const { polkadotAddress, mnemonic } = useWalletAuth();
   const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
   const isPrivateView = activeSubMenuItem === "Private";
 
@@ -301,13 +303,13 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             toast.error("Private sync folder cannot be the same as public sync folder");
             return;
           }
-          await setPrivateSyncPath(path);
+          await setPrivateSyncPath(path, polkadotAddress, mnemonic);
         } else {
           if (path === selectedPrivateFolderPath) {
             toast.error("Public sync folder cannot be the same as private sync folder");
             return;
           }
-          await setPublicSyncPath(path);
+          await setPublicSyncPath(path, polkadotAddress, mnemonic);
         }
         toast.success(
           `${isPrivateView ? "Private" : "Public"} sync folder set successfully`

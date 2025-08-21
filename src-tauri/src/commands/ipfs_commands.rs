@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use tauri::{AppHandle, Manager};
 use crate::events::AppEvent;
 use tauri::Emitter;
+use tokio::process::Command;
 
 // Helper function to format file sizes
 fn format_file_size(size_bytes: usize) -> String {
@@ -104,7 +105,6 @@ pub async fn encrypt_and_upload_file(
     Ok(file_name)
 }
 
-
 #[tauri::command]
 pub async fn download_and_decrypt_file(
     _account_id: String,
@@ -114,6 +114,64 @@ pub async fn download_and_decrypt_file(
 ) -> Result<(), String> {
     println!("[download_and_decrypt_file] Downloading file with CID: {} to: {}", metadata_cid, output_file);
     let api_url = "http://127.0.0.1:5001".to_string(); // Convert to owned String
+
+    // Special handling when the 'CID' indicates S3 source
+    if metadata_cid == "s3" {
+        // Extract filename from the output path
+        let file_name = std::path::Path::new(&output_file)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Failed to extract file name from output path")?
+            .to_string();
+
+        // Lookup source from user_profiles
+        let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT source FROM user_profiles WHERE file_name = ? ORDER BY id DESC LIMIT 1",
+        )
+        .bind(&file_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error while fetching source: {}", e))?;
+
+        let source = match row {
+            Some((src,)) => src,
+            None => return Err(format!("No source found in DB for file '{}'", file_name)),
+        };
+
+        // If source exists locally, copy; otherwise pull from S3 using aws cli
+        if std::path::Path::new(&source).exists() {
+            std::fs::copy(&source, &output_file)
+                .map_err(|e| format!("Failed to copy from '{}' to '{}': {}", source, output_file, e))?;
+            println!("[download_and_decrypt_file] Copied locally from '{}' to '{}'", source, output_file);
+            return Ok(());
+        } else {
+            // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
+            let status = Command::new("aws")
+                .arg("s3")
+                .arg("cp")
+                .arg(&source)
+                .arg(&output_file)
+                .arg("--endpoint-url")
+                .arg("https://s3.hippius.com")
+                .status()
+                .await
+                .map_err(|e| format!("Failed to spawn aws s3 cp: {}", e))?;
+
+            if !status.success() {
+                return Err(format!(
+                    "aws s3 cp failed for source '{}' to '{}' with status {:?}",
+                    source, output_file, status.code()
+                ));
+            }
+
+            println!(
+                "[download_and_decrypt_file] Downloaded from S3 '{}' to '{}' via aws cli",
+                source, output_file
+            );
+            return Ok(());
+        }
+    }
 
     let final_encryption_key = if let Some(key_b64) = encryption_key {
         let decoded_key = general_purpose::STANDARD.decode(&key_b64)
@@ -461,6 +519,81 @@ pub async fn download_and_decrypt_folder(
     Ok(())
 }
 
+async fn reconstruct_and_decrypt_single_file(
+    metadata_bytes: Vec<u8>,
+    output_path: PathBuf,
+    api_url: Arc<String>,
+    encryption_key: Option<Arc<Vec<u8>>>,
+) -> Result<(), String> {
+    let metadata: Metadata = serde_json::from_slice(&metadata_bytes)
+        .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
+
+    if metadata.chunks.is_empty() {
+        return Err(format!("Cannot reconstruct file '{}': metadata contains no chunk information.", metadata.original_file.name));
+    }
+
+    let k = metadata.erasure_coding.k;
+    let m = metadata.erasure_coding.m;
+    let chunk_size = metadata.erasure_coding.chunk_size;
+
+    let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
+    for chunk in &metadata.chunks {
+        chunk_map.entry(chunk.original_chunk).or_default().push(chunk);
+    }
+    
+    let mut reconstructed_chunks_data = Vec::with_capacity(chunk_map.len());
+    for orig_idx in 0..chunk_map.len() {
+        let available_shards = chunk_map.get(&orig_idx).ok_or("Missing chunk group in map")?;
+        let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
+        
+        for shard_info in available_shards.iter() {
+            let data = download_from_ipfs_async(&api_url, &shard_info.cid.cid).await.map_err(|e| e.to_string())?;
+            shards[shard_info.share_idx] = Some(data);
+        }
+
+        if shards.iter().filter(|s| s.is_some()).count() < k {
+            return Err(format!("Not enough shards for chunk {}", orig_idx));
+        }
+        
+        let r = ReedSolomon::new(k, m - k).map_err(|e| e.to_string())?;
+        r.reconstruct_data(&mut shards).map_err(|e| format!("Reconstruction failed: {}", e))?;
+        
+        let mut chunk_data = Vec::new();
+        let mut bytes_collected = 0;
+        let is_last_chunk = orig_idx == chunk_map.len() - 1;
+        let chunk_bytes_needed = if !is_last_chunk {
+            chunk_size
+        } else {
+            metadata.erasure_coding.encrypted_size.saturating_sub(chunk_size * orig_idx)
+        };
+
+        for i in 0..k {
+            if let Some(shard) = &shards[i] {
+                let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
+                chunk_data.extend_from_slice(&shard[..bytes_to_take]);
+                bytes_collected += bytes_to_take;
+                if bytes_collected == chunk_bytes_needed {
+                    break;
+                }
+            }
+        }
+        reconstructed_chunks_data.push(chunk_data);
+    }
+
+    let encrypted_data: Vec<u8> = reconstructed_chunks_data.into_iter().flatten().collect();
+    let decrypted_data = decrypt_file(&encrypted_data, encryption_key.map(|k| (*k).clone())).await?;
+    
+    let actual_hash = format!("{:x}", Sha256::digest(&decrypted_data));
+    if actual_hash != metadata.original_file.hash {
+        return Err(format!("Hash mismatch for {}", metadata.original_file.name));
+    }
+
+    tokio::fs::write(&output_path, &decrypted_data).await.map_err(|e| e.to_string())?;
+    println!("[✔] Successfully downloaded and wrote file to {}", output_path.display());
+    Ok(())
+}
+
+
 #[tauri::command]
 pub async fn add_file_to_private_folder(
     account_id: String,
@@ -640,12 +773,15 @@ async fn handle_erasure_coding_and_upload(
     Ok((final_chunk_info, final_chunk_pairs))
 }
 
-async fn reconstruct_and_decrypt_single_file(
-    metadata_bytes: Vec<u8>,
-    output_path: PathBuf,
+#[tauri::command]
+pub async fn download_and_decrypt_single_file(
+    metadata_cid: String,
+    output_file: String,
     api_url: Arc<String>,
     encryption_key: Option<Arc<Vec<u8>>>,
 ) -> Result<(), String> {
+    let metadata_bytes = download_from_ipfs_async(&api_url, &metadata_cid).await
+        .map_err(|e| format!("Failed to download metadata: {}", e))?;
     let metadata: Metadata = serde_json::from_slice(&metadata_bytes)
         .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
 
@@ -709,8 +845,8 @@ async fn reconstruct_and_decrypt_single_file(
         return Err(format!("Hash mismatch for {}", metadata.original_file.name));
     }
 
-    tokio::fs::write(&output_path, &decrypted_data).await.map_err(|e| e.to_string())?;
-    println!("[✔] Successfully downloaded and wrote file to {}", output_path.display());
+    tokio::fs::write(&output_file, &decrypted_data).await.map_err(|e| e.to_string())?;
+    println!("[✔] Successfully downloaded and wrote file to {}", output_file);
     Ok(())
 }
 
@@ -763,7 +899,66 @@ pub async fn download_file_public(
     let api_url = "http://127.0.0.1:5001";
     
     println!("[download_file_public] Downloading file with CID: {} to: {}", file_cid, output_file);
+
+    // Special handling when the 'CID' indicates S3 source
+    if file_cid == "s3" {
+        // Extract filename from the output path
+        let file_name = std::path::Path::new(&output_file)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Failed to extract file name from output path")?
+            .to_string();
+
+        // Lookup source from user_profiles
+        let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT source FROM user_profiles WHERE file_name = ? ORDER BY id DESC LIMIT 1",
+        )
+        .bind(&file_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error while fetching source: {}", e))?;
+
+        let source = match row {
+            Some((src,)) => src,
+            None => return Err(format!("No source found in DB for file '{}'", file_name)),
+        };
+
+        // If source exists locally, copy; otherwise pull from S3 using aws cli
+        if std::path::Path::new(&source).exists() {
+            std::fs::copy(&source, &output_file)
+                .map_err(|e| format!("Failed to copy from '{}' to '{}': {}", source, output_file, e))?;
+            println!("[download_file_public] Copied locally from '{}' to '{}'", source, output_file);
+            return Ok(());
+        } else {
+            // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
+            let status = Command::new("aws")
+                .arg("s3")
+                .arg("cp")
+                .arg(&source)
+                .arg(&output_file)
+                .arg("--endpoint-url")
+                .arg("https://s3.hippius.com")
+                .status()
+                .await
+                .map_err(|e| format!("Failed to spawn aws s3 cp: {}", e))?;
+
+            if !status.success() {
+                return Err(format!(
+                    "aws s3 cp failed for source '{}' to '{}' with status {:?}",
+                    source, output_file, status.code()
+                ));
+            }
+
+            println!(
+                "[download_file_public] Downloaded from S3 '{}' to '{}' via aws cli",
+                source, output_file
+            );
+            return Ok(());
+        }
+    }
     
+    // Default IPFS path for non-S3
     let file_cid_cloned = file_cid.clone();
     let api_url_cloned = api_url.to_string();
     let file_data = tokio::task::spawn_blocking(move || {
@@ -779,295 +974,6 @@ pub async fn download_file_public(
     println!("[download_file_public] Successfully downloaded file to: {}", output_file);
     Ok(())
 }
-
-// #[tauri::command]
-// pub async fn public_upload_with_erasure(
-//     account_id: String,
-//     file_data: Vec<u8>,
-//     file_name: String,
-//     seed_phrase: String,
-// ) -> Result<String, String> {
-//     println!("[public_upload_with_erasure] Processing file: {:?}", file_name);
-//     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
-//     let k = DEFAULT_K;
-//     let m = DEFAULT_M;
-//     let chunk_size = DEFAULT_CHUNK_SIZE;
-
-//     // Check if this file is already recorded in the sync database.
-//     if let Some(pool) = DB_POOL.get() {
-//         let is_synced: Option<(i32,)> = sqlx::query_as(
-//             "SELECT 1 FROM sync_folder_files WHERE owner = ? AND file_name = ? AND type = 'public' LIMIT 1"
-//         )
-//         .bind(&account_id)
-//         .bind(&file_name)
-//         .fetch_optional(pool)
-//         .await
-//         .map_err(|e| format!("DB error while checking sync status: {e}"))?;
-
-//         if is_synced.is_some() {
-//             let message = format!("File '{}' is already in sync DB, skipping upload.", file_name);
-//             println!("[public_upload_with_erasure] {}", message);
-//             return Err(message);
-//         }
-//     }
-
-//     if let Some(pool) = DB_POOL.get() {
-//         let row: Option<(String,)> = sqlx::query_as(
-//             "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
-//         )
-//         .bind(&account_id)
-//         .bind(&file_name)
-//         .fetch_optional(pool)
-//         .await
-//         .map_err(|e| format!("DB error: {e}"))?;
-//         if row.is_some() {
-//             return Err(format!("File '{}' already exists for this user.", file_name));
-//         }
-//     }
-
-//     let file_data_arc = Arc::new(file_data.clone());
-//     let file_name_clone = file_name.clone();
-
-//     let (original_file_hash, file_id, erasure_shards_to_upload) = tokio::task::spawn_blocking(move || {
-//         let mut hasher = Sha256::new();
-//         hasher.update(&*file_data_arc);
-//         let original_file_hash = format!("{:x}", hasher.finalize());
-//         println!("Original file size: {}, hash: {}", file_data_arc.len(), original_file_hash);
-
-//         let chunks: Vec<Vec<u8>> = file_data_arc
-//             .chunks(chunk_size)
-//             .map(|chunk| {
-//                 let mut c = chunk.to_vec();
-//                 if c.len() < chunk_size {
-//                     c.resize(chunk_size, 0);
-//                 }
-//                 c
-//             })
-//             .collect();
-        
-//         let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
-//         let file_id = Uuid::new_v4().to_string();
-//         let mut all_shards: Vec<(String, Vec<u8>, usize, usize)> = Vec::with_capacity(chunks.len() * m);
-
-//         for (orig_idx, chunk) in chunks.iter().enumerate() {
-//             let sub_block_size = (chunk.len() + k - 1) / k;
-//             let sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
-//                 let start = j * sub_block_size;
-//                 let end = std::cmp::min(start + sub_block_size, chunk.len());
-//                 let mut sub_block = chunk[start..end].to_vec();
-//                 if sub_block.len() < sub_block_size { sub_block.resize(sub_block_size, 0); }
-//                 sub_block
-//             }).collect();
-            
-//             let mut shards_data: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
-//             for _ in k..m { shards_data.push(Some(vec![0u8; sub_block_size])); }
-            
-//             let mut shard_refs: Vec<_> = shards_data.iter_mut().map(|x| x.as_mut().unwrap().as_mut_slice()).collect();
-//             r.encode(&mut shard_refs).map_err(|e| format!("ReedSolomon encode error: {e}"))?;
-            
-//             for (share_idx, shard) in shard_refs.iter().enumerate() {
-//                 let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
-//                 all_shards.push((chunk_name, shard.to_vec(), orig_idx, share_idx));
-//             }
-//         }
-        
-//         Ok::<(String, String, Vec<(String, Vec<u8>, usize, usize)>), String>((original_file_hash, file_id, all_shards))
-//     }).await.map_err(|e| e.to_string())??;
-
-//     let all_chunk_info = Arc::new(Mutex::new(Vec::new()));
-//     let chunk_pairs = Arc::new(Mutex::new(Vec::new()));
-    
-//     let original_upload_future = upload_bytes_to_ipfs(&api_url, file_data.clone(), &file_name_clone);
-    
-//     let shard_uploads_future = stream::iter(erasure_shards_to_upload).for_each_concurrent(
-//         Some(10),
-//         |(chunk_name, shard_data, orig_idx, share_idx)| {
-//             let api_url_clone = Arc::clone(&api_url);
-//             let all_chunk_info_clone = Arc::clone(&all_chunk_info);
-//             let chunk_pairs_clone = Arc::clone(&chunk_pairs);
-
-//             async move {
-//                 let shard_len = shard_data.len();
-//                 match upload_bytes_to_ipfs(&api_url_clone, shard_data, &chunk_name).await {
-//                     Ok(cid) => {
-//                         let info = ChunkInfo {
-//                             name: chunk_name.clone(),
-//                             path: String::new(),
-//                             cid: CidInfo {
-//                                 cid: cid.clone(),
-//                                 filename: chunk_name.clone(),
-//                                 size_bytes: shard_len,
-//                                 encrypted: false,
-//                                 size_formatted: format_file_size(shard_len),
-//                             },
-//                             original_chunk: orig_idx,
-//                             share_idx,
-//                             size: shard_len,
-//                         };
-//                         all_chunk_info_clone.lock().await.push(info);
-//                         chunk_pairs_clone.lock().await.push((chunk_name, cid));
-//                     }
-//                     Err(e) => eprintln!("Failed to upload chunk {}: {}", chunk_name, e),
-//                 }
-//             }
-//         },
-//     );
-
-//     let (original_file_cid_result, _) = future::join(original_upload_future, shard_uploads_future).await;
-//     let _original_file_cid = original_file_cid_result?;
-
-//     let final_chunk_info = all_chunk_info.lock().await.clone();
-    
-//     let file_extension = Path::new(&file_name).extension().and_then(|s| s.to_str()).unwrap_or_default().to_string();
-//     let metadata = Metadata {
-//         original_file: OriginalFileInfo {
-//             name: file_name.clone(),
-//             size: file_data.len(),
-//             hash: original_file_hash,
-//             extension: file_extension,
-//         },
-//         erasure_coding: ErasureCodingInfo {
-//             k,
-//             m,
-//             chunk_size,
-//             encrypted: false,
-//             file_id: file_id.clone(),
-//             encrypted_size: file_data.len(),
-//         },
-//         chunks: final_chunk_info,
-//         metadata_cid: None,
-//     };
-
-//     let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
-//     let meta_filename_for_upload = format!("{}_metadata.json", file_id);
-//     let metadata_cid = upload_bytes_to_ipfs(&api_url, metadata_json.as_bytes().to_vec(), &meta_filename_for_upload).await?;
-
-//     let meta_filename_for_db = format!("{}{}", file_name, if file_name.ends_with(".ec_metadata") { "" } else { ".ec_metadata" });
-//     let mut files_for_storage = chunk_pairs.lock().await.clone();
-//     files_for_storage.push((meta_filename_for_db.clone(), metadata_cid.clone()));
-
-//     let storage_result = request_erasure_storage(&meta_filename_for_db, &files_for_storage, &api_url, &seed_phrase).await;
-//     match storage_result {
-//         Ok(res) => {
-//             let temp_dir = tempdir().map_err(|e| e.to_string())?;
-//             let temp_path = temp_dir.path().join(&file_name);
-//             fs::write(&temp_path, file_data).map_err(|e| e.to_string())?;
-//             copy_to_sync_and_add_to_db(
-//                 &temp_path,
-//                 &account_id,
-//                 &metadata_cid,
-//                 &res,
-//                 true,
-//                 false,
-//                 &meta_filename_for_db,
-//                 true,
-//             ).await;
-//             println!("[public_upload_with_erasure] Storage request result: {}", res);
-//         }
-//         Err(e) => println!("[public_upload_with_erasure] Storage request error: {}", e),
-//     }
-
-//     Ok(metadata_cid)
-// }
-
-// #[tauri::command]
-// pub async fn public_download_with_erasure(
-//     _account_id: String,
-//     metadata_cid: String,
-//     output_file: String,
-// ) -> Result<(), String> {
-//     let api_url = "http://127.0.0.1:5001";
-//     println!("public erasure download called");
-//     tokio::task::spawn_blocking(move || {
-//         println!("Downloading metadata CID: {}", metadata_cid);
-//         let metadata_bytes = download_from_ipfs(&api_url, &metadata_cid).map_err(|e| e.to_string())?;
-//         let metadata: Metadata = serde_json::from_slice(&metadata_bytes).map_err(|e| e.to_string())?;
-//         println!("Metadata loaded: original size {}, stored size {}", metadata.original_file.size, metadata.erasure_coding.encrypted_size);
-
-//         let k = metadata.erasure_coding.k;
-//         let m = metadata.erasure_coding.m;
-//         let chunk_size = metadata.erasure_coding.chunk_size;
-//         let file_hash = &metadata.original_file.hash;
-
-//         let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
-//         for chunk in &metadata.chunks {
-//             chunk_map
-//                 .entry(chunk.original_chunk)
-//                 .or_default()
-//                 .push(chunk);
-//         }
-
-//         let mut reconstructed_chunks = Vec::with_capacity(chunk_map.len());
-
-//         for orig_idx in 0..chunk_map.len() {
-//             let available_chunks = chunk_map.get(&orig_idx).ok_or("Missing chunk info")?;
-//             let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
-//             for chunk in available_chunks {
-//                 let data = download_from_ipfs(&api_url, &chunk.cid.cid).map_err(|e| e.to_string())?;
-//                 shards[chunk.share_idx] = Some(data);
-//             }
-
-//             let available_count = shards.iter().filter(|s| s.is_some()).count();
-//             if available_count < k {
-//                 return Err(format!(
-//                     "Not enough shards for chunk {}: found {}, need {}",
-//                     orig_idx, available_count, k
-//                 ));
-//             }
-
-//             let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
-//             r.reconstruct_data(&mut shards)
-//                 .map_err(|e| format!("Reconstruction failed: {e}"))?;
-
-//             let is_last_chunk = orig_idx == chunk_map.len() - 1;
-//             let file_size = metadata.original_file.size;
-//             let chunk_bytes_needed = if !is_last_chunk {
-//                 chunk_size
-//             } else {
-//                 let total_bytes_so_far: usize = chunk_size * orig_idx;
-//                 file_size.saturating_sub(total_bytes_so_far)
-//             };
-
-//             let mut chunk_data = Vec::with_capacity(chunk_bytes_needed);
-//             let mut bytes_collected = 0;
-//             for i in 0..k {
-//                 if let Some(ref shard) = shards[i] {
-//                     let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
-//                     chunk_data.extend_from_slice(&shard[..bytes_to_take]);
-//                     bytes_collected += bytes_to_take;
-//                     if bytes_collected == chunk_bytes_needed {
-//                         break;
-//                     }
-//                 }
-//             }
-//             println!("Chunk {}: reconstructed size {}, expected {}", orig_idx, chunk_data.len(), chunk_bytes_needed);
-//             reconstructed_chunks.push(chunk_data);
-//         }
-
-//         let mut reconstructed_data = Vec::new();
-//         for chunk in reconstructed_chunks {
-//             reconstructed_data.extend_from_slice(&chunk);
-//         }
-//         println!("Combined reconstructed data size: {}, expected: {}", reconstructed_data.len(), metadata.original_file.size);
-
-//         let mut hasher = Sha256::new();
-//         hasher.update(&reconstructed_data);
-//         let actual_hash = format!("{:x}", hasher.finalize());
-//         if actual_hash != *file_hash {
-//             return Err(format!(
-//                 "Hash mismatch: expected {}, got {}",
-//                 file_hash, actual_hash
-//             ));
-//         }
-
-//         std::fs::write(&output_file, &reconstructed_data).map_err(|e| format!("Failed to write output file: {}", e))?;
-//         println!("File written to {} with size {}", output_file, reconstructed_data.len());
-//         Ok(())
-//     })
-//     .await
-//     .map_err(|e| format!("Spawn blocking error: {}", e))?
-// }
-
 
 #[tauri::command]
 pub async fn public_upload_folder(

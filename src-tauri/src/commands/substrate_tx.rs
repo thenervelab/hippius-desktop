@@ -11,6 +11,7 @@ use sqlx::Row;
 use crate::utils::ipfs::{pin_json_to_ipfs_local, download_content_from_ipfs};
 use serde_json::{json, Value};
 use hex;
+use crate::{start_public_folder_sync_tauri, start_private_folder_sync_tauri};
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -55,10 +56,12 @@ impl From<FileInputWrapper> for FileInput {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(serde::Deserialize)]
 pub struct SetSyncPathParams {
     pub path: String,
     pub is_public: bool,
+    pub account_id: String,
+    pub mnemonic: String,
 }
 
 #[derive(Serialize, Debug)]
@@ -275,22 +278,101 @@ fn collect_folder_files_recursively<'a>(
 }
 
 #[tauri::command]
-pub async fn set_sync_path(params: SetSyncPathParams) -> Result<String, String> {
+pub async fn set_sync_path(
+    app_handle: tauri::AppHandle,
+    params: SetSyncPathParams
+) -> Result<String, String> {
     let path_type = if params.is_public { "public" } else { "private" };
     let timestamp = Utc::now().timestamp();
+
     if let Some(pool) = DB_POOL.get() {
-        // Upsert logic: update if exists, else insert
         let res = sqlx::query(
             "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
-            ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp"
+             ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp"
         )
         .bind(&params.path)
         .bind(path_type)
         .bind(timestamp)
         .execute(pool)
         .await;
+
         match res {
-            Ok(_) => Ok(format!("Sync path for '{}' set successfully.", path_type)),
+            Ok(_) => {
+                println!("[set_sync_path] Sync path for '{}' set successfully in DB.", path_type);
+
+                // Now spawn the appropriate sync task depending on type
+                if params.is_public {
+                    let app_handle_public = app_handle.clone();
+                    let account = params.account_id.clone();
+                    let mnemonic = params.mnemonic.clone();
+
+                    tokio::spawn(async move {
+                        println!("[set_sync_path] Starting PUBLIC sync task...");
+                        start_public_folder_sync_tauri(app_handle_public, account.clone(), mnemonic).await;
+                    });
+
+                    // Start PUBLIC S3 listing cron (every 30 seconds)
+                    if let Some(pool) = crate::DB_POOL.get() {
+                        let pool_pub = pool.clone();
+                        let account_for_cron_pub = params.account_id.clone();
+                        tokio::spawn(async move {
+                            let interval = 30u64; // 30 seconds
+                            loop {
+                                match crate::sync_shared::list_bucket_contents(account_for_cron_pub.clone(), "public".to_string()).await {
+                                    Ok(items) => {
+                                        if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool_pub, &account_for_cron_pub, "public", &items).await {
+                                            eprintln!("[set_sync_path][S3InventoryCron][public] Failed storing listing: {}", e);
+                                        } else {
+                                            println!("[set_sync_path][S3InventoryCron][public] Stored {} items for {}", items.len(), account_for_cron_pub);
+                                        }
+                                    }
+                                    Err(e) => eprintln!("[set_sync_path][S3InventoryCron][public] List failed: {}", e),
+                                }
+
+                                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+                            }
+                        });
+                    } else {
+                        eprintln!("[set_sync_path][S3InventoryCron] DB pool unavailable; skipping PUBLIC inventory cron start");
+                    }
+                } else {
+                    let app_handle_private = app_handle.clone();
+                    let account = params.account_id.clone();
+                    let mnemonic = params.mnemonic.clone();
+
+                    tokio::spawn(async move {
+                        println!("[set_sync_path] Starting PRIVATE sync task...");
+                        start_private_folder_sync_tauri(app_handle_private, account.clone(), mnemonic).await;
+                    });
+
+                    // Start PRIVATE S3 listing cron (every 30 seconds)
+                    if let Some(pool) = crate::DB_POOL.get() {
+                        let pool_priv = pool.clone();
+                        let account_for_cron_priv = params.account_id.clone();
+                        tokio::spawn(async move {
+                            let interval = 30u64; // 30 seconds
+                            loop {
+                                match crate::sync_shared::list_bucket_contents(account_for_cron_priv.clone(), "private".to_string()).await {
+                                    Ok(items) => {
+                                        if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool_priv, &account_for_cron_priv, "private", &items).await {
+                                            eprintln!("[set_sync_path][S3InventoryCron][private] Failed storing listing: {}", e);
+                                        } else {
+                                            println!("[set_sync_path][S3InventoryCron][private] Stored {} items for {}", items.len(), account_for_cron_priv);
+                                        }
+                                    }
+                                    Err(e) => eprintln!("[set_sync_path][S3InventoryCron][private] List failed: {}", e),
+                                }
+
+                                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+                            }
+                        });
+                    } else {
+                        eprintln!("[set_sync_path][S3InventoryCron] DB pool unavailable; skipping PRIVATE inventory cron start");
+                    }
+                }
+
+                Ok(format!("Sync path for '{}' set successfully.", path_type))
+            }
             Err(e) => Err(format!("Failed to set sync path: {}", e)),
         }
     } else {
@@ -298,12 +380,11 @@ pub async fn set_sync_path(params: SetSyncPathParams) -> Result<String, String> 
     }
 }
 
-
 #[tauri::command]
 pub async fn transfer_balance_tauri(
     sender_seed: String,
     recipient_address: String,
-    amount: String, // as string for frontend compatibility
+    amount: String,
 ) -> Result<String, String> {
     use subxt::tx::PairSigner;
     use sp_core::{Pair, sr25519, crypto::Ss58Codec};

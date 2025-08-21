@@ -11,6 +11,8 @@ import {
 import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+
 
 const UpdateSyncFolder: React.FC = () => {
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] =
@@ -20,7 +22,7 @@ const UpdateSyncFolder: React.FC = () => {
   const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState("");
   const [selectedPublicFolderName, setSelectedPublicFolderName] = useState("");
   const [isPublicFolderSelection, setIsPublicFolderSelection] = useState(false);
-
+  const { polkadotAddress, mnemonic } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
 
   useEffect(() => {
@@ -62,7 +64,7 @@ const UpdateSyncFolder: React.FC = () => {
         toast.error("Please select a valid folder for private sync");
         return;
       }
-      await setPrivateSyncPath(p);
+      await setPrivateSyncPath(p, polkadotAddress, mnemonic);
       setSelectedPrivateFolderPath(p);
       setSelectedPrivateFolderName(p.split(/[\\/]/).pop() || "");
       toast.success("Private sync folder updated");
@@ -83,7 +85,7 @@ const UpdateSyncFolder: React.FC = () => {
         toast.error("Please select a valid folder for public sync");
         return;
       }
-      await setPublicSyncPath(p);
+      await setPublicSyncPath(p, polkadotAddress, mnemonic);
       setSelectedPublicFolderPath(p);
       setSelectedPublicFolderName(p.split(/[\\/]/).pop() || "");
       toast.success("Public sync folder updated");

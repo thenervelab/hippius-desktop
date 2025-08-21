@@ -7,6 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path; 
 use std::path::PathBuf;
 use std::fs;
+use std::process::Command;
+use serde::Serialize;
+use sqlx::SqlitePool;
+use hex;
 
 pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<(String, &'static str)>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
@@ -16,9 +20,9 @@ pub static GLOBAL_CANCEL_TOKEN: Lazy<Arc<AtomicBool>> =
 #[derive(serde::Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RecentItem {
     pub name: String,
-    pub scope: String,   // "public" | "private"
-    pub action: String,  // "uploaded" | "deleted"
-    pub kind: String,    // "file" | "folder" (approximated)
+    pub scope: String,
+    pub action: String,
+    pub kind: String,
 }
 
 #[derive(serde::Serialize, Clone, Debug, Default)]
@@ -281,11 +285,6 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     }
 }
 
-// --- New: Common S3 listing utilities ---
-use std::process::Command;
-use serde::Serialize;
-use sqlx::SqlitePool;
-
 #[derive(Debug, Clone, Serialize)]
 pub struct BucketItem {
     pub path: String,
@@ -379,6 +378,10 @@ pub async fn store_bucket_listing_in_db(
 
          let source = format!("s3://{}/{}", bucket, it.path);
 
+        // Use hex encoding of the source URI bytes as reversible identifiers
+        let cid_hex = hex::encode("s3".as_bytes());
+        let file_hash_hex = cid_hex.clone();
+
         // Check existence in user_profiles
         let exists: Option<(String,)> = sqlx::query_as(
             "SELECT file_name FROM user_profiles WHERE file_name = ? AND owner = ? AND type = ?"
@@ -388,7 +391,7 @@ pub async fn store_bucket_listing_in_db(
         .bind(file_type)
         .fetch_optional(pool)
         .await?;
-
+        
         if exists.is_none() {
             // Insert new record with defaults where applicable into user_profiles
             sqlx::query(
@@ -398,8 +401,8 @@ pub async fn store_bucket_listing_in_db(
             )
             .bind(&file_name)
             .bind(owner)
-            .bind("s3")
-            .bind("s3")
+            .bind(&cid_hex)
+            .bind(&file_hash_hex)
             .bind(it.size as i64)
             .bind(true)
             .bind(0i64)
@@ -417,11 +420,13 @@ pub async fn store_bucket_listing_in_db(
         } else {
             // Update existing size/source/origin in user_profiles
             sqlx::query(
-                "UPDATE user_profiles SET file_size_in_bytes = ?, main_req_hash = ?, source = ? WHERE file_name = ? AND owner = ? AND type = ?"
+                "UPDATE user_profiles SET file_size_in_bytes = ?, main_req_hash = ?, source = ?, cid = ?, file_hash = ? WHERE file_name = ? AND owner = ? AND type = ?"
             )
             .bind(it.size as i64)
             .bind("s3")
             .bind(&source)
+            .bind(&cid_hex)
+            .bind(&file_hash_hex)
             .bind(&file_name)
             .bind(owner)
             .bind(file_type)

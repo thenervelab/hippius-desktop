@@ -1,7 +1,8 @@
 use crate::user_profile_sync::{start_user_profile_sync_tauri};
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync};
+use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync, list_bucket_contents, store_bucket_listing_in_db};
+use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use tauri::Manager;
 use tokio::sync::Mutex;
 use std::sync::Arc;
@@ -15,7 +16,6 @@ use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
 use base64 as b64;
 use tauri::State;
-use crate::sync_shared::{list_bucket_contents, store_bucket_listing_in_db};
 
 #[derive(Default)]
 pub struct SyncState {
@@ -60,6 +60,7 @@ pub async fn initialize_sync(
 
         // Configure AWS env
         let encoded_seed = encode(&seed_to_use);
+        println!("[SyncInit] Using encrypted subaccount seed from DB for seed_to_use={}, encoded_seed={}", seed_to_use, encoded_seed);
         std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
         std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
         std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
@@ -77,56 +78,92 @@ pub async fn initialize_sync(
             start_user_profile_sync_tauri(app_handle_clone, account_clone).await;
         });
 
-        let folder_task = tokio::spawn(async move {
-            start_private_folder_sync_tauri(app_handle_folder_sync, account_for_bg, mnemonic_for_bg).await;
-        });
+        // Check DB-configured sync paths and only spawn tasks if present
+        let private_enabled = match get_private_sync_path().await {
+            Ok(p) if !p.trim().is_empty() => true,
+            _ => {
+                println!("[SyncInit] No private sync path configured; skipping private folder sync task");
+                false
+            }
+        };
 
-        let public_folder_task = tokio::spawn(async move {
-            start_public_folder_sync_tauri(app_handle_public_folder_sync, account_clone2, mnemonic_clone).await;
-        });
+        let public_enabled = match get_public_sync_path().await {
+            Ok(p) if !p.trim().is_empty() => true,
+            _ => {
+                println!("[SyncInit] No public sync path configured; skipping public folder sync task");
+                false
+            }
+        };
+
+        let folder_task = if private_enabled {
+            Some(tokio::spawn(async move {
+                start_private_folder_sync_tauri(app_handle_folder_sync, account_for_bg, mnemonic_for_bg).await;
+            }))
+        } else { None };
+
+        let public_folder_task = if public_enabled {
+            Some(tokio::spawn(async move {
+                start_public_folder_sync_tauri(app_handle_public_folder_sync, account_clone2, mnemonic_clone).await;
+            }))
+        } else { None };
 
         // Record task handles into global AppState so cleanup can abort them
         let state = app_for_bg.state::<Arc<AppState>>();
         let mut guard = state.sync.lock().await;
         guard.tasks.push(user_profile_task);
-        guard.tasks.push(public_folder_task);
-        guard.tasks.push(folder_task);
+        if let Some(handle) = public_folder_task { guard.tasks.push(handle); }
+        if let Some(handle) = folder_task { guard.tasks.push(handle); }
 
-        // Start S3 inventory cron in background (runs every 5 minutes)
+        // Start S3 inventory cron in background (runs every 30 seconds)
         if let Some(pool) = crate::DB_POOL.get() {
             let pool = pool.clone();
-            let account_for_cron = account_clone3.clone();
-            let cron_handle = tokio::spawn(async move {
-                let interval = 30u64; // 5 minutes
-                loop {
-                    // Public bucket
-                    match crate::sync_shared::list_bucket_contents(account_for_cron.clone(), "public".to_string()).await {
-                        Ok(items) => {
-                            if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool, &account_for_cron, "public", &items).await {
-                                eprintln!("[S3InventoryCron] Failed storing public listing: {}", e);
-                            } else {
-                                println!("[S3InventoryCron] Stored {} public items for {}", items.len(), account_for_cron);
+            // Start PUBLIC listing cron only if public sync was started
+            if public_enabled {
+                let pool_pub = pool.clone();
+                let account_for_cron_pub = account_clone3.clone();
+                let public_cron_handle = tokio::spawn(async move {
+                    let interval = 30u64; // 30 seconds
+                    loop {
+                        match crate::sync_shared::list_bucket_contents(account_for_cron_pub.clone(), "public".to_string()).await {
+                            Ok(items) => {
+                                if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool_pub, &account_for_cron_pub, "public", &items).await {
+                                    eprintln!("[S3InventoryCron][public] Failed storing listing: {}", e);
+                                } else {
+                                    println!("[S3InventoryCron][public] Stored {} items for {}", items.len(), account_for_cron_pub);
+                                }
                             }
+                            Err(e) => eprintln!("[S3InventoryCron][public] List failed: {}", e),
                         }
-                        Err(e) => eprintln!("[S3InventoryCron] Public list failed: {}", e),
-                    }
 
-                    // Private bucket
-                    match crate::sync_shared::list_bucket_contents(account_for_cron.clone(), "private".to_string()).await {
-                        Ok(items) => {
-                            if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool, &account_for_cron, "private", &items).await {
-                                eprintln!("[S3InventoryCron] Failed storing private listing: {}", e);
-                            } else {
-                                println!("[S3InventoryCron] Stored {} private items for {}", items.len(), account_for_cron);
+                        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+                    }
+                });
+                guard.tasks.push(public_cron_handle);
+            }
+
+            // Start PRIVATE listing cron only if private sync was started
+            if private_enabled {
+                let pool_priv = pool.clone();
+                let account_for_cron_priv = account_clone3.clone();
+                let private_cron_handle = tokio::spawn(async move {
+                    let interval = 30u64; // 30 seconds
+                    loop {
+                        match crate::sync_shared::list_bucket_contents(account_for_cron_priv.clone(), "private".to_string()).await {
+                            Ok(items) => {
+                                if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool_priv, &account_for_cron_priv, "private", &items).await {
+                                    eprintln!("[S3InventoryCron][private] Failed storing listing: {}", e);
+                                } else {
+                                    println!("[S3InventoryCron][private] Stored {} items for {}", items.len(), account_for_cron_priv);
+                                }
                             }
+                            Err(e) => eprintln!("[S3InventoryCron][private] List failed: {}", e),
                         }
-                        Err(e) => eprintln!("[S3InventoryCron] Private list failed: {}", e),
-                    }
 
-                    tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-                }
-            });
-            guard.tasks.push(cron_handle);
+                        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+                    }
+                });
+                guard.tasks.push(private_cron_handle);
+            }
         } else {
             eprintln!("[S3InventoryCron] DB pool unavailable; skipping inventory cron start");
         }
@@ -153,7 +190,7 @@ pub async fn cleanup_sync(app: tauri::AppHandle) -> Result<(), String> {
     }
     
     // Wait for cleanup to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
     
     println!("Sync cleanup completed");
     Ok(())
@@ -213,7 +250,7 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 if let Some(key) = &maybe_key {
                     // Try decrypt; if fails, treat as legacy plaintext and migrate
                     if let Some(decrypted) = decrypt_phrase(&stored_str, key) {
-                        println!("[SyncInit] Using encrypted subaccount seed from DB for account_id={}", account_id);
+                        println!("[SyncInit] Using encrypted subaccount seed from DB for account_id={}, stored_str={}", account_id, stored_str);
                         return decrypted;
                     } else {
                         println!("[SyncInit] Found legacy plaintext subaccount; re-encrypting for account_id={}", account_id);
