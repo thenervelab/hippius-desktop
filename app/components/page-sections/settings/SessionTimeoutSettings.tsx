@@ -16,7 +16,6 @@ import {
   SelectScrollUpButton,
   SelectScrollDownButton,
 } from "@/components/ui/select/Select2";
-import { cn } from "@/lib/utils";
 
 import {
   getSession,
@@ -57,7 +56,7 @@ export default function SessionTimeoutSettings() {
         const minutes = s?.logoutTimeInMinutes ?? 1440;
         setInitialMinutes(minutes);
         setSelected(String(minutes));
-      } catch (e) {
+      } catch {
         // if no session yet, default to 24h
         setInitialMinutes(1440);
         setSelected("1440");

@@ -23,7 +23,6 @@ import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
-import { toast } from "sonner";
 
 interface WalletContextType {
   isAuthenticated: boolean;
