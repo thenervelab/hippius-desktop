@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Label } from "@/components/ui/label";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, Icons, Input, RevealTextLine } from "@/components/ui";
 import { Eye, EyeOff, Key } from "@/components/ui/icons";
@@ -12,7 +12,9 @@ import { useRouter } from "next/navigation";
 import { useAtomValue } from "jotai";
 import { phaseAtom } from "@/components/splash-screen/atoms";
 import * as Checkbox from "@radix-ui/react-checkbox";
-import { Check } from "lucide-react";
+
+// ✅ NEW: import session reader (after you split into sessionStore)
+import { getSession } from "@/app/lib/helpers/sessionStore";
 
 const LoginWithPassCodeForm = () => {
   const [error, setError] = useState<string | null>(null);
@@ -21,9 +23,27 @@ const LoginWithPassCodeForm = () => {
   const [passcode, setPasscode] = useState("");
   const [keepMeLoggedIn, setKeepMeLoggedIn] = useState(false);
 
+  // ✅ NEW: keep the saved minutes so we can pass them when checkbox is off
+  const [savedMinutes, setSavedMinutes] = useState<number | null>(null);
+
   const { unlockWithPasscode } = useWalletAuth();
   const router = useRouter();
   const phase = useAtomValue(phaseAtom);
+
+  // ✅ Load saved session timeout on mount and prefill checkbox
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await getSession();
+        // If a previous selection exists, respect it; default to 1440 otherwise
+        const minutes = s?.logoutTimeInMinutes ?? 1440;
+        setSavedMinutes(minutes);
+        setKeepMeLoggedIn(minutes === -1); // auto-check if Forever
+      } catch {
+        setSavedMinutes(1440);
+      }
+    })();
+  }, []);
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -37,9 +57,9 @@ const LoginWithPassCodeForm = () => {
     }
 
     try {
-      // Pass keepMeLoggedIn flag to use -1 minutes (forever) if checked
-      const logoutTimeInMinutes = keepMeLoggedIn ? -1 : undefined;
-      const success = await unlockWithPasscode(passcode, logoutTimeInMinutes);
+      const minutesToUse = keepMeLoggedIn ? -1 : savedMinutes ?? 1440;
+
+      const success = await unlockWithPasscode(passcode, minutesToUse);
       if (success) {
         router.push("/");
       } else {
@@ -57,13 +77,14 @@ const LoginWithPassCodeForm = () => {
     <InView triggerOnce>
       {({ inView, ref }) => (
         <div ref={ref} className="w-full flex flex-col">
-          <div className="text-grey-10 opacity-0 animate-fade-in-0.5 w-full  flex flex-col">
+          <div className="text-grey-10 opacity-0 animate-fade-in-0.5 w-full flex flex-col">
             <form onSubmit={handleLogin}>
               <div className="text-grey-10 xl:mb-8 mb-6 xl:text-[32px] text-2xl font-medium">
                 <RevealTextLine rotate reveal={inView} className="delay-300">
                   Unlock Your Hippius Account
                 </RevealTextLine>
               </div>
+
               <div className="space-y-1 text-grey-10 w-full flex flex-col">
                 <RevealTextLine rotate reveal={inView} className="delay-300">
                   <Label
@@ -73,6 +94,7 @@ const LoginWithPassCodeForm = () => {
                     Passcode
                   </Label>
                 </RevealTextLine>
+
                 <RevealTextLine
                   rotate
                   reveal={inView}
@@ -87,8 +109,8 @@ const LoginWithPassCodeForm = () => {
                       value={passcode}
                       onChange={(e) => setPasscode(e.target.value)}
                       className="px-11 border-grey-80 h-14 text-grey-30 w-full
-                    bg-grey-100 py-4 font-medium text-base rounded-lg duration-300 outline-none 
-                    hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
+                                 bg-grey-100 py-4 font-medium text-base rounded-lg duration-300 outline-none 
+                                 hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
                     />
                     {!showPasscode ? (
                       <Eye
@@ -110,7 +132,8 @@ const LoginWithPassCodeForm = () => {
                   <Checkbox.Root
                     className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-grey-90 mt-[3px] data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors"
                     checked={keepMeLoggedIn}
-                    onCheckedChange={() => setKeepMeLoggedIn((prev) => !prev)}
+                    // Radix can pass boolean | "indeterminate"; coerce to boolean
+                    onCheckedChange={(v) => setKeepMeLoggedIn(Boolean(v))}
                     id="keepMeLoggedIn"
                   >
                     <Checkbox.Indicator>
@@ -135,7 +158,7 @@ const LoginWithPassCodeForm = () => {
                 </div>
               )}
 
-              <div className="pt-3  flex flex-col w-full">
+              <div className="pt-3 flex flex-col w-full">
                 <RevealTextLine
                   rotate
                   reveal={inView}

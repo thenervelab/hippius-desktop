@@ -13,10 +13,9 @@ import { Keyring } from "@polkadot/keyring";
 import {
   getWalletRecord,
   clearHippiusDesktopDB,
-  saveSession,
-  getSession,
-  clearSession,
 } from "./helpers/hippiusDesktopDB";
+import { saveSession, getSession, clearSession } from "./helpers/sessionStore";
+
 import { useRouter } from "next/navigation";
 
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
@@ -123,7 +122,6 @@ export function WalletAuthProvider({
       }
 
       const session = await getSession();
-      toast.success(`Session Found: ${session?.mnemonic}`);
       if (!session) {
         setSessionTimeRemaining(null);
         return;
