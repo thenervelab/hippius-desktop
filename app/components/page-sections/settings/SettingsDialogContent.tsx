@@ -14,6 +14,8 @@ import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
 import EncryptionKey from "./encryption-key";
 import CustomizeRPC from "./CustomizeRPC";
+import { Clock } from "lucide-react";
+import SessionTimeoutSettings from "./SessionTimeoutSettings";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -29,36 +31,41 @@ const SettingsDialogContent: React.FC = () => {
   const tabs: TabOption[] = [
     {
       tabName: "File Settings",
-      icon: <Icons.File2 className="size-4" />
+      icon: <Icons.File2 className="size-4" />,
     },
     {
       tabName: "Change Passcode",
-      icon: <Icons.WalletAdd className="size-4" />
+      icon: <Icons.WalletAdd className="size-4" />,
     },
     {
       tabName: "Sub Accounts",
-      icon: <Icons.KeySquare className="size-4" />
+      icon: <Icons.KeySquare className="size-4" />,
     },
     {
       tabName: "Encryption Key",
-      icon: <Icons.Key className="size-4" />
+      icon: <Icons.Key className="size-4" />,
     },
+
     {
       tabName: "Notifications",
-      icon: <Icons.Notification className="size-4" />
+      icon: <Icons.Notification className="size-4" />,
     },
     {
       tabName: "Customize RPC",
-      icon: <Icons.Box className="size-4" />
+      icon: <Icons.Box className="size-4" />,
+    },
+    {
+      tabName: "Session Timeout",
+      icon: <Clock className="size-4" />,
     },
     {
       tabName: "Backup App Data",
-      icon: <Icons.Wallet className="size-4" />
+      icon: <Icons.Wallet className="size-4" />,
     },
     {
       tabName: "Reset App Data",
-      icon: <Icons.Trash className="size-4" />
-    }
+      icon: <Icons.Trash className="size-4" />,
+    },
   ];
 
   return (
@@ -160,6 +167,15 @@ const SettingsDialogContent: React.FC = () => {
                 className="delay-300 w-full flex"
               >
                 <CustomizeRPC />
+              </RevealTextLine>
+            )}
+            {activeTab === "Session Timeout" && (
+              <RevealTextLine
+                rotate
+                reveal={inView}
+                className="delay-300 w-full flex"
+              >
+                <SessionTimeoutSettings />
               </RevealTextLine>
             )}
           </div>
