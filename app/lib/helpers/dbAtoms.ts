@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { atom } from "jotai";
 import type initSqlJsType from "sql.js/dist/sql-wasm.js";
 
