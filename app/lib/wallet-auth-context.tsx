@@ -74,7 +74,7 @@ export function WalletAuthProvider({
   const logout = useCallback(async () => {
     try {
       console.log("[WalletAuth] Starting sync cleanup...");
-      await invoke("cleanup_sync");
+      invoke("cleanup_sync");
       console.log("[WalletAuth] Sync cleanup completed");
 
       // Clear session from database
