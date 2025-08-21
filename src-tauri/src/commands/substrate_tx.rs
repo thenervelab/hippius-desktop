@@ -285,21 +285,22 @@ pub async fn set_sync_path(
 ) -> Result<String, String> {
     let path_type = if params.is_public { "public" } else { "private" };
     let timestamp = Utc::now().timestamp();
-    // Detect if this is the first time setting this type of path
-    let existing_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sync_paths"
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
-    let is_first_time = existing_count == 0;
-
-    // If this is the first time enabling this sync type, ensure AWS env is configured
-    if is_first_time {
-        ensure_aws_env(params.account_id.clone(), params.mnemonic.clone()).await;
-    }
 
     if let Some(pool) = DB_POOL.get() {
+        // Detect if this is the first time setting this type of path
+        let existing_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sync_paths"
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+        let is_first_time = existing_count == 0;
+
+        // If this is the first time enabling this sync type, ensure AWS env is configured
+        if is_first_time {
+            ensure_aws_env(params.account_id.clone(), params.mnemonic.clone()).await;
+        }
+
         // Detect if this is the first time setting this type of path
         let existing_count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sync_paths WHERE type = ?"
