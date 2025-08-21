@@ -332,16 +332,17 @@ pub async fn set_sync_path(
                     let mnemonic = params.mnemonic.clone();
 
                     if is_first_time_for_type {
-                        tokio::spawn(async move {
+                        let handle = tokio::spawn(async move {
                             println!("[set_sync_path] Starting PUBLIC sync task...");
                             start_public_folder_sync_tauri(app_handle_public, account.clone(), mnemonic).await;
                         });
+                        crate::commands::syncing::register_task(app_handle.clone(), handle).await;
     
                         // Start PUBLIC S3 listing cron (every 30 seconds)
                         if let Some(pool) = crate::DB_POOL.get() {
                             let pool_pub = pool.clone();
                             let account_for_cron_pub = params.account_id.clone();
-                            tokio::spawn(async move {
+                            let handle = tokio::spawn(async move {
                                 let interval = 30u64; // 30 seconds
                                 loop {
                                     match crate::sync_shared::list_bucket_contents(account_for_cron_pub.clone(), "public".to_string()).await {
@@ -354,10 +355,11 @@ pub async fn set_sync_path(
                                         }
                                         Err(e) => eprintln!("[set_sync_path][S3InventoryCron][public] List failed: {}", e),
                                     }
-    
+
                                     tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
                                 }
                             });
+                            crate::commands::syncing::register_task(app_handle.clone(), handle).await;
                         } else {
                             eprintln!("[set_sync_path][S3InventoryCron] DB pool unavailable; skipping PUBLIC inventory cron start");
                         }
@@ -369,16 +371,17 @@ pub async fn set_sync_path(
                     let mnemonic = params.mnemonic.clone();
 
                     if is_first_time_for_type {
-                        tokio::spawn(async move {
+                        let handle = tokio::spawn(async move {
                             println!("[set_sync_path] Starting PRIVATE sync task...");
                             start_private_folder_sync_tauri(app_handle_private, account.clone(), mnemonic).await;
                         });
+                        crate::commands::syncing::register_task(app_handle.clone(), handle).await;
     
                         // Start PRIVATE S3 listing cron (every 30 seconds)
                         if let Some(pool) = crate::DB_POOL.get() {
                             let pool_priv = pool.clone();
                             let account_for_cron_priv = params.account_id.clone();
-                            tokio::spawn(async move {
+                            let handle = tokio::spawn(async move {
                                 let interval = 30u64; // 30 seconds
                                 loop {
                                     match crate::sync_shared::list_bucket_contents(account_for_cron_priv.clone(), "private".to_string()).await {
@@ -391,10 +394,11 @@ pub async fn set_sync_path(
                                         }
                                         Err(e) => eprintln!("[set_sync_path][S3InventoryCron][private] List failed: {}", e),
                                     }
-    
+
                                     tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
                                 }
                             });
+                            crate::commands::syncing::register_task(app_handle.clone(), handle).await;
                         } else {
                             eprintln!("[set_sync_path][S3InventoryCron] DB pool unavailable; skipping PRIVATE inventory cron start");
                         }   

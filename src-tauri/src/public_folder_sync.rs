@@ -8,6 +8,7 @@ use base64::{encode};
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::path::Path;
+use std::os::unix::process::ExitStatusExt;
 
 // Import the new S3 state from sync_shared
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE, RecentItem};
@@ -329,7 +330,28 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             });
         }
         
-        let status = child.wait().expect("'aws s3 sync' command failed to run");
+        // Wait for completion, but terminate promptly if global cancellation is requested
+        let status = loop {
+            if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
+                eprintln!("[PublicFolderSync] Cancellation during active sync; killing aws child");
+                let _ = child.kill();
+                // After kill, try to reap once
+                match child.try_wait() {
+                    Ok(Some(st)) => break st,
+                    _ => break std::process::ExitStatus::from_raw(1),
+                }
+            }
+            match child.try_wait() {
+                Ok(Some(st)) => break st,
+                Ok(None) => {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+                Err(_) => {
+                    eprintln!("[PublicFolderSync] Error while waiting for child; assuming failure");
+                    break std::process::ExitStatus::from_raw(1);
+                }
+            }
+        };
         
         if status.success() {
              println!("[PublicFolderSync] Sync completed successfully.");
@@ -354,5 +376,6 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
 /// Tauri command to start the public folder sync process.
 #[tauri::command]
 pub async fn start_public_folder_sync_tauri(_app_handle: AppHandle, account_id: String, seed_phrase: String) {
-    tokio::spawn(start_public_folder_sync(account_id, seed_phrase));
+    // Do NOT spawn here. Let the caller spawn and track this task so it can be aborted on logout.
+    start_public_folder_sync(account_id, seed_phrase).await;
 }
