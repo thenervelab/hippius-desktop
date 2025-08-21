@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import initSqlJs from "sql.js/dist/sql-wasm.js";
 import type initSqlJsType from "sql.js/dist/sql-wasm.js";
 import {

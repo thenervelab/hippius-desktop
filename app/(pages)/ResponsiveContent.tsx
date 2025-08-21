@@ -18,7 +18,7 @@ export default function ResponsiveContent({
       <main
         className={cn(
           " p-4 transition-all duration-300 ease-in-out",
-          collapsed ? "ml-[60px]" : "ml-[181px]"
+          collapsed ? "ml-[60px]" : "ml-[186px]"
         )}
       >
         <div className=" bg-white z-10 justify-between flex ">
