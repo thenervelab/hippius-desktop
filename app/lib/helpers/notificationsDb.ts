@@ -2,6 +2,7 @@ import type initSqlJsType from "sql.js/dist/sql-wasm.js";
 import { initHippiusDesktopDB, saveBytes } from "./hippiusDesktopDB";
 
 /* ── schemas ─────────────────────────────── */
+let _notifDbBootstrapped = false;
 
 const NOTIFICATION_SCHEMA = `
   CREATE TABLE IF NOT EXISTS notifications (
@@ -34,20 +35,24 @@ const NOTIFICATION_PREFERENCES_SCHEMA = `
   );
 `;
 
-/* ── helpers ─────────────────────────────── */
+/* ── helpers ────────────────────────────── */
 
 async function getDb(): Promise<initSqlJsType.Database> {
-  const db = await initHippiusDesktopDB(); // same file as wallet
-  db.run(NOTIFICATION_SCHEMA);
-  db.run(APP_STATE_SCHEMA);
-  db.run(NOTIFICATION_PREFERENCES_SCHEMA);
+  const db = await initHippiusDesktopDB();
 
-  /* make sure row #1 exists */
-  const exists = db.exec(`SELECT 1 FROM app_state WHERE id = 1`);
-  if (!exists.length) db.run(`INSERT INTO app_state (id) VALUES (1)`);
+  if (!_notifDbBootstrapped) {
+    db.run(NOTIFICATION_SCHEMA);
+    db.run(APP_STATE_SCHEMA);
+    db.run(NOTIFICATION_PREFERENCES_SCHEMA);
 
-  // Initialize notification preferences if they don't exist
-  await initNotificationPreferences(db);
+    const exists = db.exec(`SELECT 1 FROM app_state WHERE id = 1`);
+    if (!exists.length) {
+      db.run(`INSERT INTO app_state (id) VALUES (1)`);
+    }
+
+    await initNotificationPreferences(db); // may call saveBytes once
+    _notifDbBootstrapped = true;
+  }
 
   return db;
 }
@@ -59,14 +64,14 @@ async function initNotificationPreferences(db: initSqlJsType.Database) {
       id: "credits",
       label: "Credits",
       description:
-        "Sends an alert when fresh credits land in your account or when your balance falls near zero, giving you time to top up before uploads pause."
+        "Sends an alert when fresh credits land in your account or when your balance falls near zero, giving you time to top up before uploads pause.",
     },
     {
       id: "files",
       label: "Files",
       description:
-        "Pings you the moment a file sync completes, confirming your data is stored safely and ready whenever you need it."
-    }
+        "Pings you the moment a file sync completes, confirming your data is stored safely and ready whenever you need it.",
+    },
   ];
 
   // Check if preferences exist
@@ -99,7 +104,7 @@ export async function getNotificationPreferences() {
     id: row[0] as string,
     label: row[1] as string,
     description: row[2] as string,
-    enabled: (row[3] as number) === 1
+    enabled: (row[3] as number) === 1,
   }));
 }
 
@@ -116,7 +121,7 @@ export async function updateAllNotificationPreferences(
     for (const [id, enabled] of Object.entries(prefMap)) {
       db.run(`UPDATE notification_preferences SET enabled = ? WHERE id = ?`, [
         enabled ? 1 : 0,
-        id
+        id,
       ]);
     }
 
@@ -150,7 +155,7 @@ export async function addNotification({
   notificationTitleText,
   notificationDescription,
   notificationLinkText,
-  notificationLink
+  notificationLink,
 }: {
   notificationType: string;
   notificationSubtype?: string;
@@ -172,7 +177,7 @@ export async function addNotification({
       notificationTitleText,
       notificationDescription,
       notificationLinkText,
-      notificationLink
+      notificationLink,
     ]
   );
   await saveBytes(db.export());
@@ -216,7 +221,7 @@ export async function markFirstTimeSeen() {
 export async function updateIsAboveHalfCredit(isAboveHalfCredit: boolean) {
   const db = await getDb();
   db.run("UPDATE app_state SET isAboveHalfCredit = ? WHERE id = 1", [
-    isAboveHalfCredit ? 1 : 0
+    isAboveHalfCredit ? 1 : 0,
   ]);
   await saveBytes(db.export());
 }

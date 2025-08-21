@@ -9,7 +9,6 @@ import NotificationList from "./NotificationList";
 import NotificationDetailView from "./NotificationDetailView";
 import NoNotificationsFound from "./NoNotificationsFound";
 import NoNotificationsEnabled from "./NoNotificationsEnabled";
-import { IconComponent } from "@/app/lib/types";
 import { Toaster, toast } from "sonner";
 import { useSetAtom, useAtom } from "jotai";
 import {
@@ -24,13 +23,7 @@ import {
   settingsDialogOpenAtom,
   activeSettingsTabAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
-
-// map DB types → icons
-export const iconMap: Record<string, IconComponent> = {
-  Credits: Icons.WalletAdd,
-  Files: Icons.DocumentText,
-  Hippius: Icons.HippiusLogo,
-};
+import { iconMap } from "@/app/lib/helpers/notificationIcons";
 
 const Notifications = () => {
   const [activeTab, setActiveTab] = useState("All");
@@ -68,28 +61,29 @@ const Notifications = () => {
     [enabledTypes]
   );
 
-  // load list on mount
+  // A) Run once on mount (already OK)
   useEffect(() => {
     refresh();
     refreshEnabledTypes();
   }, [refresh, refreshEnabledTypes]);
 
-  // Refresh enabled types when settings dialog closes
+  // B) Re-fetch types when the settings dialog closes/opens
   useEffect(() => {
     if (!settingsDialogOpen) {
       refreshEnabledTypes();
-
-      // If the current active tab is no longer in the enabled types and not "All",
-      // or if "All" is active but there are no enabled types,
-      // reset the active tab to the first available tab
-      if (
-        (activeTab === "All" && enabledTypes.length === 0) ||
-        (activeTab !== "All" && !enabledTypes.includes(activeTab))
-      ) {
-        setActiveTab(tabs[0]?.tabName || "");
-      }
     }
-  }, [settingsDialogOpen, refreshEnabledTypes, enabledTypes, activeTab, tabs]);
+    // do NOT depend on enabledTypes/tabs here
+  }, [settingsDialogOpen, refreshEnabledTypes]);
+
+  // C) Handle tab correction separately, without calling refreshEnabledTypes()
+  useEffect(() => {
+    if (
+      (activeTab === "All" && enabledTypes.length === 0) ||
+      (activeTab !== "All" && !enabledTypes.includes(activeTab))
+    ) {
+      setActiveTab(tabs[0]?.tabName || "");
+    }
+  }, [enabledTypes, activeTab, tabs]);
 
   // Update active tab if tabs change and current active tab is no longer available
   useEffect(() => {
@@ -150,17 +144,17 @@ const Notifications = () => {
 
   const detail = selected
     ? {
-      id: selected.id,
-      icon: selected.icon,
-      type: selected.type,
-      title: selected.title ?? "",
-      description: selected.description ?? "",
-      time: selected.time,
-      timestamp: selected.timestamp,
-      actionText: selected.buttonText,
-      actionLink: selected.buttonLink,
-      unread: selected.unread,
-    }
+        id: selected.id,
+        icon: selected.icon,
+        type: selected.type,
+        title: selected.title ?? "",
+        description: selected.description ?? "",
+        time: selected.time,
+        timestamp: selected.timestamp,
+        actionText: selected.buttonText,
+        actionLink: selected.buttonLink,
+        unread: selected.unread,
+      }
     : null;
 
   const handleAllRead = async () => {
