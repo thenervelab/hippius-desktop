@@ -9,7 +9,7 @@ import {
 } from "@/app/lib/helpers/notificationsDb";
 import { UiNotification } from "@/components/page-sections/notifications/types";
 import { Icons } from "@/components/ui";
-import { iconMap } from ".";
+import { iconMap } from "@/lib/helpers/notificationIcons";
 import { unreadCount } from "@/lib/helpers/notificationsDb";
 
 export const notificationsAtom = atom<UiNotification[]>([]);
@@ -57,16 +57,13 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
   const filteredNotifications =
     enabledTypes.length > 0
       ? mapped.filter(
-        (notification) =>
-          enabledTypes.includes(notification.type) ||
-          notification.type === "Hippius"
-      )
+          (notification) =>
+            enabledTypes.includes(notification.type) ||
+            notification.type === "Hippius"
+        )
       : mapped;
 
   set(notificationsAtom, filteredNotifications);
-
-  // Make sure to call the refresh function properly
-  set(refreshEnabledTypesAtom);
 });
 
 // write-only atoms for actions
