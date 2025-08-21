@@ -325,11 +325,6 @@ pub async fn set_sync_path(
             Ok(_) => {
                 println!("[set_sync_path] Sync path for '{}' set successfully in DB.", path_type);
 
-                // If this is the first time enabling this sync type, ensure AWS env is configured
-                if is_first_time_for_type {
-                    ensure_aws_env(params.account_id.clone(), params.mnemonic.clone()).await;
-                }
-
                 // Now spawn the appropriate sync task depending on type
                 if params.is_public {
                     let app_handle_public = app_handle.clone();
