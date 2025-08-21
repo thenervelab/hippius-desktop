@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import initSqlJs from "sql.js/dist/sql-wasm.js";
 import type initSqlJsType from "sql.js/dist/sql-wasm.js";
 import {
@@ -7,6 +8,13 @@ import {
   BaseDirectory,
   mkdir,
 } from "@tauri-apps/plugin-fs";
+import { getDefaultStore } from "jotai";
+import {
+  hippiusDbAtom,
+  sqlJsModuleAtom,
+  dbInitPromiseAtom,
+  dbWriteQueueAtom,
+} from "./dbAtoms";
 
 export const DB_FILENAME = "hippius-desktop.db";
 const TABLE_SCHEMA = `
@@ -15,14 +23,18 @@ const TABLE_SCHEMA = `
     encryptedMnemonic TEXT,
     passcodeHash TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS session (
+    id INTEGER PRIMARY KEY,
+    mnemonic TEXT,
+    logoutTimeStamp INTEGER,
+    logoutTimeInMinutes INTEGER DEFAULT 1440
+  );
 `;
 
 export async function ensureAppDirectory() {
   try {
-    await mkdir("", {
-      baseDir: BaseDirectory.AppLocalData,
-      recursive: true,
-    });
+    await mkdir("", { baseDir: BaseDirectory.AppLocalData, recursive: true });
     return true;
   } catch (err) {
     console.error("Failed to create app directory:", err);
@@ -32,9 +44,10 @@ export async function ensureAppDirectory() {
 
 async function getBytes(): Promise<Uint8Array | null> {
   try {
-    if (!(await exists(DB_FILENAME, { baseDir: BaseDirectory.AppLocalData }))) {
-      return null;
-    }
+    const fileExists = await exists(DB_FILENAME, {
+      baseDir: BaseDirectory.AppLocalData,
+    });
+    if (!fileExists) return null;
     return await readFile(DB_FILENAME, { baseDir: BaseDirectory.AppLocalData });
   } catch (err) {
     console.error("Error reading database file:", err);
@@ -42,11 +55,31 @@ async function getBytes(): Promise<Uint8Array | null> {
   }
 }
 
+/** Serialize all writes to avoid clobbering. */
+async function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
+  const store = getDefaultStore();
+  const prev = store.get(dbWriteQueueAtom);
+  const next = prev
+    .catch(() => void 0) // keep queue alive on error
+    .then(fn);
+  // store a promise that resolves when this write completes
+  store.set(
+    dbWriteQueueAtom,
+    next.then(
+      () => void 0,
+      () => void 0
+    )
+  );
+  return next;
+}
+
 export async function saveBytes(bytes: Uint8Array) {
   try {
     await ensureAppDirectory();
-    await writeFile(DB_FILENAME, bytes, {
-      baseDir: BaseDirectory.AppLocalData,
+    await enqueueWrite(async () => {
+      await writeFile(DB_FILENAME, bytes, {
+        baseDir: BaseDirectory.AppLocalData,
+      });
     });
     return true;
   } catch (err) {
@@ -65,67 +98,83 @@ async function createSchema(db: initSqlJsType.Database) {
   }
 }
 
+/** Single entry point that returns the shared DB instance. */
 export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
-  await ensureAppDirectory();
-  let SQL: any;
-  try {
-    SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
-  } catch {
-    console.error("Failed to initialize SQL.js");
-  }
-  let raw: any;
-  try {
-    raw = await getBytes();
-  } catch {
-    console.error("Failed to get database bytes");
-  }
-  let db: initSqlJsType.Database | undefined;
-  try {
-    if (raw) {
-      db = new SQL.Database(raw);
-    } else {
-      db = new SQL.Database();
-    }
-    // Always ensure the schema exists, regardless of whether we loaded an existing DB
-    if (db) {
+  const store = getDefaultStore();
+  // Already created
+  const existing = store.get(hippiusDbAtom);
+  if (existing) return existing;
+
+  // Dedupe concurrent init
+  let inFlight = store.get(dbInitPromiseAtom);
+  if (!inFlight) {
+    inFlight = (async () => {
+      // Reuse loaded SQL.js module
+      let SQL: any = store.get(sqlJsModuleAtom);
+      if (!SQL) {
+        SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
+        store.set(sqlJsModuleAtom, SQL);
+      }
+
+      const raw = await getBytes();
+      const db: initSqlJsType.Database = raw
+        ? new SQL.Database(raw)
+        : new SQL.Database();
+
       await createSchema(db);
-    }
-  } catch {
-    console.error("Failed to create schema");
-  }
-  if (!db) {
-    console.error("Failed to initialize database");
-    throw new Error("Database initialization failed");
-  }
-  // Verify the table exists
-  try {
-    db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet'");
-  } catch (err) {
-    console.error("Failed to verify wallet table:", err);
-    throw new Error(
-      "Database initialization failed: could not verify wallet table"
-    );
+
+      // If this is the first creation (no file), persist schema once
+      if (!raw) {
+        await saveBytes(db.export());
+      }
+
+      // Sanity: wallet table must exist
+      db.exec(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet'"
+      );
+
+      store.set(hippiusDbAtom, db);
+      return db;
+    })();
+
+    store.set(dbInitPromiseAtom, inFlight);
   }
 
-  return db;
+  try {
+    const db = await inFlight;
+    return db;
+  } finally {
+    // clear the in-flight marker
+    store.set(dbInitPromiseAtom, null);
+  }
 }
 
 export async function ensureWalletTable(): Promise<boolean> {
   try {
     const db = await initHippiusDesktopDB();
-    const result = db.exec(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='wallet'"
+
+    const hasWallet = db.exec(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet' LIMIT 1"
     );
-    if (!result.length || !result[0].values.length) {
+    const hasSession = db.exec(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session' LIMIT 1"
+    );
+
+    const missingWallet = !hasWallet.length || !hasWallet[0]?.values.length;
+    const missingSession = !hasSession.length || !hasSession[0]?.values.length;
+
+    if (missingWallet || missingSession) {
       await createSchema(db);
       await saveBytes(db.export());
     }
     return true;
   } catch (err) {
-    console.error("Failed to ensure wallet table:", err);
+    console.error("Failed to ensure schema:", err);
     return false;
   }
 }
+
+/* ─ Wallet helpers ─ */
 
 export async function saveWallet(
   encryptedMnemonic: string,
@@ -134,12 +183,10 @@ export async function saveWallet(
   try {
     await ensureWalletTable();
     const db = await initHippiusDesktopDB();
-
     db.run(
       "INSERT INTO wallet (encryptedMnemonic, passcodeHash) VALUES (?, ?)",
       [encryptedMnemonic, passcodeHash]
     );
-
     await saveBytes(db.export());
     return true;
   } catch (err) {
@@ -153,14 +200,11 @@ export async function updateWallet(
   passcodeHash: string
 ) {
   const db = await initHippiusDesktopDB();
-  // Get the latest wallet record id
   const res = db.exec("SELECT id FROM wallet ORDER BY id DESC LIMIT 1");
   if (!res[0]?.values.length) {
     throw new Error("No wallet record found to update");
   }
   const id = res[0].values[0][0];
-
-  // Update the record
   db.run(
     "UPDATE wallet SET encryptedMnemonic = ?, passcodeHash = ? WHERE id = ?",
     [encryptedMnemonic, passcodeHash, id]
@@ -180,9 +224,7 @@ export async function getWalletRecord(): Promise<{
       "SELECT encryptedMnemonic, passcodeHash FROM wallet ORDER BY id DESC LIMIT 1"
     );
 
-    if (!res.length || !res[0]?.values.length) {
-      return null;
-    }
+    if (!res.length || !res[0]?.values.length) return null;
 
     const [encryptedMnemonic, passcodeHash] = res[0].values[0] as string[];
     return { encryptedMnemonic, passcodeHash };
@@ -192,18 +234,23 @@ export async function getWalletRecord(): Promise<{
   }
 }
 
+/** Use the shared DB (no extra instance). */
 export async function hasWalletRecord(): Promise<boolean> {
-  const raw = await getBytes();
-  if (!raw) return false;
-  const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
-  const db = new SQL.Database(raw);
+  const db = await initHippiusDesktopDB();
   const rows = db.exec("SELECT 1 FROM wallet LIMIT 1");
   return rows.length > 0 && rows[0].values.length > 0;
 }
 
+/** Reset DB file and update the shared instance reference. */
 export async function clearHippiusDesktopDB() {
-  const SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
+  const store = getDefaultStore();
+  let SQL: any = store.get(sqlJsModuleAtom);
+  if (!SQL) {
+    SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
+    store.set(sqlJsModuleAtom, SQL);
+  }
   const db = new SQL.Database();
   db.run(TABLE_SCHEMA);
   await saveBytes(db.export());
+  store.set(hippiusDbAtom, db);
 }

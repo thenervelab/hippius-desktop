@@ -2,9 +2,9 @@
 import { useRouter } from "next/navigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { isOnboardingDone } from "@/app/lib/helpers/onboardingDb";
 import OnBoardingPage from "@/components/auth/onboarding/OnBoardingPage";
+import PageLoader from "../components/PageLoader";
 
 export default function OnBoardingGuard({
   children,
@@ -32,11 +32,7 @@ export default function OnBoardingGuard({
   }, [isAuthenticated, isLoading]);
 
   if (isLoading || (isAuthenticated && checking)) {
-    return (
-      <div className="flex items-center justify-center min-h-screen w-full">
-        <Loader2 className="animate-spin text-grey-50" />
-      </div>
-    );
+    return <PageLoader />;
   }
   if (!isAuthenticated) return null;
   if (done === false) {
