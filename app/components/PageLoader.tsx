@@ -4,7 +4,7 @@ import { HippiusLogo } from "@/components/ui/icons";
 
 export default function PageLoader() {
   return (
-    <div className="flex items-center justify-center min-h-screen h-screen bg-grey-100">
+    <div className="flex items-center justify-center min-h-screen h-screen w-screen bg-grey-100">
       <div
         role="status"
         aria-live="polite"
