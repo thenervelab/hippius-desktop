@@ -39,7 +39,8 @@ export const downloadIpfsFile = async (
       folderCid: file.cid,
       folderName: file.name,
       polkadotAddress,
-      isPrivate: isPrivateView
+      isPrivate: isPrivateView,
+      file
     });
 
     if (result && !result.success) {
@@ -74,7 +75,8 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
 
     await invoke("download_file_public", {
       fileCid: decodeHexCid(cid),
-      outputFile: filePath
+      outputFile: filePath,
+      source: file.source
     });
 
     toast.success(`Download complete: ${name}`, { id: toastId });
@@ -112,7 +114,8 @@ const downloadEncryptedIpfsFile = async (
     await invoke("download_and_decrypt_file", {
       accountId: polkadotAddress,
       metadataCid: cid,
-      outputFile: savePath
+      outputFile: savePath,
+      source: file.source
     });
 
     toast.success(`Download complete: ${name}`, {

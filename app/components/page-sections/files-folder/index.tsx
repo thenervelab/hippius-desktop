@@ -27,6 +27,7 @@ import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFile
 import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userPreferencesDb";
 import { getFolderPathArray } from "@/app/utils/folderPathUtils";
 import AddFolderToFolderButton from "@/components/page-sections/files/ipfs/AddFolderToFolderButton";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 
 interface FileEntry {
     file_name: string;
@@ -53,8 +54,9 @@ export default function FolderView({
     folderName = "Folder",
     folderActualName = "Folder",
     mainFolderActualName,
-    subFolderPath
+    subFolderPath,
 }: FolderViewProps) {
+    const { getParam } = useUrlParams();
     const { polkadotAddress } = useWalletAuth();
     const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
     const [files, setFiles] = useState<FormattedUserIpfsFile[]>([]);
@@ -197,6 +199,8 @@ export default function FolderView({
                 return; // User canceled directory selection
             }
 
+            const folderSource = getParam("folderSource");
+
             // Download folder
             setIsDownloading(true);
             const result = await downloadIpfsFolder({
@@ -205,6 +209,7 @@ export default function FolderView({
                 polkadotAddress: polkadotAddress ?? "",
                 isPrivate: isPrivateFolder,
                 outputDir,
+                source: folderSource
             });
 
             if (result && !result.success) {

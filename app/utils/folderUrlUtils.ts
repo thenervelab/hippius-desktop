@@ -35,6 +35,7 @@ export function generateFolderUrl(file: FormattedUserIpfsFile, getParam: ParamGe
         folderActualName: file.actualFileName ?? "",
         mainFolderActualName: newMainFolder ?? "",
         subFolderPath: newSubFolderPath ?? "",
+        folderSource: file.source || ""
     };
 
     const query = new URLSearchParams(queryParams).toString();

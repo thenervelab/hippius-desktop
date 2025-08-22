@@ -17,6 +17,7 @@ type NameCellProps = {
   onShowDetails?: () => void;
   isPreviewable?: boolean;
   isFolder?: boolean;
+  source?: string
 };
 
 const NameCell: FC<NameCellProps> = ({
@@ -27,6 +28,7 @@ const NameCell: FC<NameCellProps> = ({
   fileType,
   isPreviewable = false,
   isFolder = false,
+  source
 }) => {
   const name = formatDisplayName(rawName);
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
@@ -57,6 +59,7 @@ const NameCell: FC<NameCellProps> = ({
       folderActualName: actualName ?? "",
       mainFolderActualName: newMainFolder ?? "",
       subFolderPath: newSubFolderPath ?? "",
+      folderSource: source || ""
     },
   };
 

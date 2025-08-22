@@ -266,6 +266,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
                 fileType={fileType}
                 isPreviewable={true}
                 isFolder={info.row.original.isFolder}
+                source={info.row.original.source}
               />
             </VideoDialogTrigger>
           );
@@ -282,6 +283,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
                 fileType={fileType}
                 isPreviewable={true}
                 isFolder={info.row.original.isFolder}
+                source={info.row.original.source}
               />
             </ImageDialogTrigger>
           );
@@ -298,6 +300,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
                 fileType={fileType}
                 isPreviewable={true}
                 isFolder={info.row.original.isFolder}
+                source={info.row.original.source}
               />
             </PdfDialogTrigger>
           );
@@ -311,6 +314,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
             isAssigned={info.row.original.isAssigned}
             fileType={fileType || "document"}
             isFolder={info.row.original.isFolder}
+            source={info.row.original.source}
           />
         );
       }
