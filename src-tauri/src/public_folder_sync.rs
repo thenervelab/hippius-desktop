@@ -368,7 +368,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             }
         }
 
-        println!("[PublicFolderSync] Cycle complete. Waiting for 5 minutes before next sync.");
+        println!("[PublicFolderSync] Cycle complete. Waiting for 1 minutes before next sync.");
         sleep(Duration::from_secs(60)).await;
     }
 }

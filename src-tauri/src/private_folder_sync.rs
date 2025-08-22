@@ -344,7 +344,7 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             }
         }
 
-        println!("[PrivateFolderSync] Waiting for 5 minutes before next sync.");
+        println!("[PrivateFolderSync] Waiting for 1 minutes before next sync.");
         sleep(Duration::from_secs(60)).await;
     }
 }
