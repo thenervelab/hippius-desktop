@@ -1,58 +1,45 @@
 use std::sync::{Arc, Mutex};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::collections::{HashSet, VecDeque};
 use tauri::{AppHandle, Wry};
-use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse};
+use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse}; // Assuming this is now just the response struct
 use once_cell::sync::Lazy;
-use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::Path; 
+use std::path::PathBuf;
+use std::fs;
+use std::process::Command;
+use serde::Serialize;
+use sqlx::SqlitePool;
+use hex;
 
-// Import recent activity sets from public/private modules
-use crate::public_folder_sync::{RECENTLY_UPLOADED as PUBLIC_RECENTLY_UPLOADED, RECENTLY_DELETED as PUBLIC_RECENTLY_DELETED};
-use crate::private_folder_sync::{RECENTLY_UPLOADED as PRIVATE_RECENTLY_UPLOADED, RECENTLY_DELETED as PRIVATE_RECENTLY_DELETED};
-use crate::public_folder_sync::{
-    UPLOADING_FILES as PUBLIC_UPLOADING_FILES,
-    CREATE_BATCH as PUBLIC_CREATE_BATCH,
-};
-use crate::private_folder_sync::{
-    UPLOADING_FILES as PRIVATE_UPLOADING_FILES,
-    CREATE_BATCH as PRIVATE_CREATE_BATCH,
-};
-
-// Global sync status tracking (split by sync type)
-pub static PRIVATE_SYNC_STATUS: Lazy<Arc<Mutex<SyncStatus>>> =
-    Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
-pub static PUBLIC_SYNC_STATUS: Lazy<Arc<Mutex<SyncStatus>>> =
-    Lazy::new(|| Arc::new(Mutex::new(SyncStatus::default())));
-
-// Upload lock to prevent concurrent uploads
-pub static UPLOAD_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-// Track accounts currently syncing (account_id + sync_type)
 pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<(String, &'static str)>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
-
-// Global cancellation token for all sync processes
 pub static GLOBAL_CANCEL_TOKEN: Lazy<Arc<AtomicBool>> = 
     Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
-#[derive(Debug, Clone)]
-pub struct UploadJob {
-    pub account_id: String,
-    pub seed_phrase: String,
-    pub file_path: String,
-    pub is_folder: bool,
-}
-
-// Types for recent activity to expose to the frontend
-#[derive(serde::Serialize, Clone, Debug)]
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RecentItem {
     pub name: String,
-    pub path: String,
-    pub scope: String,   // "public" | "private"
-    pub action: String,  // "uploaded" | "deleted"
-    pub kind: String,    // "file" | "folder" | "unknown"
+    pub scope: String,
+    pub action: String,
+    pub kind: String,
 }
+
+#[derive(serde::Serialize, Clone, Debug, Default)]
+pub struct S3SyncState {
+    pub in_progress: bool,
+    pub total_files: usize,
+    pub processed_files: usize,
+    pub current_item: Option<RecentItem>,
+    pub recent_items: VecDeque<RecentItem>, // Stores the last N items
+}
+
+// --- Create separate state holders for Private and Public ---
+pub static S3_PRIVATE_SYNC_STATE: Lazy<Arc<Mutex<S3SyncState>>> =
+    Lazy::new(|| Arc::new(Mutex::new(S3SyncState::default())));
+
+pub static S3_PUBLIC_SYNC_STATE: Lazy<Arc<Mutex<S3SyncState>>> =
+    Lazy::new(|| Arc::new(Mutex::new(S3SyncState::default())));
 
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct SyncActivityResponse {
@@ -60,26 +47,27 @@ pub struct SyncActivityResponse {
     pub uploading: Vec<RecentItem>
 }
 
+// --- Update Tauri Commands to Aggregate Data ---
+
 #[tauri::command]
 pub fn get_sync_status() -> SyncStatusResponse {
-    let private_status = PRIVATE_SYNC_STATUS.lock().unwrap();
-    let public_status = PUBLIC_SYNC_STATUS.lock().unwrap();
+    let private_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+    let public_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
 
-    let total_files = private_status.total_files + public_status.total_files;
-    let processed_files = private_status.processed_files + public_status.processed_files;
-    let synced_files = private_status.synced_files + public_status.synced_files;
-    let in_progress = private_status.in_progress || public_status.in_progress;
+    let total_files = private_state.total_files + public_state.total_files;
+    let processed_files = private_state.processed_files + public_state.processed_files;
+    let in_progress = private_state.in_progress || public_state.in_progress;
 
     let percent = if total_files > 0 {
-        (synced_files as f32 / total_files as f32) * 100.0
+        (processed_files as f32 / total_files as f32) * 100.0
     } else if in_progress {
-        0.0
+        0.0 // In progress but total not yet calculated
     } else {
-        100.0
+        100.0 // Not in progress and nothing to do
     };
 
     SyncStatusResponse {
-        synced_files,
+        synced_files: processed_files,
         total_files,
         in_progress,
         percent,
@@ -87,149 +75,58 @@ pub fn get_sync_status() -> SyncStatusResponse {
 }
 
 #[tauri::command]
-pub fn get_recent_sync_items(limit: Option<usize>) -> Vec<RecentItem> {
-    let limit_opt = limit; // None => return all
-
-    // Helper to map a path string to RecentItem
-    fn map_item(path: &str, scope: &str, action: &str) -> RecentItem {
-        let name = std::path::Path::new(path)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(path)
-            .to_string();
-        let kind = std::fs::metadata(path)
-            .map(|m| if m.is_dir() { "folder" } else { "file" })
-            .unwrap_or("unknown")
-            .to_string();
-        RecentItem {
-            name,
-            path: path.to_string(),
-            scope: scope.to_string(),
-            action: action.to_string(),
-            kind,
-        }
-    }
-
-    let mut items: Vec<RecentItem> = Vec::new();
-
-    {
-        let set = PUBLIC_RECENTLY_UPLOADED.lock().unwrap();
-        for p in set.iter() {
-            items.push(map_item(p, "public", "uploaded"));
-        }
-    }
-    {
-        let set = PRIVATE_RECENTLY_UPLOADED.lock().unwrap();
-        for p in set.iter() {
-            items.push(map_item(p, "private", "uploaded"));
-        }
-    }
-    {
-        let set = PUBLIC_RECENTLY_DELETED.lock().unwrap();
-        for p in set.iter() {
-            items.push(map_item(p, "public", "deleted"));
-        }
-    }
-    {
-        let set = PRIVATE_RECENTLY_DELETED.lock().unwrap();
-        for p in set.iter() {
-            items.push(map_item(p, "private", "deleted"));
-        }
-    }
-
-    // Sort newest-ish first by name/path for determinism; we don't track timestamps, so just stable sort by path desc
-    items.sort_by(|a, b| b.path.cmp(&a.path));
-    if let Some(l) = limit_opt {
-        if items.len() > l {
-            items.truncate(l);
-        }
-    }
-    items
-}
-
-#[tauri::command]
 pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
-    // helper to map to RecentItem
-    fn map_item(path: &str, scope: &str, action: &str) -> RecentItem {
-        let name = std::path::Path::new(path)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(path)
-            .to_string();
-        let kind = std::fs::metadata(path)
-            .map(|m| if m.is_dir() { "folder" } else { "file" })
-            .unwrap_or("unknown")
-            .to_string();
-        RecentItem {
-            name,
-            path: path.to_string(),
-            scope: scope.to_string(),
-            action: action.to_string(),
-            kind,
-        }
-    }
+    let p_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+    let pub_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+    let limit = limit.unwrap_or(10);
 
-    // Build recent using existing command for consistency
-    let mut recent = get_recent_sync_items(limit);
-
-    // Uploading (in-progress)
-    let mut uploading: Vec<RecentItem> = Vec::new();
-    {
-        let set = PUBLIC_UPLOADING_FILES.lock().unwrap();
-        for p in set.iter() {
-            uploading.push(map_item(p, "public", "uploading"));
-        }
-    }
-    {
-        let set = PRIVATE_UPLOADING_FILES.lock().unwrap();
-        for p in set.iter() {
-            uploading.push(map_item(p, "private", "uploading"));
-        }
-    }
-    uploading.sort_by(|a, b| b.path.cmp(&a.path));
-    if let Some(l) = limit {
-        if uploading.len() > l { uploading.truncate(l); }
-    }
+    // Combine and sort recent items
+    let mut recent: Vec<RecentItem> = p_state.recent_items.iter()
+        .chain(pub_state.recent_items.iter())
+        .cloned()
+        .collect();
+    
+    // This sort is simplistic; a real implementation might add timestamps.
+    // For now, we just combine them.
+    recent.truncate(limit);
+    
+    // Combine currently uploading items
+    let uploading: Vec<RecentItem> = p_state.current_item.iter()
+        .chain(pub_state.current_item.iter())
+        .cloned()
+        .collect();
 
     SyncActivityResponse { recent, uploading }
 }
 
-#[tauri::command]
-pub fn app_close(app: AppHandle<Wry>) {
-    app.exit(0);
-}
-
-// Function to reset all sync state and signal cancellation
 pub fn reset_all_sync_state() {
-    println!("[SyncShared] Resetting all sync state and signaling cancellation");
     
-    // Signal global cancellation
     GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
     
-    // Clear syncing accounts (folder sync)
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         syncing_accounts.clear();
     }
     
-    // Clean up user profile sync state
-    crate::user_profile_sync::cleanup_user_profile_sync_state();
-    
-    // Reset sync statuses
+    // Reset S3 sync states
     {
-        let mut private_status = PRIVATE_SYNC_STATUS.lock().unwrap();
-        *private_status = SyncStatus::default();
+        let mut private_status = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+        *private_status = S3SyncState::default();
     }
     {
-        let mut public_status = PUBLIC_SYNC_STATUS.lock().unwrap();
-        *public_status = SyncStatus::default();
+        let mut public_status = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+        *public_status = S3SyncState::default();
     }
 }
 
-// Function to prepare for new sync (reset cancellation token)
 pub fn prepare_for_new_sync() {
     println!("[SyncShared] Preparing for new sync - resetting cancellation token");
     GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
+}
+
+#[tauri::command]
+pub fn app_close(app: AppHandle<Wry>) {
+    app.exit(0);
 }
 
 // Helper to collect all subfolders
@@ -386,4 +283,158 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
         .await
         .unwrap();
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BucketItem {
+    pub path: String,
+    pub size: u64,
+    pub last_modified: String,
+}
+
+/// Parses a single line from the `aws s3 ls --recursive` output.
+/// Expected file line example (bytes, not human-readable):
+/// "2023-11-20 15:45:01       1024 folder/document.txt"
+fn parse_s3_ls_line(line: &str) -> Option<BucketItem> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    if parts.len() < 4 {
+        return None;
+    }
+
+    // Detect and skip folder prefix lines like: "                           PRE folder/"
+    if parts.get(2).map(|s| *s) == Some(&"PRE") || parts.get(0).map(|s| *s) == Some(&"PRE") {
+        return None;
+    }
+
+    // Combine date and time
+    let last_modified = format!("{} {}", parts[0], parts[1]);
+
+    // Size in bytes
+    let size: u64 = parts[2].parse().unwrap_or(0);
+
+    // Key path: join remainder (handles spaces in keys if any)
+    let path = parts[3..].join(" ");
+
+    Some(BucketItem { path, size, last_modified })
+}
+
+/// Lists all files (recursively) in a given S3 bucket using AWS CLI.
+/// scope must be "public" or "private".
+pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<Vec<BucketItem>, String> {
+    if scope != "public" && scope != "private" {
+        return Err("Invalid scope provided. Must be 'public' or 'private'.".to_string());
+    }
+
+    let bucket_name = format!("{}-{}", account_id, scope);
+    let endpoint_url = "https://s3.hippius.com";
+
+    println!("[ListBucket] Listing contents for bucket: s3://{}", bucket_name);
+
+    let output = Command::new("aws")
+        .env("AWS_PAGER", "")
+        .arg("s3")
+        .arg("ls")
+        .arg(format!("s3://{}/", bucket_name))
+        .arg("--endpoint-url")
+        .arg(endpoint_url)
+        .arg("--recursive")
+        .output();
+
+    match output {
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let items: Vec<BucketItem> = stdout
+                    .lines()
+                    .filter_map(parse_s3_ls_line)
+                    .collect();
+                Ok(items)
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("[ListBucket] Failed to list bucket contents: {}", stderr);
+                Err(format!("Failed to list bucket contents: {}", stderr))
+            }
+        }
+        Err(e) => {
+            eprintln!("[ListBucket] Failed to execute 'aws s3 ls' command: {}", e);
+            Err(format!("Failed to execute aws command: {}", e))
+        }
+    }
+}
+
+pub async fn store_bucket_listing_in_db(
+    pool: &SqlitePool,
+    owner: &str,
+    scope: &str,
+    items: &[BucketItem],
+) -> Result<usize, sqlx::Error> {
+    let file_type = if scope == "public" { "public" } else { "private" };
+    let bucket = format!("{}-{}", owner, file_type);
+
+    let mut stored = 0usize;
+
+    for it in items {
+        let file_name = it.path.clone();
+
+         let source = format!("s3://{}/{}", bucket, it.path);
+
+        // Use hex encoding of the source URI bytes as reversible identifiers
+        let cid_hex = hex::encode("s3".as_bytes());
+        let file_hash_hex = cid_hex.clone();
+
+        // Check existence in user_profiles
+        let exists: Option<(String,)> = sqlx::query_as(
+            "SELECT file_name FROM user_profiles WHERE file_name = ? AND owner = ? AND type = ?"
+        )
+        .bind(&file_name)
+        .bind(owner)
+        .bind(file_type)
+        .fetch_optional(pool)
+        .await?;
+        
+        if exists.is_none() {
+            // Insert new record with defaults where applicable into user_profiles
+            sqlx::query(
+                "INSERT INTO user_profiles (
+                    file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&file_name)
+            .bind(owner)
+            .bind(&cid_hex)
+            .bind(&file_hash_hex)
+            .bind(it.size as i64)
+            .bind(true)
+            .bind(0i64)
+            .bind("s3")
+            .bind("")
+            .bind(0i64)
+            .bind(0i64) 
+            .bind("")
+            .bind(&source)
+            .bind("")
+            .bind(file_type)
+            .bind(false)
+            .execute(pool)
+            .await?;
+        } else {
+            // Update existing size/source/origin in user_profiles
+            sqlx::query(
+                "UPDATE user_profiles SET file_size_in_bytes = ?, main_req_hash = ?, source = ?, cid = ?, file_hash = ? WHERE file_name = ? AND owner = ? AND type = ?"
+            )
+            .bind(it.size as i64)
+            .bind("s3")
+            .bind(&source)
+            .bind(&cid_hex)
+            .bind(&file_hash_hex)
+            .bind(&file_name)
+            .bind(owner)
+            .bind(file_type)
+            .execute(pool)
+            .await?;
+        }
+        stored += 1;
+    }
+
+    Ok(stored)
 }
