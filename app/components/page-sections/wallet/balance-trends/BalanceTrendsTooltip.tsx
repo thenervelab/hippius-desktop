@@ -16,10 +16,10 @@ const BalanceTrendsTooltip: React.FC<{
     datum.bandLabel ??
     (datum.x instanceof Date
       ? datum.x.toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        })
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
       : "");
 
   return (
@@ -29,20 +29,11 @@ const BalanceTrendsTooltip: React.FC<{
       </p>
 
       {/* balance row */}
-      <div className="flex items-center mb-1">
+      <div className="flex items-center">
         <span className="inline-block w-2 h-2 rounded-full mr-1.5 bg-primary-40" />
         <div className="font-medium text-[10px] text-grey-10">
           <span className="mr-1">Balance:</span>
           <span>{numberFmt(datum.balance)}</span>
-        </div>
-      </div>
-
-      {/* credit row */}
-      <div className="flex items-center">
-        <span className="inline-block w-2 h-2 rounded-full mr-1.5 bg-primary-70" />
-        <div className="font-medium text-[10px] text-grey-10">
-          <span className="mr-1">Credit:</span>
-          <span>{numberFmt(datum.credit)}</span>
         </div>
       </div>
     </div>

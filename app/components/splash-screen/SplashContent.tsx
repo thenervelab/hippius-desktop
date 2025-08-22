@@ -8,11 +8,11 @@ export const PHASE_CONTENT: Record<AppSetupPhases, AppSetupPhaseContent> = {
     status: "Checking IPFS Status",
     subStatus: "Verifying node status ....",
   },
-  downloading_binary: {
-    icon: <Icons.DownloadingIPFS className="h-[200] w-[130px] " />,
-    status: "Downloading IPFS",
-    subStatus: "Fetching and installing IPFS binary ....",
-  },
+  // downloading_binary: {
+  //   icon: <Icons.DownloadingIPFS className="h-[200] w-[130px] " />,
+  //   status: "Downloading IPFS",
+  //   subStatus: "Fetching and installing IPFS binary ....",
+  // },
   initializing_repo: {
     icon: <Icons.InitializeRepo className="h-[222px] w-[110px] " />,
     status: "Initializing IPFS Repository",

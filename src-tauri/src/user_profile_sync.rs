@@ -919,11 +919,11 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
             // Step 3: Clear and insert into user_profiles table
             if let Some(pool) = DB_POOL.get() {
                 if records_to_insert.len() > 0 && profile_parsed_successfully {
-                    match sqlx::query("DELETE FROM user_profiles")
+                    match sqlx::query("DELETE FROM user_profiles WHERE main_req_hash <> 's3'")
                         .execute(pool)
                         .await
                     {
-                        Ok(_) => println!("[UserSync] Cleared user_profiles table"),
+                        Ok(_) => println!("[UserSync] Cleared non-S3 user_profiles records"),
                         Err(e) => {
                             let error_message = format!("[UserSync] Failed to clear user_profiles table: {e}");
                             eprintln!("[UserSync] Failed to clear user_profiles table: {e}");
@@ -1024,7 +1024,13 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
 
                     // Use the full file_name for both files and folders, adjusting for folder suffixes if needed
                     let base_name = {
-                        let mut name = file_name.clone();
+                        // If file_name has a path like "public-syn/pub-sync.jpeg", use only the last segment
+                        let mut name = if file_name.contains('/') {
+                            file_name.rsplit('/').next().unwrap_or(&file_name).to_string()
+                        } else {
+                            file_name.clone()
+                        };
+                        // Trim known folder metadata suffixes
                         if name.ends_with(".folder.ec_metadata") {
                             name = name.trim_end_matches(".folder.ec_metadata").to_string();
                         } else if name.ends_with("-folder.ec_metadata") {
@@ -1038,7 +1044,12 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                         }
                         name
                     };
-                    let mut source = "Hippius".to_string();
+
+                    // if we already have an s3 path use it
+                    let mut source: String = row.get::<String, _>("source");
+                    if source.trim().is_empty() {
+                        source = "Hippius".to_string();
+                    }
 
                     if type_ == "public" && public_sync_path.is_some() {
                         let full_path = if is_folder {

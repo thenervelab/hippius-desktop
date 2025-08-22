@@ -5,7 +5,6 @@ import React, { useState, useEffect } from "react";
 import WalletBalanceWidgetWithGraph from "./WalletBalanceWidgetWithGraph";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import TransactionHistoryTable from "./TransactionHistoryTable";
-import HippiusBalance from "./HippiusBalance";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import { CardButton, Icons } from "@/components/ui";
 import { PlusCircle } from "lucide-react";
@@ -55,9 +54,6 @@ export default function Wallet() {
   return (
     <>
       <DashboardTitleWrapper mainText="Wallet">
-        <div className="w-full mt-6">
-          <HippiusBalance />
-        </div>
         <div className="w-full mt-6">
           <WalletBalanceWidgetWithGraph />
         </div>

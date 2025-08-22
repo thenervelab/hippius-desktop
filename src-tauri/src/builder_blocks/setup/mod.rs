@@ -10,21 +10,6 @@ use crate::{
     constants::substrate::WSS_ENDPOINT,
 };
 
-// #[cfg(target_os = "macos")]
-// use tauri::api::dialog::blocking::message;
-
-#[cfg(target_os = "macos")]
-fn request_macos_permissions() {
-    use std::process::Command;
-    
-    // Request file access permissions programmatically
-    let _ = Command::new("osascript")
-        .args(&[
-            "-e", 
-            "tell application \"System Events\" to authorize \"Hippius\" for \"Files and Folders\""
-        ])
-        .output();
-}
 
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas
@@ -84,6 +69,15 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("file_hash", "TEXT NOT NULL"),
                 ("timestamp", "INTEGER NOT NULL"),
                 ("path", "TEXT NOT NULL"),
+            ],
+        ),
+        (
+            "sub_accounts",
+            &[
+                ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+                ("account_id", "TEXT NOT NULL"),
+                ("sub_account_seed_phrase", "TEXT NOT NULL"),
+                ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
     ];
@@ -168,6 +162,17 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sub_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            sub_account_seed_phrase TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )"
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -196,18 +201,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
                 win.show()?;       
             }
-            // Show macOS permission guidance on first run
-            #[cfg(target_os = "macos")]
-            {
-                let app_handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    
-                    // Request permissions programmatically
-                    request_macos_permissions();
-                });
-            }
-            
             // Spawn async task for database initialization and IPFS daemon
             tauri::async_runtime::spawn(async move {
                 println!("[Setup] async block started in setup.rs");

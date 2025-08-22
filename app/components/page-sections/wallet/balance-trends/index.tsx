@@ -58,8 +58,9 @@ const BalanceTrends: React.FC<{
 
   const yTicks = useMemo(() => {
     if (!formattedChartData.length) return [0, 1];
-    const allVals = formattedChartData.flatMap((d) => [d.balance, d.credit]);
-    const mx = Math.max(...allVals, 0);
+    // Only consider balance values for the y-axis scale
+    const balanceValues = formattedChartData.map((d) => d.balance);
+    const mx = Math.max(...balanceValues, 0);
     return getNiceTicksAlways(0, mx, 5);
   }, [formattedChartData]);
 
@@ -80,14 +81,14 @@ const BalanceTrends: React.FC<{
     xLabels =
       today <= 15
         ? Array.from({ length: today }, (_, i) =>
-            String(i + 1).padStart(2, "0")
-          )
+          String(i + 1).padStart(2, "0")
+        )
         : [
-            ...Array.from({ length: Math.ceil(today / 2) }, (_, i) =>
-              String(1 + i * 2).padStart(2, "0")
-            ),
-            String(today).padStart(2, "0"),
-          ];
+          ...Array.from({ length: Math.ceil(today / 2) }, (_, i) =>
+            String(1 + i * 2).padStart(2, "0")
+          ),
+          String(today).padStart(2, "0"),
+        ];
   } else if (timeRange === "quarter") {
     if (formattedChartData.length) {
       xLabels = getQuarterDateLabels(formattedChartData[0].x, 10);
@@ -95,8 +96,8 @@ const BalanceTrends: React.FC<{
   } else {
     const baseYear = chartData?.length
       ? new Date(
-          chartData[chartData.length - 1].processed_timestamp
-        ).getFullYear()
+        chartData[chartData.length - 1].processed_timestamp
+      ).getFullYear()
       : new Date().getFullYear();
     const now = new Date().getFullYear();
     const months = baseYear === now ? new Date().getMonth() + 1 : 12;
@@ -108,9 +109,8 @@ const BalanceTrends: React.FC<{
       {({ ref }) => (
         <div
           ref={ref}
-          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${
-            className || ""
-          }`}
+          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${className || ""
+            }`}
         >
           <div className="flex justify-between mb-3.5">
             <div className="flex gap-4 items-center">
@@ -118,7 +118,7 @@ const BalanceTrends: React.FC<{
                 <WalletAdd className="absolute text-primary-40 size-4 sm:size-5" />
               </AbstractIconWrapper>
               <span className="text-base font-medium  text-grey-60">
-                Transactions Overview
+                Balance Overview
               </span>
             </div>
 
@@ -129,19 +129,6 @@ const BalanceTrends: React.FC<{
             />
           </div>
           <div className="border border-grey-80 rounded-lg h-[225px] relative">
-            <div className="absolute left-2  z-50">
-              <div className="flex ml-8 mt-2 text-grey-70 font-medium items-center gap-x-3 text-xs">
-                <div className="flex items-center gap-x-2">
-                  <div className="w-6 h-0.5 bg-primary-40" />
-                  Balance
-                </div>
-
-                <div className="flex items-center gap-x-2">
-                  <div className="w-6 h-0 border-t-2 border-dashed border-primary-70" />
-                  Credit
-                </div>
-              </div>
-            </div>
 
             <div className="relative w-full h-full flex">
               {isLoading ? (
@@ -204,13 +191,6 @@ const BalanceTrends: React.FC<{
                         xAccessor: (d: ChartPoint) => d.bandLabel ?? d.x,
                         yAccessor: (d: ChartPoint) => d.balance,
                         lineColor: COLORS.balance,
-                      },
-                      {
-                        dataKey: "credit",
-                        xAccessor: (d: ChartPoint) => d.bandLabel ?? d.x,
-                        yAccessor: (d: ChartPoint) => d.credit,
-                        lineColor: COLORS.credit,
-                        lineType: "dashed",
                       },
                     ]}
                     renderTooltip={(td) => (

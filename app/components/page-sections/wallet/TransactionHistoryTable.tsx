@@ -5,7 +5,7 @@ import {
   getSortedRowModel
 } from "@tanstack/react-table";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   TableWrapper,
   Table,
@@ -14,14 +14,15 @@ import {
   Th,
   THead,
   TBody,
-  CopyableCell
+  CopyableCell,
+  Pagination
 } from "@/components/ui/alt-table";
 import { Loader2 } from "lucide-react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { Dollar } from "@/components/ui/icons";
-import useBillingTransactions, {
+import useBalanceTransactions, {
   TransactionObject
-} from "@/app/lib/hooks/api/useBillingTransactions";
+} from "@/app/lib/hooks/api/useBalanceTransactions";
 import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
@@ -56,10 +57,23 @@ export const formatDate = (
 };
 
 const columnHelper = createColumnHelper<TransactionObject>();
+const ITEMS_PER_PAGE = 10;
 
 const TransactionHistoryTable: React.FC = () => {
-  const { data: transactions, isPending } = useBillingTransactions();
-  const { polkadotAddress } = useWalletAuth(); // Get the user's polkadot address
+  const { data: transactions, isPending } = useBalanceTransactions();
+  const { polkadotAddress } = useWalletAuth();
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const totalPages = useMemo(
+    () => Math.ceil((transactions?.length || 0) / ITEMS_PER_PAGE),
+    [transactions?.length]
+  );
+
+  const paginatedData = useMemo(() => {
+    if (!transactions) return [];
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return transactions.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [transactions, currentPage]);
 
   const baseColumns = useMemo(
     () => [
@@ -140,7 +154,7 @@ const TransactionHistoryTable: React.FC = () => {
 
   const table = useReactTable({
     columns,
-    data: transactions || [],
+    data: paginatedData,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel()
   });
@@ -188,6 +202,16 @@ const TransactionHistoryTable: React.FC = () => {
           </div>
         )}
       </TableWrapper>
+
+      {totalPages > 1 && (
+        <div className="my-4">
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setPage={setCurrentPage}
+          />
+        </div>
+      )}
     </>
   );
 };

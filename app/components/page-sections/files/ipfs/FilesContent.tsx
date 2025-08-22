@@ -30,11 +30,8 @@ import { toast } from "sonner";
 import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
-import EncryptionKeyDialog from "./EncryptionKeyDialog";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { invoke } from "@tauri-apps/api/core";
 
 interface FilesContentProps {
     isRecentFiles?: boolean;
@@ -125,15 +122,8 @@ const FilesContent: FC<FilesContentProps> = ({
         contextMenu,
         setContextMenu
     } = sharedState;
-    const { polkadotAddress } = useWalletAuth();
 
     const selectedFileType = selectedFile ? getFileType(selectedFile) : null;
-    const [fileToDownload, setFileToDownload] =
-        useState<FormattedUserIpfsFile | null>(null);
-    const [isEncryptionDialogOpen, setIsEncryptionDialogOpen] = useState(false);
-    const [encryptionKeyError, setEncryptionKeyError] = useState<string | null>(
-        null
-    );
 
     // Drag and drop handlers
     const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -213,59 +203,7 @@ const FilesContent: FC<FilesContentProps> = ({
         file: FormattedUserIpfsFile,
         polkadotAddress: string
     ) => {
-        if (isPrivateView) {
-            setFileToDownload(file);
-            setEncryptionKeyError(null);
-            setIsEncryptionDialogOpen(true);
-        } else {
-            downloadIpfsFile(file, polkadotAddress, isPrivateView);
-        }
-    };
-
-    const handleEncryptedDownload = async (encryptionKey: string | null) => {
-        if (!fileToDownload || !polkadotAddress) return;
-
-        // Validate encryption key if provided
-        if (encryptionKey) {
-            try {
-                const savedKeys = await invoke<Array<{ id: number; key: string }>>(
-                    "get_encryption_keys"
-                );
-
-                const keyExists = savedKeys.some((k) => k.key === encryptionKey);
-
-                if (!keyExists) {
-                    setEncryptionKeyError(
-                        "Incorrect encryption key. Please try again with a correct one."
-                    );
-                    return;
-                }
-            } catch (error) {
-                console.error("Error validating encryption key:", error);
-                toast.error("Failed to validate encryption key");
-                return;
-            }
-        }
-
-        const result = await downloadIpfsFile(
-            fileToDownload,
-            polkadotAddress,
-            isPrivateView,
-            encryptionKey
-        );
-
-        if (
-            result &&
-            !result.success &&
-            (result.error === "INVALID_KEY" || result.error === "INVALID_KEY_FORMAT")
-        ) {
-            setEncryptionKeyError(
-                result.message || "Incorrect encryption key. Please try again."
-            );
-            setIsEncryptionDialogOpen(true);
-            return;
-        }
-        setIsEncryptionDialogOpen(false);
+        downloadIpfsFile(file, polkadotAddress, isPrivateView);
     };
 
     const renderContent = () => {
@@ -482,17 +420,6 @@ const FilesContent: FC<FilesContentProps> = ({
                     onResetFilters={handleResetFilters}
                 />
             </SidebarDialog>
-
-            <EncryptionKeyDialog
-                open={isEncryptionDialogOpen}
-                onClose={() => {
-                    setIsEncryptionDialogOpen(false);
-                    setEncryptionKeyError(null);
-                }}
-                onDownload={handleEncryptedDownload}
-                keyError={encryptionKeyError}
-                file={fileToDownload}
-            />
         </>
     );
 };

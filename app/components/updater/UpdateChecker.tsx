@@ -10,19 +10,23 @@ import { refreshUnreadCountAtom } from "@/components/page-sections/notifications
 export default function UpdateChecker() {
   const didRun = useRef(false);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
-
   useEffect(() => {
     if (didRun.current) return;
 
     // optional: guard across full session
     if (!(window as any).__didCheckUpdates) {
       (window as any).__didCheckUpdates = true;
-      checkForUpdates(true);
-      refreshUnread();
+
+      const runUpdate = async () => {
+        await checkForUpdates(true);
+        refreshUnread();
+      };
+
+      runUpdate();
     }
 
     didRun.current = true;
-  }, []);
+  }, [refreshUnread]);
 
   return null;
 }

@@ -10,17 +10,19 @@ import { useAtom, useSetAtom } from "jotai";
 import {
   settingsDialogOpenAtom,
   sidebarCollapsedAtom,
-  activeSettingsTabAtom
+  activeSettingsTabAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
 import { InView } from "react-intersection-observer";
 import FooterNavItem from "./FooterNavItems";
 import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
 import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
 import { openAppLink } from "@/app/lib/utils/links";
-
+import CheckForUpdateDialog from "../updater/CheckForUpdateDialog";
+import { useState } from "react";
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
+  const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useAtom(sidebarCollapsedAtom);
   const [settingsDialogOpen, setSettingsDialogOpen] = useAtom(
     settingsDialogOpenAtom
@@ -49,6 +51,11 @@ const Sidebar: React.FC = () => {
       >
         <SettingsDialogContent />
       </SettingsWidthDialog>
+      <CheckForUpdateDialog
+        open={open}
+        onOpenChange={setOpen}
+        onClose={() => setOpen(false)}
+      />
 
       <InView triggerOnce>
         {({ ref, inView }) => (
@@ -56,7 +63,7 @@ const Sidebar: React.FC = () => {
             ref={ref}
             className={cn(
               "fixed top-0 left-0 bottom-0 bg-white flex flex-col ml-4 my-4 border border-grey-80 rounded transition-all duration-300 ease-in-out z-50",
-              collapsed ? "w-[48px]" : "w-[165px]"
+              collapsed ? "w-[48px]" : "w-[170px]"
             )}
           >
             <div className="flex flex-col items-start w-full">
@@ -133,8 +140,32 @@ const Sidebar: React.FC = () => {
                 />
               ))}
             </div>
+            <div className="mt-2 py-2 border-t border-grey-80">
+              <div
+                className={cn(
+                  " transition-all  duration-300  relative group cursor-pointer",
+                  "hover:bg-gray-100 hover:text-primary-40 text-grey-40"
+                )}
+                onClick={() => setOpen(true)}
+              >
+                <RevealTextLine
+                  reveal={inView}
+                  parentClassName="block"
+                  className="flex items-center py-1.5 px-3.5 h-8"
+                >
+                  <span className="size-4 flex-shrink-0">
+                    <Icons.Repeat />
+                  </span>
+                  {!collapsed && (
+                    <span className="text-sm font-medium whitespace-nowrap ml-1.5 overflow-hidden transition-opacity duration-300">
+                      Check for Update
+                    </span>
+                  )}
+                </RevealTextLine>
+              </div>
+            </div>
 
-            <div className="py-2 border-y border-gray-80 mt-2 w-full">
+            <div className="py-2 border-y border-gray-80  w-full">
               {footerNavItems.map((item) => (
                 <FooterNavItem
                   key={item.label}

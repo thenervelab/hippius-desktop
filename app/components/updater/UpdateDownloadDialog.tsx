@@ -16,24 +16,17 @@ import {
 } from "@/app/components/updater/updateStore";
 import RevealTextLine from "@/components/ui/reveal-text-line";
 import { InView } from "react-intersection-observer";
+import BasicMarkdown from "./BasicMarkdown";
 
-type Props = {
-  onClose?: () => void;
-};
+type Props = { onClose?: () => void };
 
 export function useDesktopAppDialog() {
   const open = useAtomValue(updateDialogOpenAtom, { store: updateStore });
   const setOpen = useSetAtom(updateDialogOpenAtom, { store: updateStore });
-
   const closeDialog = () => {
     closeUpdateDialog();
   };
-
-  return {
-    open,
-    setOpen,
-    closeDialog,
-  };
+  return { open, setOpen, closeDialog };
 }
 
 export default function DesktopAppDownloadDialog({ onClose }: Props) {
@@ -43,7 +36,7 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
   const handleClose = () => {
     closeDialog();
     confirmUpdate(false);
-    if (onClose) onClose();
+    onClose?.();
   };
 
   const handleDownload = (e: React.MouseEvent) => {
@@ -58,9 +51,9 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
         <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
         <Dialog.Content
           className="
-        fixed left-1/2 top-1/2 z-50 
-        w-full max-w-[1100px] h-[calc(100vh-100px)] md:h-[567px]
-        -translate-x-1/2 -translate-y-1/2
+            fixed left-1/2 top-1/2 z-50 
+            w-full max-w-[1100px] h-[calc(100vh-100px)] md:h-[567px]
+            -translate-x-1/2 -translate-y-1/2
           "
         >
           <Dialog.Title className="sr-only">
@@ -69,29 +62,32 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
 
           <div
             className="bg-white rounded-[8px]
-            shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
-            border border-grey-80 mx-6 h-full relative max-md:overflow-y-scroll"
+                       shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
+                       border border-grey-80 mx-6 h-full relative max-md:overflow-y-scroll"
           >
             <div className="absolute top-0 left-0 right-0 h-4 bg-primary-50 rounded-t-[8px] sm:hidden" />
             <Dialog.Close className="max-md:hidden absolute top-4 right-4 border-[0.7px] border-grey-80 flex justify-center items-center size-10 hover:bg-grey-90 transition-colors">
               <X className="size-4 text-grey-10" />
             </Dialog.Close>
 
-            {/* Two divs with 48px gap */}
             <InView triggerOnce>
               {({ inView, ref }) => (
                 <div
                   ref={ref}
-                  className="grid grid-cols-1 max-md:p-4 md:grid-cols-2 md:gap-6  lg:gap-12  w-full h-full  md:pr-4"
+                  className="grid grid-cols-1 max-md:p-4 md:grid-cols-2 md:gap-6 lg:gap-12 w-full h-full md:pr-4 items-stretch"
                 >
+                  {/* Mobile close */}
                   <button
                     aria-label="Close"
-                    className=" text-grey-10 hover:text-grey-20 md:hidden py-4 flex justify-end"
+                    onClick={handleClose}
+                    className="text-grey-10 hover:text-grey-20 md:hidden py-4 flex justify-end"
                   >
                     <CloseCircle className="size-6" />
                   </button>
-                  <div className=" bg-primary-100 md:rounded-tl-lg md:rounded-bl-lg relative h-full max-md:h-[359px] ">
-                    <div className={"absolute w-full  top-0 h-full opacity-5 "}>
+
+                  {/* LEFT: image pane */}
+                  <div className="bg-primary-100 md:rounded-tl-lg md:rounded-bl-lg relative h-full max-md:h-[359px]">
+                    <div className="absolute w-full top-0 h-full opacity-5">
                       <Graphsheet
                         majorCell={{
                           lineColor: [31, 80, 189, 1.0],
@@ -106,7 +102,7 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
                         className="absolute w-full left-0 h-full duration-500"
                       />
                     </div>
-                    <div className="relative w-full  h-full">
+                    <div className="relative w-full h-full">
                       <RevealTextLine
                         rotate
                         reveal={inView}
@@ -123,10 +119,11 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
                     </div>
                   </div>
 
-                  <div className="bg-grey-100 flex flex-col mt-9">
-                    <div>
-                      {/* Icon */}
-                      <div className="flex items-center">
+                  {/* RIGHT: content pane (fixed height, only notes scroll) */}
+                  <div className="bg-grey-100 flex flex-col md:h-full md:overflow-hidden my-9 md:my-0 pr-2 md:pr-4 pb-6">
+                    {/* Top (static) */}
+                    <div className="shrink-0">
+                      <div className="flex items-center mt-9">
                         <div className="flex items-center justify-center h-[56px] w-[56px] relative">
                           <Graphsheet
                             majorCell={{
@@ -146,6 +143,7 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
                           </div>
                         </div>
                       </div>
+
                       <div className="mt-6">
                         <RevealTextLine
                           rotate
@@ -157,6 +155,7 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
                           </span>
                         </RevealTextLine>
                       </div>
+
                       <h1 className="text-[28px] lg:text-[40px] leading-[48px] text-grey-10 mt-2">
                         <RevealTextLine
                           rotate
@@ -166,7 +165,7 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
                           <span className="font-medium text-grey-30">
                             {" "}
                             New Update Available -
-                          </span>{" "}
+                          </span>
                         </RevealTextLine>
                         <br />
                         <RevealTextLine
@@ -179,6 +178,7 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
                           </span>
                         </RevealTextLine>
                       </h1>
+
                       <RevealTextLine
                         rotate
                         reveal={inView}
@@ -189,30 +189,25 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
                           available for download.
                         </p>
                       </RevealTextLine>
-                      {updateInfo?.body && (
-                        <div className="flex gap-2 flex-col font-medium mt-3 text-grey-50">
-                          <RevealTextLine
-                            rotate
-                            reveal={inView}
-                            className="delay-600"
-                          >
-                            <div className="flex gap-2">
-                              <Icons.Note2 className="size-6" />
-                              <span className="text-lg">Release Notes</span>
-                            </div>
-                          </RevealTextLine>
-                          <RevealTextLine
-                            rotate
-                            reveal={inView}
-                            className="delay-700"
-                          >
-                            <p className="text-sm">{updateInfo.body}</p>
-                          </RevealTextLine>
-                        </div>
-                      )}
                     </div>
 
-                    <div className="flex flex-col gap-4 mt-7">
+                    {/* Release notes: heading static, body scrolls */}
+                    {updateInfo?.body && (
+                      <div className="flex-1 min-h-0 mt-4">
+                        <div className="flex items-center gap-2 text-grey-50 font-medium">
+                          <Icons.Note2 className="size-6" />
+                          <span className="text-lg">Release Notes</span>
+                        </div>
+
+                        {/* Only this scrolls */}
+                        <div className=" h-full overflow-y-auto pr-1 md:pr-3 pb-4">
+                          <BasicMarkdown text={updateInfo.body} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* CTA (fixed at bottom, always visible) */}
+                    <div className="shrink-0 flex flex-col gap-4 mt-10">
                       <RevealTextLine
                         rotate
                         reveal={inView}

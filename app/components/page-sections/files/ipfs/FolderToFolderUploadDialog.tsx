@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { CloseCircle, Eye, EyeOff, FolderAdd, ShieldSecurity } from "@/components/ui/icons";
+import { CloseCircle, FolderAdd } from "@/components/ui/icons";
 import { AbstractIconWrapper, RevealTextLine } from "@/app/components/ui";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
@@ -42,8 +42,6 @@ export default function FolderToFolderUploadDialog({
     const { getParam } = useUrlParams();
 
     const [folderPath, setFolderPath] = useState<string>("");
-    const [encryptionKey, setEncryptionKey] = useState<string>("");
-    const [showEncryptionKey, setShowEncryptionKey] = useState(false);
     const [folderError, setFolderError] = useState<string | null>(null);
 
     const urlMainFolderCid = getParam("mainFolderCid");
@@ -95,14 +93,12 @@ export default function FolderToFolderUploadDialog({
                 folderName: mainFolderActualName || parentFolderName,
                 folderPath: folderPath,
                 seedPhrase: mnemonic,
-                subfolderPath: folderPathArray || null,
-                ...(isPrivateFolder ? { encryptionKey: encryptionKey.trim() || null } : {})
+                subfolderPath: folderPathArray || null
             };
 
             console.log("Invoke params (sanitized):", {
                 ...invokeParams,
-                seedPhrase: "[REDACTED]",
-                ...(isPrivateFolder ? { encryptionKey: encryptionKey.trim() || null } : {})
+                seedPhrase: "[REDACTED]"
             });
 
             const manifestCid = await invoke<string>(command, invokeParams);
@@ -126,8 +122,6 @@ export default function FolderToFolderUploadDialog({
 
     const handleClose = () => {
         setFolderPath("");
-        setEncryptionKey("");
-        setShowEncryptionKey(false);
         setFolderError(null);
         onClose();
     };
@@ -172,7 +166,7 @@ export default function FolderToFolderUploadDialog({
                         <div className="text-grey-70 text-sm text-center">
                             <RevealTextLine rotate reveal={true} className="delay-300">
                                 {isPrivateFolder
-                                    ? "Upload a folder to private IPFS storage with encryption."
+                                    ? "Upload a folder to private IPFS storage."
                                     : "Upload a folder to public IPFS storage."}
                             </RevealTextLine>
                         </div>
@@ -215,45 +209,6 @@ export default function FolderToFolderUploadDialog({
                                 </div>
                             )}
                         </div>
-
-                        {isPrivateFolder && (
-                            <div className="space-y-2">
-                                <Label htmlFor="encryptionKey" className="text-sm font-medium text-grey-70">
-                                    Encryption Key (Optional)
-                                </Label>
-                                <div className="relative flex items-start w-full">
-                                    <ShieldSecurity className="size-6 absolute left-3 top-[28px] transform -translate-y-1/2 text-grey-60" />
-                                    <Input
-                                        id="encryptionKey"
-                                        type={showEncryptionKey ? "text" : "password"}
-                                        placeholder="Enter encryption key (optional)"
-                                        value={encryptionKey}
-                                        onChange={(e) => setEncryptionKey(e.target.value)}
-                                        className={cn(
-                                            "pl-11 pr-11 border-grey-80 h-14 text-grey-30 w-full",
-                                            "bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none",
-                                            "hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
-                                        )}
-                                    />
-                                    <button
-                                        type="button"
-                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-60 hover:text-grey-40"
-                                        onClick={() => setShowEncryptionKey(!showEncryptionKey)}
-                                    >
-                                        {showEncryptionKey ? (
-                                            <EyeOff className="size-5" />
-                                        ) : (
-                                            <Eye className="size-5" />
-                                        )}
-                                    </button>
-                                </div>
-                                <p className="text-xs text-grey-70">
-                                    {encryptionKey.trim()
-                                        ? "Using custom encryption key for this folder."
-                                        : "Default encryption key will be used if left empty."}
-                                </p>
-                            </div>
-                        )}
 
                         <div className="flex flex-col gap-2">
                             <button
