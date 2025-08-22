@@ -10,50 +10,7 @@ use std::thread; // Add thread
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, RecentItem}; // Update imports
 use std::path::Path;
 use std::os::unix::process::ExitStatusExt;
-
-fn parse_s3_sync_line(line: &str) -> Option<RecentItem> {
-    let mut parts = line.split_whitespace();
-
-    // The first part might be "(dryrun)". If it is, we skip it.
-    let first_part = parts.next().unwrap_or("");
-    let action_part = if first_part == "(dryrun)" {
-        parts.next().unwrap_or("")
-    } else {
-        first_part
-    };
-    
-    // The action should be "upload:" or "delete:"
-    let action = match action_part {
-        "upload:" => "uploaded",
-        "delete:" => "deleted",
-        _ => return None, // Not a line we care about
-    };
-
-    // The next part is always the path
-    let path_part = parts.next().unwrap_or("");
-    if path_part.is_empty() {
-        return None;
-    }
-
-    let file_name = if action == "deleted" {
-        // Input is an S3 URI like "s3://bucket/file.txt"
-        path_part.rsplit('/').next().unwrap_or("")
-    } else {
-        // Input is a local path like "./file.txt" or "/path/to/file.txt"
-        Path::new(path_part).file_name().and_then(|s| s.to_str()).unwrap_or("")
-    };
-
-    if file_name.is_empty() {
-        return None;
-    }
-    
-    Some(RecentItem {
-        name: file_name.to_string(),
-        scope: "private".to_string(),
-        action: action.to_string(),
-        kind: "file".to_string(), // Approximation
-    })
-}
+use crate::sync_shared::parse_s3_sync_line;
 
 
 pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) {
@@ -226,13 +183,7 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
 
         // --- Step 1: Dry Run to get total file count ---
         println!("[PrivateFolderSync] Starting dry run to calculate changes...");
-        {
-            let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
-            state.in_progress = true;
-            state.processed_files = 0;
-            state.total_files = 0;
-            state.current_item = None;
-        }
+        
         
         let dry_run_output = Command::new("aws")
             .env("AWS_PAGER", "")
@@ -250,7 +201,7 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 stdout.lines()
-                    .filter_map(|line| parse_s3_sync_line(line))
+                    .filter_map(|line| parse_s3_sync_line(line, "private"))
                     .count()
             },
             Err(e) => {
@@ -258,11 +209,6 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
                 continue;
             }
         };
-        
-        {
-            let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
-            state.total_files = total_changes;
-        }
 
         if total_changes == 0 {
             println!("[PrivateFolderSync] No changes detected. Waiting for next cycle.");
@@ -272,6 +218,19 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             }
             sleep(Duration::from_secs(60)).await;
             continue;
+        }
+
+        {
+            let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+            state.in_progress = true;
+            state.processed_files = 0;
+            state.total_files = 0;
+            state.current_item = None;
+        }
+
+        {
+            let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+            state.total_files = total_changes;
         }
 
         // --- Step 2: Live Parse the real sync ---
@@ -296,7 +255,7 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
                 for line in reader.lines() {
                     if let Ok(line) = line {
                         println!("[AWS Sync] {}", line);
-                        if let Some(item) = parse_s3_sync_line(&line) {
+                        if let Some(item) = parse_s3_sync_line(&line, "private") {
                              let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
                              state.processed_files += 1;
                              state.current_item = Some(item.clone());
