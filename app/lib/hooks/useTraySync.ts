@@ -18,19 +18,14 @@ const TRAY_ID = "hippius-tray";
 const QUIT_ID = "quit";
 const SYNC_ID = "sync";
 const INSTALL_UPDATE = "install-update";
-
-// New section ids
-const SYNC_SECTION_HEADER_ID = "sync-activity-header";
 const SYNC_ITEM_PREFIX = "sync-activity-item:";
 
 /* ─ State kept across React reloads ───────────────────────────── */
 let menuPromise: Promise<Menu> | null = null;
 let syncItem: MenuItem | null = null;
-
-let syncHeaderItem: MenuItem | null = null; // "Sync Activity" header
 const syncRowItems = new Map<string, MenuItem>(); // rows under header
 
-// Cache last rendered “rows signature” to avoid flicker
+// Cache last rendered "rows signature" to avoid flicker
 let lastRowsSignature = "";
 
 // Runtime check for icon rows
@@ -57,7 +52,7 @@ type SyncActivityRow = {
   fileName: string;            // possibly shortened for display
   rawName: string;             // full name
   scope: string;               // public/private
-  status: "uploading" | "uploaded" | "deleted" | "queued" | "failed" | "synced";
+  status: "uploading" | "uploaded";
   progress?: number;
   iconPath?: string;           // final icon/thumbnail to show if supported
   rawPath?: string;            // original file path (for click actions later)
@@ -72,15 +67,6 @@ export function useTrayInit() {
       const iconPath = await resolveResource("icons/trayIcon.png");
       const existingTray = await TrayIcon.getById(TRAY_ID);
 
-      // Quit
-      const quit = await MenuItem.new({
-        id: QUIT_ID,
-        text: "Quit Hippius",
-        action: async () => {
-          await invoke("app_close");
-        },
-      });
-
       // Optional update menu item
       const update = await getAvailableUpdate();
       let installUpdateMenuItem: MenuItem | undefined;
@@ -94,12 +80,20 @@ export function useTrayInit() {
         });
       }
 
-      // Build the base menu
+      // Quit item - create this early but add it last
+      const quit = await MenuItem.new({
+        id: QUIT_ID,
+        text: "Quit Hippius",
+        action: async () => {
+          await invoke("app_close");
+        },
+      });
+
+      // Build the initial menu
       const menu = await Menu.new({
         items: [
-          // The dynamic percent label may insert above these later
           ...(installUpdateMenuItem ? [installUpdateMenuItem] : []),
-          quit,
+          // We'll add the quit item at the end after sync items
         ],
       });
 
@@ -116,6 +110,9 @@ export function useTrayInit() {
 
       // Start watcher for sync activity after menu exists
       startSyncActivityWatcher();
+
+      // Add quit item at the end
+      await menu.append(quit);
 
       return menu;
     })();
@@ -173,7 +170,7 @@ function startSyncActivityWatcher() {
 
       const rows = await normalizeActivityToRows(resp ?? {});
 
-      // Build a compact signature to detect “no change”
+      // Build a compact signature to detect "no change"
       const signature = JSON.stringify(
         rows.map((r) => ({
           id: r.id,
@@ -183,14 +180,13 @@ function startSyncActivityWatcher() {
       );
 
       if (signature === lastRowsSignature) {
-        // No changes => no DOM churn => no flicker.
         return;
       }
       lastRowsSignature = signature;
 
-      await updateSyncActivitySection(menu, rows);
-    } catch {
-      // silent: avoid noisy logs from tray updates
+      await updateSyncRowsDirectly(menu, rows);
+    } catch (error) {
+      console.error("Error updating sync activity in tray:", error);
     }
   };
 
@@ -210,43 +206,41 @@ function startSyncActivityWatcher() {
 async function normalizeActivityToRows(
   resp: BackendActivityResponse
 ): Promise<SyncActivityRow[]> {
+  // Get icons for different file types
   const videoIcon = await safeResolve("icons/generic-video.png");
   const fileIcon = await safeResolve("icons/generic-file.png");
+  const folderIcon = await safeResolve("icons/generic-folder.png");
 
   const rows: SyncActivityRow[] = [];
 
   const addItem = async (it: BackendActivityItem) => {
-    const status =
-      it.action === "uploading"
-        ? "uploading"
-        : it.action === "deleted"
-          ? "deleted"
-          : "synced";
+    // Simplify status to just "uploading" or "uploaded"
+    const status = it.action === "uploading" ? "uploading" : "uploaded";
 
     const rawName = it.name || "Unknown";
     const fileName = shortenName(rawName);
 
-    // Resolve best icon:
-    // 1) Ask backend for a thumbnail (works for images/videos if you implement it)
-    // 2) If image, use the file itself as icon (often supported)
-    // 3) If video, use generic video icon
-    // 4) Fallback to generic file icon
+    // Always try to get a thumbnail regardless of file type
     let iconPath: string | undefined;
 
     try {
-      // Optional but recommended backend helper:
-      // return a small PNG path (e.g., 64x64) for any file (image or video)
-      iconPath =
-        (await invoke("get_thumbnail_for_path", {
-          path: it.path,
-          size: 64,
-        })) as string;
-    } catch {
-      // Helper not available; continue with heuristics
+      // Try to get thumbnail from backend
+      iconPath = (await invoke("get_thumbnail_for_path", {
+        path: it.path,
+        size: 32, // Smaller size for menu items
+      })) as string;
+
+      console.log(`Got thumbnail for ${fileName}: ${iconPath ? "✓" : "✗"}`);
+    } catch (error) {
+      console.log(`Failed to get thumbnail for ${fileName}, using fallbacks`);
+      console.log(error);
     }
 
+    // Fallback icons if no thumbnail
     if (!iconPath) {
-      if (isImagePath(it.path)) {
+      if (it.kind === "folder") {
+        iconPath = folderIcon || fileIcon;
+      } else if (isImagePath(it.path)) {
         iconPath = it.path; // many platforms allow raw file path as icon
       } else if (isVideoPath(it.path)) {
         iconPath = videoIcon || fileIcon;
@@ -261,107 +255,82 @@ async function normalizeActivityToRows(
       fileName,
       scope: it.scope || "",
       status,
-      iconPath: iconPath || undefined,
+      iconPath: iconPath,
       rawPath: it.path,
     });
   };
 
+  // Process uploading files first, then recent files
   for (const it of resp.uploading ?? []) await addItem(it);
   for (const it of resp.recent ?? []) await addItem(it);
 
-  // Order: uploading first, then recent. Limit to keep the tray tidy.
+  // Limit to reasonable number to keep menu clean
   return rows.slice(0, 5);
 }
 
-/* ─ Maintain "Sync Activity" section (minimal churn) ──────────── */
-async function updateSyncActivitySection(menu: Menu, rows: SyncActivityRow[]) {
-  if (rows.length === 0) {
-    await removeSyncActivitySection(menu);
-    return;
-  }
-
-  // Ensure header exists, inserted right below the percent label if present
-  if (!syncHeaderItem) {
-    syncHeaderItem = await MenuItem.new({
-      id: SYNC_SECTION_HEADER_ID,
-      text: "— Sync Activity —",
-      enabled: false,
-    });
-
+/* ─ Add rows directly after sync percentage ─────────────────── */
+async function updateSyncRowsDirectly(menu: Menu, rows: SyncActivityRow[]) {
+  try {
     const items = await menu.items();
-    const syncIdx = items.findIndex((i) => i.id === SYNC_ID);
-    const insertAt = syncIdx >= 0 ? syncIdx + 1 : 0;
-    await menu.insert(syncHeaderItem, insertAt);
-  }
 
-  // Compute desired order of row IDs
-  const desiredIds = rows.map((r) => SYNC_ITEM_PREFIX + r.id);
-  const desiredMap = new Map(desiredIds.map((id, idx) => [id, idx]));
-
-  // 1) Remove stale items
-  for (const [id, item] of [...syncRowItems.entries()]) {
-    if (!desiredMap.has(id)) {
-      await menu.remove(item);
-      syncRowItems.delete(id);
-    }
-  }
-
-  // 2) Ensure rows exist in desired order, updating text/icon only when changed
-  //    Insert right after the header.
-  let insertIndex =
-    (await menu.items()).findIndex((i) => i.id === SYNC_SECTION_HEADER_ID) + 1;
-
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i];
-    const id = SYNC_ITEM_PREFIX + r.id;
-    const newText = formatRowText(r);
-
-    const existing = syncRowItems.get(id);
-
-    if (!existing) {
-      // Create new (try icon row; fallback to text)
-      const item = await newSyncRowMenuItem(id, newText, r.iconPath);
-      await menu.insert(item, insertIndex++);
-      syncRowItems.set(id, item);
+    // Find position for files - right after sync percentage if it exists,
+    // or at the beginning if it doesn't
+    let insertPosition = items.findIndex((i) => i.id === SYNC_ID);
+    if (insertPosition >= 0) {
+      insertPosition += 1; // Insert after sync percentage
     } else {
-      // Update in place if text changed
-      const currentText = await existing.text();
-      if (currentText !== newText) {
-        await existing.setText(newText);
-      }
-      // Ensure correct order with minimal moves:
-      // We'll accept minor out-of-order to reduce flicker.
-      insertIndex++;
+      insertPosition = 0; // Insert at the beginning
     }
+
+    // First remove existing sync row items
+    for (const [id, item] of [...syncRowItems.entries()]) {
+      try {
+        await menu.remove(item);
+        syncRowItems.delete(id);
+      } catch (error) {
+        console.error(`Failed to remove menu item ${id}:`, error);
+      }
+    }
+
+    // If no rows to show, we're done
+    if (rows.length === 0) {
+      return;
+    }
+
+    // Now add new items - we add all at once to avoid UI flicker
+    // Insert in reverse order to maintain correct final order
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      const id = SYNC_ITEM_PREFIX + row.id;
+      const text = formatRowText(row);
+
+      try {
+        const item = await newSyncRowMenuItem(id, text, row.iconPath);
+        await menu.insert(item, insertPosition);
+        syncRowItems.set(id, item);
+      } catch (error) {
+        console.error(`Failed to create menu item for ${row.fileName}:`, error);
+      }
+    }
+
+    console.log(`Updated tray menu: ${syncRowItems.size} file items added`);
+  } catch (error) {
+    console.error("Error managing tray menu items:", error);
   }
 }
 
-/* ─ Remove header + rows ──────────────────────────────────────── */
-async function removeSyncActivitySection(menu: Menu) {
-  for (const [, item] of syncRowItems) {
-    await menu.remove(item);
-  }
-  syncRowItems.clear();
-
-  if (syncHeaderItem) {
-    await menu.remove(syncHeaderItem);
-    syncHeaderItem = null;
-  }
-
-  lastRowsSignature = "";
-}
-
-/* ─ Create a row (icon if available) ──────────────────────────── */
+/* ─ Create a row with icon if available ─────────────────────── */
 async function newSyncRowMenuItem(id: string, text: string, iconPath?: string) {
   if (hasIconMenuItems && iconPath) {
     try {
       return await TauriIconMenuItem.new({
         id,
         text,
-        icon: iconPath, // backend thumbnail or file path
+        icon: iconPath,
         enabled: false,
       });
-    } catch {
+    } catch (error) {
+      console.error("Failed to create icon menu item:", error);
       // fall through to text row
     }
   }
@@ -373,23 +342,20 @@ async function newSyncRowMenuItem(id: string, text: string, iconPath?: string) {
   });
 }
 
-/* ─ Row label formatting ──────────────────────────────────────── */
-// Try multi-line. Some platforms collapse to one line; that’s okay.
+/* ─ Row label formatting - improved for status display ────────── */
 function formatRowText(r: SyncActivityRow) {
-  const primary =
-    r.status === "uploading"
-      ? `⬆️ ${r.fileName}`
-      : r.status === "uploaded"
-        ? `✅ ${r.fileName}`
-        : r.status === "deleted"
-          ? `🗑️ ${r.fileName}`
-          : r.status === "failed"
-            ? `❌ ${r.fileName}`
-            : `⏳ ${r.fileName}`;
+  // Format name on first line
+  const firstLine = r.fileName;
 
-  // Second line for scope (public/private) if available
-  const scope = r.scope ? `\n(${r.scope})` : "";
-  return primary + scope;
+  // Format status and scope on second line  
+  const statusText = r.status === "uploading" ? "Uploading..." : "Uploaded";
+  const scopeText = r.scope ? ` (${r.scope})` : "";
+
+  // Second line has status and scope
+  const secondLine = `${statusText}${scopeText}`;
+
+  // Return formatted text with multiline support
+  return `${firstLine}\n${secondLine}`;
 }
 
 /* ─ Helpers ───────────────────────────────────────────────────── */
