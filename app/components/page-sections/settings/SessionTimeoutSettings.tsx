@@ -146,8 +146,8 @@ export default function SessionTimeoutSettings() {
                       className="
                         absolute size-5 right-4 top-1/2 -translate-y-1/2
                         text-grey-60 pointer-events-none
-                        transition-transform duration-200 ease-out
-                        rotate-180 group-data-[state=open]:rotate-0
+                        transition-transform duration-200 ease-out rotate-0
+                         group-data-[state=open]:rotate-180
                       "
                     />
                   </SelectTrigger>
