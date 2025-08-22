@@ -255,7 +255,7 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
                 for line in reader.lines() {
                     if let Ok(line) = line {
                         println!("[AWS Sync] {}", line);
-                        if let Some(item) = parse_s3_sync_line(&line) {
+                        if let Some(item) = parse_s3_sync_line(&line, "private") {
                              let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
                              state.processed_files += 1;
                              state.current_item = Some(item.clone());
