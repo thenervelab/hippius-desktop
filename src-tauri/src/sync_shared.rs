@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::collections::{HashSet, VecDeque};
 use tauri::{AppHandle, Wry};
-use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse}; // Assuming this is now just the response struct
+use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse}; 
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path; 
@@ -139,9 +139,7 @@ pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
     let uploading: Vec<RecentItem> = p_state.current_item.iter()
         .chain(pub_state.current_item.iter())
         .cloned()
-        .collect();
-    println!("[SyncShared] Recent: {:?}", recent);
-    println!("[SyncShared] Uploading: {:?}", uploading);
+        .collect();\
     SyncActivityResponse { recent, uploading }
 }
 
@@ -166,7 +164,6 @@ pub fn reset_all_sync_state() {
 }
 
 pub fn prepare_for_new_sync() {
-    println!("[SyncShared] Preparing for new sync - resetting cancellation token");
     GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
 }
 
