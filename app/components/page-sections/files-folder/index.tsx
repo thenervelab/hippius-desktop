@@ -27,6 +27,7 @@ import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFile
 import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userPreferencesDb";
 import { getFolderPathArray } from "@/app/utils/folderPathUtils";
 import AddFolderToFolderButton from "@/components/page-sections/files/ipfs/AddFolderToFolderButton";
+import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 
 interface FileEntry {
     file_name: string;
@@ -53,8 +54,9 @@ export default function FolderView({
     folderName = "Folder",
     folderActualName = "Folder",
     mainFolderActualName,
-    subFolderPath
+    subFolderPath,
 }: FolderViewProps) {
+    const { getParam } = useUrlParams();
     const { polkadotAddress } = useWalletAuth();
     const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
     const [files, setFiles] = useState<FormattedUserIpfsFile[]>([]);
@@ -114,10 +116,10 @@ export default function FolderView({
 
 
             const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
-                folderName: folderActualName,
-                folderMetadataCid: folderCid,
+                accountId: polkadotAddress,
+                scope: isPrivateFolder ? "private" : "public",
                 mainFolderName: mainFolderActualName || null,
-                subfolderPath: folderPath || null
+                subfolderPath: folderPath || null,
             });
 
             console.log("Fetched folder contents:", fileEntries);
@@ -149,7 +151,7 @@ export default function FolderView({
                         minerIds: parseMinerIds(entry.miner_ids),
                         lastChargedAt: Number(entry.last_charged_at),
                         isErasureCoded,
-                        isFolder: isFolder,
+                        isFolder: isFolder || entry.is_folder,
                         parentFolderId: folderCid,
                         parentFolderName: folderName
                     };
@@ -197,6 +199,8 @@ export default function FolderView({
                 return; // User canceled directory selection
             }
 
+            const folderSource = getParam("folderSource");
+
             // Download folder
             setIsDownloading(true);
             const result = await downloadIpfsFolder({
@@ -205,6 +209,7 @@ export default function FolderView({
                 polkadotAddress: polkadotAddress ?? "",
                 isPrivate: isPrivateFolder,
                 outputDir,
+                source: folderSource
             });
 
             if (result && !result.success) {

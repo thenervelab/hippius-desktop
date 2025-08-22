@@ -79,9 +79,10 @@ pub struct FileDetail {
     pub source: String,
     pub file_hash: String,
     pub miner_ids: String,
-    pub file_size: usize,
+    pub file_size: u64, // <-- FIX: Changed to u64
     pub created_at: String,
     pub last_charged_at: String,
+    pub is_folder: bool, // <-- FIX: Added this field
 }
 
 // A helper struct to hold the results from processing each file

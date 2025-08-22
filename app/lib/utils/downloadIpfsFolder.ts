@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-
+import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 export interface DownloadIpfsFolderOptions {
     folderCid: string;
     folderName: string;
@@ -9,6 +9,8 @@ export interface DownloadIpfsFolderOptions {
     isPrivate: boolean;
     encryptionKey?: string | null;
     outputDir?: string | null;
+    file?: FormattedUserIpfsFile;
+    source?: string | null
 }
 
 export const downloadIpfsFolder = async ({
@@ -18,6 +20,8 @@ export const downloadIpfsFolder = async ({
     isPrivate,
     encryptionKey,
     outputDir,
+    file,
+    source
 }: DownloadIpfsFolderOptions) => {
     let selectedOutputDir = outputDir;
     if (!selectedOutputDir) {
@@ -31,6 +35,15 @@ export const downloadIpfsFolder = async ({
     }
 
     console.log("selectedOutputDir", selectedOutputDir)
+
+    console.log({
+        accountId: polkadotAddress,
+        folderMetadataCid: folderCid,
+        folderName: folderName,
+        outputDir: selectedOutputDir,
+        encryptionKey: encryptionKey,
+        source: source ? source : file?.source || ""
+    })
 
     const toastId = toast.info("Downloading folder...", { duration: Infinity });
 
@@ -47,6 +60,7 @@ export const downloadIpfsFolder = async ({
                 folderName: folderName,
                 outputDir: selectedOutputDir,
                 encryptionKey: encryptionKey,
+                source: source ? source : file?.source || ""
             });
         } else {
             result = await invoke<{
@@ -57,7 +71,8 @@ export const downloadIpfsFolder = async ({
                 accountId: polkadotAddress,
                 folderMetadataCid: folderCid,
                 folderName: folderName,
-                outputDir: selectedOutputDir
+                outputDir: selectedOutputDir,
+                source: source ? source : file?.source || ""
             });
         }
 
