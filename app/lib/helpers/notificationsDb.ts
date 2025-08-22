@@ -2,7 +2,6 @@ import type initSqlJsType from "sql.js/dist/sql-wasm.js";
 import { initHippiusDesktopDB, saveBytes } from "./hippiusDesktopDB";
 
 /* ── schemas ─────────────────────────────── */
-let _notifDbBootstrapped = false;
 
 const NOTIFICATION_SCHEMA = `
   CREATE TABLE IF NOT EXISTS notifications (
@@ -40,19 +39,16 @@ const NOTIFICATION_PREFERENCES_SCHEMA = `
 async function getDb(): Promise<initSqlJsType.Database> {
   const db = await initHippiusDesktopDB();
 
-  if (!_notifDbBootstrapped) {
-    db.run(NOTIFICATION_SCHEMA);
-    db.run(APP_STATE_SCHEMA);
-    db.run(NOTIFICATION_PREFERENCES_SCHEMA);
+  db.run(NOTIFICATION_SCHEMA);
+  db.run(APP_STATE_SCHEMA);
+  db.run(NOTIFICATION_PREFERENCES_SCHEMA);
 
-    const exists = db.exec(`SELECT 1 FROM app_state WHERE id = 1`);
-    if (!exists.length) {
-      db.run(`INSERT INTO app_state (id) VALUES (1)`);
-    }
-
-    await initNotificationPreferences(db); // may call saveBytes once
-    _notifDbBootstrapped = true;
+  const exists = db.exec(`SELECT 1 FROM app_state WHERE id = 1`);
+  if (!exists.length) {
+    db.run(`INSERT INTO app_state (id) VALUES (1)`);
   }
+
+  await initNotificationPreferences(db); // may call saveBytes once
 
   return db;
 }
