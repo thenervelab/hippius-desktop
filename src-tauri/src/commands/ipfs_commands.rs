@@ -1376,103 +1376,96 @@ async fn process_single_file_for_sync(
 
 #[tauri::command]
 pub async fn list_folder_contents(
-    folder_name: String,
-    folder_metadata_cid: String,
-    main_folder_name: Option<String>,
-    mut subfolder_path: Option<Vec<String>>,
+    account_id: String,
+    scope: String,
+    main_folder_name: String,
+    subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
-    let api_url = "http://127.0.0.1:5001";
-    println!("subfolder_path {:?}", subfolder_path);
-    println!("[list_folder_contents] fetching folder folder_name: {} for CID: {}", folder_name, folder_metadata_cid);
-    let metadata_bytes = download_from_ipfs_async(api_url, &folder_metadata_cid)
-        .await
-        .map_err(|e| format!("Failed to download folder manifest for CID {}: {}", folder_metadata_cid, e))?;
-    let file_entries = parse_folder_metadata(&metadata_bytes, &folder_metadata_cid).await?;
-    let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
+    println!("[ListFolderContents] Received main_folder_name: {:?}", main_folder_name);
+    println!("[ListFolderContents] Received subfolder_path: {:?}", subfolder_path);    
 
-    let folder_record = sqlx::query(
-        r#"
-        SELECT 
-            source, 
-            miner_ids, 
-            created_at, 
-            last_charged_at
-        FROM user_profiles 
-        WHERE file_name = ?
-        LIMIT 1
-        "#
-    )
-    .bind(main_folder_name.as_ref().unwrap_or(&folder_name))
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("DB query failed for folder {}: {}", folder_name, e))?;
-    println!("files_in_folder , {:?}", file_entries);
-    let files_in_folder: Vec<FileDetail> = file_entries
-        .into_iter()
-        .filter(|entry| !entry.file_name.ends_with(".ec"))
-        .map(|file_entry| {
-            let mut file_detail = if let Some(row) = &folder_record {
-                let mut source_path = row.get::<Option<String>, _>("source").unwrap_or_default();
-                println!("source_path: {}", source_path);
-                if source_path != "Hippius" {
-                    // Build a base directory from source and sanitized subfolder path (excluding main folder)
-                    let mut base_dir = PathBuf::from(&source_path);
-                    if let Some(ref mut path_vector) = subfolder_path {
-                        // If the first segment is main folder, drop it
-                        if let Some(main) = main_folder_name.as_ref().or(Some(&folder_name)) {
-                            if !path_vector.is_empty() && sanitize_name(&path_vector[0]) == sanitize_name(main) {
-                                let _ = path_vector.remove(0);
-                            }
-                        } else if !path_vector.is_empty() {
-                            let _ = path_vector.remove(0);
-                        }
-                        for segment in path_vector.iter() {
-                            let sanitized_segment = sanitize_name(segment);
-                            if !sanitized_segment.is_empty() {
-                                base_dir.push(sanitized_segment);
-                            }
-                        }
-                    }
+    let bucket_name = format!("{}-{}", account_id, scope);
+    let endpoint_url = "https://s3.hippius.com";
 
-                    // Append the sanitized entry name (works for files and folders)
-                    let sanitized_entry_name = sanitize_name(&file_entry.file_name);
-                    let candidate_path = base_dir.join(&sanitized_entry_name);
-                    let candidate_str = candidate_path.to_string_lossy().to_string();
-                    println!("constructed candidate path: {}", candidate_str);
-                    if candidate_path.exists() {
-                        source_path = candidate_str;
-                    }else{
-                        source_path = "Hippius".to_string()
-                    }
-                }
-                FileDetail {
-                    file_name: file_entry.file_name.clone(),
-                    cid: file_entry.cid.clone(),
-                    source: source_path,
-                    file_hash: hex::encode(file_entry.cid),
-                    miner_ids: row.get::<Option<String>, _>("miner_ids").unwrap_or_default(),
-                    file_size: file_entry.file_size.unwrap_or(0),
-                    created_at: row.get::<Option<i64>, _>("created_at").unwrap_or(0).to_string(),
-                    last_charged_at: row.get::<Option<i64>, _>("last_charged_at").unwrap_or(0).to_string(),
-                }
+    let path_parts = match subfolder_path {
+        Some(paths) if !paths.is_empty() => paths,
+        _ => vec![main_folder_name],
+    };
+
+    let s3_prefix = format!("{}/", path_parts.join("/"));
+    let full_s3_uri_prefix = format!("s3://{}/{}", bucket_name, s3_prefix);
+
+    println!("[ListFolderContents] Listing contents for: {}", full_s3_uri_prefix);
+
+    // --- FIX is on the line below ---
+    let output = Command::new("aws")
+        .env("AWS_PAGER", "")
+        .arg("s3")
+        .arg("ls")
+        .arg(&full_s3_uri_prefix)
+        .arg("--endpoint-url")
+        .arg(endpoint_url)
+        .arg("--recursive")
+        .output()
+        .await // <-- FIX: Added .await here
+        .map_err(|e| format!("Failed to execute aws command: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to list S3 folder contents: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut direct_files: Vec<FileDetail> = Vec::new();
+    let mut subfolder_data: HashMap<String, (u64, String)> = HashMap::new();
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 4 { continue; }
+
+        let last_modified = format!("{} {}", parts[0], parts[1]);
+        let size: u64 = parts[2].parse().unwrap_or(0);
+        let full_s3_key = parts[3..].join(" ");
+
+        if let Some(relative_path) = full_s3_key.strip_prefix(&s3_prefix) {
+            if let Some(slash_index) = relative_path.find('/') {
+                let subfolder_name = relative_path[..slash_index].to_string();
+                let entry = subfolder_data.entry(subfolder_name).or_insert((0, String::new()));
+                entry.0 += size;
+                entry.1 = last_modified;
             } else {
-                FileDetail {
-                    file_name: file_entry.file_name.clone(),
-                    cid: file_entry.cid.clone(),
-                    source: "Hippius".to_string(),
-                    file_hash: hex::encode(file_entry.cid),
+                if relative_path.is_empty() { continue; }
+                direct_files.push(FileDetail {
+                    file_name: relative_path.to_string(),
+                    cid: "s3".to_string(),
+                    source: format!("s3://{}/{}", bucket_name, full_s3_key),
+                    file_hash: hex::encode(full_s3_key.as_bytes()),
                     miner_ids: String::new(),
-                    file_size: file_entry.file_size.unwrap_or(0),
-                    created_at: 0.to_string(),
-                    last_charged_at: 0.to_string(),
-                }
-            };
-            file_detail.file_name = clean_file_name(&file_detail.file_name);
-            file_detail
-        })
-        .collect();
+                    file_size: size,
+                    created_at: "0".to_string(),
+                    last_charged_at: "0".to_string(),
+                    is_folder: false,
+                });
+            }
+        }
+    }
 
-    Ok(files_in_folder)
+    for (folder_name, (total_size, _)) in subfolder_data {
+        let folder_s3_key = format!("{}{}", s3_prefix, folder_name);
+        direct_files.push(FileDetail {
+            file_name: folder_name,
+            cid: "s3".to_string(),
+            source: format!("s3://{}/{}", bucket_name, folder_s3_key),
+            file_hash: hex::encode(folder_s3_key.as_bytes()),
+            miner_ids: String::new(),
+            file_size: total_size,
+            created_at: "0".to_string(),
+            last_charged_at: "0".to_string(),
+            is_folder: true,
+        });
+    }
+
+    Ok(direct_files)
 }
 
 async fn parse_folder_metadata(bytes: &[u8], original_cid: &str) -> Result<Vec<FolderFileEntry>, String> {

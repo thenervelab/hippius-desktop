@@ -221,19 +221,8 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             }
         };
         
-        // Get the name of the folder we are syncing
-        let sync_folder_name = Path::new(&sync_path)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-
-        if sync_folder_name.is_empty() {
-            eprintln!("[PrivateFolderSync] Could not determine sync folder name from path: {}", sync_path);
-            sleep(Duration::from_secs(60)).await;
-            continue;
-        }
-        // Construct the destination URI to include the folder name
-        let s3_destination = format!("s3://{}/{}/", bucket_name, sync_folder_name);
+        // Sync the contents of the local folder directly to the bucket root (no extra top-level prefix)
+        let s3_destination = format!("s3://{}/", bucket_name);
 
         // --- Step 1: Dry Run to get total file count ---
         println!("[PrivateFolderSync] Starting dry run to calculate changes...");
@@ -249,8 +238,8 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             .env("AWS_PAGER", "")
             .arg("s3")
             .arg("sync")
-            .arg(&sync_path) // Use the full path as the source
-            .arg(&s3_destination) // Use the new destination
+            .arg(&sync_path)
+            .arg(&s3_destination)
             .arg("--endpoint-url")
             .arg(endpoint_url)
             .arg("--delete")
@@ -291,8 +280,8 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             .env("AWS_PAGER", "")
             .arg("s3")
             .arg("sync")
-            .arg(&sync_path) // Use the full path as the source
-            .arg(&s3_destination) // Use the new destination
+            .arg(&sync_path)
+            .arg(&s3_destination)
             .arg("--endpoint-url")
             .arg(endpoint_url)
             .arg("--delete")

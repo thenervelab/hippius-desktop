@@ -11,6 +11,8 @@ use std::process::Command;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use hex;
+use std::collections::HashMap;
+
 
 pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<(String, &'static str)>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
@@ -290,36 +292,37 @@ pub struct BucketItem {
     pub path: String,
     pub size: u64,
     pub last_modified: String,
+    pub is_folder: bool, 
 }
 
-/// Parses a single line from the `aws s3 ls --recursive` output.
-/// Expected file line example (bytes, not human-readable):
-/// "2023-11-20 15:45:01       1024 folder/document.txt"
-fn parse_s3_ls_line(line: &str) -> Option<BucketItem> {
-    let parts: Vec<&str> = line.split_whitespace().collect();
-    if parts.len() < 4 {
-        return None;
-    }
+// /// Parses a single line from the `aws s3 ls --recursive` output.
+// /// Expected file line example (bytes, not human-readable):
+// /// "2023-11-20 15:45:01       1024 folder/document.txt"
+// fn parse_s3_ls_line(line: &str) -> Option<BucketItem> {
+//     let parts: Vec<&str> = line.split_whitespace().collect();
+//     if parts.len() < 4 {
+//         return None;
+//     }
 
-    // Detect and skip folder prefix lines like: "                           PRE folder/"
-    if parts.get(2).map(|s| *s) == Some(&"PRE") || parts.get(0).map(|s| *s) == Some(&"PRE") {
-        return None;
-    }
+//     // Detect and skip folder prefix lines like: "                           PRE folder/"
+//     if parts.get(2).map(|s| *s) == Some(&"PRE") || parts.get(0).map(|s| *s) == Some(&"PRE") {
+//         return None;
+//     }
 
-    // Combine date and time
-    let last_modified = format!("{} {}", parts[0], parts[1]);
+//     // Combine date and time
+//     let last_modified = format!("{} {}", parts[0], parts[1]);
 
-    // Size in bytes
-    let size: u64 = parts[2].parse().unwrap_or(0);
+//     // Size in bytes
+//     let size: u64 = parts[2].parse().unwrap_or(0);
 
-    // Key path: join remainder (handles spaces in keys if any)
-    let path = parts[3..].join(" ");
+//     // Key path: join remainder (handles spaces in keys if any)
+//     let path = parts[3..].join(" ");
 
-    Some(BucketItem { path, size, last_modified })
-}
+//     Some(BucketItem { path, size, last_modified })
+// }
 
-/// Lists all files (recursively) in a given S3 bucket using AWS CLI.
-/// scope must be "public" or "private".
+/// Lists all root-level files and folders in a given S3 bucket using AWS CLI.
+/// Folders will have their total size calculated by summing up the sizes of their contents.
 pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<Vec<BucketItem>, String> {
     if scope != "public" && scope != "private" {
         return Err("Invalid scope provided. Must be 'public' or 'private'.".to_string());
@@ -344,11 +347,52 @@ pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<V
         Ok(output) => {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let items: Vec<BucketItem> = stdout
-                    .lines()
-                    .filter_map(parse_s3_ls_line)
-                    .collect();
-                Ok(items)
+                let mut root_files: Vec<BucketItem> = Vec::new();
+                let mut folder_sizes: HashMap<String, u64> = HashMap::new();
+                let mut folder_last_modified: HashMap<String, String> = HashMap::new();
+
+                for line in stdout.lines() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() < 4 {
+                        continue;
+                    }
+
+                    let last_modified = format!("{} {}", parts[0], parts[1]);
+                    let size_str = parts[2];
+                    let path = parts[3..].join(" ");
+
+                    if let Ok(size) = size_str.parse::<u64>() {
+                        if let Some(slash_index) = path.find('/') {
+                            // This is inside a folder.
+                            let root_folder_name = path[..slash_index].to_string();
+                            *folder_sizes.entry(root_folder_name.clone()).or_insert(0) += size;
+                            
+                            // Keep the last modified date of the latest file in the folder as the folder's last modified date.
+                            folder_last_modified.insert(root_folder_name, last_modified.clone());
+                        } else {
+                            // This is a root file.
+                            root_files.push(BucketItem {
+                                path,
+                                size,
+                                last_modified,
+                                is_folder: false,
+                            });
+                        }
+                    }
+                }
+
+                let mut root_folders: Vec<BucketItem> = folder_sizes.into_iter().map(|(path, size)| {
+                    let last_modified = folder_last_modified.get(&path).cloned().unwrap_or_default();
+                    BucketItem {
+                        path,
+                        size,
+                        last_modified,
+                        is_folder: true,
+                    }
+                }).collect();
+
+                root_files.append(&mut root_folders);
+                Ok(root_files)
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 eprintln!("[ListBucket] Failed to list bucket contents: {}", stderr);
@@ -372,7 +416,6 @@ pub async fn store_bucket_listing_in_db(
     let bucket = format!("{}-{}", owner, file_type);
 
     // Remove any existing S3-derived records for this owner and scope to avoid duplicates
-    // This preserves other sources (e.g., ipfs) since we constrain by main_req_hash = 's3'
     sqlx::query(
         "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'"
     )
@@ -385,64 +428,35 @@ pub async fn store_bucket_listing_in_db(
 
     for it in items {
         let file_name = it.path.clone();
-
-         let source = format!("s3://{}/{}", bucket, it.path);
-
-        // Use hex encoding of the source URI bytes as reversible identifiers
+        let source = format!("s3://{}/{}", bucket, it.path);
         let cid_hex = hex::encode("s3".as_bytes());
         let file_hash_hex = cid_hex.clone();
 
-        // Check existence in user_profiles (only consider S3-origin entries)
-        let exists: Option<(String,)> = sqlx::query_as(
-            "SELECT file_name FROM user_profiles WHERE file_name = ? AND owner = ? AND type = ? AND main_req_hash = 's3'"
+        // Insert new record
+        sqlx::query(
+            "INSERT INTO user_profiles (
+                file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&file_name)
         .bind(owner)
+        .bind(&cid_hex)
+        .bind(&file_hash_hex)
+        .bind(it.size as i64)
+        .bind(true)
+        .bind(0i64)
+        .bind("s3")
+        .bind("")
+        .bind(0i64)
+        .bind(0i64) 
+        .bind("")
+        .bind(&source)
+        .bind("")
         .bind(file_type)
-        .fetch_optional(pool)
+        .bind(it.is_folder) // Correctly use the is_folder flag
+        .execute(pool)
         .await?;
         
-        if exists.is_none() {
-            // Insert new record with defaults where applicable into user_profiles
-            sqlx::query(
-                "INSERT INTO user_profiles (
-                    file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            )
-            .bind(&file_name)
-            .bind(owner)
-            .bind(&cid_hex)
-            .bind(&file_hash_hex)
-            .bind(it.size as i64)
-            .bind(true)
-            .bind(0i64)
-            .bind("s3")
-            .bind("")
-            .bind(0i64)
-            .bind(0i64) 
-            .bind("")
-            .bind(&source)
-            .bind("")
-            .bind(file_type)
-            .bind(false)
-            .execute(pool)
-            .await?;
-        } else {
-            // Update existing size/source/origin in user_profiles (only S3-origin entries)
-            sqlx::query(
-                "UPDATE user_profiles SET file_size_in_bytes = ?, main_req_hash = ?, source = ?, cid = ?, file_hash = ? WHERE file_name = ? AND owner = ? AND type = ? AND main_req_hash = 's3'"
-            )
-            .bind(it.size as i64)
-            .bind("s3")
-            .bind(&source)
-            .bind(&cid_hex)
-            .bind(&file_hash_hex)
-            .bind(&file_name)
-            .bind(owner)
-            .bind(file_type)
-            .execute(pool)
-            .await?;
-        }
         stored += 1;
     }
 

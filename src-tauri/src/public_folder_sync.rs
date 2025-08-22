@@ -69,11 +69,10 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
         syncing_accounts.insert((account_id.clone(), "public"));
     }
 
-    let bucket_name = format!("{}-public", account_id); // Public bucket
+    let bucket_name = format!("{}-public", account_id);
     let endpoint_url = "https://s3.hippius.com";
     let encoded_seed_phrase = encode(&seed_phrase);
 
-    // --- Bucket creation and preflight checks (No changes needed here) ---
     println!("[PublicFolderSync] Ensuring bucket exists: s3://{}", bucket_name);
     let exists_output = Command::new("aws")
         .env("AWS_PAGER", "")
@@ -256,29 +255,13 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             state.current_item = None;
         }
 
-        // --- MODIFICATION START ---
-        // Get the name of the folder we are syncing
-        let sync_folder_name = Path::new(&sync_path)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-
-        if sync_folder_name.is_empty() {
-            eprintln!("[PublicFolderSync] Could not determine sync folder name from path: {}", sync_path);
-            sleep(Duration::from_secs(60)).await;
-            continue;
-        }
-        // Construct the destination URI to include the folder name
-        let s3_destination = format!("s3://{}/{}/", bucket_name, sync_folder_name);
-        // --- MODIFICATION END ---
-
+        let s3_destination = format!("s3://{}/", bucket_name);
 
         let dry_run_output = Command::new("aws")
-            // .current_dir(&sync_path) // No longer needed
             .arg("s3")
             .arg("sync")
-            .arg(&sync_path) // Use the full path as the source
-            .arg(&s3_destination) // Use the new destination
+            .arg(&sync_path)
+            .arg(&s3_destination)
             .arg("--endpoint-url")
             .arg(endpoint_url)
             .arg("--delete")
@@ -319,16 +302,15 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
         println!("[PublicFolderSync] Syncing {} changes...", total_changes);
         println!(
             "[PublicFolderSync] Executing: aws s3 sync '{}' -> '{}' (endpoint: {}) with --delete",
-             &sync_path,
-             &s3_destination, // Use the new destination for logging
-             endpoint_url
-         );
+            &sync_path,
+            &s3_destination,
+            endpoint_url
+        );
         let mut child = Command::new("aws")
-            // .current_dir(&sync_path) // No longer needed
             .arg("s3")
             .arg("sync")
-            .arg(&sync_path) // Use the full path as the source
-            .arg(&s3_destination) // Use the new destination
+            .arg(&sync_path)
+            .arg(&s3_destination)
             .arg("--endpoint-url")
             .arg(endpoint_url)
             .arg("--delete")
