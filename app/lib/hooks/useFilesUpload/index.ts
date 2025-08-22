@@ -54,6 +54,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       const cids: string[] = [];
 
+      console.log("Starting upload for files:", filePaths);
+
       // upload each file via Tauri using file paths
       for (let i = 0; i < filePaths.length; i++) {
         const filePath = filePaths[i];

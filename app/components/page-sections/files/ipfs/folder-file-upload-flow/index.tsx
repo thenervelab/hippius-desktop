@@ -21,6 +21,7 @@ interface FolderFileUploadFlowProps {
 interface FilePathInfo {
     path: string;
     name: string;
+    file?: File;
 }
 
 const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
@@ -41,69 +42,62 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     const mainFolderActualName = getParam("mainFolderActualName", "");
     const subFolderPath = getParam("subFolderPath");
 
-    // Handle initial files if provided
+    // Handle initial files - just store references without writing to disk yet
     useEffect(() => {
-        const loadInitialFiles = async () => {
-            if (initialFiles && initialFiles.length > 0) {
-                const tempPathInfos = [];
+        if (initialFiles && initialFiles.length > 0) {
+            const fileInfos = Array.from(initialFiles).map(file => ({
+                path: '', // Path will be set during upload
+                name: file.name,
+                file: file // Store the File object
+            }));
 
-                for (let i = 0; i < initialFiles.length; i++) {
-                    const file = initialFiles[i];
-                    try {
-                        const arrayBuffer = await file.arrayBuffer();
-                        const tempPath = `/tmp/${file.name}`;
-
-                        // Write file to disk using Tauri command
-                        await invoke("write_file", {
-                            path: tempPath,
-                            data: Array.from(new Uint8Array(arrayBuffer)),
-                        });
-
-                        tempPathInfos.push({
-                            path: tempPath,
-                            name: file.name
-                        });
-                    } catch (error) {
-                        console.error("Error processing file:", file.name, error);
-                        toast.error(`Failed to process file: ${file.name}`);
-                    }
-                }
-
-                setFiles(tempPathInfos);
-                if (tempPathInfos.length > 1) setRevealFiles(true);
-            }
-        };
-
-        loadInitialFiles();
+            setFiles(fileInfos);
+            if (fileInfos.length > 1) setRevealFiles(true);
+        }
     }, [initialFiles]);
 
-    // Append files, avoiding duplicates
-    const appendFiles = useCallback(async (newFilePaths: string[]) => {
-        if (!newFilePaths?.length) return;
-
+    // Handle files from both file dialog and drag-and-drop
+    const handleFiles = useCallback(async (paths: string[], browserFiles?: File[]) => {
         try {
-            const newPathInfos = await Promise.all(
-                newFilePaths.map(async (path) => ({
-                    path,
-                    name: await basename(path)
-                }))
-            );
+            let newPathInfos: FilePathInfo[] = [];
+
+            // Handle file paths from file dialog
+            if (paths.length > 0) {
+                newPathInfos = await Promise.all(
+                    paths.map(async (path) => ({
+                        path,
+                        name: await basename(path)
+                    }))
+                );
+            }
+
+            // Handle browser File objects from drag and drop
+            if (browserFiles && browserFiles.length > 0) {
+                const browserFileInfos = browserFiles.map(file => ({
+                    path: '',
+                    name: file.name,
+                    file: file
+                }));
+                newPathInfos = [...newPathInfos, ...browserFileInfos];
+            }
+
+            if (newPathInfos.length === 0) return;
 
             setFiles((prev) => {
                 if (!prev.length) return newPathInfos;
 
-                // Create a Set of existing paths to avoid duplicates
-                const seen = new Set(prev.map(f => f.path));
-                const unique = newPathInfos.filter(f => !seen.has(f.path));
+                // Create a Set of existing paths/names to avoid duplicates
+                const seen = new Set(prev.map(f => f.path || f.name));
+                const unique = newPathInfos.filter(f => !seen.has(f.path || f.name));
 
-                if (!unique.length) return prev;
+                if (unique.length === 0) return prev;
 
                 const combined = [...prev, ...unique];
                 if (combined.length > 1) setRevealFiles(true);
                 return combined;
             });
         } catch (error) {
-            console.error("Error processing file paths:", error);
+            console.error("Error processing files:", error);
             toast.error("Failed to process selected files");
         }
     }, []);
@@ -126,7 +120,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
             return;
         }
 
-        onCancel();
+        onCancel(); // Close dialog
         setIsUploading(true);
         setUploadProgress(0);
 
@@ -143,6 +137,28 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                 const file = files[i];
                 const percent = Math.round(((i + 1) / files.length) * 100);
 
+                let filePath = file.path;
+
+                // If this is a browser File, write it to disk first
+                if (file.file) {
+                    try {
+                        const arrayBuffer = await file.file.arrayBuffer();
+                        const tempPath = `/tmp/${file.name}`;
+
+                        // Write file to disk using Tauri command
+                        await invoke("write_file", {
+                            path: tempPath,
+                            data: Array.from(new Uint8Array(arrayBuffer)),
+                        });
+
+                        filePath = tempPath;
+                    } catch (error) {
+                        console.error(`Error processing file ${file.name}:`, error);
+                        toast.error(`Failed to process file: ${file.name}`);
+                        continue;
+                    }
+                }
+
                 // Now add the file to the folder using the file path
                 const functionName = isPrivateFolder
                     ? "add_file_to_private_folder"
@@ -155,7 +171,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     accountId: polkadotAddress,
                     folderMetadataCid: mainFolderCid,
                     folderName: mainFolderActualName,
-                    filePath: file.path,
+                    filePath: filePath,
                     seedPhrase: mnemonic,
                     subfolderPath: folderPath || null
                 };
@@ -167,14 +183,15 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
 
                 await invoke<string>(functionName, params);
 
-                // Small delay to make progress visible when adding multiple small files
-                if (files.length > 1) await new Promise(r => setTimeout(r, 300));
+                // Update progress
                 setUploadProgress(percent);
-                // Update toast with progress
                 const msg = files.length > 1
                     ? `Adding ${files.length} files to folder: ${percent}%`
                     : `Adding file to folder: ${percent}%`;
                 toast.loading(msg, { id: toastId });
+
+                // Small delay to make progress visible when adding multiple small files
+                if (files.length > 1) await new Promise(r => setTimeout(r, 300));
             }
 
             toast.success(
@@ -199,7 +216,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
 
     return (
         <div className="w-full">
-            <FileDropzone setFiles={appendFiles} />
+            <FileDropzone setFiles={handleFiles} />
 
             {files.length > 0 ? (
                 <div className="bg-grey-90 max-h-[200px] overflow-y-auto custom-scrollbar-thin pr-2 rounded-[8px] mt-4">
@@ -237,7 +254,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                         <div className="px-2 flex flex-col w-full gap-y-1 pb-1 font-medium text-grey-10">
                             {files.slice(1).map((file, i) => (
                                 <div
-                                    key={file.path}
+                                    key={file.path || file.name}
                                     className="w-full flex items-center justify-between"
                                 >
                                     <div className="w-0 grow truncate">{file.name}</div>

@@ -12,21 +12,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/utils";
 import { Icons, AbstractIconWrapper, P } from "@/components/ui";
 
+// Type for handling both file paths (from dialog) and browser Files (from drop)
+type SetFilesFunction = (paths: string[], browserFiles?: File[]) => void;
+
 const FileDropzone: FC<{
-  setFiles: (filePaths: string[]) => void;
+  setFiles: SetFilesFunction;
 }> = ({ setFiles }) => {
   const [isDragging, setIsDragging] = useState(false);
-
-  const handleFilePaths = useCallback(
-    (paths: string[]) => {
-      if (!paths.length) {
-        toast.error("No Files Found");
-        return;
-      }
-      setFiles(paths);
-    },
-    [setFiles]
-  );
 
   const handleSelectFiles = useCallback(async () => {
     try {
@@ -41,25 +33,30 @@ const FileDropzone: FC<{
 
       // Handle both array of paths and single path
       const paths = Array.isArray(selected) ? selected : [selected];
-      handleFilePaths(paths);
+      setFiles(paths);
     } catch (error) {
       console.error("File selection error:", error);
       toast.error("Failed to select files");
     }
-  }, [handleFilePaths]);
+  }, [setFiles]);
 
-  // This is just a visual handler for drag & drop
-  // The actual file selection will happen through the Tauri dialog
   const handleDrop = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
       setIsDragging(false);
 
-      // We'll open the dialog instead of handling dropped files
-      handleSelectFiles();
+      // If files were dropped
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        // Convert FileList to array
+        const droppedFiles = Array.from(e.dataTransfer.files);
+        if (droppedFiles.length === 0) return;
+
+        // Send empty paths array and browser files
+        setFiles([], droppedFiles);
+      }
     },
-    [handleSelectFiles]
+    [setFiles]
   );
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -68,7 +65,9 @@ const FileDropzone: FC<{
     setIsDragging(true);
   };
 
-  const handleDragLeave = () => {
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
   };
 
@@ -93,13 +92,13 @@ const FileDropzone: FC<{
 
           <div className="mt-2 flex flex-col">
             <P className="font-semibold text-grey-10" size="md">
-              Select Files to Upload
+              Upload a File Here
             </P>
             <P
               size="sm"
               className="mt-2 text-center text-grey-60 max-w-[264px]"
             >
-              Click to select one or more files from your computer
+              Drag and drop or click to add one or more files here to upload
             </P>
           </div>
         </div>
