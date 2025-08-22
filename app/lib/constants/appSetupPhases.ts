@@ -9,6 +9,7 @@ export const APP_SETUP_PHASES = [
   "connecting_to_network",
   "initialising_database",
   "syncing_data",
+  
   "ready",
 ] as const;
 

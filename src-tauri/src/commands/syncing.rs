@@ -35,10 +35,6 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
 
     // Configure AWS env
     let encoded_seed = encode(&seed_to_use);
-    println!(
-        "[SyncInit] Using encrypted subaccount seed from DB for seed_to_use={}, encoded_seed={}",
-        seed_to_use, encoded_seed
-    );
     std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
     std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
     std::env::set_var("AWS_DEFAULT_REGION", "decentralized");

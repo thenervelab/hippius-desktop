@@ -298,7 +298,11 @@ pub async fn set_sync_path(
 
         // If this is the first time enabling this sync type, ensure AWS env is configured
         if is_first_time {
-            ensure_aws_env(params.account_id.clone(), params.mnemonic.clone()).await;
+            let account_for_env = params.account_id.clone();
+            let mnemonic_for_env = params.mnemonic.clone();
+            tokio::spawn(async move {
+                ensure_aws_env(account_for_env, mnemonic_for_env).await;
+            });
         }
 
         // Detect if this is the first time setting this type of path
@@ -387,12 +391,12 @@ pub async fn set_sync_path(
                                     match crate::sync_shared::list_bucket_contents(account_for_cron_priv.clone(), "private".to_string()).await {
                                         Ok(items) => {
                                             if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool_priv, &account_for_cron_priv, "private", &items).await {
-                                                eprintln!("[set_sync_path][S3InventoryCron][private] Failed storing listing: {}", e);
+                                                eprintln!("[S3InventoryCron][private] Failed storing listing: {}", e);
                                             } else {
-                                                println!("[set_sync_path][S3InventoryCron][private] Stored {} items for {}", items.len(), account_for_cron_priv);
+                                                println!("[S3InventoryCron][private] Stored {} items for {}", items.len(), account_for_cron_priv);
                                             }
                                         }
-                                        Err(e) => eprintln!("[set_sync_path][S3InventoryCron][private] List failed: {}", e),
+                                        Err(e) => eprintln!("[S3InventoryCron][private] List failed: {}", e),
                                     }
 
                                     tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
