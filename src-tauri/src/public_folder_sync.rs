@@ -92,74 +92,118 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
     if bucket_exists {
         println!("[PublicFolderSync] Bucket already exists, proceeding.");
     } else {
-        let mb_output = Command::new("aws")
-            .env("AWS_PAGER", "")
-            .arg("s3")
-            .arg("mb")
-            .arg(format!("s3://{}", bucket_name))
-            .arg("--endpoint-url")
-            .arg(endpoint_url)
-            .output();
+        // Retry creating or verifying the bucket every 30 seconds until success
+        loop {
+            let mb_output = Command::new("aws")
+                .env("AWS_PAGER", "")
+                .arg("s3")
+                .arg("mb")
+                .arg(format!("s3://{}", bucket_name))
+                .arg("--endpoint-url")
+                .arg(endpoint_url)
+                .output();
 
-        match mb_output {
-            Ok(output) => {
-                if output.status.success() {
-                    println!("[PublicFolderSync] Successfully created bucket 's3://{}'.", bucket_name);
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    // Proceed if bucket already exists/owned
-                    if stderr.contains("BucketAlreadyExists") || stderr.contains("BucketAlreadyOwnedByYou") {
-                        println!("[PublicFolderSync] Bucket already exists (race condition), proceeding.");
+            let proceed = match mb_output {
+                Ok(output) => {
+                    if output.status.success() {
+                        println!("[PublicFolderSync] Successfully created bucket 's3://{}'.", bucket_name);
+                        true
                     } else {
-                        // Try a follow-up access check; if accessible, proceed
-                        let verify = Command::new("aws")
-                            .env("AWS_PAGER", "")
-                            .arg("s3")
-                            .arg("ls")
-                            .arg(format!("s3://{}", bucket_name))
-                            .arg("--endpoint-url")
-                            .arg(endpoint_url)
-                            .output();
-                        match verify {
-                            Ok(v) if v.status.success() => {
-                                println!("[PublicFolderSync] Bucket accessible after failed create, proceeding.");
-                            }
-                            _ => {
-                                eprintln!("[PublicFolderSync] Failed to create bucket: {}", stderr);
-                                {
-                                    let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-                                    syncing_accounts.remove(&(account_id.clone(), "public"));
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        // Proceed if bucket already exists/owned
+                        if stderr.contains("BucketAlreadyExists") || stderr.contains("BucketAlreadyOwnedByYou") {
+                            println!("[PublicFolderSync] Bucket already exists (race condition), proceeding.");
+                            true
+                        } else {
+                            // Try a follow-up access check; if accessible, proceed
+                            let verify = Command::new("aws")
+                                .env("AWS_PAGER", "")
+                                .arg("s3")
+                                .arg("ls")
+                                .arg(format!("s3://{}", bucket_name))
+                                .arg("--endpoint-url")
+                                .arg(endpoint_url)
+                                .output();
+
+                            match verify {
+                                Ok(v) if v.status.success() => {
+                                    println!("[PublicFolderSync] Bucket accessible after failed create, proceeding.");
+                                    true
                                 }
-                                return;
+                                _ => {
+                                    eprintln!("[PublicFolderSync] Failed to create bucket, will retry in 30s: {}", stderr);
+                                    false
+                                }
                             }
                         }
                     }
                 }
-            }
-            Err(e) => {
-                eprintln!("[PublicFolderSync] Failed to execute 'aws s3 mb' command: {}", e);
-                // Try a follow-up access check; if accessible, proceed
-                let verify = Command::new("aws")
-                    .env("AWS_PAGER", "")
-                    .arg("s3")
-                    .arg("ls")
-                    .arg(format!("s3://{}", bucket_name))
-                    .arg("--endpoint-url")
-                    .arg(endpoint_url)
-                    .output();
-                match verify {
-                    Ok(v) if v.status.success() => {
-                        println!("[PublicFolderSync] Bucket accessible after 'mb' exec error, proceeding.");
-                    }
-                    _ => {
-                        {
-                            let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-                            syncing_accounts.remove(&(account_id.clone(), "public"));
-                        }
-                        return;
-                    }
+                Err(e) => {
+                    eprintln!("[PublicFolderSync] Failed to execute 'aws s3 mb' command (will retry in 30s): {}", e);
+                    // Try a follow-up access check; if accessible, proceed
+                    let verify = Command::new("aws")
+                        .env("AWS_PAGER", "")
+                        .arg("s3")
+                        .arg("ls")
+                        .arg(format!("s3://{}", bucket_name))
+                        .arg("--endpoint-url")
+                        .arg(endpoint_url)
+                        .output();
+                    matches!(verify, Ok(v) if v.status.success())
                 }
+            };
+
+            if proceed {
+                break;
+            } else {
+                // Wait 30 seconds before retrying
+                thread::sleep(Duration::from_secs(30));
+                continue;
             }
+        }
+    }
+
+    // Ensure public-read bucket policy is applied so objects are publicly accessible
+    // Equivalent to MinIO example via AWS CLI: allow s3:GetObject on bucket/*
+    let bucket_policy = format!(
+        r#"{{
+            "Version": "2012-10-17",
+            "Statement": [
+                {{
+                    "Effect": "Allow",
+                    "Principal": "*",
+                    "Action": ["s3:GetObject"],
+                    "Resource": ["arn:aws:s3:::{bucket}/*"]
+                }}
+            ]
+        }}"#,
+        bucket = bucket_name
+    );
+
+    match Command::new("aws")
+        .env("AWS_PAGER", "")
+        .arg("s3api")
+        .arg("put-bucket-policy")
+        .arg("--bucket")
+        .arg(&bucket_name)
+        .arg("--policy")
+        .arg(&bucket_policy)
+        .arg("--endpoint-url")
+        .arg(endpoint_url)
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            println!("[PublicFolderSync] Applied public-read bucket policy to '{}'.", bucket_name);
+        }
+        Ok(o) => {
+            eprintln!(
+                "[PublicFolderSync] Failed to apply bucket policy (exit {}), stderr: {}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+        Err(e) => {
+            eprintln!("[PublicFolderSync] Error executing 'aws s3api put-bucket-policy': {}", e);
         }
     }
 
@@ -176,11 +220,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             println!("[PublicFolderSync] Preflight: AWS CLI can access bucket 's3://{}'", bucket_name);
         }
         Ok(o) => {
-            eprintln!(
-                "[PublicFolderSync] Preflight: 'aws s3 ls' failed (exit {}) stderr: {}",
-                o.status,
-                String::from_utf8_lossy(&o.stderr)
-            );
+            eprintln!("[PublicFolderSync] Preflight: 'aws s3 ls' failed (exit {}) stderr: {}", o.status, String::from_utf8_lossy(&o.stderr));
         }
         Err(e) => {
             eprintln!("[PublicFolderSync] Preflight: failed to execute aws: {}", e);
@@ -368,7 +408,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             }
         }
 
-        println!("[PublicFolderSync] Cycle complete. Waiting for 5 minutes before next sync.");
+        println!("[PublicFolderSync] Cycle complete. Waiting for 1 minutes before next sync.");
         sleep(Duration::from_secs(60)).await;
     }
 }

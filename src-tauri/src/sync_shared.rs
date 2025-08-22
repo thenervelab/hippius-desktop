@@ -371,6 +371,16 @@ pub async fn store_bucket_listing_in_db(
     let file_type = if scope == "public" { "public" } else { "private" };
     let bucket = format!("{}-{}", owner, file_type);
 
+    // Remove any existing S3-derived records for this owner and scope to avoid duplicates
+    // This preserves other sources (e.g., ipfs) since we constrain by main_req_hash = 's3'
+    sqlx::query(
+        "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'"
+    )
+    .bind(owner)
+    .bind(file_type)
+    .execute(pool)
+    .await?;
+
     let mut stored = 0usize;
 
     for it in items {
@@ -382,9 +392,9 @@ pub async fn store_bucket_listing_in_db(
         let cid_hex = hex::encode("s3".as_bytes());
         let file_hash_hex = cid_hex.clone();
 
-        // Check existence in user_profiles
+        // Check existence in user_profiles (only consider S3-origin entries)
         let exists: Option<(String,)> = sqlx::query_as(
-            "SELECT file_name FROM user_profiles WHERE file_name = ? AND owner = ? AND type = ?"
+            "SELECT file_name FROM user_profiles WHERE file_name = ? AND owner = ? AND type = ? AND main_req_hash = 's3'"
         )
         .bind(&file_name)
         .bind(owner)
@@ -418,9 +428,9 @@ pub async fn store_bucket_listing_in_db(
             .execute(pool)
             .await?;
         } else {
-            // Update existing size/source/origin in user_profiles
+            // Update existing size/source/origin in user_profiles (only S3-origin entries)
             sqlx::query(
-                "UPDATE user_profiles SET file_size_in_bytes = ?, main_req_hash = ?, source = ?, cid = ?, file_hash = ? WHERE file_name = ? AND owner = ? AND type = ?"
+                "UPDATE user_profiles SET file_size_in_bytes = ?, main_req_hash = ?, source = ?, cid = ?, file_hash = ? WHERE file_name = ? AND owner = ? AND type = ? AND main_req_hash = 's3'"
             )
             .bind(it.size as i64)
             .bind("s3")
