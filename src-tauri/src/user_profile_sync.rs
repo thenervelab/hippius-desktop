@@ -919,11 +919,11 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
             // Step 3: Clear and insert into user_profiles table
             if let Some(pool) = DB_POOL.get() {
                 if records_to_insert.len() > 0 && profile_parsed_successfully {
-                    match sqlx::query("DELETE FROM user_profiles")
+                    match sqlx::query("DELETE FROM user_profiles WHERE main_req_hash <> 's3'")
                         .execute(pool)
                         .await
                     {
-                        Ok(_) => println!("[UserSync] Cleared user_profiles table"),
+                        Ok(_) => println!("[UserSync] Cleared non-S3 user_profiles records"),
                         Err(e) => {
                             let error_message = format!("[UserSync] Failed to clear user_profiles table: {e}");
                             eprintln!("[UserSync] Failed to clear user_profiles table: {e}");
