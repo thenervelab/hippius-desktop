@@ -114,10 +114,10 @@ export default function FolderView({
 
 
             const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
-                folderName: folderActualName,
-                folderMetadataCid: folderCid,
+                accountId: polkadotAddress,
+                scope: isPrivateFolder ? "private" : "public",
                 mainFolderName: mainFolderActualName || null,
-                subfolderPath: folderPath || null
+                subfolderPath: folderPath || null,
             });
 
             console.log("Fetched folder contents:", fileEntries);
