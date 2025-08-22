@@ -163,6 +163,50 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
         }
     }
 
+    // Ensure public-read bucket policy is applied so objects are publicly accessible
+    // Equivalent to MinIO example via AWS CLI: allow s3:GetObject on bucket/*
+    let bucket_policy = format!(
+        r#"{{
+            "Version": "2012-10-17",
+            "Statement": [
+                {{
+                    "Effect": "Allow",
+                    "Principal": "*",
+                    "Action": ["s3:GetObject"],
+                    "Resource": ["arn:aws:s3:::{bucket}/*"]
+                }}
+            ]
+        }}"#,
+        bucket = bucket_name
+    );
+
+    match Command::new("aws")
+        .env("AWS_PAGER", "")
+        .arg("s3api")
+        .arg("put-bucket-policy")
+        .arg("--bucket")
+        .arg(&bucket_name)
+        .arg("--policy")
+        .arg(&bucket_policy)
+        .arg("--endpoint-url")
+        .arg(endpoint_url)
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            println!("[PublicFolderSync] Applied public-read bucket policy to '{}'.", bucket_name);
+        }
+        Ok(o) => {
+            eprintln!(
+                "[PublicFolderSync] Failed to apply bucket policy (exit {}), stderr: {}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+        Err(e) => {
+            eprintln!("[PublicFolderSync] Error executing 'aws s3api put-bucket-policy': {}", e);
+        }
+    }
+
     match Command::new("aws")
         .env("AWS_PAGER", "")
         .arg("s3")

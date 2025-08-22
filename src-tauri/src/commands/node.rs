@@ -94,15 +94,24 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         }
     }
 
-    if is_ipfs_api_up().await {
-        println!("[IPFS] Existing IPFS daemon detected on {}. Skipping start.", API_URL);
-        emit_and_update_phase(app.clone(), AppSetupPhase::Ready).await;
-        return Ok(());
-    }
-
     sleep(Duration::from_secs(LARGE_SLEEP)).await;
     let app = emit_and_update_phase(app.clone(), AppSetupPhase::CheckingBinary).await;
     sleep(Duration::from_secs(SMALL_SLEEP)).await;
+
+    // Ensure AWS CLI is available as part of CheckingBinary (no extra event)
+    ensure_aws_cli_installed_blocking().await;
+
+    // If an IPFS daemon is already up, skip starting and just move to final phases
+    if is_ipfs_api_up().await {
+        println!("[IPFS] Existing IPFS daemon detected on {}. Skipping start.", API_URL);
+        sleep(Duration::from_secs(SMALL_SLEEP)).await;
+        let app = emit_and_update_phase(app.clone(), AppSetupPhase::InitialisingDatabase).await;
+        sleep(Duration::from_secs(SMALL_SLEEP)).await;
+        let app = emit_and_update_phase(app.clone(), AppSetupPhase::SyncingData).await;
+        sleep(Duration::from_secs(SMALL_SLEEP)).await;
+        emit_and_update_phase(app.clone(), AppSetupPhase::Ready).await;
+        return Ok(());
+    }
 
     let bin_path = ensure_ipfs_binary(app.clone())
         .await
@@ -141,24 +150,6 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
             }
         }
     });
-
-    // Check if AWS CLI installation should be skipped (to avoid repeated permission prompts)
-    if !should_skip_aws_installation().await && !is_aws_cli_installed().await {
-        println!("[AWS CLI] Not found. Installing...");
-        match install_aws_cli().await {
-            Ok(_) => {
-                println!("[AWS CLI] Installed successfully.");
-                mark_aws_installation_complete().await;
-            },
-            Err(e) => {
-                eprintln!("[AWS CLI] Install failed: {}", e);
-                // Mark to skip future attempts for this session to avoid repeated prompts
-                mark_aws_installation_attempted().await;
-            }
-        }
-    } else {
-        println!("[AWS CLI] Installation check skipped or already installed.");
-    }
 
     let mutex = IPFS_HANDLE.get_or_init(|| Mutex::new(None));
     let mut guard = mutex.lock().await;
@@ -494,14 +485,58 @@ pub async fn reset_aws_installation_state() -> Result<(), String> {
 }
 
 async fn is_aws_cli_installed() -> bool {
-    let path = match get_aws_binary_path().await {
-        Ok(p) => p,
-        Err(_) => return false,
+    // Try managed local binary first
+    let local_ok = match get_aws_binary_path().await {
+        Ok(p) => {
+            #[cfg(not(target_os = "windows"))]
+            {
+                if !p.exists() { false } else { Command::new(p).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().await.map_or(false, |s| s.success()) }
+            }
+            #[cfg(target_os = "windows")]
+            {
+                Command::new(p).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().await.map_or(false, |s| s.success())
+            }
+        }
+        Err(_) => false,
     };
-    #[cfg(not(target_os = "windows"))]
-    if !path.exists() { return false; }
-    Command::new(path)
+    if local_ok { return true; }
+
+    // Fallback to system PATH
+    Command::new("aws")
         .arg("--version")
-        .stdout(Stdio::null()).stderr(Stdio::null())
-        .status().await.map_or(false, |s| s.success())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map_or(false, |s| s.success())
+}
+
+// Install AWS CLI with retries (no event emission). Blocks until installed.
+async fn ensure_aws_cli_installed_blocking() {
+    if is_aws_cli_installed().await {
+        println!("[AWS CLI] Already installed.");
+        return;
+    }
+
+    let mut delay = Duration::from_secs(5);
+    loop {
+        println!("[AWS CLI] Installing...");
+        match install_aws_cli().await {
+            Ok(_) => {
+                if is_aws_cli_installed().await {
+                    println!("[AWS CLI] Installed successfully.");
+                    mark_aws_installation_complete().await;
+                    break;
+                } else {
+                    eprintln!("[AWS CLI] Post-install check failed; retrying...");
+                }
+            }
+            Err(e) => {
+                eprintln!("[AWS CLI] Install failed: {}", e);
+                mark_aws_installation_attempted().await;
+            }
+        }
+        sleep(delay).await;
+        delay = std::cmp::min(delay * 2, Duration::from_secs(60));
+    }
 }
