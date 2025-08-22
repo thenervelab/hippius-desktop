@@ -8,6 +8,7 @@ use crate::utils::{
     file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, request_folder_storage, get_file_name_variations,
         request_file_storage , remove_from_sync_folder, copy_to_sync_folder, delete_and_unpin_user_file_records_from_folder}
 };
+use fs_extra;
 use futures::TryFutureExt;
 use uuid::Uuid;
 use std::fs;
@@ -322,8 +323,58 @@ pub async fn download_and_decrypt_folder(
     folder_name: String,
     output_dir: String,
     encryption_key: Option<String>,
+    source: String,
 ) -> Result<(), String> {
     println!("[+] Starting download for folder with manifest CID: {}", folder_metadata_cid);
+
+    let source_clone = source.clone();
+    if folder_metadata_cid == "s3" {
+        println!("[+] Handling S3 folder download for source: {}", source);
+        let source_path = Path::new(&source);
+        let destination_path = Path::new(&output_dir).join(&folder_name);
+
+        // First, check if the source path exists locally
+        if source_path.exists() && source_path.is_dir() {
+            println!("[i] Source folder exists locally at '{}'. Copying...", source);
+            
+            let options = fs_extra::dir::CopyOptions::new().overwrite(true);
+            fs_extra::dir::copy(source_path, &output_dir, &options)
+                .map_err(|e| format!("Failed to copy directory locally: {}", e))?;
+
+            println!("[✔] Successfully copied folder from '{}' to '{}'", source, destination_path.display());
+            return Ok(());
+        } else {
+            println!("[i] Source is an S3 path. Downloading with AWS CLI...");
+
+            if let Some(parent) = destination_path.parent() {
+                 tokio::fs::create_dir_all(parent).await
+                    .map_err(|e| format!("Failed to create output directory: {}", e))?;
+            }
+
+            let status = Command::new("aws")
+                .arg("s3")
+                .arg("cp")
+                .arg(&source) 
+                .arg(&destination_path) 
+                .arg("--recursive") 
+                .arg("--endpoint-url")
+                .arg("https://s3.hippius.com")
+                .status()
+                .await
+                .map_err(|e| format!("Failed to spawn 'aws s3 cp --recursive': {}", e))?;
+
+            if !status.success() {
+                return Err(format!(
+                    "aws s3 cp --recursive failed for source '{}' with status {:?}",
+                    source, status.code()
+                ));
+            }
+
+            println!("[✔] Successfully downloaded folder from S3 '{}' to '{}'", source, destination_path.display());
+            return Ok(());
+        }
+    }
+
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
 
     let encryption_key_bytes = if let Some(key_b64) = encryption_key {
@@ -347,6 +398,8 @@ pub async fn download_and_decrypt_folder(
             let output_root_clone = output_root_path.clone();
             let encryption_key_clone = encryption_key_bytes.as_ref().map(Arc::clone);
 
+            // We no longer need to clone `source` here because we won't be using it.
+
             async move {
                 println!("[download_and_decrypt_folder] Processing entry with CID: {} to: {:?}", 
                     entry.cid, output_root_clone.join(&entry.file_name));
@@ -368,41 +421,12 @@ pub async fn download_and_decrypt_folder(
                         subfolder_name.to_string(),
                         output_root_clone.to_string_lossy().to_string(),
                         encryption_key_clone.as_ref().map(|k| base64::engine::general_purpose::STANDARD.encode(&**k)),
+                        String::new() // <-- THE FIX: Pass an empty string. The source is not needed for an IPFS subfolder.
                     ).await {
                         eprintln!("[!] Failed to download/decrypt subfolder {}: {}", subfolder_name, e);
                     }
-                } else if entry.file_name.ends_with(".ff.ec_metadata") {
-                    // Handle regular file in root folder
-                    let file_metadata_bytes = match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
-                        Ok(bytes) => bytes,
-                        Err(e) => {
-                            eprintln!("[!] Failed to download metadata for {} (CID: {}): {}", 
-                                entry.file_name, entry.cid, e);
-                            return;
-                        }
-                    };
-
-                    let clean_file_name = entry.file_name.trim_end_matches(".ff.ec_metadata");
-                    let output_file_path = output_root_clone.join(clean_file_name);
-
-                    if let Some(parent) = output_file_path.parent() {
-                        if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                            eprintln!("[!] Failed to create directory for {}: {}", clean_file_name, e);
-                            return;
-                        }
-                    }
-
-                    match reconstruct_and_decrypt_single_file(
-                        file_metadata_bytes,
-                        output_file_path.clone(),
-                        api_url_clone,
-                        encryption_key_clone,
-                    ).await {
-                        Ok(()) => println!("[✔] Successfully downloaded and decrypted {}", clean_file_name),
-                        Err(e) => eprintln!("[!] Failed to download/decrypt {}: {}", clean_file_name, e),
-                    }
-                } else {
-                    // Handle regular file in root folder
+                } else { // Combined the two identical `else if` and `else` blocks
+                    // Handle regular file
                     let file_metadata_bytes = match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
                         Ok(bytes) => bytes,
                         Err(e) => {
@@ -1011,6 +1035,54 @@ pub async fn public_download_folder(
     output_dir: String,
     source: String,
 ) -> Result<(), String> {
+    if folder_metadata_cid == "s3" {
+        println!("[+] Handling S3 folder download for source: {}", source);
+        let source_path = Path::new(&source);
+        let destination_path = Path::new(&output_dir).join(&folder_name);
+
+        // First, check if the source path exists locally
+        if source_path.exists() && source_path.is_dir() {
+            println!("[i] Source folder exists locally at '{}'. Copying...", source);
+            
+            let options = fs_extra::dir::CopyOptions::new().overwrite(true);
+            fs_extra::dir::copy(source_path, &output_dir, &options)
+                .map_err(|e| format!("Failed to copy directory locally: {}", e))?;
+
+            println!("[✔] Successfully copied folder from '{}' to '{}'", source, destination_path.display());
+            return Ok(());
+        } else {
+            // If it's not local, download from S3 using AWS CLI
+            println!("[i] Source is an S3 path. Downloading with AWS CLI...");
+
+            // Ensure the parent directory for the output exists
+            if let Some(parent) = destination_path.parent() {
+                 tokio::fs::create_dir_all(parent).await
+                    .map_err(|e| format!("Failed to create output directory: {}", e))?;
+            }
+
+            let status = Command::new("aws")
+                .arg("s3")
+                .arg("cp")
+                .arg(&source) 
+                .arg(&destination_path) 
+                .arg("--recursive") 
+                .arg("--endpoint-url")
+                .arg("https://s3.hippius.com")
+                .status()
+                .await
+                .map_err(|e| format!("Failed to spawn 'aws s3 cp --recursive': {}", e))?;
+
+            if !status.success() {
+                return Err(format!(
+                    "aws s3 cp --recursive failed for source '{}' with status {:?}",
+                    source, status.code()
+                ));
+            }
+
+            println!("[✔] Successfully downloaded folder from S3 '{}' to '{}'", source, destination_path.display());
+            return Ok(());
+        }
+    }
     public_download_folder_inner(
         &_account_id,
         &folder_metadata_cid,

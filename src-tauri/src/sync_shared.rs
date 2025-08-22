@@ -139,7 +139,7 @@ pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
     let uploading: Vec<RecentItem> = p_state.current_item.iter()
         .chain(pub_state.current_item.iter())
         .cloned()
-        .collect();\
+        .collect();
     SyncActivityResponse { recent, uploading }
 }
 
