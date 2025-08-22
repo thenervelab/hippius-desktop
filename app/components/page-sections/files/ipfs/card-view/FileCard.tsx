@@ -38,9 +38,10 @@ const FileCard: React.FC<FileCardProps> = ({
   const [isLoadingThumbnail, setIsLoadingThumbnail] = useState(false);
   const [loadAttempts, setLoadAttempts] = useState(0);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const fileIdRef = useRef<string>("");
 
   const fileType = getFileTypeFromExtension(fileFormat || null);
-  const shouldLoadThumbnail = fileType === "image" || fileType === "video";
+  const shouldLoadThumbnail = !file.isFolder && (fileType === "image" || fileType === "video");
   const displayName = formatDisplayName(file.name);
   const { icon: Icon, color } = getFileIcon(fileType ?? undefined, !!file.isFolder);
 
@@ -54,7 +55,6 @@ const FileCard: React.FC<FileCardProps> = ({
   const effectiveMainFolderCid = mainFolderCid || file.cid;
   const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
 
-
   // Build the folder path for navigation
   const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
     folderActualName,
@@ -63,21 +63,37 @@ const FileCard: React.FC<FileCardProps> = ({
     subFolderPath
   );
 
-  // console.log("effectiveMainFolderActualName", effectiveMainFolderActualName);
-  // console.log("folderActualName", folderActualName);
-  // console.log("file", file);
-  // console.log("newMainFolder", newMainFolder)
+  // Reset thumbnail state when file changes
+  useEffect(() => {
+    // Generate a unique ID for this file to track changes
+    const currentFileId = `${file.cid}-${file.name}`;
 
+    // If the file changed, reset all thumbnail states
+    if (fileIdRef.current !== currentFileId) {
+      fileIdRef.current = currentFileId;
+      setThumbnailUrl(null);
+      setThumbnailError(false);
+      setIsLoadingThumbnail(false);
+      setLoadAttempts(0);
 
-  // console.log("FileCard", `/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}`)
+      // Clear any existing timeout
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    }
+  }, [file.cid, file.name]);
 
   useEffect(() => {
+    // Only attempt to load thumbnails for image and video files
+    // and make sure we're not already loading or have a thumbnail
     if (
+      !shouldLoadThumbnail ||
       thumbnailUrl ||
       thumbnailError ||
-      !shouldLoadThumbnail ||
       loadAttempts >= 2 ||
-      isLoadingThumbnail
+      isLoadingThumbnail ||
+      file.isFolder
     ) {
       return;
     }
@@ -184,6 +200,8 @@ const FileCard: React.FC<FileCardProps> = ({
             console.warn(`Video load error for ${file.name}:`, error);
             handleError();
           };
+        } else {
+          handleError();
         }
       } catch (error) {
         console.error(`Thumbnail generation error for ${file.name}:`, error);
@@ -202,11 +220,12 @@ const FileCard: React.FC<FileCardProps> = ({
     file.name,
     file.source,
     fileType,
+    shouldLoadThumbnail,
     thumbnailUrl,
     thumbnailError,
     loadAttempts,
-    shouldLoadThumbnail,
-    isLoadingThumbnail
+    isLoadingThumbnail,
+    file.isFolder
   ]);
 
   return (
@@ -218,28 +237,13 @@ const FileCard: React.FC<FileCardProps> = ({
       )}
     >
       {!file.isFolder && (
-        // <Graphsheet
-        //   majorCell={{
-        //     lineColor: [31, 80, 189, 1.0],
-        //     lineWidth: 2,
-        //     cellDim: 50
-        //   }}
-        //   minorCell={{
-        //     lineColor: [255, 255, 255, 1.0],
-        //     lineWidth: 0,
-        //     cellDim: 0
-        //   }}
-        //   className="absolute w-full h-full left-0 opacity-10"
-        // />
         <Image
           src="/assets/file-card-gridlines.png"
           alt="File Card Gridlines"
           fill
           className="object-cover"
         />
-
-      )
-      }
+      )}
 
       <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-[40px] w-full">
         {file.isFolder ? (
@@ -268,7 +272,7 @@ const FileCard: React.FC<FileCardProps> = ({
         className="flex items-center justify-center cursor-pointer relative h-[calc(100%-40px)]"
         onClick={onClick}
       >
-        {thumbnailUrl && !thumbnailError ? (
+        {shouldLoadThumbnail && thumbnailUrl && !thumbnailError ? (
           <div className="relative w-full h-full">
             <Image
               src={thumbnailUrl}
@@ -285,7 +289,7 @@ const FileCard: React.FC<FileCardProps> = ({
           </div>
         ) : (
           <div className="flex flex-col items-center justify-center p-4 h-full w-full">
-            {isLoadingThumbnail && shouldLoadThumbnail ? (
+            {shouldLoadThumbnail && isLoadingThumbnail ? (
               <div className="flex flex-col items-center justify-center space-y-2">
                 <Loader2 className="h-8 w-8 animate-spin text-primary-50" />
                 <span className="text-xs text-gray-500">
@@ -304,24 +308,7 @@ const FileCard: React.FC<FileCardProps> = ({
                 )}
                 <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
                   {file.isFolder ? (
-                    <>
-                      {/* <Graphsheet
-                        majorCell={{
-                          lineColor: [31, 80, 189, 1],
-                          lineWidth: 2,
-                          cellDim: 40
-                        }}
-                        minorCell={{
-                          lineColor: [31, 80, 189, 1],
-                          lineWidth: 2,
-                          cellDim: 40
-                        }}
-                        className="absolute w-full h-full inset-0 duration-300 opacity-10"
-                      /> */}
-
-
-                      <Folder2 className="size-10 text-primary-50" />
-                    </>
+                    <Folder2 className="size-10 text-primary-50" />
                   ) : (
                     <div className="flex items-center justify-center size-9 bg-primary-50 rounded-[8px] relative">
                       <FileTypeIcon
