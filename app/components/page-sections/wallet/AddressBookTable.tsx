@@ -84,12 +84,6 @@ const AddressBookTable: React.FC<AddressBookTableProps> = ({
     }
   };
 
-  const handleCopy = (address: string) => {
-    navigator.clipboard.writeText(address).then(() => {
-      toast.success("Address copied to clipboard");
-    });
-  };
-
   const createTableItems = useCallback(
     (contact: Contact) => {
       return [

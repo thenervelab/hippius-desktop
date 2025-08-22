@@ -8,11 +8,12 @@ import { insufficientCreditsDialogOpenAtom } from "@/components/page-sections/fi
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { basename } from '@tauri-apps/api/path';
+import { invoke } from "@tauri-apps/api/core";
 
 
 interface UploadFilesFlowProps {
   reset: () => void;
-  initialFiles?: string[];
+  initialFiles?: FileList | null;
   isPrivateView: boolean;
 }
 
@@ -47,14 +48,32 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
   useEffect(() => {
     const loadInitialFiles = async () => {
       if (initialFiles && initialFiles.length > 0) {
-        const pathInfos = await Promise.all(
-          initialFiles.map(async (path) => ({
-            path,
-            name: await basename(path)
-          }))
-        );
-        setFiles(pathInfos);
-        if (pathInfos.length > 1) setRevealFiles(true);
+        const tempPathInfos = [];
+
+        for (let i = 0; i < initialFiles.length; i++) {
+          const file = initialFiles[i];
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            const tempPath = `/tmp/${file.name}`;
+
+            // Write file to disk using Tauri command
+            await invoke("write_file", {
+              path: tempPath,
+              data: Array.from(new Uint8Array(arrayBuffer)),
+            });
+
+            tempPathInfos.push({
+              path: tempPath,
+              name: file.name
+            });
+          } catch (error) {
+            console.error("Error processing file:", file.name, error);
+            toast.error(`Failed to process file: ${file.name}`);
+          }
+        }
+
+        setFiles(tempPathInfos);
+        if (tempPathInfos.length > 1) setRevealFiles(true);
       }
     };
 
