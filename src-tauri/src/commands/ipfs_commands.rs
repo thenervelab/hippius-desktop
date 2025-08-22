@@ -110,34 +110,13 @@ pub async fn download_and_decrypt_file(
     metadata_cid: String,
     output_file: String,
     encryption_key: Option<String>,
+    source: String,
 ) -> Result<(), String> {
     println!("[download_and_decrypt_file] Downloading file with CID: {} to: {}", metadata_cid, output_file);
     let api_url = "http://127.0.0.1:5001".to_string(); // Convert to owned String
 
     // Special handling when the 'CID' indicates S3 source
     if metadata_cid == "s3" {
-        // Extract filename from the output path
-        let file_name = std::path::Path::new(&output_file)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or("Failed to extract file name from output path")?
-            .to_string();
-
-        // Lookup source from user_profiles
-        let pool = DB_POOL.get().ok_or("DB pool not initialized")?;
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT source FROM user_profiles WHERE file_name = ? ORDER BY id DESC LIMIT 1",
-        )
-        .bind(&file_name)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("DB error while fetching source: {}", e))?;
-
-        let source = match row {
-            Some((src,)) => src,
-            None => return Err(format!("No source found in DB for file '{}'", file_name)),
-        };
-
         // If source exists locally, copy; otherwise pull from S3 using aws cli
         if std::path::Path::new(&source).exists() {
             std::fs::copy(&source, &output_file)
@@ -305,6 +284,7 @@ pub async fn encrypt_and_upload_folder(
     account_id: String,
     folder_path: String,
     seed_phrase: String,
+    source: String,
 ) -> Result<String, String> {
     println!("[+] Starting encrypted upload for folder: {}", folder_path);
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
@@ -835,43 +815,14 @@ pub async fn upload_file_public(
 pub async fn download_file_public(
     file_cid: String,
     output_file: String,
+    source: String,
 ) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001"; 
 
     println!("[download_file_public] Start: file_cid='{}', output_file='{}'", file_cid, output_file);
-
     // Special handling when the 'CID' indicates S3 source
     if file_cid == "s3" {
-        println!("[download_file_public] Detected 's3' source mode");
-        // Extract filename from the output path
-        let output_path_ref = std::path::Path::new(&output_file);
-        println!(
-            "[download_file_public] Output path parsed. is_file_name_present={}",
-            output_path_ref.file_name().is_some()
-        );
-        let file_name = output_path_ref
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or("Failed to extract file name from output path")?
-            .to_string();
-        println!("[download_file_public] Extracted file_name='{}'", file_name);
-
-        // Lookup source from user_profiles
-        let pool = DB_POOL.get().ok_or("[download_file_public] DB pool not initialized")?;
-        println!("[download_file_public] DB pool acquired. Querying source for file_name='{}'", file_name);
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT source FROM user_profiles WHERE file_name = ? ORDER BY id DESC LIMIT 1",
-        )
-        .bind(&file_name)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("[download_file_public] DB error while fetching source for '{}': {}", file_name, e))?;
-
-        let source = match row {
-            Some((src,)) => src,
-            None => return Err(format!("[download_file_public] No source found in DB for file '{}'", file_name)),
-        };
-        println!("[download_file_public] DB returned source='{}'", source);
+        println!("[download_file_public]  returned source='{}'", source);
 
         // If source exists locally, copy; otherwise pull from S3 using aws cli
         let source_exists = std::path::Path::new(&source).exists();
@@ -1059,6 +1010,7 @@ pub async fn public_download_folder(
     folder_metadata_cid: String,
     folder_name: String,
     output_dir: String,
+    source: String,
 ) -> Result<(), String> {
     public_download_folder_inner(
         &_account_id,
@@ -1127,7 +1079,7 @@ async fn public_download_folder_inner(
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
             }
-            if let Err(e) = download_file_public(entry.cid.clone(), output_file_path.to_string_lossy().to_string()).await {
+            if let Err(e) = download_file_public(entry.cid.clone(), output_file_path.to_string_lossy().to_string(), "".to_string()).await {
                 eprintln!("[public_download_folder] Failed to download file {}: {}", clean_file_name, e);
             }
         } else {
@@ -1137,6 +1089,50 @@ async fn public_download_folder_inner(
     }
 
     Ok(())
+}
+
+/// Downloads a folder and its contents recursively from an S3 bucket.
+async fn download_s3_folder_recursive(
+    account_id: &str,
+    scope: &str, // "public" or "private"
+    folder_name: &str,
+    output_dir: &str,
+) -> Result<(), String> {
+    let bucket_name = format!("{}-{}", account_id, scope);
+    let endpoint_url = "https://s3.hippius.com";
+
+    // The S3 source path. The trailing slash is important.
+    let s3_source = format!("s3://{}/{}/", bucket_name, folder_name);
+
+    // The local destination path where the folder will be created.
+    let local_destination = Path::new(output_dir).join(folder_name);
+
+    println!("[S3FolderDownload] Downloading from '{}' to '{}'", s3_source, local_destination.display());
+
+    // Ensure the parent directory of the destination exists
+    if let Some(parent) = local_destination.parent() {
+        tokio::fs::create_dir_all(parent).await
+            .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+    }
+
+    let status = Command::new("aws")
+        .arg("s3")
+        .arg("cp")
+        .arg(&s3_source)
+        .arg(local_destination)
+        .arg("--recursive")
+        .arg("--endpoint-url")
+        .arg(endpoint_url)
+        .status()
+        .await
+        .map_err(|e| format!("Failed to execute 'aws s3 cp' command: {}", e))?;
+
+    if status.success() {
+        println!("[S3FolderDownload] Successfully downloaded folder '{}'", folder_name);
+        Ok(())
+    } else {
+        Err(format!("'aws s3 cp' command failed with status: {}", status))
+    }
 }
 
 #[tauri::command]
@@ -1242,138 +1238,6 @@ pub async fn remove_file_from_public_folder(
     Ok(folder_name)
 }
 
-
-async fn process_single_file_for_sync(
-    file_path: PathBuf,
-    base_folder_path: PathBuf,
-    api_url: Arc<String>,
-    encryption_key: Option<Arc<Vec<u8>>>,
-    k: usize,
-    m: usize,
-    chunk_size: usize,
-    results: Arc<Mutex<Vec<FileProcessingResultSync>>>,
-) -> Result<(), String> {
-    let file_data = tokio::fs::read(&file_path).await.map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    hasher.update(&file_data);
-    let original_file_hash = format!("{:x}", hasher.finalize());
-
-    let to_process = encrypt_file(&file_data, encryption_key.map(|k| (*k).clone())).await?;
-    let encrypted_size = to_process.len();
-    
-    let (file_id, shards_to_upload) = tokio::task::spawn_blocking(move || {
-        let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
-        let file_id = Uuid::new_v4().to_string();
-        let mut shards_to_upload: Vec<(String, Vec<u8>, usize, usize)> = Vec::new();
-
-        let chunks: Vec<Vec<u8>> = to_process.chunks(chunk_size).map(|c| {
-            let mut chunk = c.to_vec();
-            if chunk.len() < chunk_size { chunk.resize(chunk_size, 0); }
-            chunk
-        }).collect();
-
-        for (orig_idx, chunk) in chunks.iter().enumerate() {
-            let sub_block_size = (chunk.len() + k - 1) / k;
-            let sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
-                let start = j * sub_block_size;
-                let end = std::cmp::min(start + sub_block_size, chunk.len());
-                let mut sub_block = chunk[start..end].to_vec();
-                if sub_block.len() < sub_block_size { sub_block.resize(sub_block_size, 0); }
-                sub_block
-            }).collect();
-            
-            let mut shards_data: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
-            for _ in k..m { shards_data.push(Some(vec![0u8; sub_block_size])); }
-            
-            let mut shard_refs: Vec<_> = shards_data.iter_mut().map(|x| x.as_mut().unwrap().as_mut_slice()).collect();
-            r.encode(&mut shard_refs).map_err(|e| format!("ReedSolomon encode error: {e}"))?;
-            
-            for (share_idx, shard_data) in shard_refs.iter().enumerate() {
-                let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
-                shards_to_upload.push((chunk_name, shard_data.to_vec(), orig_idx, share_idx));
-            }
-        }
-        Ok::<(String, Vec<(String, Vec<u8>, usize, usize)>), String>((file_id, shards_to_upload))
-    }).await.map_err(|e| e.to_string())??;
-
-    let all_chunk_info = Arc::new(Mutex::new(Vec::new()));
-    let chunk_pairs = Arc::new(Mutex::new(Vec::new()));
-
-    stream::iter(shards_to_upload)
-        .for_each_concurrent(None, |(name, data, orig_idx, share_idx)| {
-            let api_url_clone = Arc::clone(&api_url);
-            let chunk_info_clone = Arc::clone(&all_chunk_info);
-            let pairs_clone = Arc::clone(&chunk_pairs);
-            let data_clone = data.clone();
-            async move {
-                match upload_bytes_to_ipfs(&api_url_clone, data_clone, &name).await {
-                    Ok(cid) => {
-                        let chunk_info = ChunkInfo {
-                            name: name.clone(),
-                            path: String::new(),
-                            cid: CidInfo {
-                                cid: cid.clone(),
-                                filename: name.clone(),
-                                size_bytes: data.len(),
-                                encrypted: true,
-                                size_formatted: format_file_size(data.len()),
-                            },
-                            original_chunk: orig_idx,
-                            share_idx,
-                            size: data.len(),
-                        };
-                        chunk_info_clone.lock().await.push(chunk_info);
-                        pairs_clone.lock().await.push((name, cid));
-                    },
-                    Err(e) => eprintln!("Failed to upload shard {}: {}", name, e),
-                }
-            }
-        }).await;
-
-    let file_name_str = file_path.file_name().unwrap().to_string_lossy().to_string();
-    let file_extension = file_path.extension().and_then(|s| s.to_str()).unwrap_or_default().to_string();
-    
-    let final_chunk_info = all_chunk_info.lock().await.clone();
-    
-    let metadata = Metadata {
-        original_file: OriginalFileInfo {
-            name: file_name_str.clone(),
-            size: file_data.len(),
-            hash: original_file_hash,
-            extension: file_extension
-        },
-        erasure_coding: ErasureCodingInfo {
-            k, m, chunk_size, encrypted: true,
-            file_id: file_id.clone(),
-            encrypted_size,
-        },
-        chunks: final_chunk_info,
-        metadata_cid: None,
-    };
-    
-    let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
-    let metadata_filename = format!("{}_metadata.json", file_id);
-    let metadata_cid = upload_bytes_to_ipfs(&api_url, metadata_json.as_bytes().to_vec(), &metadata_filename).await?;
-
-    let meta_filename_for_storage = format!("{}{}", file_name_str, ".ff.ec_metadata");
-
-    let result = FileProcessingResultSync {
-        file_entry: FileEntry {
-            file_name: meta_filename_for_storage.clone(),
-            file_size: file_data.len(),
-            cid: metadata_cid.clone(),
-        },
-        meta_filename: meta_filename_for_storage.clone(),
-        metadata_cid,
-        chunk_pairs: Arc::try_unwrap(chunk_pairs).unwrap().into_inner(),
-    };
-    
-    results.lock().await.push(result);
-    println!("[✔] Finished processing for file: {}", file_name_str);
-    Ok(())
-}
-
-
 #[tauri::command]
 pub async fn list_folder_contents(
     account_id: String,
@@ -1464,7 +1328,7 @@ pub async fn list_folder_contents(
             is_folder: true,
         });
     }
-
+    println!("files are : {:?}", direct_files);
     Ok(direct_files)
 }
 

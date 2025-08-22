@@ -50,7 +50,6 @@ pub struct SyncActivityResponse {
 }
 
 // --- Update Tauri Commands to Aggregate Data ---
-
 #[tauri::command]
 pub fn get_sync_status() -> SyncStatusResponse {
     let private_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
