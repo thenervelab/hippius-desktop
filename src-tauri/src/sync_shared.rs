@@ -15,44 +15,48 @@ use std::collections::HashMap;
 
 /// Parses a line from the `aws s3 sync` output to create a RecentItem.
 pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
-    let mut parts = line.split_whitespace();
-
-    let first_part = parts.next().unwrap_or("");
-    let action_part = if first_part == "(dryrun)" {
-        parts.next().unwrap_or("")
-    } else {
-        first_part
-    };
-    
-    let action = match action_part {
-        "upload:" => "uploaded",
-        "delete:" => "deleted",
-        _ => return None,
-    };
-
-    let path_part = parts.next().unwrap_or("");
-    if path_part.is_empty() {
-        return None;
+    // Normalize and strip optional dryrun prefix
+    let mut s = line.trim();
+    if s.starts_with("(dryrun)") {
+        s = s.trim_start_matches("(dryrun)").trim();
     }
 
-    let file_name = if action == "deleted" {
-        path_part.rsplit('/').next().unwrap_or("")
-    } else {
-        Path::new(path_part).file_name().and_then(|s| s.to_str()).unwrap_or("")
+    // Helper to build item
+    let mk_item = |name: &str, action: &str| -> Option<RecentItem> {
+        if name.is_empty() { return None; }
+        Some(RecentItem {
+            name: name.to_string(),
+            scope: scope.to_string(),
+            action: action.to_string(),
+            kind: "file".to_string(),
+        })
     };
 
-    if file_name.is_empty() {
-        return None;
+    // Handle 'upload:' lines: "upload: <src> to s3://..."
+    if let Some(rest) = s.strip_prefix("upload:") {
+        let rest = rest.trim_start();
+        let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
+        let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
+        return mk_item(file_name, "uploaded");
     }
-    
-    Some(RecentItem {
-        name: file_name.to_string(),
-        scope: scope.to_string(), // Use the passed-in scope
-        action: action.to_string(),
-        kind: "file".to_string(),
-    })
+
+    // Handle 'copy:' lines similarly to upload (ACL/metadata changes)
+    if let Some(rest) = s.strip_prefix("copy:") {
+        let rest = rest.trim_start();
+        let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
+        let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
+        return mk_item(file_name, "uploaded");
+    }
+
+    // Handle 'delete:' lines: "delete: s3://bucket/key"
+    if let Some(rest) = s.strip_prefix("delete:") {
+        let s3path = rest.trim();
+        let file_name = s3path.rsplit('/').next().unwrap_or("");
+        return mk_item(file_name, "deleted");
+    }
+
+    None
 }
-
 
 pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<(String, &'static str)>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
@@ -136,7 +140,8 @@ pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
         .chain(pub_state.current_item.iter())
         .cloned()
         .collect();
-
+    println!("[SyncShared] Recent: {:?}", recent);
+    println!("[SyncShared] Uploading: {:?}", uploading);
     SyncActivityResponse { recent, uploading }
 }
 
