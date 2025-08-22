@@ -257,14 +257,6 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             state.current_item = None;
         }
 
-        // --- Step 2: Live Parse the real sync ---
-        println!("[PublicFolderSync] Syncing {} changes...", total_changes);
-        println!(
-            "[PublicFolderSync] Executing: aws s3 sync '{}' -> '{}' (endpoint: {}) with --delete",
-            &sync_path,
-            &s3_destination,
-            endpoint_url
-        );
         let mut child = Command::new("aws")
             .arg("s3")
             .arg("sync")
@@ -275,6 +267,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             .arg("--delete")
             .arg("--acl") 
             .arg("public-read") 
+            .arg("--no-progress") 
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

@@ -233,8 +233,6 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             state.total_files = total_changes;
         }
 
-        // --- Step 2: Live Parse the real sync ---
-        println!("[PrivateFolderSync] Syncing {} changes...", total_changes);
         let mut child = Command::new("aws")
             .env("AWS_PAGER", "")
             .arg("s3")
@@ -244,6 +242,7 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             .arg("--endpoint-url")
             .arg(endpoint_url)
             .arg("--delete")
+            .arg("--no-progress") 
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

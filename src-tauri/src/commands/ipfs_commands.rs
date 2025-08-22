@@ -895,8 +895,7 @@ pub async fn public_upload_folder(
         return Err("Provided path is not a directory".to_string());
     }
 
-    let folder_name = folder_path
-        .file_name()
+    let folder_name = folder_path.file_name()
         .map(|s| s.to_string_lossy().to_string())
         .ok_or_else(|| "Invalid folder path, cannot extract folder name".to_string())?;
     
@@ -1251,15 +1250,78 @@ pub async fn list_folder_contents(
     let bucket_name = format!("{}-{}", account_id, scope);
     let endpoint_url = "https://s3.hippius.com";
 
-    let path_parts = match subfolder_path {
-        Some(paths) if !paths.is_empty() => paths,
-        _ => vec![main_folder_name],
-    };
-
+    let path_parts = subfolder_path
+        .as_ref()
+        .filter(|paths| !paths.is_empty())
+        .cloned()
+        .unwrap_or_else(|| vec![main_folder_name.clone()]);
     let s3_prefix = format!("{}/", path_parts.join("/"));
     let full_s3_uri_prefix = format!("s3://{}/{}", bucket_name, s3_prefix);
 
     println!("[ListFolderContents] Listing contents for: {}", full_s3_uri_prefix);
+
+    async fn get_sync_root(scope: &str) -> Result<PathBuf, String> {
+        if scope == "public" {
+            crate::utils::sync::get_public_sync_path()
+                .await
+                .map(|s| PathBuf::from(s)) // Convert String to PathBuf
+                .map_err(|e| e.to_string())
+        } else {
+            crate::utils::sync::get_private_sync_path()
+                .await
+                .map(|s| PathBuf::from(s)) // Convert String to PathBuf
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    async fn db_lookup_path_by_name(file_name: &str) -> Option<String> {
+        // Use global DB pool if available
+        if let Some(pool) = crate::DB_POOL.get() {
+            // Return the most recent path for the given file name
+            match sqlx::query_scalar::<_, String>(
+                "SELECT path FROM file_paths WHERE file_name = ?1 ORDER BY timestamp DESC LIMIT 1",
+            )
+            .bind(file_name)
+            .fetch_optional(pool)
+            .await
+            {
+                Ok(opt) => opt,
+                Err(_e) => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    async fn resolve_source(
+        scope: &str,
+        sync_root: &std::path::Path,
+        main_folder_name: &str,
+        subfolder_path: &Option<Vec<String>>,
+        item_name: &str,
+        fallback_s3: &str,
+    ) -> String {
+        use std::path::PathBuf;
+        // Decide which prefix to use under the sync root
+        let local_prefix = match subfolder_path {
+            Some(paths) if !paths.is_empty() => paths.join("/"),
+            _ => main_folder_name.to_string(),
+        };
+
+        let candidate: PathBuf = sync_root.join(local_prefix).join(item_name);
+        if candidate.exists() {
+            return candidate.to_string_lossy().to_string();
+        }
+
+        // Try DB fallback by file_name
+        if let Some(p) = db_lookup_path_by_name(item_name).await { return p; }
+
+        // Default to S3 URL
+        fallback_s3.to_string()
+    }
+
+    // Compute sync root once
+    let sync_root = get_sync_root(&scope).await?;
 
     // --- FIX is on the line below ---
     let output = Command::new("aws")
@@ -1267,11 +1329,11 @@ pub async fn list_folder_contents(
         .arg("s3")
         .arg("ls")
         .arg(&full_s3_uri_prefix)
+        .arg("--recursive")
         .arg("--endpoint-url")
         .arg(endpoint_url)
-        .arg("--recursive")
         .output()
-        .await // <-- FIX: Added .await here
+        .await
         .map_err(|e| format!("Failed to execute aws command: {}", e))?;
 
     if !output.status.success() {
@@ -1299,10 +1361,19 @@ pub async fn list_folder_contents(
                 entry.1 = last_modified;
             } else {
                 if relative_path.is_empty() { continue; }
+                let s3_url = format!("s3://{}/{}", bucket_name, full_s3_key);
+                let src = resolve_source(
+                    &scope,
+                    &sync_root,
+                    &main_folder_name,
+                    &subfolder_path,
+                    relative_path,
+                    &s3_url,
+                ).await;
                 direct_files.push(FileDetail {
                     file_name: relative_path.to_string(),
                     cid: "s3".to_string(),
-                    source: format!("s3://{}/{}", bucket_name, full_s3_key),
+                    source: src,
                     file_hash: hex::encode(full_s3_key.as_bytes()),
                     miner_ids: String::new(),
                     file_size: size,
@@ -1316,10 +1387,19 @@ pub async fn list_folder_contents(
 
     for (folder_name, (total_size, _)) in subfolder_data {
         let folder_s3_key = format!("{}{}", s3_prefix, folder_name);
+        let s3_url = format!("s3://{}/{}", bucket_name, folder_s3_key);
+        let src = resolve_source(
+            &scope,
+            &sync_root,
+            &main_folder_name,
+            &subfolder_path,
+            &folder_name,
+            &s3_url,
+        ).await;
         direct_files.push(FileDetail {
             file_name: folder_name,
             cid: "s3".to_string(),
-            source: format!("s3://{}/{}", bucket_name, folder_s3_key),
+            source: src,
             file_hash: hex::encode(folder_s3_key.as_bytes()),
             miner_ids: String::new(),
             file_size: total_size,
