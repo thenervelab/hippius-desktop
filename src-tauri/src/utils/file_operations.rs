@@ -327,7 +327,7 @@ pub async fn copy_to_sync_and_add_to_db(
             .bind(&requested_file_name)
             .bind(file_size_in_bytes)
             .bind(false)
-            .bind(request_cid)  // main_req_hash
+            .bind("s3")  // main_req_hash
             .bind(source)   // source
             .bind(if is_public { "public" } else { "private" })  // type
             .bind(is_folder)
@@ -638,7 +638,7 @@ pub async fn copy_to_sync_folder(
             .bind(metadata_cid)
             .bind(&file_hash)
             .bind(file_size_in_bytes)
-            .bind(request_cid)
+            .bind("s3")
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
             .bind(account_id)
@@ -661,7 +661,7 @@ pub async fn copy_to_sync_folder(
             .bind(meta_folder_name)
             .bind(file_size_in_bytes)
             .bind(false)
-            .bind(request_cid)
+            .bind("s3")
             .bind(source)
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
@@ -839,7 +839,7 @@ pub async fn remove_from_sync_folder(
             .bind(folder_manifest_cid)
             .bind(&file_hash)
             .bind(0)
-            .bind(requested_cid)
+            .bind("s3")
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
             .bind(account_id)
@@ -865,7 +865,7 @@ pub async fn remove_from_sync_folder(
             .bind(meta_folder_name)
             .bind(0)
             .bind(false)
-            .bind(requested_cid)
+            .bind("s3")
             .bind(source)
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
