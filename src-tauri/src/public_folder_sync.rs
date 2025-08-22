@@ -9,54 +9,11 @@ use std::sync::atomic::Ordering;
 use std::thread;
 use std::path::Path;
 use std::os::unix::process::ExitStatusExt;
+use crate::sync_shared::parse_s3_sync_line;
 
 // Import the new S3 state from sync_shared
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE, RecentItem};
 
-/// Parses a line from the `aws s3 sync` output to create a RecentItem.
-fn parse_s3_sync_line(line: &str) -> Option<RecentItem> {
-    let mut parts = line.split_whitespace();
-
-    // The first part might be "(dryrun)". If it is, we skip it.
-    let first_part = parts.next().unwrap_or("");
-    let action_part = if first_part == "(dryrun)" {
-        parts.next().unwrap_or("")
-    } else {
-        first_part
-    };
-    
-    // The action should be "upload:" or "delete:"
-    let action = match action_part {
-        "upload:" => "uploaded",
-        "delete:" => "deleted",
-        _ => return None, // Not a line we care about
-    };
-
-    // The next part is always the path
-    let path_part = parts.next().unwrap_or("");
-    if path_part.is_empty() {
-        return None;
-    }
-
-    let file_name = if action == "deleted" {
-        // Input is an S3 URI like "s3://bucket/file.txt"
-        path_part.rsplit('/').next().unwrap_or("")
-    } else {
-        // Input is a local path like "./file.txt" or "/path/to/file.txt"
-        Path::new(path_part).file_name().and_then(|s| s.to_str()).unwrap_or("")
-    };
-
-    if file_name.is_empty() {
-        return None;
-    }
-    
-    Some(RecentItem {
-        name: file_name.to_string(),
-        scope: "public".to_string(),
-        action: action.to_string(),
-        kind: "file".to_string(), // Approximation
-    })
-}
 
 /// Starts the main sync loop for the public folder.
 pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
@@ -247,14 +204,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
 
         // --- Step 1: Dry Run to get total file count ---
         println!("[PublicFolderSync] Starting dry run to calculate changes...");
-        {
-            let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-            state.in_progress = true;
-            state.processed_files = 0;
-            state.total_files = 0;
-            state.current_item = None;
-        }
-
+        
         let s3_destination = format!("s3://{}/", bucket_name);
 
         let dry_run_output = Command::new("aws")
@@ -274,7 +224,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
 
                 // Use the CORRECTED parser to count the lines
                 stdout.lines()
-                    .filter_map(|line| parse_s3_sync_line(line))
+                    .filter_map(|line| parse_s3_sync_line(line, "public"))
                     .count()
             },
             Err(_) => {
@@ -283,10 +233,6 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
         };
 
         println!("[PublicFolderSync] Dry run complete. Found {} changes.", total_changes);
-        {
-            let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-            state.total_files = total_changes;
-        }
 
         if total_changes == 0 {
             println!("[PublicFolderSync] No changes detected. Waiting for next cycle.");
@@ -296,6 +242,19 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             }
             sleep(Duration::from_secs(60)).await;
             continue;
+        }
+
+        {
+            let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+            state.total_files = total_changes;
+        }
+
+        {
+            let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+            state.in_progress = true;
+            state.processed_files = 0;
+            state.total_files = 0;
+            state.current_item = None;
         }
 
         // --- Step 2: Live Parse the real sync ---
