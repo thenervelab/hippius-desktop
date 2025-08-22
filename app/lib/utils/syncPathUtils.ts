@@ -10,7 +10,7 @@ export async function getPrivateSyncPath(): Promise<string> {
     }
 }
 
-export async function setPrivateSyncPath(path: string, polkadotAddress: any, mnemonic: any): Promise<string> {
+export async function setPrivateSyncPath(path: string, polkadotAddress: string, mnemonic: string): Promise<string> {
     try {
         return await invoke<string>("set_sync_path", {
             params: { path, is_public: false, account_id: polkadotAddress, mnemonic },
@@ -32,10 +32,10 @@ export async function getPublicSyncPath(): Promise<string> {
     }
 }
 
-export async function setPublicSyncPath(path: string, polkadotAddress: any, mnemonic: any): Promise<string> {
+export async function setPublicSyncPath(path: string, polkadotAddress: string, mnemonic: string): Promise<string> {
     try {
         return await invoke<string>("set_sync_path", {
-            params: { path, is_public: true , account_id: polkadotAddress, mnemonic},
+            params: { path, is_public: true, account_id: polkadotAddress, mnemonic },
         });
     } catch (error) {
         console.error("Error setting sync path:", error);

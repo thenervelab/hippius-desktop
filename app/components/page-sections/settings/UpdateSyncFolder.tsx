@@ -64,6 +64,11 @@ const UpdateSyncFolder: React.FC = () => {
         toast.error("Please select a valid folder for private sync");
         return;
       }
+      if (!polkadotAddress || !mnemonic) {
+        toast.error("Wallet authentication is required");
+        return;
+      }
+
       await setPrivateSyncPath(p, polkadotAddress, mnemonic);
       setSelectedPrivateFolderPath(p);
       setSelectedPrivateFolderName(p.split(/[\\/]/).pop() || "");
@@ -85,6 +90,12 @@ const UpdateSyncFolder: React.FC = () => {
         toast.error("Please select a valid folder for public sync");
         return;
       }
+
+      if (!polkadotAddress || !mnemonic) {
+        toast.error("Wallet authentication is required");
+        return;
+      }
+
       await setPublicSyncPath(p, polkadotAddress, mnemonic);
       setSelectedPublicFolderPath(p);
       setSelectedPublicFolderName(p.split(/[\\/]/).pop() || "");

@@ -298,6 +298,11 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const handleFolderSelected = useCallback(
     async (path: string) => {
       try {
+        if (!polkadotAddress || !mnemonic) {
+          toast.error("Wallet authentication is required");
+          return;
+        }
+
         if (isPrivateView) {
           if (path === selectedPublicFolderPath) {
             toast.error("Private sync folder cannot be the same as public sync folder");
