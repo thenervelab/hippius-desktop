@@ -60,7 +60,8 @@
             "icons",
             "icons/icon.png",
             "icons/trayIcon.png",
-            "resources/awscli-macos-universal"
+            "resources/awscli-macos-universal",
+            "resources/awscli-windows"
         ],
         "macOS": {
             "entitlements": "entitlements.plist",

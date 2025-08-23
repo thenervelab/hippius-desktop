@@ -281,59 +281,128 @@ async fn install_aws_cli() -> Result<(), String> {
     Ok(())
 }
 
+
+
 #[cfg(target_os = "windows")]
 async fn install_aws_cli() -> Result<(), String> {
-    use tokio::fs;
-    use tokio::process::Command;
-    use std::path::Path;
+    use std::io;
 
-    let install_dir = dirs::home_dir().ok_or("Could not find home directory")?.join(".aws-cli");
+    // 1) Define install locations under the user's home directory
+    let install_dir = dirs::home_dir()
+        .ok_or("Could not find home directory")?
+        .join(".aws-cli");
     let bin_dir = install_dir.join("bin");
-
-    fs::create_dir_all(&bin_dir).await.map_err(|e| format!("Failed to create bin dir: {}", e))?;
-
-    let url = "https://awscli.amazonaws.com/AWSCLIV2.msi";
-    let msi_path = install_dir.join("AWSCLIV2.msi");
-
-    let output = Command::new("curl")
-        .args(&[
-            "https://awscli.amazonaws.com/AWSCLIV2.msi",
-            "-o",
-            msi_path.to_str().unwrap(),
-            "-L", // Follow redirects
-            "-f", // Fail fast on server errors
-            "--show-error",
-        ])
-        .output()
+    fs::create_dir_all(&bin_dir)
         .await
-        .map_err(|e| format!("curl command failed: {}", e))?;
+        .map_err(|e| format!("Failed to create directories: {}", e))?;
 
-    if !output.status.success() {
-        return Err("Internet connection required to download AWS CLI.".to_string());
+    // 2) Resolve Resources directory (dev or packaged) and log it
+    let resources_dir = windows_resources_dir()
+        .ok_or_else(|| "Failed to locate app Resources directory".to_string())?;
+    println!("[AWS CLI][Windows] Using Resources dir: {}", resources_dir.display());
+
+    // 3) Build expected source and log candidates
+    let source_dir = resources_dir
+        .join("awscli-windows")
+        .join("AWSCLIV2");
+    println!("[AWS CLI][Windows] Expecting bundled CLI at: {}", source_dir.display());
+
+    if !source_dir.exists() {
+        // Extra diagnostics: list the resources dir to help debugging
+        eprintln!(
+            "[AWS CLI][Windows] Bundled directory not found. Listing contents of {}:",
+            resources_dir.display()
+        );
+        if let Ok(mut rd) = tokio::fs::read_dir(&resources_dir).await {
+            while let Ok(Some(ent)) = rd.next_entry().await {
+                eprintln!("  - {}", ent.path().display());
+            }
+        }
+        return Err(format!(
+            "Bundled AWS CLI not found at expected path: {}",
+            source_dir.display()
+        ));
     }
 
-    // Use msiexec with target directory under user home (no admin required if writing there)
-    let output = Command::new("msiexec")
-        .args(&["/a", msi_path.to_str().unwrap(), "/qn", &format!("TARGETDIR={}", install_dir.to_str().unwrap())])
-        .output()
-        .await
-        .map_err(|e| format!("MSI extraction failed: {}", e))?;
+    // 4) Copy the entire AWSCLIV2 folder to ~/.aws-cli/AWSCLIV2 (so auxiliary files are preserved)
+    let target_cli_dir = install_dir.join("AWSCLIV2");
+    println!(
+        "[AWS CLI][Windows] Installing bundled CLI to {}",
+        target_cli_dir.display()
+    );
 
-    if !output.status.success() {
-        return Err(format!("Failed to extract AWS CLI MSI: {}", String::from_utf8_lossy(&output.stderr)));
+    let src_clone = source_dir.clone();
+    let dst_clone = target_cli_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        use std::fs;
+        // Fresh install: remove old target if it exists
+        if dst_clone.exists() {
+            let _ = fs::remove_dir_all(&dst_clone);
+        }
+        fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> io::Result<()> {
+            std::fs::create_dir_all(dst)?;
+            for entry in std::fs::read_dir(src)? {
+                let entry = entry?;
+                let path = entry.path();
+                let to_path = dst.join(entry.file_name());
+                if path.is_dir() {
+                    copy_dir_recursive(&path, &to_path)?;
+                } else {
+                    std::fs::copy(&path, &to_path)?;
+                }
+            }
+            Ok(())
+        }
+        copy_dir_recursive(&src_clone, &dst_clone)
+    })
+    .await
+    .map_err(|e| format!("Task join error during copy: {}", e))?
+    .map_err(|e| format!("Failed to copy bundled AWS CLI: {}", e))?;
+
+    // 5) Ensure aws.exe is available at ~/.aws-cli/bin/aws.exe (the path used by get_aws_binary_path())
+    let aws_exe_src = target_cli_dir.join("aws.exe");
+    let aws_exe_dst = bin_dir.join("aws.exe");
+
+    if !aws_exe_src.exists() {
+        return Err(format!(
+            "Copied CLI, but aws.exe missing at {}",
+            aws_exe_src.display()
+        ));
     }
 
-    let aws_binary_src = install_dir.join("AWSCLIV2").join("aws.exe");
-    let aws_binary_dest = bin_dir.join("aws.exe");
+    // Copy (overwrite) the launcher into bin
+    if let Err(e) = tokio::fs::copy(&aws_exe_src, &aws_exe_dst).await {
+        return Err(format!(
+            "Failed to place aws.exe into bin ({} -> {}): {}",
+            aws_exe_src.display(),
+            aws_exe_dst.display(),
+            e
+        ));
+    }
 
-    fs::copy(&aws_binary_src, &aws_binary_dest).await
-        .map_err(|e| format!("Failed to copy aws.exe: {}", e))?;
+    // 6) Verify
+    // Run from within the AWSCLIV2 folder so aws.exe can find its side-by-side DLLs
+    println!(
+        "[AWS CLI][Windows] Verifying installation (cwd={}): {}",
+        target_cli_dir.display(),
+        aws_exe_src.display()
+    );
+    let ok = Command::new(&aws_exe_src)
+        .current_dir(&target_cli_dir)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map_or(false, |s| s.success());
+    if !ok {
+        return Err("aws.exe did not run successfully after install".to_string());
+    }
 
-    println!("[AWS CLI] Installed successfully into user directory without admin (Windows).");
+    println!("[AWS CLI][Windows] Installed successfully from bundled resources.");
     Ok(())
 }
 
-// Recursively search for a file named "aws" under a "bin" directory, with a max depth.
 #[cfg(target_os = "macos")]
 async fn find_aws_binary_recursively(root: &Path, max_depth: usize) -> Option<PathBuf> {
     use std::collections::VecDeque;
@@ -453,8 +522,6 @@ async fn ensure_aws_cli_installed_blocking() {
 }
 
 #[cfg(target_os = "macos")]
-
-#[cfg(target_os = "macos")]
 async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
     // 1. Resolve the Resources directory of the .app bundle
     let resources_dir = macos_resources_dir()
@@ -462,7 +529,6 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
     println!("[AWS CLI] Using Resources dir: {}", resources_dir.display());
 
     // 2. Define the source directory, pointing to the nested aws-cli folder
-    //    --- CHANGE #1 ---
     let source_dir = resources_dir.join("resources").join("awscli-macos-universal").join("aws-cli");
 
     // 3. Check if the bundled directory actually exists
@@ -517,8 +583,7 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
     .map_err(|e| format!("Failed to copy bundled AWS CLI: {}", e))?;
 
     // 6. Define the path to the executable and make it executable
-    //    --- CHANGE #2 ---
-    let aws_bin = target_dir.join("aws"); // This is now correct because we copied the *contents* of the nested folder
+    let aws_bin = target_dir.join("aws");
 
     if aws_bin.exists() {
         #[cfg(unix)]
@@ -581,12 +646,44 @@ fn macos_resources_dir() -> Option<std::path::PathBuf> {
     None
 }
 
+#[cfg(target_os = "windows")]
+fn windows_resources_dir() -> Option<std::path::PathBuf> {
+    // Packaged: Tauri places a `resources` folder next to the executable
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let packaged = exe_dir.join("resources");
+            if packaged.exists() {
+                return Some(packaged);
+            }
+        }
+    }
+
+    // Dev: try cwd/resources (when running `tauri dev` from src-tauri)
+    if cfg!(debug_assertions) {
+        if let Ok(cwd) = std::env::current_dir() {
+            let dev_resources = cwd.join("resources");
+            if dev_resources.exists() {
+                return Some(dev_resources);
+            }
+        }
+    }
+
+    None
+}
+
 async fn get_aws_binary_path() -> Result<PathBuf, String> {
     let base_dir = dirs::home_dir().ok_or("Could not find home directory")?.join(".aws-cli");
 
     #[cfg(target_os = "windows")]
     {
-        Ok(base_dir.join("bin").join("aws.exe"))
+        // Prefer running aws.exe from its installed folder with DLLs alongside it
+        let primary = base_dir.join("AWSCLIV2").join("aws.exe");
+        if primary.exists() {
+            return Ok(primary);
+        }
+        // Fallback to legacy/bin location if present
+        let fallback = base_dir.join("bin").join("aws.exe");
+        Ok(fallback)
     }
     #[cfg(target_os = "linux")]
     {
