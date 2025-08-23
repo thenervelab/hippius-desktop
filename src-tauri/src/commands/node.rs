@@ -296,13 +296,20 @@ async fn install_aws_cli() -> Result<(), String> {
     let msi_path = install_dir.join("AWSCLIV2.msi");
 
     let output = Command::new("curl")
-        .args(&["-L", url, "-o", msi_path.to_str().unwrap(), "-f", "--show-error"])
+        .args(&[
+            "https://awscli.amazonaws.com/AWSCLIV2.msi",
+            "-o",
+            msi_path.to_str().unwrap(),
+            "-L", // Follow redirects
+            "-f", // Fail fast on server errors
+            "--show-error",
+        ])
         .output()
         .await
-        .map_err(|e| format!("Download command failed: {}", e))?;
+        .map_err(|e| format!("curl command failed: {}", e))?;
 
     if !output.status.success() {
-        return Err(format!("Failed to download AWS CLI: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err("Internet connection required to download AWS CLI.".to_string());
     }
 
     // Use msiexec with target directory under user home (no admin required if writing there)
@@ -324,75 +331,6 @@ async fn install_aws_cli() -> Result<(), String> {
 
     println!("[AWS CLI] Installed successfully into user directory without admin (Windows).");
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-async fn install_aws_cli() -> Result<(), String> {
-    use tokio::process::Command;
-    use tokio::fs;
-
-    println!("[AWS CLI] Checking for AWS CLI...");
-
-    // First, check if AWS CLI is already installed
-    if let Ok(output) = Command::new("which").arg("aws").output().await {
-        if output.status.success() {
-            println!("[AWS CLI] AWS CLI is already installed");
-            return Ok(());
-        }
-    }
-
-    // Check if Homebrew is installed
-    let has_brew = Command::new("brew")
-        .arg("--version")
-        .output().await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !has_brew {
-        println!("[AWS CLI] Installing Homebrew without sudo...");
-        // Install Homebrew in user's home directory (no sudo required)
-        let output = Command::new("/bin/bash")
-            .args(&["-c", r#"
-                # Install Homebrew to ~/.homebrew
-                git clone https://github.com/Homebrew/brew ~/.homebrew
-                echo 'export PATH="$HOME/.homebrew/bin:$PATH"' >> ~/.zshrc
-                echo 'export PATH="$HOME/.homebrew/bin:$PATH"' >> ~/.bashrc
-                export PATH="$HOME/.homebrew/bin:$PATH"
-            "#])
-            .output()
-            .await
-            .map_err(|e| format!("Homebrew installation failed: {}", e))?;
-
-        if !output.status.success() {
-            return Err("Failed to install Homebrew".into());
-        }
-    }
-
-    // Install AWS CLI using Homebrew (user installation, no sudo)
-    println!("[AWS CLI] Installing AWS CLI via Homebrew...");
-    
-    // Use the user's Homebrew installation
-    let brew_path = if has_brew {
-        "brew".to_string()
-    } else {
-        // Use the newly installed Homebrew
-        let home = dirs::home_dir().ok_or("Could not find home directory")?;
-        home.join(".homebrew").join("bin").join("brew").to_str().unwrap().to_string()
-    };
-
-    let output = Command::new(&brew_path)
-        .args(&["install", "awscli"])
-        .output()
-        .await
-        .map_err(|e| format!("AWS CLI installation failed: {}", e))?;
-
-    if output.status.success() {
-        println!("[AWS CLI] AWS CLI installed successfully via Homebrew");
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Failed to install AWS CLI: {}", stderr))
-    }
 }
 
 // Recursively search for a file named "aws" under a "bin" directory, with a max depth.
@@ -419,23 +357,6 @@ async fn find_aws_binary_recursively(root: &Path, max_depth: usize) -> Option<Pa
         }
     }
     None
-}
-
-async fn get_aws_binary_path() -> Result<PathBuf, String> {
-    let install_dir = dirs::home_dir().ok_or("Could not find home directory")?.join(".aws-cli");
-    
-    #[cfg(target_os = "windows")]
-    {
-        let binary_path = install_dir.join("bin").join("aws.exe");
-        Ok(binary_path)
-    }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        let binary_path = install_dir.join("bin").join("aws");
-        Ok(binary_path)
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    Err("Unsupported operating system for local AWS CLI management.".to_string())
 }
 
 // --- AWS Installation State Management ---
@@ -484,33 +405,6 @@ pub async fn reset_aws_installation_state() -> Result<(), String> {
     Ok(())
 }
 
-async fn is_aws_cli_installed() -> bool {
-    // Try managed local binary first
-    let local_ok = match get_aws_binary_path().await {
-        Ok(p) => {
-            #[cfg(not(target_os = "windows"))]
-            {
-                if !p.exists() { false } else { Command::new(p).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().await.map_or(false, |s| s.success()) }
-            }
-            #[cfg(target_os = "windows")]
-            {
-                Command::new(p).arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().await.map_or(false, |s| s.success())
-            }
-        }
-        Err(_) => false,
-    };
-    if local_ok { return true; }
-
-    // Fallback to system PATH
-    Command::new("aws")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .map_or(false, |s| s.success())
-}
-
 // Install AWS CLI with retries (no event emission). Blocks until installed.
 async fn ensure_aws_cli_installed_blocking() {
     if is_aws_cli_installed().await {
@@ -521,7 +415,24 @@ async fn ensure_aws_cli_installed_blocking() {
     let mut delay = Duration::from_secs(5);
     loop {
         println!("[AWS CLI] Installing...");
-        match install_aws_cli().await {
+        #[cfg(target_os = "macos")]
+        let res = {
+            // Try installing from bundled resources first, then fall back to pkg-based flow
+            match install_aws_cli_from_bundle_macos().await {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    eprintln!(
+                        "[AWS CLI] Bundled install unavailable or failed ({}). Falling back to pkg installer...",
+                        e
+                    );
+                    install_aws_cli().await
+                }
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let res = install_aws_cli().await;
+
+        match res {
             Ok(_) => {
                 if is_aws_cli_installed().await {
                     println!("[AWS CLI] Installed successfully.");
@@ -539,4 +450,158 @@ async fn ensure_aws_cli_installed_blocking() {
         sleep(delay).await;
         delay = std::cmp::min(delay * 2, Duration::from_secs(60));
     }
+}
+
+#[cfg(target_os = "macos")]
+async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
+    // Determine architecture to pick the right resource folder
+    let arch = String::from_utf8_lossy(
+        &Command::new("uname")
+            .arg("-m")
+            .output()
+            .await
+            .map_err(|e| format!("uname -m command failed: {}", e))?
+            .stdout,
+    )
+    .trim()
+    .to_string();
+
+    // Resolve the Resources directory of the .app bundle
+    let resources_dir = macos_resources_dir().ok_or_else(|| "Failed to locate app Resources directory".to_string())?;
+
+    // Layout options: prefer universal, otherwise arch-specific
+    let candidates = [
+        resources_dir.join("awscli-macos-universal").join("aws-cli"),
+        if arch == "arm64" {
+            resources_dir.join("awscli-macos-arm64").join("aws-cli")
+        } else {
+            resources_dir.join("awscli-macos-x64").join("aws-cli")
+        },
+    ];
+
+    // Pick first existing source
+    let source_dir = candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .ok_or_else(|| "Bundled AWS CLI not found in app resources".to_string())?;
+
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let target_root = home_dir.join(".aws-cli");
+    let target_dir = target_root.join("aws-cli");
+
+    // Copy recursively in a blocking task using std::fs
+    tokio::task::spawn_blocking(move || {
+        use std::fs;
+        use std::io;
+        fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> io::Result<()> {
+            if !dst.exists() {
+                fs::create_dir_all(dst)?;
+            }
+            for entry in fs::read_dir(src)? {
+                let entry = entry?;
+                let path = entry.path();
+                let to_path = dst.join(entry.file_name());
+                if path.is_dir() {
+                    copy_dir_recursive(&path, &to_path)?;
+                } else {
+                    fs::create_dir_all(to_path.parent().unwrap())?;
+                    fs::copy(&path, &to_path)?;
+                }
+            }
+            Ok(())
+        }
+        copy_dir_recursive(&source_dir, &target_dir)
+    })
+    .await
+    .map_err(|e| format!("task join error: {}", e))?
+    .map_err(|e| format!("Failed to copy bundled AWS CLI: {}", e))?;
+
+    // Ensure executables are marked executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let aws_bin = target_dir.join("aws");
+        if aws_bin.exists() {
+            if let Ok(meta) = tokio::fs::metadata(&aws_bin).await {
+                let mut mode = meta.permissions().mode();
+                // add user/group/other execute bits
+                mode |= 0o111;
+                let _ = tokio::fs::set_permissions(&aws_bin, std::fs::Permissions::from_mode(mode)).await;
+            }
+        }
+        let completer = target_dir.join("aws_completer");
+        if completer.exists() {
+            if let Ok(meta) = tokio::fs::metadata(&completer).await {
+                let mut mode = meta.permissions().mode();
+                mode |= 0o111;
+                let _ = tokio::fs::set_permissions(&completer, std::fs::Permissions::from_mode(mode)).await;
+            }
+        }
+    }
+
+    // Verify
+    let aws_path = get_aws_binary_path().await?;
+    let output = Command::new(&aws_path)
+        .arg("--version")
+        .output()
+        .await
+        .map_err(|e| format!("aws --version command failed: {}", e))?;
+    if !output.status.success() {
+        return Err("Bundled AWS CLI appears non-functional".to_string());
+    }
+
+    println!("[AWS CLI] Installed from bundled resources to {}", target_dir.display());
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_resources_dir() -> Option<std::path::PathBuf> {
+    // Resolve .../MyApp.app/Contents/Resources relative to current_exe()
+    let exe = std::env::current_exe().ok()?; // .../MyApp.app/Contents/MacOS/MyApp
+    let macos_dir = exe.parent()?; // .../MyApp.app/Contents/MacOS
+    let contents_dir = macos_dir.parent()?; // .../MyApp.app/Contents
+    Some(contents_dir.join("Resources"))
+}
+
+async fn get_aws_binary_path() -> Result<PathBuf, String> {
+    let base_dir = dirs::home_dir().ok_or("Could not find home directory")?.join(".aws-cli");
+
+    #[cfg(target_os = "windows")]
+    {
+        Ok(base_dir.join("bin").join("aws.exe"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Ok(base_dir.join("bin").join("aws"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // The official installer for 'CurrentUserHomeDirectory' creates this specific sub-path.
+        Ok(base_dir.join("aws-cli").join("aws"))
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        Err("Unsupported operating system for local AWS CLI management.".to_string())
+    }
+}
+
+async fn is_aws_cli_installed() -> bool {
+    // Try our managed local binary first.
+    if let Ok(p) = get_aws_binary_path().await {
+        if p.exists() {
+            if Command::new(p).arg("--version").output().await.map_or(false, |o| o.status.success()) {
+                return true;
+            }
+        }
+    }
+
+    // Fallback to system PATH for users who might have it installed via another method.
+    Command::new("aws")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map_or(false, |s| s.success())
 }

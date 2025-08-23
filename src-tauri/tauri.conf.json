@@ -56,7 +56,14 @@
             "icons/icon.ico"
         ],
         "createUpdaterArtifacts": true,
-        "resources": ["icons", "icons/icon.png", "icons/trayIcon.png"],
+        "resources": [
+            "icons",
+            "icons/icon.png",
+            "icons/trayIcon.png",
+            "resources/awscli-macos-universal",
+            "resources/awscli-macos-arm64",
+            "resources/awscli-macos-x64"
+        ],
         "macOS": {
             "entitlements": "entitlements.plist",
             "exceptionDomain": "hippius.com",
