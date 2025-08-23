@@ -9,7 +9,10 @@ use std::sync::atomic::Ordering;
 use std::thread; // Add thread
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, RecentItem}; // Update imports
 use std::path::Path;
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+#[cfg(windows)]
+use std::os::windows::process::ExitStatusExt;
 use crate::sync_shared::parse_s3_sync_line;
 
 
@@ -276,7 +279,12 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
                 // After kill, try to reap once
                 match child.try_wait() {
                     Ok(Some(st)) => break st,
-                    _ => break std::process::ExitStatus::from_raw(1),
+                    _ => {
+                        #[cfg(unix)]
+                        { break std::process::ExitStatus::from_raw(1); }
+                        #[cfg(windows)]
+                        { break std::process::ExitStatus::from_raw(1); }
+                    }
                 }
             }
             match child.try_wait() {
@@ -286,7 +294,10 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
                 }
                 Err(_) => {
                     eprintln!("[PrivateFolderSync] Error while waiting for child; assuming failure");
-                    break std::process::ExitStatus::from_raw(1);
+                    #[cfg(unix)]
+                    { break std::process::ExitStatus::from_raw(1); }
+                    #[cfg(windows)]
+                    { break std::process::ExitStatus::from_raw(1); }
                 }
             }
         };
