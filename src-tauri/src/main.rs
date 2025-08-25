@@ -32,7 +32,7 @@ use commands::ipfs_commands::{
     remove_folder_from_public_folder, add_folder_to_private_folder, remove_folder_from_private_folder
 };
 use utils::file_operations::delete_and_unpin_file_by_name;
-use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon, reset_aws_installation_state};
+use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
 use commands::substrate_tx::{
     get_sync_path, get_wss_endpoint, set_sync_path, test_wss_endpoint_command,
     transfer_balance_tauri, update_wss_endpoint_command,
@@ -73,7 +73,6 @@ fn main() {
             start_ipfs_daemon,
             stop_ipfs_daemon,
             get_current_setup_phase,
-            reset_aws_installation_state,
             encrypt_and_upload_file,
             download_and_decrypt_file,
             upload_file_public,

@@ -261,27 +261,79 @@ async fn install_aws_cli() -> Result<(), String> {
         return Err(format!("Failed to unzip AWS CLI: {}", String::from_utf8_lossy(&output.stderr)));
     }
 
-    let aws_binary_src = install_dir.join("aws").join("dist").join("aws");
-    let aws_binary_dest = bin_dir.join("aws");
+    // Ensure the dist/aws binary is executable (we will execute it in-place with its side-by-side files)
+    let aws_binary_in_dist = install_dir.join("aws").join("dist").join("aws");
+    if aws_binary_in_dist.exists() {
+        let mut perms = fs::metadata(&aws_binary_in_dist)
+            .await
+            .map_err(|e| format!("Failed to get metadata for aws binary: {}", e))?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&aws_binary_in_dist, perms)
+            .await
+            .map_err(|e| format!("Failed to set permissions on aws binary: {}", e))?;
+    }
 
-    fs::copy(&aws_binary_src, &aws_binary_dest).await
-        .map_err(|e| format!("Failed to copy aws binary: {}", e))?;
+    // Also place a user-accessible launcher into ~/.local/bin so `aws` is available in the shell
+    // We create a tiny wrapper script that changes directory to the dist folder and execs the real binary.
+    if let Some(home) = dirs::home_dir() {
+        let user_bin = home.join(".local").join("bin");
+        if let Err(e) = fs::create_dir_all(&user_bin).await {
+            eprintln!("[AWS CLI] Warning: failed to ensure ~/.local/bin exists: {}", e);
+        } else {
+            let user_path_aws = user_bin.join("aws");
+            // Overwrite any existing file
+            if user_path_aws.exists() {
+                let _ = fs::remove_file(&user_path_aws).await;
+            }
 
-    let mut perms = fs::metadata(&aws_binary_dest)
-    .await
-    .map_err(|e| format!("Failed to get metadata for aws binary: {}", e))?
-    .permissions();
-    
-    perms.set_mode(0o755);
-    fs::set_permissions(&aws_binary_dest, perms)
-    .await
-    .map_err(|e| format!("Failed to set permissions on aws binary: {}", e))?;
+            // Build wrapper script contents
+            let dist_dir = install_dir.join("aws").join("dist");
+            let wrapper = format!(
+                "#!/usr/bin/env bash\ncd \"{}\" || exit 1\nAWS_PAGER=\"\" exec \"{}/aws\" \"$@\"\n",
+                dist_dir.display(),
+                dist_dir.display()
+            );
+
+            if let Err(e) = fs::write(&user_path_aws, wrapper.as_bytes()).await {
+                eprintln!("[AWS CLI] Warning: failed to write wrapper to ~/.local/bin/aws: {}", e);
+            } else {
+                // Ensure executable
+                if let Ok(meta) = fs::metadata(&user_path_aws).await {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(0o755);
+                    let _ = fs::set_permissions(&user_path_aws, perms).await;
+                }
+
+                // Make sure current process can see ~/.local/bin first on PATH
+                if let Ok(mut cur_path) = std::env::var("PATH") {
+                    let user_bin_str = user_bin.to_string_lossy().to_string();
+                    if !cur_path.split(':').any(|p| p == user_bin_str) {
+                        cur_path = format!("{}:{}", user_bin_str, cur_path);
+                        std::env::set_var("PATH", &cur_path);
+                        println!("[AWS CLI] Added {} to PATH for current process", user_bin_str);
+                    }
+                }
+
+                // Verify via the wrapper in ~/.local/bin directly
+                let verify = Command::new(&user_path_aws)
+                    .arg("--version")
+                    .output()
+                    .await;
+                if let Ok(v) = verify {
+                    if v.status.success() {
+                        println!("[AWS CLI] Verified aws launcher in ~/.local/bin");
+                    } else {
+                        eprintln!("[AWS CLI] aws launcher in ~/.local/bin failed to run: {}", String::from_utf8_lossy(&v.stderr));
+                    }
+                }
+            }
+        }
+    }
 
     println!("[AWS CLI] Installed successfully into user directory without sudo (Linux).");
     Ok(())
 }
-
-
 
 #[cfg(target_os = "windows")]
 async fn install_aws_cli() -> Result<(), String> {
@@ -360,22 +412,22 @@ async fn install_aws_cli() -> Result<(), String> {
     .map_err(|e| format!("Failed to copy bundled AWS CLI: {}", e))?;
 
     // 5) Ensure aws.exe is available at ~/.aws-cli/bin/aws.exe (the path used by get_aws_binary_path())
-    let aws_exe_src = target_cli_dir.join("aws.exe");
-    let aws_exe_dst = bin_dir.join("aws.exe");
+    let aws_binary_src = target_cli_dir.join("aws.exe");
+    let aws_binary_dest = bin_dir.join("aws.exe");
 
-    if !aws_exe_src.exists() {
+    if !aws_binary_src.exists() {
         return Err(format!(
             "Copied CLI, but aws.exe missing at {}",
-            aws_exe_src.display()
+            aws_binary_src.display()
         ));
     }
 
     // Copy (overwrite) the launcher into bin
-    if let Err(e) = tokio::fs::copy(&aws_exe_src, &aws_exe_dst).await {
+    if let Err(e) = tokio::fs::copy(&aws_binary_src, &aws_binary_dest).await {
         return Err(format!(
             "Failed to place aws.exe into bin ({} -> {}): {}",
-            aws_exe_src.display(),
-            aws_exe_dst.display(),
+            aws_binary_src.display(),
+            aws_binary_dest.display(),
             e
         ));
     }
@@ -385,13 +437,25 @@ async fn install_aws_cli() -> Result<(), String> {
     println!(
         "[AWS CLI][Windows] Verifying installation (cwd={}): {}",
         target_cli_dir.display(),
-        aws_exe_src.display()
+        aws_binary_src.display()
     );
-    let ok = Command::new(&aws_exe_src)
+
+    // Use Windows-specific command creation to suppress terminal window
+    let mut verify_cmd = Command::new(&aws_binary_src);
+    verify_cmd
         .current_dir(&target_cli_dir)
         .arg("--version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+
+    // Add Windows-specific flags to suppress terminal window
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        verify_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let ok = verify_cmd
         .status()
         .await
         .map_or(false, |s| s.success());
@@ -460,18 +524,6 @@ async fn mark_aws_installation_attempted() {
         }
         let _ = fs::write(&state_file, "attempted").await;
     }
-}
-
-#[tauri::command]
-pub async fn reset_aws_installation_state() -> Result<(), String> {
-    if let Some(state_file) = get_aws_state_file().await {
-        if state_file.exists() {
-            fs::remove_file(&state_file).await
-                .map_err(|e| format!("Failed to reset AWS installation state: {}", e))?;
-        }
-    }
-    println!("[AWS CLI] Installation state reset. AWS CLI will be checked again on next startup.");
-    Ok(())
 }
 
 // Install AWS CLI with retries (no event emission). Blocks until installed.
@@ -600,12 +652,16 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
         return Err("Copied files, but the 'aws' executable is missing.".to_string());
     }
 
-    // 7. Verify the installation
-    let output = Command::new(&aws_bin)
-        .arg("--version")
-        .output()
-        .await
-        .map_err(|e| format!("aws --version command failed after install: {}", e))?;
+   // 7. Verify the installation
+   let mut cmd = Command::new(&aws_bin);
+   cmd.arg("--version");
+   #[cfg(target_os = "windows")]
+   {
+       use std::os::windows::process::CommandExt;
+       cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+   }
+
+   let output = cmd.output().await.map_err(|e| format!("aws --version command failed after install: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -613,9 +669,85 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
     }
 
     println!("[AWS CLI] Installed from bundled resources to {}", target_dir.display());
+
+    // Also create a user-accessible launcher into ~/.local/bin so `aws` is available in the shell (macOS)
+    if let Some(home) = dirs::home_dir() {
+        let user_bin = home.join(".local").join("bin");
+        if let Err(e) = tokio::fs::create_dir_all(&user_bin).await {
+            eprintln!("[AWS CLI][macOS] Warning: failed to ensure ~/.local/bin exists: {}", e);
+        } else {
+            let user_path_aws = user_bin.join("aws");
+            // Overwrite any existing file
+            if user_path_aws.exists() {
+                let _ = tokio::fs::remove_file(&user_path_aws).await;
+            }
+
+            // Build wrapper script contents to exec the installed binary
+            let wrapper = format!(
+                "#!/usr/bin/env bash\nAWS_PAGER=\"\" exec \"{}\" \"$@\"\n",
+                target_dir.join("aws").display()
+            );
+
+            if let Err(e) = tokio::fs::write(&user_path_aws, wrapper.as_bytes()).await {
+                eprintln!("[AWS CLI][macOS] Warning: failed to write wrapper to ~/.local/bin/aws: {}", e);
+            } else {
+                // Ensure executable
+                if let Ok(meta) = tokio::fs::metadata(&user_path_aws).await {
+                    let mut perms = meta.permissions();
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        perms.set_mode(0o755);
+                    }
+                    let _ = tokio::fs::set_permissions(&user_path_aws, perms).await;
+                }
+
+                // Make sure current process can see ~/.local/bin first on PATH
+                if let Ok(mut cur_path) = std::env::var("PATH") {
+                    let user_bin_str = user_bin.to_string_lossy().to_string();
+                    if !cur_path.split(':').any(|p| p == user_bin_str) {
+                        cur_path = format!("{}:{}", user_bin_str, cur_path);
+                        std::env::set_var("PATH", &cur_path);
+                        println!("[AWS CLI][macOS] Added {} to PATH for current process", user_bin_str);
+                    }
+                }
+
+                // Persist PATH update for user shells (zsh): append to ~/.zprofile and ~/.zshrc if missing
+                // This is idempotent and will not duplicate entries.
+                {
+                    use tokio::io::AsyncWriteExt;
+                    let export_line = r#"export PATH="$HOME/.local/bin:$PATH""#;
+                    let notice = "\n# Added by Hippius to expose aws in the shell\n";
+                    let profiles = [home.join(".zprofile"), home.join(".zshrc")];
+                    for path in &profiles {
+                        let mut needs_write = true;
+                        if let Ok(existing) = tokio::fs::read_to_string(path).await {
+                            if existing.contains(export_line) {
+                                needs_write = false;
+                            }
+                        }
+                        if needs_write {
+                            if let Ok(mut f) = tokio::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(path)
+                                .await
+                            {
+                                let _ = f.write_all(notice.as_bytes()).await;
+                                let _ = f.write_all(format!("{}\n", export_line).as_bytes()).await;
+                                println!("[AWS CLI][macOS] Appended PATH export to {}", path.display());
+                            } else {
+                                eprintln!("[AWS CLI][macOS] Warning: could not open {} for appending PATH", path.display());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
-
 
 #[cfg(target_os = "macos")]
 fn macos_resources_dir() -> Option<std::path::PathBuf> {
@@ -687,7 +819,8 @@ async fn get_aws_binary_path() -> Result<PathBuf, String> {
     }
     #[cfg(target_os = "linux")]
     {
-        Ok(base_dir.join("bin").join("aws"))
+        // Run the binary from its dist folder where its dependencies live
+        Ok(base_dir.join("aws").join("dist").join("aws"))
     }
     #[cfg(target_os = "macos")]
     {
@@ -704,18 +837,35 @@ async fn is_aws_cli_installed() -> bool {
     // Try our managed local binary first.
     if let Ok(p) = get_aws_binary_path().await {
         if p.exists() {
-            if Command::new(p).arg("--version").output().await.map_or(false, |o| o.status.success()) {
+            let mut cmd = Command::new(&p);
+            cmd.arg("--version");
+            // On Unix, ensure we run from the binary's parent so its relative resources are found
+            #[cfg(unix)]
+            if let Some(parent) = p.parent() {
+                cmd.current_dir(parent);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+
+            if cmd.output().await.map_or(false, |o| o.status.success()) {
                 return true;
             }
         }
     }
 
     // Fallback to system PATH for users who might have it installed via another method.
-    Command::new("aws")
-        .arg("--version")
+    let mut cmd = Command::new("aws");
+    cmd.arg("--version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .map_or(false, |s| s.success())
+        .stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    cmd.status().await.map_or(false, |s| s.success())
 }

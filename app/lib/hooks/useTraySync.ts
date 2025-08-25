@@ -164,11 +164,14 @@ function startSyncActivityWatcher() {
       const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
       if (!menu) return;
 
+      console.log("Fetching sync activity data...");
       const resp = (await invoke(
         "get_sync_activity"
       )) as BackendActivityResponse | null;
+      console.log("Sync activity data received:", resp);
 
       const rows = await normalizeActivityToRows(resp ?? {});
+      console.log("Normalized rows for tray menu:", rows.length, "items");
 
       // Build a compact signature to detect "no change"
       const signature = JSON.stringify(
@@ -180,6 +183,7 @@ function startSyncActivityWatcher() {
       );
 
       if (signature === lastRowsSignature) {
+        console.log("No changes in sync activity, skipping update");
         return;
       }
       lastRowsSignature = signature;
@@ -220,33 +224,21 @@ async function normalizeActivityToRows(
     const rawName = it.name || "Unknown";
     const fileName = shortenName(rawName);
 
-    // Always try to get a thumbnail regardless of file type
+    // Determine icon path directly based on file type
     let iconPath: string | undefined;
 
-    try {
-      // Try to get thumbnail from backend
-      iconPath = (await invoke("get_thumbnail_for_path", {
-        path: it.path,
-        size: 32, // Smaller size for menu items
-      })) as string;
-
-      console.log(`Got thumbnail for ${fileName}: ${iconPath ? "✓" : "✗"}`);
-    } catch (error) {
-      console.log(`Failed to get thumbnail for ${fileName}, using fallbacks`);
-      console.log(error);
+    // For images, use the file path directly (many systems can display the image as an icon)
+    if (isImagePath(it.path)) {
+      iconPath = it.path;
+      console.log(`Using image file path as icon: ${fileName}`);
     }
-
-    // Fallback icons if no thumbnail
-    if (!iconPath) {
-      if (it.kind === "folder") {
-        iconPath = folderIcon || fileIcon;
-      } else if (isImagePath(it.path)) {
-        iconPath = it.path; // many platforms allow raw file path as icon
-      } else if (isVideoPath(it.path)) {
-        iconPath = videoIcon || fileIcon;
-      } else {
-        iconPath = fileIcon;
-      }
+    // For other files use generic icons
+    else if (it.kind === "folder") {
+      iconPath = folderIcon || fileIcon;
+    } else if (isVideoPath(it.path)) {
+      iconPath = videoIcon || fileIcon;
+    } else {
+      iconPath = fileIcon;
     }
 
     rows.push({
