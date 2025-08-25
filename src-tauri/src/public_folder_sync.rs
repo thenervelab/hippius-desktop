@@ -14,13 +14,15 @@ use std::os::unix::process::ExitStatusExt;
 use std::os::windows::process::ExitStatusExt;
 use crate::sync_shared::parse_s3_sync_line;
 use crate::sync_shared::MAX_RECENT_ITEMS;
+use serde_json::json;
+use tauri::Emitter;
 
 // Import the new S3 state from sync_shared
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE, RecentItem};
 
 
 /// Starts the main sync loop for the public folder.
-pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
+pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String, seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(&(account_id.clone(), "public")) {
@@ -352,6 +354,22 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
             }
         }
 
+        // Emit a Tauri event so the frontend can react to completion of this cycle
+        {
+            let state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+            let payload = json!({
+                "scope": "public",
+                "account_id": account_id,
+                "success": status.success(),
+                "total_files": state.total_files,
+                "processed_files": state.processed_files,
+            });
+            println!("[PublicFolderSync] Emitting sync_completed event: {}", payload);
+            if let Err(e) = app_handle.emit("sync_completed", payload) {
+                eprintln!("[PublicFolderSync] Failed to emit sync_completed event: {}", e);
+            }
+        }
+
         println!("[PublicFolderSync] Cycle complete. Waiting for 1 minutes before next sync.");
         sleep(Duration::from_secs(60)).await;
     }
@@ -359,7 +377,7 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
 
 /// Tauri command to start the public folder sync process.
 #[tauri::command]
-pub async fn start_public_folder_sync_tauri(_app_handle: AppHandle, account_id: String, seed_phrase: String) {
+pub async fn start_public_folder_sync_tauri(app_handle: AppHandle, account_id: String, seed_phrase: String) {
     // Do NOT spawn here. Let the caller spawn and track this task so it can be aborted on logout.
-    start_public_folder_sync(account_id, seed_phrase).await;
+    start_public_folder_sync(app_handle, account_id, seed_phrase).await;
 }
