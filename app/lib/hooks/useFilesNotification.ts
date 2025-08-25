@@ -40,6 +40,7 @@ export function useFilesNotification() {
         setInvokeCount((prevCount) => prevCount + 1);
 
         const status = await invoke<SyncStatusResponse>("get_sync_status");
+        console.log("status", status);
         setSyncStatus(status);
         // toast.success(
         //   `Sync Staus: ${status.percent}% : ${status.in_progress ? "In Progress" : "Completed"}`
@@ -91,7 +92,7 @@ export function useFilesNotification() {
     getSyncStatus();
 
     // Set up interval to periodically refresh the status
-    const intervalId = setInterval(getSyncStatus, 1000);
+    const intervalId = setInterval(getSyncStatus, 100);
 
     // Clean up interval on component unmount
     return () => clearInterval(intervalId);
