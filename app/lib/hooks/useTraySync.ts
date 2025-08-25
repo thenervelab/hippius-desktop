@@ -296,6 +296,8 @@ async function updateSyncRowsDirectly(menu: Menu, rows: SyncActivityRow[]) {
       const id = SYNC_ITEM_PREFIX + row.id;
       const text = formatRowText(row);
 
+      console.log("row", row)
+
       try {
         const item = await newSyncRowMenuItem(id, text, row.iconPath);
         await menu.insert(item, insertPosition);
@@ -321,6 +323,13 @@ async function newSyncRowMenuItem(id: string, text: string, iconPath?: string) {
         icon: iconPath,
         enabled: false,
       });
+      // return await MenuItem.new({
+      //   id,
+      //   text,
+      //   action: async () => {
+      //     await checkForUpdates();
+      //   },
+      // });
     } catch (error) {
       console.error("Failed to create icon menu item:", error);
       // fall through to text row

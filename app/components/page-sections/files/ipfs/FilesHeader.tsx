@@ -1,7 +1,7 @@
 "use client";
 
 import { FC, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Icons, RefreshButton, SearchInput } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import AddButton from "./AddFileButton";
@@ -9,6 +9,7 @@ import StorageStateList from "./storage-stats";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
+import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
 
 interface FilesHeaderProps {
   isRecentFiles?: boolean;
@@ -27,6 +28,8 @@ interface FilesHeaderProps {
   addButtonRef: React.RefObject<{
     openWithFiles(files: FileList): void;
   } | null>;
+  privateFileCount?: number;
+  publicFileCount?: number;
 }
 
 const FilesHeader: FC<FilesHeaderProps> = ({
@@ -43,9 +46,19 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   handleRemoveFilter,
   setIsFilterOpen,
   refetchUserFiles,
-  addButtonRef
+  addButtonRef,
+  privateFileCount = 0,
+  publicFileCount = 0
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  const router = useRouter();
+  const { navigateToFilesView } = useFilesNavigation();
+
+  const handleViewAllFiles = () => {
+    // Navigate to the appropriate files view based on the file counts
+    navigateToFilesView(privateFileCount, publicFileCount);
+    router.push('/files');
+  };
 
   return (
     <>
@@ -103,13 +116,13 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             </button>
           </div>
           {isRecentFiles && (
-            <Link
-              href="/files"
+            <button
+              onClick={handleViewAllFiles}
               className="px-4 py-2.5 items-center flex bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
             >
               View All Files
               <Icons.ArrowRight className="size-[14px] ml-1" />
-            </Link>
+            </button>
           )}
           {!isRecentFiles && (
             <div className="flex border border-grey-80 p-1 rounded">
