@@ -227,15 +227,10 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
             state.in_progress = true;
             state.processed_files = 0;
-            state.total_files = 0;
+            state.total_files = total_changes;
             state.current_item = None;
         }
-
-        {
-            let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
-            state.total_files = total_changes;
-        }
-
+        
         let mut child = Command::new("aws")
             .env("AWS_PAGER", "")
             .arg("s3")
@@ -260,6 +255,9 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
                         if let Some(item) = parse_s3_sync_line(&line, "private") {
                              let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
                              state.processed_files += 1;
+                             if state.processed_files > state.total_files {
+                                 state.processed_files = state.total_files;
+                             }
                              state.current_item = Some(item.clone());
                              state.recent_items.push_front(item);
                              if state.recent_items.len() > 50 {

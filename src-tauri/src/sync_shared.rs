@@ -103,16 +103,19 @@ pub fn get_sync_status() -> SyncStatusResponse {
     let processed_files = private_state.processed_files + public_state.processed_files;
     let in_progress = private_state.in_progress || public_state.in_progress;
 
+    // Synced files should never exceed total_files
+    let synced_files = processed_files.min(total_files);
+
     let percent = if total_files > 0 {
-        (processed_files as f32 / total_files as f32) * 100.0
+        ((synced_files as f32 / total_files as f32) * 100.0).min(100.0)
     } else if in_progress {
         0.0 // In progress but total not yet calculated
     } else {
-        100.0 // Not in progress and nothing to do
+        0.0 // Not in progress and nothing to do
     };
 
     SyncStatusResponse {
-        synced_files: processed_files,
+        synced_files,
         total_files,
         in_progress,
         percent,

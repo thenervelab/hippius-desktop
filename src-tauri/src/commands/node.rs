@@ -387,11 +387,23 @@ async fn install_aws_cli() -> Result<(), String> {
         target_cli_dir.display(),
         aws_exe_src.display()
     );
-    let ok = Command::new(&aws_exe_src)
+
+    // Use Windows-specific command creation to suppress terminal window
+    let mut verify_cmd = Command::new(&aws_exe_src);
+    verify_cmd
         .current_dir(&target_cli_dir)
         .arg("--version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+
+    // Add Windows-specific flags to suppress terminal window
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        verify_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let ok = verify_cmd
         .status()
         .await
         .map_or(false, |s| s.success());
@@ -600,12 +612,16 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
         return Err("Copied files, but the 'aws' executable is missing.".to_string());
     }
 
-    // 7. Verify the installation
-    let output = Command::new(&aws_bin)
-        .arg("--version")
-        .output()
-        .await
-        .map_err(|e| format!("aws --version command failed after install: {}", e))?;
+   // 7. Verify the installation
+   let mut cmd = Command::new(&aws_bin);
+   cmd.arg("--version");
+   #[cfg(target_os = "windows")]
+   {
+       use std::os::windows::process::CommandExt;
+       cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+   }
+
+   let output = cmd.output().await.map_err(|e| format!("aws --version command failed after install: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -704,18 +720,30 @@ async fn is_aws_cli_installed() -> bool {
     // Try our managed local binary first.
     if let Ok(p) = get_aws_binary_path().await {
         if p.exists() {
-            if Command::new(p).arg("--version").output().await.map_or(false, |o| o.status.success()) {
+            let mut cmd = Command::new(p);
+            cmd.arg("--version");
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+
+            if cmd.output().await.map_or(false, |o| o.status.success()) {
                 return true;
             }
         }
     }
 
     // Fallback to system PATH for users who might have it installed via another method.
-    Command::new("aws")
-        .arg("--version")
+    let mut cmd = Command::new("aws");
+    cmd.arg("--version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .map_or(false, |s| s.success())
+        .stderr(Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    cmd.status().await.map_or(false, |s| s.success())
 }
