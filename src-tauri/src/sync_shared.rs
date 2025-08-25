@@ -22,8 +22,25 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
         s = s.trim_start_matches("(dryrun)").trim();
     }
 
+    // Helper to resolve absolute path for local filesystem entries
+    let abs_path = |p: &str| -> String {
+        let pth = std::path::Path::new(p);
+        // Try canonicalize first (resolves symlinks). If it fails, fall back to CWD join for relative paths
+        if let Ok(canon) = std::fs::canonicalize(pth) {
+            canon.to_string_lossy().to_string()
+        } else if pth.is_relative() {
+            if let Ok(cwd) = std::env::current_dir() {
+                cwd.join(pth).to_string_lossy().to_string()
+            } else {
+                p.to_string()
+            }
+        } else {
+            p.to_string()
+        }
+    };
+
     // Helper to build item
-    let mk_item = |name: &str, action: &str, path: &str| -> Option<RecentItem> {
+    let mk_item = |name: &str, action: &str, path: String| -> Option<RecentItem> {
         if name.is_empty() { return None; }
         let now_ms: i64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -34,7 +51,7 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
             scope: scope.to_string(),
             action: action.to_string(),
             kind: "file".to_string(),
-            path: path.to_string(),
+            path,
             timestamp: now_ms,
         })
     };
@@ -44,7 +61,8 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
         let rest = rest.trim_start();
         let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
         let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
-        return mk_item(file_name, "uploaded", src);
+        let path_abs = abs_path(src);
+        return mk_item(file_name, "uploaded", path_abs);
     }
 
     // Handle 'copy:' lines similarly to upload (ACL/metadata changes)
@@ -52,14 +70,15 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
         let rest = rest.trim_start();
         let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
         let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
-        return mk_item(file_name, "uploaded", src);
+        let path_abs = abs_path(src);
+        return mk_item(file_name, "uploaded", path_abs);
     }
 
     // Handle 'delete:' lines: "delete: s3://bucket/key"
     if let Some(rest) = s.strip_prefix("delete:") {
         let s3path = rest.trim();
         let file_name = s3path.rsplit('/').next().unwrap_or("");
-        return mk_item(file_name, "deleted", s3path);
+        return mk_item(file_name, "deleted", s3path.to_string());
     }
 
     None
@@ -147,7 +166,7 @@ pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
     // Sort by timestamp (newest first)
     recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     recent.truncate(limit);
-    
+    println!("Recent items: {:#?}", recent);
     // Combine currently uploading items
     let uploading: Vec<RecentItem> = p_state.current_item.iter()
         .chain(pub_state.current_item.iter())
