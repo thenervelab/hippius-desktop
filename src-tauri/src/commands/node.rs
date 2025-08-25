@@ -669,9 +669,85 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
     }
 
     println!("[AWS CLI] Installed from bundled resources to {}", target_dir.display());
+
+    // Also create a user-accessible launcher into ~/.local/bin so `aws` is available in the shell (macOS)
+    if let Some(home) = dirs::home_dir() {
+        let user_bin = home.join(".local").join("bin");
+        if let Err(e) = tokio::fs::create_dir_all(&user_bin).await {
+            eprintln!("[AWS CLI][macOS] Warning: failed to ensure ~/.local/bin exists: {}", e);
+        } else {
+            let user_path_aws = user_bin.join("aws");
+            // Overwrite any existing file
+            if user_path_aws.exists() {
+                let _ = tokio::fs::remove_file(&user_path_aws).await;
+            }
+
+            // Build wrapper script contents to exec the installed binary
+            let wrapper = format!(
+                "#!/usr/bin/env bash\nAWS_PAGER=\"\" exec \"{}\" \"$@\"\n",
+                target_dir.join("aws").display()
+            );
+
+            if let Err(e) = tokio::fs::write(&user_path_aws, wrapper.as_bytes()).await {
+                eprintln!("[AWS CLI][macOS] Warning: failed to write wrapper to ~/.local/bin/aws: {}", e);
+            } else {
+                // Ensure executable
+                if let Ok(meta) = tokio::fs::metadata(&user_path_aws).await {
+                    let mut perms = meta.permissions();
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        perms.set_mode(0o755);
+                    }
+                    let _ = tokio::fs::set_permissions(&user_path_aws, perms).await;
+                }
+
+                // Make sure current process can see ~/.local/bin first on PATH
+                if let Ok(mut cur_path) = std::env::var("PATH") {
+                    let user_bin_str = user_bin.to_string_lossy().to_string();
+                    if !cur_path.split(':').any(|p| p == user_bin_str) {
+                        cur_path = format!("{}:{}", user_bin_str, cur_path);
+                        std::env::set_var("PATH", &cur_path);
+                        println!("[AWS CLI][macOS] Added {} to PATH for current process", user_bin_str);
+                    }
+                }
+
+                // Persist PATH update for user shells (zsh): append to ~/.zprofile and ~/.zshrc if missing
+                // This is idempotent and will not duplicate entries.
+                {
+                    use tokio::io::AsyncWriteExt;
+                    let export_line = r#"export PATH="$HOME/.local/bin:$PATH""#;
+                    let notice = "\n# Added by Hippius to expose aws in the shell\n";
+                    let profiles = [home.join(".zprofile"), home.join(".zshrc")];
+                    for path in &profiles {
+                        let mut needs_write = true;
+                        if let Ok(existing) = tokio::fs::read_to_string(path).await {
+                            if existing.contains(export_line) {
+                                needs_write = false;
+                            }
+                        }
+                        if needs_write {
+                            if let Ok(mut f) = tokio::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(path)
+                                .await
+                            {
+                                let _ = f.write_all(notice.as_bytes()).await;
+                                let _ = f.write_all(format!("{}\n", export_line).as_bytes()).await;
+                                println!("[AWS CLI][macOS] Appended PATH export to {}", path.display());
+                            } else {
+                                eprintln!("[AWS CLI][macOS] Warning: could not open {} for appending PATH", path.display());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
-
 
 #[cfg(target_os = "macos")]
 fn macos_resources_dir() -> Option<std::path::PathBuf> {
