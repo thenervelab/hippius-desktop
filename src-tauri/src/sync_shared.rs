@@ -118,13 +118,13 @@ pub fn get_sync_status() -> SyncStatusResponse {
     let synced_files = processed_files.min(total_files);
 
     let percent = if total_files > 0 {
+        println!("Sync percent is : {}", ((synced_files as f32 / total_files as f32) * 100.0).min(100.0));
         ((synced_files as f32 / total_files as f32) * 100.0).min(100.0)
     } else if in_progress {
         0.0 // In progress but total not yet calculated
     } else {
         0.0 // Not in progress and nothing to do
     };
-
     SyncStatusResponse {
         synced_files,
         total_files,
