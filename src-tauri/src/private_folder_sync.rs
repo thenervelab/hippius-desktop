@@ -13,6 +13,7 @@ use std::path::Path;
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::process::ExitStatusExt;
+use crate::sync_shared::MAX_RECENT_ITEMS;
 use crate::sync_shared::parse_s3_sync_line;
 
 
@@ -227,15 +228,10 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
             let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
             state.in_progress = true;
             state.processed_files = 0;
-            state.total_files = 0;
+            state.total_files = total_changes;
             state.current_item = None;
         }
-
-        {
-            let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
-            state.total_files = total_changes;
-        }
-
+        
         let mut child = Command::new("aws")
             .env("AWS_PAGER", "")
             .arg("s3")
@@ -260,9 +256,12 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
                         if let Some(item) = parse_s3_sync_line(&line, "private") {
                              let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
                              state.processed_files += 1;
+                             if state.processed_files > state.total_files {
+                                 state.processed_files = state.total_files;
+                             }
                              state.current_item = Some(item.clone());
                              state.recent_items.push_front(item);
-                             if state.recent_items.len() > 50 {
+                             if state.recent_items.len() > MAX_RECENT_ITEMS {
                                  state.recent_items.pop_back();
                              }
                         }

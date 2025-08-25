@@ -13,6 +13,7 @@ use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::process::ExitStatusExt;
 use crate::sync_shared::parse_s3_sync_line;
+use crate::sync_shared::MAX_RECENT_ITEMS;
 
 // Import the new S3 state from sync_shared
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE, RecentItem};
@@ -249,15 +250,10 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
 
         {
             let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-            state.total_files = total_changes;
-        }
-
-        {
-            let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
             state.in_progress = true;
             state.processed_files = 0;
-            state.total_files = 0;
             state.current_item = None;
+            state.total_files = total_changes;
         }
 
         let mut child = Command::new("aws")
@@ -285,9 +281,12 @@ pub async fn start_public_folder_sync(account_id: String, seed_phrase: String) {
                         if let Some(item) = parse_s3_sync_line(&line, "public") {
                              let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
                              state.processed_files += 1;
+                             if state.processed_files > state.total_files {
+                                 state.processed_files = state.total_files;
+                             }
                              state.current_item = Some(item.clone());
                              state.recent_items.push_front(item);
-                             if state.recent_items.len() > 50 {
+                             if state.recent_items.len() > MAX_RECENT_ITEMS {
                                  state.recent_items.pop_back();
                              }
                         }
