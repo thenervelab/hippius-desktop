@@ -12,6 +12,7 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use hex;
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Parses a line from the `aws s3 sync` output to create a RecentItem.
 pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
@@ -22,13 +23,19 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
     }
 
     // Helper to build item
-    let mk_item = |name: &str, action: &str| -> Option<RecentItem> {
+    let mk_item = |name: &str, action: &str, path: &str| -> Option<RecentItem> {
         if name.is_empty() { return None; }
+        let now_ms: i64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
         Some(RecentItem {
             name: name.to_string(),
             scope: scope.to_string(),
             action: action.to_string(),
             kind: "file".to_string(),
+            path: path.to_string(),
+            timestamp: now_ms,
         })
     };
 
@@ -37,7 +44,7 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
         let rest = rest.trim_start();
         let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
         let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
-        return mk_item(file_name, "uploaded");
+        return mk_item(file_name, "uploaded", src);
     }
 
     // Handle 'copy:' lines similarly to upload (ACL/metadata changes)
@@ -45,14 +52,14 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
         let rest = rest.trim_start();
         let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
         let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
-        return mk_item(file_name, "uploaded");
+        return mk_item(file_name, "uploaded", src);
     }
 
     // Handle 'delete:' lines: "delete: s3://bucket/key"
     if let Some(rest) = s.strip_prefix("delete:") {
         let s3path = rest.trim();
         let file_name = s3path.rsplit('/').next().unwrap_or("");
-        return mk_item(file_name, "deleted");
+        return mk_item(file_name, "deleted", s3path);
     }
 
     None
@@ -63,12 +70,16 @@ pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<(String, &'static str)>>>> =
 pub static GLOBAL_CANCEL_TOKEN: Lazy<Arc<AtomicBool>> = 
     Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
+pub const MAX_RECENT_ITEMS: usize = 100;
+
 #[derive(serde::Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RecentItem {
     pub name: String,
     pub scope: String,
     pub action: String,
     pub kind: String,
+    pub path: String,
+    pub timestamp: i64,
 }
 
 #[derive(serde::Serialize, Clone, Debug, Default)]
@@ -126,16 +137,15 @@ pub fn get_sync_status() -> SyncStatusResponse {
 pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
     let p_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
     let pub_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-    let limit = limit.unwrap_or(10);
+    let limit = limit.unwrap_or(100);
 
     // Combine and sort recent items
     let mut recent: Vec<RecentItem> = p_state.recent_items.iter()
         .chain(pub_state.recent_items.iter())
         .cloned()
         .collect();
-    
-    // This sort is simplistic; a real implementation might add timestamps.
-    // For now, we just combine them.
+    // Sort by timestamp (newest first)
+    recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     recent.truncate(limit);
     
     // Combine currently uploading items

@@ -13,6 +13,7 @@ use std::path::Path;
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::process::ExitStatusExt;
+use crate::sync_shared::MAX_RECENT_ITEMS;
 use crate::sync_shared::parse_s3_sync_line;
 
 
@@ -260,7 +261,7 @@ pub async fn start_private_folder_sync(account_id: String, seed_phrase: String) 
                              }
                              state.current_item = Some(item.clone());
                              state.recent_items.push_front(item);
-                             if state.recent_items.len() > 50 {
+                             if state.recent_items.len() > MAX_RECENT_ITEMS {
                                  state.recent_items.pop_back();
                              }
                         }
