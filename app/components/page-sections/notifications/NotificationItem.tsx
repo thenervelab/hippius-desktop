@@ -11,6 +11,9 @@ import NotificationContextMenu from "./NotificationContextMenu";
 import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
+import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
+import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
+import { X } from "lucide-react";
 
 interface NotificationItemProps {
   id?: number;
@@ -25,6 +28,7 @@ interface NotificationItemProps {
   selected?: boolean;
   onClick?: () => void;
   onReadStatusChange?: (id: number, isUnread: boolean) => void;
+  onRefresh?: () => void; // Added for refreshing notification list
 }
 
 const NotificationItem: React.FC<NotificationItemProps> = ({
@@ -39,14 +43,17 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   unread = false,
   selected = false,
   onClick,
-  onReadStatusChange
+  onReadStatusChange,
+  onRefresh
 }) => {
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
   } | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
   const router = useRouter();
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
+  const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
   const handleLinkClick = (e: React.MouseEvent) => {
     handleButtonLink(e, buttonLink, router, setActiveSubMenuItem);
@@ -63,6 +70,24 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent triggering onClick
+
+    if (!id) return;
+
+    try {
+      setIsArchiving(true);
+      await new Promise(r => setTimeout(r, 160)); // Animation delay
+      await deleteNotification(id);
+      await refreshUnread();
+      if (onRefresh) {
+        onRefresh();
+      }
+    } catch (error) {
+      console.error('Failed to delete notification:', error);
+    }
+  };
+
   return (
     <>
       <InView triggerOnce>
@@ -70,8 +95,9 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
           <div
             ref={ref}
             className={cn(
-              "flex items-start gap-3 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer",
-              selected && "border border-primary-70 bg-primary-100"
+              "flex items-start gap-3 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer transition duration-200 relative",
+              selected && "border border-primary-70 bg-primary-100",
+              isArchiving && "opacity-0 translate-y-1 scale-[0.98]"
             )}
             onClick={onClick}
             onContextMenu={handleContextMenu}
@@ -131,20 +157,37 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
                 ></div>
               </div>
             </div>
+
+            {/* Delete button - appears on hover */}
+            <button
+              className={cn("absolute top-6 right-2.5 opacity-0 group-hover:opacity-100 transition-opacity text-grey-60 hover:text-error-50", !unread && "top-4")}
+              onClick={handleDelete}
+              title="Archive notification"
+            >
+              <Icons.Trash className="size-4" />
+            </button>
           </div>
         )}
-      </InView>
+      </InView >
 
       {/* Context Menu */}
-      {contextMenu && (
-        <NotificationContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          isUnread={unread}
-          onClose={() => setContextMenu(null)}
-          onToggleReadStatus={handleReadStatusToggle}
-        />
-      )}
+      {
+        contextMenu && (
+          <NotificationContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            isUnread={unread}
+            onClose={() => setContextMenu(null)}
+            onToggleReadStatus={handleReadStatusToggle}
+            notificationId={id}
+            onArchived={() => {
+              setContextMenu(null);
+              if (onRefresh) onRefresh();
+            }}
+            onArchiveStart={() => setIsArchiving(true)}
+          />
+        )
+      }
     </>
   );
 };

@@ -47,11 +47,7 @@ export function useFilesNotification() {
         if (status.in_progress) {
           await setTraySyncPercent(status.percent); // 0–100
         } else if (status.percent === 100) {
-          // First show completed status, then clear after 3 seconds
           await setTraySyncPercent(100);
-          setTimeout(async () => {
-            await setTraySyncPercent(null); // Remove the sync item after a delay
-          }, 10000);
         } else {
           // If not in progress and not 100%, don't show any sync status
           await setTraySyncPercent(null);

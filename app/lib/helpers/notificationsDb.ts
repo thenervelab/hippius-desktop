@@ -276,3 +276,19 @@ export async function hippusVersionNotificationExists(
   );
   return (res[0]?.values[0][0] as number) > 0;
 }
+
+// New: delete a single notification
+export async function deleteNotification(id: number) {
+  const db = await getDb();
+  db.run(`DELETE FROM notifications WHERE id = ?`, [id]);
+  await saveBytes(db.export());
+  return true;
+}
+
+// New: delete all notifications
+export async function deleteAllNotifications() {
+  const db = await getDb();
+  db.run(`DELETE FROM notifications`);
+  await saveBytes(db.export());
+  return true;
+}

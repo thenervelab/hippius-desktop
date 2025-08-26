@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { Icons } from "@/components/ui";
 import * as Switch from "@radix-ui/react-switch";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
@@ -24,6 +24,7 @@ import {
   activeSettingsTabAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
 import { iconMap } from "@/app/lib/helpers/notificationIcons";
+import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
 
 const Notifications = () => {
   const [activeTab, setActiveTab] = useState("All");
@@ -66,6 +67,16 @@ const Notifications = () => {
     refresh();
     refreshEnabledTypes();
   }, [refresh, refreshEnabledTypes]);
+
+  // New: remove window event listeners. We refetch directly where needed.
+  // useEffect(() => {
+  //   const onUpdated = () => {
+  //     refresh();
+  //     refreshUnread();
+  //   };
+  //   window.addEventListener("notifications:updated", onUpdated);
+  //   return () => window.removeEventListener("notifications:updated", onUpdated);
+  // }, [refresh, refreshUnread]);
 
   // B) Re-fetch types when the settings dialog closes/opens
   useEffect(() => {
@@ -140,21 +151,26 @@ const Notifications = () => {
     setSelectedId(id);
   };
 
+  // Clear selected notification when deleted
+  const handleNotificationDeleted = () => {
+    setSelectedId(null);
+  };
+
   const selected = selectedId ? visible.find((n) => n.id === selectedId) : null;
 
   const detail = selected
     ? {
-        id: selected.id,
-        icon: selected.icon,
-        type: selected.type,
-        title: selected.title ?? "",
-        description: selected.description ?? "",
-        time: selected.time,
-        timestamp: selected.timestamp,
-        actionText: selected.buttonText,
-        actionLink: selected.buttonLink,
-        unread: selected.unread,
-      }
+      id: selected.id,
+      icon: selected.icon,
+      type: selected.type,
+      title: selected.title ?? "",
+      description: selected.description ?? "",
+      time: selected.time,
+      timestamp: selected.timestamp,
+      actionText: selected.buttonText,
+      actionLink: selected.buttonLink,
+      unread: selected.unread,
+    }
     : null;
 
   const handleAllRead = async () => {
@@ -163,11 +179,25 @@ const Notifications = () => {
     refreshUnread();
   };
 
+  // New: archive all
+  const handleArchiveAll = async () => {
+    await deleteAllNotifications();
+    toast.success("All notifications archived");
+    await refresh();
+    await refreshUnread();
+    // Removed window.dispatchEvent. We refetch directly.
+  };
+
   const handleOpenSettings = () => {
     // Set the active tab to "Notifications" before opening
     setActiveSettingsTab("Notifications");
     setSettingsDialogOpen(true);
   };
+
+  // Refresh the notifications list
+  const handleRefreshNotifications = useCallback(() => {
+    refresh();
+  }, [refresh]);
 
   return (
     <DashboardTitleWrapper mainText="Notifications">
@@ -204,6 +234,14 @@ const Notifications = () => {
             >
               Mark all as Read
             </button>
+            {/* New: Archive All */}
+            <button
+              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-error-60 hover:text-white active:bg-error-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
+              onClick={handleArchiveAll}
+              title="Remove all notifications"
+            >
+              Archive All
+            </button>
           </>
         )}
         <button
@@ -228,10 +266,12 @@ const Notifications = () => {
               selectedNotificationId={selectedId}
               onSelectNotification={onItemClick}
               onReadStatusChange={onReadToggle}
+              onRefresh={handleRefreshNotifications}
             />
             <NotificationDetailView
               selectedNotification={detail}
               onReadStatusChange={onReadToggle}
+              onDeleted={handleNotificationDeleted}
             />
           </>
         )}
