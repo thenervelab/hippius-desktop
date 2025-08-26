@@ -1207,109 +1207,6 @@ async fn download_s3_folder_recursive(
 }
 
 #[tauri::command]
-pub async fn add_file_to_public_folder(
-    account_id: String,
-    folder_metadata_cid: String,
-    folder_name: String,
-    file_path: String,
-    seed_phrase: String,
-    subfolder_path: Option<Vec<String>>,
-) -> Result<String, String> {
-    use std::sync::Arc;
-
-    let path = std::path::PathBuf::from(&file_path);
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
-
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
-    let folder_name = sanitize_name(&folder_name);
-    let file_name = sanitize_name(&file_name);
-
-    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
-    println!(
-        "[add_file_to_public_folder] subfolder_path: {:?}, cid: {}, normalized_subfolder: {:?}", 
-        subfolder_path, folder_metadata_cid, normalized_subfolder
-    );
-
-    // Build sync subfolder path (if any)
-    let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
-        let mut full_path = std::path::PathBuf::from(&folder_name);
-        for segment in path_vec {
-            full_path.push(segment);
-        }
-        full_path.to_string_lossy().to_string()
-    });
-
-    // Use the original file path instead of writing file_data
-    copy_to_sync_folder(
-        &path,
-        &folder_name,
-        &account_id,
-        "",
-        "",
-        true,
-        false,
-        &folder_name,
-        sync_subfolder_path,
-    )
-    .await;
-
-    println!("file added to folder successfully");
-
-    Ok(folder_name)
-}
-
-#[tauri::command]
-pub async fn remove_file_from_public_folder(
-    account_id: String,
-    folder_metadata_cid: String,
-    folder_name: String,
-    file_name: String,
-    seed_phrase: String,
-    subfolder_path: Option<Vec<String>>,
-) -> Result<String, String> {
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
-    let folder_name = sanitize_name(&folder_name);
-    
-    
-    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
-
-    // Remove from sync folder
-    let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
-        let mut full_path = std::path::PathBuf::from(&folder_name);
-        for segment in path_vec {
-            full_path.push(segment);
-        }
-        full_path.to_string_lossy().to_string()
-    });
-
-    let final_file_name = if file_name.ends_with(".ff") {
-        file_name.clone()
-    } else {
-        format!("{}.ff", file_name)
-    };
-
-    remove_from_sync_folder(
-        &final_file_name,
-        &folder_name,
-        true,
-        false,
-        &file_name,
-        "",
-        &account_id,
-        "",
-        sync_subfolder_path,
-    ).await;
-    
-    Ok(folder_name)
-}
-
-#[tauri::command]
 pub async fn list_folder_contents(
     account_id: String,
     scope: String,
@@ -1317,8 +1214,34 @@ pub async fn list_folder_contents(
     subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
     println!("[ListFolderContents] Received main_folder_name: {:?}", main_folder_name);
-    println!("[ListFolderContents] Received subfolder_path: {:?}", subfolder_path);    
+    println!("[ListFolderContents] Received subfolder_path: {:?}", subfolder_path);
 
+    // Get the sync root path first
+    let sync_root = get_sync_root(&scope).await?;
+    
+    // Build the local path to check
+    let mut local_path = sync_root.clone();
+    
+    // Add main folder name if not already in subfolder_path
+    if let Some(paths) = subfolder_path.as_ref() {
+        if paths.is_empty() {
+            local_path = local_path.join(&main_folder_name);
+        } else {
+            for part in paths {
+                local_path = local_path.join(part);
+            }
+        }
+    } else {
+        local_path = local_path.join(&main_folder_name);
+    }
+    
+    // Check if local path exists and is a directory
+    if local_path.is_dir() {
+        println!("[ListFolderContents] Found local directory: {:?}", local_path);
+        return list_local_directory(&local_path, &sync_root, &scope, &main_folder_name, subfolder_path).await;
+    }
+    
+    // Fall back to S3 if local directory doesn't exist
     let bucket_name = format!("{}-{}", account_id, scope);
     let endpoint_url = "https://s3.hippius.com";
 
@@ -1484,6 +1407,59 @@ pub async fn list_folder_contents(
     Ok(direct_files)
 }
 
+async fn list_local_directory(
+    dir_path: &Path,
+    sync_root: &Path,
+    scope: &str,
+    main_folder_name: &str,
+    subfolder_path: Option<Vec<String>>,
+) -> Result<Vec<FileDetail>, String> {
+    use std::fs;
+    use std::time::UNIX_EPOCH;
+    
+    let mut files = Vec::new();
+    
+    for entry in fs::read_dir(dir_path).map_err(|e| format!("Failed to read directory: {}", e))? {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+        let file_name = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+            
+        if file_name.starts_with('.') {
+            continue; // Skip hidden files
+        }
+        
+        let metadata = fs::metadata(&path).map_err(|e| format!("Failed to get metadata: {}", e))?;
+        let is_folder = metadata.is_dir();
+        
+        // Get relative path from sync root
+        let relative_path = path.strip_prefix(sync_root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+            
+        // Get last modified time
+        let modified = metadata.modified()
+            .map(|t| t.duration_since(UNIX_EPOCH).map(|d| d.as_secs().to_string()).unwrap_or_default())
+            .unwrap_or_default();
+            
+        files.push(FileDetail {
+            file_name,
+            cid: "local".to_string(),
+            source: path.to_string_lossy().to_string(),
+            file_hash: hex::encode(relative_path.as_bytes()),
+            miner_ids: String::new(),
+            file_size: metadata.len(),
+            created_at: modified.clone(),
+            last_charged_at: modified,
+            is_folder,
+        });
+    }
+    
+    Ok(files)
+}
+
 async fn parse_folder_metadata(bytes: &[u8], original_cid: &str) -> Result<Vec<FolderFileEntry>, String> {
     if let Ok(folder_refs) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
             return Ok(folder_refs)
@@ -1508,6 +1484,109 @@ fn clean_file_name(name: &str) -> String {
         // Return as is if no matching suffix
         name.to_string()
     }
+}
+
+#[tauri::command]
+pub async fn add_file_to_public_folder(
+    account_id: String,
+    folder_metadata_cid: String,
+    folder_name: String,
+    file_path: String,
+    seed_phrase: String,
+    subfolder_path: Option<Vec<String>>,
+) -> Result<String, String> {
+    use std::sync::Arc;
+
+    let path = std::path::PathBuf::from(&file_path);
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
+
+    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
+    let folder_name = sanitize_name(&folder_name);
+    let file_name = sanitize_name(&file_name);
+
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+    println!(
+        "[add_file_to_public_folder] subfolder_path: {:?}, cid: {}, normalized_subfolder: {:?}", 
+        subfolder_path, folder_metadata_cid, normalized_subfolder
+    );
+
+    // Build sync subfolder path (if any)
+    let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
+        let mut full_path = std::path::PathBuf::from(&folder_name);
+        for segment in path_vec {
+            full_path.push(segment);
+        }
+        full_path.to_string_lossy().to_string()
+    });
+
+    // Use the original file path instead of writing file_data
+    copy_to_sync_folder(
+        &path,
+        &folder_name,
+        &account_id,
+        "",
+        "",
+        true,
+        false,
+        &folder_name,
+        sync_subfolder_path,
+    )
+    .await;
+
+    println!("file added to folder successfully");
+
+    Ok(folder_name)
+}
+
+#[tauri::command]
+pub async fn remove_file_from_public_folder(
+    account_id: String,
+    folder_metadata_cid: String,
+    folder_name: String,
+    file_name: String,
+    seed_phrase: String,
+    subfolder_path: Option<Vec<String>>,
+) -> Result<String, String> {
+    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
+    let folder_name = sanitize_name(&folder_name);
+    
+    
+    let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
+
+    // Remove from sync folder
+    let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
+        let mut full_path = std::path::PathBuf::from(&folder_name);
+        for segment in path_vec {
+            full_path.push(segment);
+        }
+        full_path.to_string_lossy().to_string()
+    });
+
+    let final_file_name = if file_name.ends_with(".ff") {
+        file_name.clone()
+    } else {
+        format!("{}.ff", file_name)
+    };
+
+    remove_from_sync_folder(
+        &final_file_name,
+        &folder_name,
+        true,
+        false,
+        &file_name,
+        "",
+        &account_id,
+        "",
+        sync_subfolder_path,
+    ).await;
+    
+    Ok(folder_name)
 }
 
 #[tauri::command]
@@ -1564,14 +1643,13 @@ pub async fn remove_folder_from_public_folder(
     use std::sync::Arc;
     let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_name = sanitize_name(&folder_name);
-    let folder_to_remove = sanitize_name(&folder_to_remove);
-
-    // Main logic
+    
+    
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
-    let sanitized_folder_name = sanitize_name(&folder_name);
+    // Remove from sync folder
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
-        let mut full_path = std::path::PathBuf::from(&sanitized_folder_name);
+        let mut full_path = std::path::PathBuf::from(&folder_name);
         for segment in path_vec {
             full_path.push(segment);
         }
