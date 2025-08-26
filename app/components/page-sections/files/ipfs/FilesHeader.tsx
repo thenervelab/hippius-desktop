@@ -1,7 +1,7 @@
 "use client";
 
 import { FC, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Icons, RefreshButton, SearchInput } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import AddButton from "./AddFileButton";
@@ -9,6 +9,9 @@ import StorageStateList from "./storage-stats";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
+import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
+import { openPath } from '@tauri-apps/plugin-opener';
+
 
 interface FilesHeaderProps {
   isRecentFiles?: boolean;
@@ -27,6 +30,9 @@ interface FilesHeaderProps {
   addButtonRef: React.RefObject<{
     openWithFiles(files: FileList): void;
   } | null>;
+  privateFileCount?: number;
+  publicFileCount?: number;
+  syncFolderPath?: string;
 }
 
 const FilesHeader: FC<FilesHeaderProps> = ({
@@ -43,13 +49,34 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   handleRemoveFilter,
   setIsFilterOpen,
   refetchUserFiles,
-  addButtonRef
+  addButtonRef,
+  privateFileCount = 0,
+  publicFileCount = 0,
+  syncFolderPath,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  const router = useRouter();
+  const { navigateToFilesView } = useFilesNavigation();
+
+  const handleViewAllFiles = () => {
+    // Navigate to the appropriate files view based on the file counts
+    navigateToFilesView(privateFileCount, publicFileCount);
+    router.push('/files');
+  };
+
+  // New: open active sync folder
+  const handleOpenSyncFolder = async () => {
+    try {
+      if (!syncFolderPath) return;
+      await openPath(syncFolderPath);
+    } catch (e) {
+      console.error("Failed to open sync folder:", e);
+    }
+  };
 
   return (
     <>
-      <div className="flex items-center justify-between w-full gap-6 flex-wrap">
+      <div className="flex justify-between items-center w-full gap-6 flex-wrap">
         {isRecentFiles ? (
           <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
         ) : (
@@ -76,7 +103,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             </div>
           )}
 
-          <div className="flex gap-2 border border-grey-80 p-1 rounded">
+          <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
             <button
               className={cn(
                 "p-1 rounded",
@@ -103,13 +130,13 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             </button>
           </div>
           {isRecentFiles && (
-            <Link
-              href="/files"
+            <button
+              onClick={handleViewAllFiles}
               className="px-4 py-2.5 items-center flex bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
             >
               View All Files
               <Icons.ArrowRight className="size-[14px] ml-1" />
-            </Link>
+            </button>
           )}
           {!isRecentFiles && (
             <div className="flex border border-grey-80 p-1 rounded">
@@ -128,6 +155,17 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             </div>
           )}
 
+          {/* New: Open Sync Folder button (same style) */}
+          <button
+            onClick={handleOpenSyncFolder}
+            disabled={!syncFolderPath}
+            className="flex items-center justify-between gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors disabled:opacity-50"
+            title={syncFolderPath ? syncFolderPath : "Sync folder not configured"}
+          >
+            <Icons.Folder className="size-4" />
+            <span className="ml-1">Open Sync Folder</span>
+          </button>
+
           <button
             onClick={() => setIsFolderUploadOpen(true)}
             className="flex items-center justify-center gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors"
@@ -135,6 +173,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             <Icons.FolderAdd className="size-4" />
             <span className="ml-1">Add Folder</span>
           </button>
+
 
           <AddButton ref={addButtonRef} className="h-9" />
         </div>

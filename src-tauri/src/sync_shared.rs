@@ -13,6 +13,7 @@ use sqlx::SqlitePool;
 use hex;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use chrono::{DateTime, Utc};
 
 /// Parses a line from the `aws s3 sync` output to create a RecentItem.
 pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
@@ -22,8 +23,25 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
         s = s.trim_start_matches("(dryrun)").trim();
     }
 
+    // Helper to resolve absolute path for local filesystem entries
+    let abs_path = |p: &str| -> String {
+        let pth = std::path::Path::new(p);
+        // Try canonicalize first (resolves symlinks). If it fails, fall back to CWD join for relative paths
+        if let Ok(canon) = std::fs::canonicalize(pth) {
+            canon.to_string_lossy().to_string()
+        } else if pth.is_relative() {
+            if let Ok(cwd) = std::env::current_dir() {
+                cwd.join(pth).to_string_lossy().to_string()
+            } else {
+                p.to_string()
+            }
+        } else {
+            p.to_string()
+        }
+    };
+
     // Helper to build item
-    let mk_item = |name: &str, action: &str, path: &str| -> Option<RecentItem> {
+    let mk_item = |name: &str, action: &str, path: String| -> Option<RecentItem> {
         if name.is_empty() { return None; }
         let now_ms: i64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -34,7 +52,7 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
             scope: scope.to_string(),
             action: action.to_string(),
             kind: "file".to_string(),
-            path: path.to_string(),
+            path,
             timestamp: now_ms,
         })
     };
@@ -44,7 +62,8 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
         let rest = rest.trim_start();
         let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
         let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
-        return mk_item(file_name, "uploaded", src);
+        let path_abs = abs_path(src);
+        return mk_item(file_name, "uploaded", path_abs);
     }
 
     // Handle 'copy:' lines similarly to upload (ACL/metadata changes)
@@ -52,14 +71,15 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
         let rest = rest.trim_start();
         let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
         let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
-        return mk_item(file_name, "uploaded", src);
+        let path_abs = abs_path(src);
+        return mk_item(file_name, "uploaded", path_abs);
     }
 
     // Handle 'delete:' lines: "delete: s3://bucket/key"
     if let Some(rest) = s.strip_prefix("delete:") {
         let s3path = rest.trim();
         let file_name = s3path.rsplit('/').next().unwrap_or("");
-        return mk_item(file_name, "deleted", s3path);
+        return mk_item(file_name, "deleted", s3path.to_string());
     }
 
     None
@@ -118,7 +138,6 @@ pub fn get_sync_status() -> SyncStatusResponse {
     let synced_files = processed_files.min(total_files);
 
     let percent = if total_files > 0 {
-        println!("Sync percent is : {}", ((synced_files as f32 / total_files as f32) * 100.0).min(100.0));
         ((synced_files as f32 / total_files as f32) * 100.0).min(100.0)
     } else if in_progress {
         0.0 // In progress but total not yet calculated
@@ -147,7 +166,6 @@ pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
     // Sort by timestamp (newest first)
     recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     recent.truncate(limit);
-    
     // Combine currently uploading items
     let uploading: Vec<RecentItem> = p_state.current_item.iter()
         .chain(pub_state.current_item.iter())
@@ -349,32 +367,6 @@ pub struct BucketItem {
     pub is_folder: bool, 
 }
 
-// /// Parses a single line from the `aws s3 ls --recursive` output.
-// /// Expected file line example (bytes, not human-readable):
-// /// "2023-11-20 15:45:01       1024 folder/document.txt"
-// fn parse_s3_ls_line(line: &str) -> Option<BucketItem> {
-//     let parts: Vec<&str> = line.split_whitespace().collect();
-//     if parts.len() < 4 {
-//         return None;
-//     }
-
-//     // Detect and skip folder prefix lines like: "                           PRE folder/"
-//     if parts.get(2).map(|s| *s) == Some(&"PRE") || parts.get(0).map(|s| *s) == Some(&"PRE") {
-//         return None;
-//     }
-
-//     // Combine date and time
-//     let last_modified = format!("{} {}", parts[0], parts[1]);
-
-//     // Size in bytes
-//     let size: u64 = parts[2].parse().unwrap_or(0);
-
-//     // Key path: join remainder (handles spaces in keys if any)
-//     let path = parts[3..].join(" ");
-
-//     Some(BucketItem { path, size, last_modified })
-// }
-
 /// Lists all root-level files and folders in a given S3 bucket using AWS CLI.
 /// Folders will have their total size calculated by summing up the sizes of their contents.
 pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<Vec<BucketItem>, String> {
@@ -489,8 +481,10 @@ pub async fn store_bucket_listing_in_db(
         // Insert new record
         sqlx::query(
             "INSERT INTO user_profiles (
-                file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, 
+                main_req_hash, selected_validator, total_replicas, block_number, profile_cid, 
+                source, miner_ids, type, is_folder, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&file_name)
         .bind(owner)
@@ -507,12 +501,185 @@ pub async fn store_bucket_listing_in_db(
         .bind(&source)
         .bind("")
         .bind(file_type)
-        .bind(it.is_folder) // Correctly use the is_folder flag
+        .bind(it.is_folder)
+        .bind(chrono::DateTime::parse_from_rfc3339(&it.last_modified)
+            .unwrap_or_else(|_| chrono::Utc::now().into())
+            .timestamp() as i64)
         .execute(pool)
         .await?;
-        
         stored += 1;
     }
 
     Ok(stored)
+}
+
+// New: Non-destructive insert that only adds missing items for this owner/scope
+pub async fn insert_bucket_items_if_absent(
+    pool: &SqlitePool,
+    owner: &str,
+    scope: &str,
+    items: &[BucketItem],
+) -> Result<usize, sqlx::Error> {
+    let file_type = if scope == "public" { "public" } else { "private" };
+    let bucket = format!("{}-{}", owner, file_type);
+
+    let mut stored = 0usize;
+
+    for it in items {
+        let file_name = it.path.clone();
+        let exists: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3' AND file_name = ? LIMIT 1"
+        )
+        .bind(owner)
+        .bind(file_type)
+        .bind(&file_name)
+        .fetch_optional(pool)
+        .await?;
+
+        if exists.is_none() {
+            let source = format!("s3://{}/{}", bucket, it.path);
+            let cid_hex = hex::encode("s3".as_bytes());
+            let file_hash_hex = cid_hex.clone();
+
+            sqlx::query(
+                "INSERT INTO user_profiles (
+                    file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&file_name)
+            .bind(owner)
+            .bind(&cid_hex)
+            .bind(&file_hash_hex)
+            .bind(it.size as i64)
+            .bind(true)
+            .bind(0i64)
+            .bind("s3")
+            .bind("")
+            .bind(0i64)
+            .bind(0i64)
+            .bind("")
+            .bind(&source)
+            .bind("")
+            .bind(file_type)
+            .bind(it.is_folder)
+            .bind(chrono::DateTime::parse_from_rfc3339(&it.last_modified)
+                .unwrap_or_else(|_| chrono::Utc::now().into())
+                .timestamp() as i64)
+            .execute(pool)
+            .await?;
+
+            stored += 1;
+        }
+    }
+    println!("[InsertBucketItemsIfAbsent] Inserted {} items for {} {}", stored, owner, scope);
+    Ok(stored)
+}
+
+// Convenience: single-item variant
+pub async fn insert_bucket_item_if_absent(
+    pool: &SqlitePool,
+    owner: &str,
+    scope: &str,
+    item: &BucketItem,
+) -> Result<bool, sqlx::Error> {
+    let added = insert_bucket_items_if_absent(pool, owner, scope, std::slice::from_ref(item)).await?;
+    Ok(added > 0)
+}
+
+// Delete a previously stored S3-derived record for this owner/scope by its top-level name.
+// Matches how inserts are written (user_profiles with main_req_hash = 's3').
+pub async fn delete_bucket_item_by_name(
+    pool: &SqlitePool,
+    owner: &str,
+    scope: &str,
+    name: &str,
+) -> Result<u64, sqlx::Error> {
+    let file_type = if scope == "public" { "public" } else { "private" };
+    let res = sqlx::query(
+        "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND file_name = ? AND main_req_hash = 's3'",
+    )
+    .bind(owner)
+    .bind(file_type)
+    .bind(name)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+//  Reconcile DB rows with the given root-level bucket items. Any DB row for this
+// owner/scope (main_req_hash='s3') whose file_name is NOT present in items will be deleted.
+pub async fn reconcile_bucket_root(
+    pool: &SqlitePool,
+    owner: &str,
+    scope: &str,
+    items: &[BucketItem],
+) -> Result<u64, sqlx::Error> {
+    let file_type = if scope == "public" { "public" } else { "private" };
+    // Fetch current names
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT file_name FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'",
+    )
+    .bind(owner)
+    .bind(file_type)
+    .fetch_all(pool)
+    .await?;
+
+    let existing: std::collections::HashSet<String> = rows.into_iter().map(|(n,)| n).collect();
+    let wanted: std::collections::HashSet<String> = items.iter().map(|it| it.path.clone()).collect();
+
+    // Compute names to delete: existing - wanted
+    let to_delete: Vec<String> = existing.difference(&wanted).cloned().collect();
+    if to_delete.is_empty() {
+        return Ok(0);
+    }
+
+    // Delete in a transaction
+    let mut tx = pool.begin().await?;
+    let mut deleted: u64 = 0;
+    for name in to_delete {
+        let res = sqlx::query(
+            "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND file_name = ? AND main_req_hash = 's3'",
+        )
+        .bind(owner)
+        .bind(file_type)
+        .bind(&name)
+        .execute(&mut *tx)
+        .await?;
+        deleted += res.rows_affected();
+    }
+    tx.commit().await?;
+    Ok(deleted)
+}
+ 
+// Build a top-level BucketItem from an absolute local file path.
+// Only the first path segment under sync_root is used as the S3 "path" field, so
+// children of an uploaded folder are coalesced into the folder entry.
+pub fn bucket_item_from_local(abs_local: &Path, sync_root: &Path) -> Option<BucketItem> {
+    let rel = abs_local.strip_prefix(sync_root).ok()?;
+    let mut comps = rel.components();
+    let first = comps.next()?; // top-level component under sync root
+    let first_str = first.as_os_str().to_string_lossy().to_string();
+    // If there are remaining components after the first, we treat it as a folder upload
+    // and only store the top folder once.
+    let is_folder = comps.next().is_some();
+
+    let (size, last_modified) = if is_folder {
+        (0, Utc::now().to_rfc3339())
+    } else {
+        let metadata = std::fs::metadata(abs_local).ok()?;
+        let modified = metadata.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| DateTime::from_timestamp(d.as_secs() as i64, 0).unwrap_or_else(Utc::now))
+            .unwrap_or_else(Utc::now)
+            .to_rfc3339();
+        (metadata.len(), modified)
+    };
+
+    Some(BucketItem {
+        path: first_str,
+        size,
+        last_modified,
+        is_folder,
+    })
 }

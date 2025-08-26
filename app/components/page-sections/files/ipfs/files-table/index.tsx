@@ -35,7 +35,6 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { VideoDialogTrigger } from "./VideoDialog";
 import { ImageDialogTrigger } from "./ImageDialog";
 import { PdfDialogTrigger } from "./PdfDialog";
-import BlockTimestamp from "@/app/components/ui/block-timestamp";
 import { Icons } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -45,6 +44,7 @@ import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
+import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
@@ -342,7 +342,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
       id: "date_uploaded",
       cell: (cell) => {
         const createdAt = cell.row.original.createdAt;
-        return createdAt === 0 ? "Unknown" : <BlockTimestamp blockNumber={createdAt} />;
+        return createdAt === 0 ? "Unknown" : <FormattedTimestamp timestamp={createdAt} />;
       }
     }),
     columnHelper.display({

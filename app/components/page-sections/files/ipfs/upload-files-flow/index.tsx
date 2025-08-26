@@ -158,13 +158,18 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
         return;
       }
 
+      // Update same toast id for starting upload (optional)
       toast.loading(`Starting upload...`, { id: toastId });
-      reset(); // Close dialog
-      upload(processedPaths, isPrivateView);
 
+      reset(); // Close dialog
+      // Pass the toast id so the hook reuses and updates the same toast
+      upload(processedPaths, isPrivateView, { toastId });
     } catch (error) {
       console.error("Error preparing files:", error);
-      toast.error(`Error preparing files for upload: ${error instanceof Error ? error.message : String(error)}`, { id: toastId });
+      toast.error(
+        `Error preparing files for upload: ${error instanceof Error ? error.message : String(error)}`,
+        { id: toastId }
+      );
       setIsUploading(false);
     }
   };

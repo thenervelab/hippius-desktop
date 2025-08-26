@@ -6,7 +6,8 @@ interface NotificationListProps {
   notifications: UiNotification[];
   selectedNotificationId: number | null;
   onSelectNotification: (id: number) => void;
-  onReadStatusChange?: (id: number, isUnread: boolean) => void;
+  onReadStatusChange: (id: number, isUnread: boolean) => void;
+  onRefresh?: () => void;
 }
 
 const NotificationList: React.FC<NotificationListProps> = ({
@@ -14,6 +15,7 @@ const NotificationList: React.FC<NotificationListProps> = ({
   selectedNotificationId,
   onSelectNotification,
   onReadStatusChange,
+  onRefresh,
 }) => {
   return (
     <div className="flex flex-col gap-4 w-full border border-grey-80 rounded p-4 max-h-[80.9vh] overflow-y-auto overflow-x-hidden pr-2">
@@ -32,6 +34,7 @@ const NotificationList: React.FC<NotificationListProps> = ({
           selected={notification.id === selectedNotificationId}
           onClick={() => onSelectNotification(notification.id)}
           onReadStatusChange={onReadStatusChange}
+          onRefresh={onRefresh}
         />
       ))}
     </div>

@@ -3,6 +3,8 @@ use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
 use tauri::AppHandle;
+use tauri::Manager;
+use sqlx::SqlitePool;
 use tokio::time::sleep;
 use base64::{encode};
 use std::sync::atomic::Ordering;
@@ -14,14 +16,12 @@ use std::os::unix::process::ExitStatusExt;
 use std::os::windows::process::ExitStatusExt;
 use crate::sync_shared::parse_s3_sync_line;
 use crate::sync_shared::MAX_RECENT_ITEMS;
+use crate::sync_shared::{insert_bucket_item_if_absent, bucket_item_from_local, delete_bucket_item_by_name, list_bucket_contents, reconcile_bucket_root};
 use serde_json::json;
 use tauri::Emitter;
+use crate::DB_POOL;
+pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE, RecentItem, BucketItem};
 
-// Import the new S3 state from sync_shared
-pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE, RecentItem};
-
-
-/// Starts the main sync loop for the public folder.
 pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String, seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
@@ -54,7 +54,6 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
     if bucket_exists {
         println!("[PublicFolderSync] Bucket already exists, proceeding.");
     } else {
-        // Retry creating or verifying the bucket every 30 seconds until success
         loop {
             let mb_output = Command::new("aws")
                 .env("AWS_PAGER", "")
@@ -72,12 +71,10 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                         true
                     } else {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        // Proceed if bucket already exists/owned
                         if stderr.contains("BucketAlreadyExists") || stderr.contains("BucketAlreadyOwnedByYou") {
                             println!("[PublicFolderSync] Bucket already exists (race condition), proceeding.");
                             true
                         } else {
-                            // Try a follow-up access check; if accessible, proceed
                             let verify = Command::new("aws")
                                 .env("AWS_PAGER", "")
                                 .arg("s3")
@@ -102,7 +99,6 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                 }
                 Err(e) => {
                     eprintln!("[PublicFolderSync] Failed to execute 'aws s3 mb' command (will retry in 30s): {}", e);
-                    // Try a follow-up access check; if accessible, proceed
                     let verify = Command::new("aws")
                         .env("AWS_PAGER", "")
                         .arg("s3")
@@ -118,15 +114,12 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             if proceed {
                 break;
             } else {
-                // Wait 30 seconds before retrying
                 thread::sleep(Duration::from_secs(30));
                 continue;
             }
         }
     }
 
-    // Ensure public-read bucket policy is applied so objects are publicly accessible
-    // Equivalent to MinIO example via AWS CLI: allow s3:GetObject on bucket/*
     let bucket_policy = format!(
         r#"{{
             "Version": "2012-10-17",
@@ -158,11 +151,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             println!("[PublicFolderSync] Applied public-read bucket policy to '{}'.", bucket_name);
         }
         Ok(o) => {
-            eprintln!(
-                "[PublicFolderSync] Failed to apply bucket policy (exit {}), stderr: {}",
-                o.status,
-                String::from_utf8_lossy(&o.stderr)
-            );
+            eprintln!("[PublicFolderSync] Failed to apply bucket policy (exit {}), stderr: {}", o.status, String::from_utf8_lossy(&o.stderr));
         }
         Err(e) => {
             eprintln!("[PublicFolderSync] Error executing 'aws s3api put-bucket-policy': {}", e);
@@ -208,9 +197,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             }
         };
 
-        // --- Step 1: Dry Run to get total file count ---
         println!("[PublicFolderSync] Starting dry run to calculate changes...");
-        
         let s3_destination = format!("s3://{}/", bucket_name);
 
         let dry_run_output = Command::new("aws")
@@ -222,13 +209,19 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             .arg(endpoint_url)
             .arg("--delete")
             .arg("--dryrun")
+            .arg("--exclude")
+            .arg("*.DS_Store")
+            .arg("--exclude")
+            .arg("Thumbs.db")
+            .arg("--exclude")
+            .arg("*.tmp")
+            .arg("--exclude")
+            .arg(".git/*")
             .output();
-        
+
         let total_changes = match dry_run_output {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-
-                // Use the CORRECTED parser to count the lines
                 stdout.lines()
                     .filter_map(|line| parse_s3_sync_line(line, "public"))
                     .count()
@@ -266,9 +259,17 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             .arg("--endpoint-url")
             .arg(endpoint_url)
             .arg("--delete")
-            .arg("--acl") 
-            .arg("public-read") 
-            .arg("--no-progress") 
+            .arg("--acl")
+            .arg("public-read")
+            .arg("--no-progress")
+            .arg("--exclude")
+            .arg("*.DS_Store")
+            .arg("--exclude")
+            .arg("Thumbs.db")
+            .arg("--exclude")
+            .arg("*.tmp")
+            .arg("--exclude")
+            .arg(".git/*")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -276,27 +277,86 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
 
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
+            let app_handle_clone = app_handle.clone();
+            let account_id_clone = account_id.clone();
+            let sync_path_str = sync_path.clone();
             thread::spawn(move || {
                 for line in reader.lines() {
                     if let Ok(line) = line {
                         println!("[AWS Public Sync][STDOUT] {}", line);
                         if let Some(item) = parse_s3_sync_line(&line, "public") {
-                             let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-                             state.processed_files += 1;
-                             if state.processed_files > state.total_files {
-                                 state.processed_files = state.total_files;
-                             }
-                             state.current_item = Some(item.clone());
-                             state.recent_items.push_front(item);
-                             if state.recent_items.len() > MAX_RECENT_ITEMS {
-                                 state.recent_items.pop_back();
-                             }
+                            let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+                            state.processed_files += 1;
+                            if state.processed_files > state.total_files {
+                                state.processed_files = state.total_files;
+                            }
+                            state.current_item = Some(item.clone());
+                            state.recent_items.push_front(item.clone());
+                            if state.recent_items.len() > MAX_RECENT_ITEMS {
+                                state.recent_items.pop_back();
+                            }
+
+                            if let Some(pool) = DB_POOL.get() {
+                                let pool = pool.clone();
+                                let owner = account_id_clone.clone();
+                                let sync_root = std::path::PathBuf::from(&sync_path_str);
+
+                                if item.action == "uploaded" {
+                                    let abs_path = std::path::PathBuf::from(&item.path);
+                                    if let Ok(rel_path) = abs_path.strip_prefix(&sync_root) {
+                                        if let Some(first_component) = rel_path.components().next() {
+                                            let name = first_component.as_os_str().to_string_lossy().to_string();
+                                            let is_folder = abs_path.is_dir() || rel_path.components().count() > 1;
+                                            let bucket_item = BucketItem {
+                                                path: name.clone(),
+                                                size: if is_folder { 0 } else { abs_path.metadata().map(|m| m.len()).unwrap_or(0) },
+                                                last_modified: String::new(),
+                                                is_folder,
+                                            };
+
+                                            tauri::async_runtime::spawn(async move {
+                                                // Insert into bucket items
+                                                if let Err(e) = insert_bucket_item_if_absent(&pool, &owner, "public", &bucket_item).await {
+                                                    eprintln!("[PublicFolderSync] Failed to insert bucket item '{}': {}", name, e);
+                                                }
+                                                
+                                                // Also insert into file_paths table for non-folder items
+                                                if !is_folder {
+                                                    let file_hash = ""; // You might want to compute this
+                                                    if let Err(e) = sqlx::query(
+                                                        "INSERT OR REPLACE INTO file_paths (file_name, file_hash, timestamp, path) VALUES (?, ?, ?, ?)"
+                                                    )
+                                                    .bind(&name)
+                                                    .bind(file_hash)
+                                                    .bind(chrono::Utc::now().timestamp())
+                                                    .bind(&abs_path.to_string_lossy())
+                                                    .execute(&pool)
+                                                    .await {
+                                                        eprintln!("[PublicFolderSync] Failed to insert into file_paths '{}': {}", name, e);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                } else if item.action == "deleted" {
+                                    if let Some(key) = item.path.splitn(4, '/').nth(3) {
+                                        if !key.is_empty() && !key.contains('/') {
+                                            let name = key.to_string();
+                                            tauri::async_runtime::spawn(async move {
+                                                if let Err(e) = delete_bucket_item_by_name(&pool, &owner, "public", &name).await {
+                                                    eprintln!("[PublicFolderSync] Failed to delete bucket item '{}': {}", name, e);
+                                                }
+                                            });
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             });
         }
-        
+
         if let Some(stderr) = child.stderr.take() {
             let reader = BufReader::new(stderr);
             thread::spawn(move || {
@@ -307,13 +367,11 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                 }
             });
         }
-        
-        // Wait for completion, but terminate promptly if global cancellation is requested
+
         let status = loop {
             if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
                 eprintln!("[PublicFolderSync] Cancellation during active sync; killing aws child");
                 let _ = child.kill();
-                // After kill, try to reap once
                 match child.try_wait() {
                     Ok(Some(st)) => break st,
                     _ => {
@@ -335,15 +393,9 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                     { break std::process::ExitStatus::from_raw(1); }
                     #[cfg(windows)]
                     { break std::process::ExitStatus::from_raw(1); }
-                }
+                    }
             }
         };
-        
-        if status.success() {
-             println!("[PublicFolderSync] Sync completed successfully.");
-        } else {
-            eprintln!("[PublicFolderSync] Sync failed.");
-        }
 
         {
             let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
@@ -354,7 +406,6 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             }
         }
 
-        // Emit a Tauri event so the frontend can react to completion of this cycle
         {
             let state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
             let payload = json!({
@@ -375,9 +426,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
     }
 }
 
-/// Tauri command to start the public folder sync process.
 #[tauri::command]
 pub async fn start_public_folder_sync_tauri(app_handle: AppHandle, account_id: String, seed_phrase: String) {
-    // Do NOT spawn here. Let the caller spawn and track this task so it can be aborted on logout.
     start_public_folder_sync(app_handle, account_id, seed_phrase).await;
 }

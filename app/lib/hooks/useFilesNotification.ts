@@ -42,14 +42,17 @@ export function useFilesNotification() {
         const status = await invoke<SyncStatusResponse>("get_sync_status");
         console.log("status", status);
         setSyncStatus(status);
-        // toast.success(
-        //   `Sync Staus: ${status.percent}% : ${status.in_progress ? "In Progress" : "Completed"}`
-        // );
+
+        // Update tray sync percentage only when there's a meaningful change
         if (status.in_progress) {
           await setTraySyncPercent(status.percent); // 0–100
         } else if (status.percent === 100) {
-          await setTraySyncPercent(100); // Completed
+          await setTraySyncPercent(100);
+        } else {
+          // If not in progress and not 100%, don't show any sync status
+          await setTraySyncPercent(null);
         }
+
         // Check if sync was previously in progress
         if (status.in_progress) {
           wasInProgress.current = true;
@@ -92,7 +95,7 @@ export function useFilesNotification() {
     getSyncStatus();
 
     // Set up interval to periodically refresh the status
-    const intervalId = setInterval(getSyncStatus, 100);
+    const intervalId = setInterval(getSyncStatus, 1000);
 
     // Clean up interval on component unmount
     return () => clearInterval(intervalId);

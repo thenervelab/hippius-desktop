@@ -418,6 +418,9 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       />
     );
   } else {
+    // Compute active sync folder path
+    const syncFolderPath = isPrivateView ? selectedPrivateFolderPath : selectedPublicFolderPath;
+
     content = (
       <div className="w-full relative mt-6">
         <FilesHeader
@@ -427,7 +430,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           formattedStorageSize={formattedStorageSize}
           allFilteredDataLength={displayedFileCount}
           viewMode={viewMode}
-          setViewMode={handleViewModeChange} // Use our new handler
+          setViewMode={handleViewModeChange}
           searchTerm={searchTerm}
           handleSearchChange={handleSearchChange}
           activeFilters={activeFilters}
@@ -435,6 +438,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           setIsFilterOpen={setIsFilterOpen}
           refetchUserFiles={refetchUserFiles}
           addButtonRef={addButtonRef}
+          syncFolderPath={syncFolderPath}
         />
 
         <FilesContent
