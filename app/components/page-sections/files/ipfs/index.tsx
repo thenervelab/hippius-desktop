@@ -30,7 +30,6 @@ import { useAtomValue } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userPreferencesDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { useSyncActivity } from "@/lib/hooks/useSyncActivity";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { api } = usePolkadotApi();
@@ -46,11 +45,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     isFetching,
     error
   } = useUserIpfsFiles();
-
-  const {
-    allActivityFiles,
-    fileCountByType,
-  } = useSyncActivity();
 
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
@@ -87,13 +81,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   >(null);
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
 
-  // Modify allFilteredData logic to use sync activity data for recent files
   const allFilteredData = useMemo(() => {
-    // If in recent files view, use sync activity data instead
-    if (isRecentFiles) {
-      return allActivityFiles || [];
-    }
-
     if (data?.files) {
       let filtered = data.files.filter((file) => !file.deleted);
 
@@ -110,7 +98,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       return filtered;
     }
     return [];
-  }, [data?.files, activeSubMenuItem, isRecentFiles, allActivityFiles]);
+  }, [data?.files, activeSubMenuItem]);
 
   // Extract unpinned file details from data
   const unpinnedFileDetails = useMemo(() => {
@@ -430,6 +418,9 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       />
     );
   } else {
+    // Compute active sync folder path
+    const syncFolderPath = isPrivateView ? selectedPrivateFolderPath : selectedPublicFolderPath;
+
     content = (
       <div className="w-full relative mt-6">
         <FilesHeader
@@ -439,7 +430,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           formattedStorageSize={formattedStorageSize}
           allFilteredDataLength={displayedFileCount}
           viewMode={viewMode}
-          setViewMode={handleViewModeChange} // Use our new handler
+          setViewMode={handleViewModeChange}
           searchTerm={searchTerm}
           handleSearchChange={handleSearchChange}
           activeFilters={activeFilters}
@@ -447,8 +438,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           setIsFilterOpen={setIsFilterOpen}
           refetchUserFiles={refetchUserFiles}
           addButtonRef={addButtonRef}
-          privateFileCount={fileCountByType.private}
-          publicFileCount={fileCountByType.public}
+          syncFolderPath={syncFolderPath}
         />
 
         <FilesContent

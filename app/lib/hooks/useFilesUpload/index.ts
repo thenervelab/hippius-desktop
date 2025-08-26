@@ -12,6 +12,22 @@ export type UploadFilesHandlers = {
   onError?: (err: Error | unknown) => void;
 };
 
+// New: upload options to accept external toast id
+export type UploadOptions = {
+  toastId?: string | number;
+  // future-proof overrides (optional)
+  messages?: {
+    startSingle?: string;
+    startMultiple?: (count: number) => string;
+    uploadingSingle?: (percent: number) => string;
+    uploadingMultiple?: (count: number, percent: number) => string;
+    successSingle?: string;
+    successMultiple?: (count: number) => string;
+    errorSingle?: string;
+    errorMultiple?: (count: number) => string;
+  };
+};
+
 export function useFilesUpload(handlers: UploadFilesHandlers) {
   const { onSuccess, onError } = handlers;
   const setProgress = useSetAtom(uploadProgressAtom);
@@ -33,16 +49,25 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
   async function upload(
     filePaths: string[],
-    isPrivateView: boolean
+    isPrivateView: boolean,
+    options?: UploadOptions
   ) {
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
-    // start toast and progress
-    const toastId = toast.loading(
+    const msgs = options?.messages;
+    const startText =
       filePaths.length > 1
-        ? `Uploading ${filePaths.length} files: 0%`
-        : "Uploading file: 0%"
-    );
+        ? msgs?.startMultiple?.(filePaths.length) ?? `Uploading ${filePaths.length} files: 0%`
+        : msgs?.startSingle ?? "Uploading file: 0%";
+
+    // If a toastId is given, update that toast; otherwise create a new one
+    let localToastId = options?.toastId;
+    if (localToastId !== undefined) {
+      toast.loading(startText, { id: localToastId });
+    } else {
+      localToastId = toast.loading(startText);
+    }
+
     setRequestState("uploading");
     setProgress(0);
 
@@ -80,11 +105,14 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         // update progress
         const percent = Math.round(((i + 1) / filePaths.length) * 100);
         setProgress(percent);
-        const msg =
+
+        const uploadingText =
           filePaths.length > 1
-            ? `Uploading ${filePaths.length} files: ${percent}%`
-            : `Uploading file: ${percent}%`;
-        toast.loading(msg, { id: toastId });
+            ? msgs?.uploadingMultiple?.(filePaths.length, percent) ?? `Uploading ${filePaths.length} files: ${percent}%`
+            : msgs?.uploadingSingle?.(percent) ?? `Uploading file: ${percent}%`;
+
+        // Always update the same toast id
+        toast.loading(uploadingText, { id: localToastId });
       }
 
       // finish up
@@ -92,24 +120,27 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       idleTimeout.current = setTimeout(() => {
         refetchUserFiles();
         onSuccess?.();
-        toast.success(
+
+        const successText =
           filePaths.length > 1
-            ? `${filePaths.length} files successfully uploaded!`
-            : `File successfully uploaded!`,
-          { id: toastId }
-        );
+            ? msgs?.successMultiple?.(filePaths.length) ?? `${filePaths.length} files successfully uploaded!`
+            : msgs?.successSingle ?? `File successfully uploaded!`;
+
+        // Convert loading -> success on the same toast id (auto-closes)
+        toast.success(successText, { id: localToastId });
       }, 500);
     } catch (err) {
       setRequestState("idle");
       setProgress(0);
       onError?.(err);
-      console.log("error", err);
-      toast.error(
+
+      const errorText =
         filePaths.length > 1
-          ? `${filePaths.length} files failed to upload!`
-          : `File failed to upload!`,
-        { id: toastId }
-      );
+          ? msgs?.errorMultiple?.(filePaths.length) ?? `${filePaths.length} files failed to upload!`
+          : msgs?.errorSingle ?? `File failed to upload!`;
+
+      // Convert loading -> error on the same toast id
+      toast.error(errorText, { id: localToastId });
     }
   }
 

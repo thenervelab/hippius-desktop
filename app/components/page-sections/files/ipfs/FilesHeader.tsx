@@ -10,6 +10,8 @@ import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
 import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
+import { openPath } from '@tauri-apps/plugin-opener';
+
 
 interface FilesHeaderProps {
   isRecentFiles?: boolean;
@@ -30,6 +32,7 @@ interface FilesHeaderProps {
   } | null>;
   privateFileCount?: number;
   publicFileCount?: number;
+  syncFolderPath?: string;
 }
 
 const FilesHeader: FC<FilesHeaderProps> = ({
@@ -48,7 +51,8 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   refetchUserFiles,
   addButtonRef,
   privateFileCount = 0,
-  publicFileCount = 0
+  publicFileCount = 0,
+  syncFolderPath,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
   const router = useRouter();
@@ -60,9 +64,19 @@ const FilesHeader: FC<FilesHeaderProps> = ({
     router.push('/files');
   };
 
+  // New: open active sync folder
+  const handleOpenSyncFolder = async () => {
+    try {
+      if (!syncFolderPath) return;
+      await openPath(syncFolderPath);
+    } catch (e) {
+      console.error("Failed to open sync folder:", e);
+    }
+  };
+
   return (
     <>
-      <div className="flex items-center justify-between w-full gap-6 flex-wrap">
+      <div className={cn("flex justify-between items-center w-full gap-6 flex-wrap", !isRecentFiles && "flex-col items-start justify-end")}>
         {isRecentFiles ? (
           <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
         ) : (
@@ -89,7 +103,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             </div>
           )}
 
-          <div className="flex gap-2 border border-grey-80 p-1 rounded">
+          <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
             <button
               className={cn(
                 "p-1 rounded",
@@ -141,6 +155,17 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             </div>
           )}
 
+          {/* New: Open Sync Folder button (same style) */}
+          <button
+            onClick={handleOpenSyncFolder}
+            disabled={!syncFolderPath}
+            className="flex items-center justify-between gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors disabled:opacity-50"
+            title={syncFolderPath ? syncFolderPath : "Sync folder not configured"}
+          >
+            <Icons.Folder className="size-4" />
+            <span className="ml-1">Open Sync Folder</span>
+          </button>
+
           <button
             onClick={() => setIsFolderUploadOpen(true)}
             className="flex items-center justify-center gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors"
@@ -148,6 +173,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             <Icons.FolderAdd className="size-4" />
             <span className="ml-1">Add Folder</span>
           </button>
+
 
           <AddButton ref={addButtonRef} className="h-9" />
         </div>

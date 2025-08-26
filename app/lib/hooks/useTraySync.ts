@@ -6,8 +6,10 @@ import {
   IconMenuItem as TauriIconMenuItem,
 } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
+import { writeFile } from '@tauri-apps/plugin-fs';
+import { tempDir, join } from "@tauri-apps/api/path";
 import {
   checkForUpdates,
   getAvailableUpdate,
@@ -36,9 +38,11 @@ const hasIconMenuItems =
 type BackendActivityItem = {
   name: string;
   path: string;
-  scope: string; // "public" | "private" | etc.
+  scope: string;
   action: "uploaded" | "deleted" | "uploading";
   kind: "file" | "folder" | string;
+  timestamp?: number; // when action happened (ms)
+  file_type?: string;
 };
 
 type BackendActivityResponse = {
@@ -46,17 +50,21 @@ type BackendActivityResponse = {
   uploading?: BackendActivityItem[];
 };
 
-// Internal normalized row
 type SyncActivityRow = {
   id: string;
-  fileName: string;            // possibly shortened for display
-  rawName: string;             // full name
-  scope: string;               // public/private
-  status: "uploading" | "uploaded";
+  fileName: string;
+  rawName: string;
+  scope: string;
+  status: "uploading" | "uploaded" | "deleted";
+  fileType: string;
+  timestamp?: number;
   progress?: number;
-  iconPath?: string;           // final icon/thumbnail to show if supported
-  rawPath?: string;            // original file path (for click actions later)
+  path?: string;     // thumbnail/icon path for menu item
+  rawPath?: string;  // actual file path
 };
+
+// Cache for resolved generic icons
+const iconPathCache: Record<string, string | undefined | null> = {};
 
 /* ─ Public: create tray once ──────────────────────────────────── */
 export function useTrayInit() {
@@ -125,11 +133,14 @@ export async function setTraySyncPercent(percent: number | null) {
   if (!menu) return;
 
   const items = await menu.items();
+
+  // Find any existing sync items by ID
   if (!syncItem) {
-    syncItem =
-      (items.find((i) => i.id === SYNC_ID) as MenuItem | null) || null;
+    // Look for an existing sync item in the menu
+    syncItem = items.find((i) => i.id === SYNC_ID) as MenuItem | null;
   }
 
+  // If percent is null, we want to remove the sync item
   if (percent === null) {
     if (syncItem) {
       await menu.remove(syncItem);
@@ -138,54 +149,55 @@ export async function setTraySyncPercent(percent: number | null) {
     return;
   }
 
-  const label =
-    percent >= 100 ? "Sync: Completed" : `Sync: ${Math.round(percent)} %`;
+  const label = percent >= 100 ? "Sync: Completed" : `Sync: ${Math.round(percent)} %`;
   const update = await getAvailableUpdate();
 
-  // Insert once near the top; keep your original logic
-  if (!syncItem && (items.length < 2 || (update && items.length < 3))) {
+  // If sync item doesn't exist yet, create it and add it to the menu
+  if (!syncItem) {
     syncItem = await MenuItem.new({
       id: SYNC_ID,
       text: label,
       enabled: false,
     });
-    await menu.insert(syncItem, 0);
+
+    // Insert at the top of the menu (but after the update item if it exists)
+    const insertPosition = update ? 1 : 0;
+    await menu.insert(syncItem, insertPosition);
   } else {
-    await syncItem!.setText(label);
+    // Update existing sync item text
+    await syncItem.setText(label);
   }
 }
 
 /* ─ Sync Activity watcher (debounced & diffed) ────────────────── */
 function startSyncActivityWatcher() {
-  const INTERVAL_MS = 1500;
+  const INTERVAL_MS = 3000;
 
   const tick = async () => {
     try {
       const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
       if (!menu) return;
 
-      console.log("Fetching sync activity data...");
-      const resp = (await invoke(
-        "get_sync_activity"
-      )) as BackendActivityResponse | null;
-      console.log("Sync activity data received:", resp);
+      const resp = (await invoke("get_sync_activity")) as BackendActivityResponse | null;
 
-      const rows = await normalizeActivityToRows(resp ?? {});
-      console.log("Normalized rows for tray menu:", rows.length, "items");
+      // Only show what's returned now; if empty, clear all previous rows
+      if (!resp || (!resp.recent?.length && !resp.uploading?.length)) {
+        await updateSyncRowsDirectly(menu, []);
+        lastRowsSignature = "";
+        return;
+      }
 
-      // Build a compact signature to detect "no change"
+      const rows = await normalizeActivityToRows(resp);
+
       const signature = JSON.stringify(
         rows.map((r) => ({
           id: r.id,
           text: formatRowText(r),
-          icon: r.iconPath || "",
+          icon: r.path || "",
         }))
       );
 
-      if (signature === lastRowsSignature) {
-        console.log("No changes in sync activity, skipping update");
-        return;
-      }
+      if (signature === lastRowsSignature) return;
       lastRowsSignature = signature;
 
       await updateSyncRowsDirectly(menu, rows);
@@ -196,124 +208,230 @@ function startSyncActivityWatcher() {
 
   void tick();
   const h = setInterval(tick, INTERVAL_MS);
-
-  // Avoid duplicate intervals on HMR
   if (typeof window !== "undefined") {
-    // @ts-expect-error: window.__hippiusSyncWatcher is a custom property for sync watcher
+    // @ts-expect-error custom watcher handle
     if (window.__hippiusSyncWatcher) clearInterval(window.__hippiusSyncWatcher);
-    // @ts-expect-error: window.__hippiusSyncWatcher is a custom property for sync watcher
+    // @ts-expect-error custom watcher handle
     window.__hippiusSyncWatcher = h;
   }
 }
 
-/* ─ Normalize backend shape to rows ───────────────────────────── */
+/* ─ Normalize backend shape to rows (with thumbnails) ────────── */
 async function normalizeActivityToRows(
   resp: BackendActivityResponse
 ): Promise<SyncActivityRow[]> {
-  // Get icons for different file types
-  const videoIcon = await safeResolve("icons/generic-video.png");
-  const fileIcon = await safeResolve("icons/generic-file.png");
-  const folderIcon = await safeResolve("icons/generic-folder.png");
+  // Resolve generic icons once
+  if (!iconPathCache.file) {
+    try { iconPathCache.file = await resolveResource("icons/generic-file.png"); } catch { iconPathCache.file = null; }
+  }
+  if (!iconPathCache.folder) {
+    try { iconPathCache.folder = await resolveResource("icons/generic-folder.png"); } catch { iconPathCache.folder = null; }
+  }
+  if (!iconPathCache.video) {
+    try { iconPathCache.video = await resolveResource("icons/generic-video.png"); } catch { iconPathCache.video = null; }
+  }
 
   const rows: SyncActivityRow[] = [];
+  const seen = new Set<string>(); // ensure one row per id per tick
 
   const addItem = async (it: BackendActivityItem) => {
-    // Simplify status to just "uploading" or "uploaded"
-    const status = it.action === "uploading" ? "uploading" : "uploaded";
+    const status: "uploading" | "uploaded" | "deleted" =
+      it.action === "uploading" ? "uploading" : it.action === "deleted" ? "deleted" : "uploaded";
+
+    const id = hashId(it);
+    if (seen.has(id)) return;
+    seen.add(id);
 
     const rawName = it.name || "Unknown";
     const fileName = shortenName(rawName);
+    const fileType = getFileType(it.file_type || it.path || it.name, it.kind);
 
-    // Determine icon path directly based on file type
+    // Build thumbnail/icon path:
+    // - Deleted: always generic file icon
+    // - Folder: generic folder icon
+    // - Image: use convertFileSrc(localPath)
+    // - Video: extract a frame, write to temp, use that file path
+    // - Other: generic file icon
     let iconPath: string | undefined;
 
-    // For images, use the file path directly (many systems can display the image as an icon)
-    if (isImagePath(it.path)) {
-      iconPath = it.path;
-      console.log(`Using image file path as icon: ${fileName}`);
-    }
-    // For other files use generic icons
-    else if (it.kind === "folder") {
-      iconPath = folderIcon || fileIcon;
-    } else if (isVideoPath(it.path)) {
-      iconPath = videoIcon || fileIcon;
-    } else {
-      iconPath = fileIcon;
+    try {
+      if (status === "deleted") {
+        iconPath = iconPathCache.file ?? undefined;
+      } else if (it.kind === "folder") {
+        iconPath = iconPathCache.folder ?? iconPathCache.file ?? undefined;
+      } else if (isImagePath(it.path)) {
+        iconPath = it.path ? convertFileSrc(it.path) : iconPathCache.file ?? undefined;
+      } else if (isVideoPath(it.path)) {
+        iconPath = (await ensureVideoThumbnail(it.path, id)) ?? iconPathCache.video ?? iconPathCache.file ?? undefined;
+      } else {
+        iconPath = iconPathCache.file ?? undefined;
+      }
+    } catch (e) {
+      console.warn("Failed to prepare thumbnail for", it.name, e);
+      iconPath = iconPathCache.file ?? undefined;
     }
 
     rows.push({
-      id: hashId(it),
+      id,
       rawName,
       fileName,
       scope: it.scope || "",
       status,
-      iconPath: iconPath,
+      fileType,
+      timestamp: it.timestamp,
+      path: iconPath,
       rawPath: it.path,
     });
   };
 
-  // Process uploading files first, then recent files
   for (const it of resp.uploading ?? []) await addItem(it);
   for (const it of resp.recent ?? []) await addItem(it);
 
-  // Limit to reasonable number to keep menu clean
+  // Keep the list compact
   return rows.slice(0, 5);
 }
 
-/* ─ Add rows directly after sync percentage ─────────────────── */
+/* ─ Ensure video thumbnail exists for a local file path ──────── */
+async function ensureVideoThumbnail(localPath?: string, id?: string): Promise<string | undefined> {
+  try {
+    if (!localPath || !id) return undefined;
+
+    // Build a temp file path for the thumbnail
+    const tmpDir = await tempDir();
+    const thumbPath = await join(tmpDir, `hippius-thumb-${safeId(id)}.png`);
+
+    // Try to render a frame in-memory and write it as PNG
+    const data = await captureVideoFrameAsPng(localPath);
+    if (!data) return undefined;
+
+    await writeFile(thumbPath, data);
+    return thumbPath;
+  } catch (e) {
+    console.warn("ensureVideoThumbnail failed:", e);
+    return undefined;
+  }
+}
+
+function safeId(id: string) {
+  return id.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+/* ─ Capture a video frame into PNG bytes ─────────────────────── */
+async function captureVideoFrameAsPng(localPath: string): Promise<Uint8Array | null> {
+  try {
+    // Use convertFileSrc so the video element can read local files
+    const url = convertFileSrc(localPath);
+
+    // Create video element
+    const video = document.createElement("video");
+    video.crossOrigin = "anonymous";
+    video.src = url;
+    video.preload = "metadata";
+    // Needed to be able to seek to time
+    await new Promise<void>((resolve, reject) => {
+      const tid = setTimeout(() => reject(new Error("video metadata timeout")), 10000);
+      video.onloadedmetadata = () => {
+        clearTimeout(tid);
+        resolve();
+      };
+      video.onerror = () => {
+        clearTimeout(tid);
+        reject(new Error("video load error"));
+      };
+    });
+
+    // Seek around 0.25 progress or 0.5s if short
+    const seekTime = Math.min(1, Math.max(0.5, video.duration * 0.25));
+    video.currentTime = seekTime;
+
+    await new Promise<void>((resolve, reject) => {
+      const tid = setTimeout(() => reject(new Error("video seek timeout")), 10000);
+      video.onseeked = () => {
+        clearTimeout(tid);
+        resolve();
+      };
+      video.onerror = () => {
+        clearTimeout(tid);
+        reject(new Error("video seek error"));
+      };
+    });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(160, video.videoWidth || 320);
+    canvas.height = Math.max(90, video.videoHeight || 180);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Convert to PNG bytes
+    const dataUrl = canvas.toDataURL("image/png");
+    return dataURLtoUint8Array(dataUrl);
+  } catch (e) {
+    console.warn("captureVideoFrameAsPng failed:", e);
+    return null;
+  }
+}
+
+function dataURLtoUint8Array(dataUrl: string): Uint8Array {
+  const [meta, base64] = dataUrl.split(",");
+  const binStr = atob(base64);
+  const len = binStr.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binStr.charCodeAt(i);
+  return bytes;
+}
+
+/* ─ Add rows (deduped) after sync percentage ─────────────────── */
 async function updateSyncRowsDirectly(menu: Menu, rows: SyncActivityRow[]) {
   try {
     const items = await menu.items();
 
-    // Find position for files - right after sync percentage if it exists,
-    // or at the beginning if it doesn't
     let insertPosition = items.findIndex((i) => i.id === SYNC_ID);
-    if (insertPosition >= 0) {
-      insertPosition += 1; // Insert after sync percentage
-    } else {
-      insertPosition = 0; // Insert at the beginning
-    }
+    insertPosition = insertPosition >= 0 ? insertPosition + 1 : 0;
 
-    // First remove existing sync row items
-    for (const [id, item] of [...syncRowItems.entries()]) {
-      try {
-        await menu.remove(item);
-        syncRowItems.delete(id);
-      } catch (error) {
-        console.error(`Failed to remove menu item ${id}:`, error);
-      }
-    }
+    // Hard-purge old rows to avoid duplicates
+    await removeAllSyncActivityRows(menu);
 
-    // If no rows to show, we're done
-    if (rows.length === 0) {
-      return;
-    }
+    if (rows.length === 0) return;
 
-    // Now add new items - we add all at once to avoid UI flicker
-    // Insert in reverse order to maintain correct final order
     for (let i = rows.length - 1; i >= 0; i--) {
       const row = rows[i];
       const id = SYNC_ITEM_PREFIX + row.id;
       const text = formatRowText(row);
-
-      console.log("row", row)
-
       try {
-        const item = await newSyncRowMenuItem(id, text, row.iconPath);
+        const item = await newSyncRowMenuItem(id, text, row.path);
         await menu.insert(item, insertPosition);
         syncRowItems.set(id, item);
       } catch (error) {
         console.error(`Failed to create menu item for ${row.fileName}:`, error);
       }
     }
-
-    console.log(`Updated tray menu: ${syncRowItems.size} file items added`);
   } catch (error) {
     console.error("Error managing tray menu items:", error);
   }
 }
 
-/* ─ Create a row with icon if available ─────────────────────── */
+/* ─ Remove all sync-activity rows ────────────────────────────── */
+async function removeAllSyncActivityRows(menu: Menu) {
+  try {
+    for (const [, item] of [...syncRowItems.entries()]) {
+      try { await menu.remove(item); } catch { }
+    }
+    syncRowItems.clear();
+
+    const items = await menu.items();
+    for (const item of items) {
+      if (typeof item.id === "string" && item.id.startsWith(SYNC_ITEM_PREFIX)) {
+        try { await menu.remove(item); } catch { }
+      }
+    }
+  } catch (error) {
+    console.error("Failed to purge sync-activity rows:", error);
+  }
+}
+
+/* ─ Create menu item with icon (thumbnail) if supported ─────── */
 async function newSyncRowMenuItem(id: string, text: string, iconPath?: string) {
   if (hasIconMenuItems && iconPath) {
     try {
@@ -323,74 +441,73 @@ async function newSyncRowMenuItem(id: string, text: string, iconPath?: string) {
         icon: iconPath,
         enabled: false,
       });
-      // return await MenuItem.new({
-      //   id,
-      //   text,
-      //   action: async () => {
-      //     await checkForUpdates();
-      //   },
-      // });
     } catch (error) {
-      console.error("Failed to create icon menu item:", error);
-      // fall through to text row
+      console.warn("Icon menu item failed; falling back to text row:", error);
     }
   }
-
-  return await MenuItem.new({
-    id,
-    text,
-    enabled: false,
-  });
+  return await MenuItem.new({ id, text, enabled: false });
 }
 
-/* ─ Row label formatting - improved for status display ────────── */
+/* ─ Row label: 3 lines (name / scope+status / time) ──────────── */
 function formatRowText(r: SyncActivityRow) {
-  // Format name on first line
-  const firstLine = r.fileName;
+  const first = r.fileName;
 
-  // Format status and scope on second line  
-  const statusText = r.status === "uploading" ? "Uploading..." : "Uploaded";
-  const scopeText = r.scope ? ` (${r.scope})` : "";
+  let statusText = "Synced";
+  if (r.status === "uploading") statusText = "Uploading";
+  else if (r.status === "uploaded") statusText = "Uploaded";
+  else if (r.status === "deleted") statusText = "Deleted";
 
-  // Second line has status and scope
-  const secondLine = `${statusText}${scopeText}`;
+  const second = [r.scope || "", statusText].filter(Boolean).join(" • ");
 
-  // Return formatted text with multiline support
-  return `${firstLine}\n${secondLine}`;
+  const third = r.timestamp ? formatTimeAgo(r.timestamp) : "";
+
+  return [first, second, third].filter(Boolean).join("\n");
 }
 
 /* ─ Helpers ───────────────────────────────────────────────────── */
 function isImagePath(p?: string) {
   if (!p) return false;
   const ext = p.split(".").pop()?.toLowerCase();
-  return !!ext && ["png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "tiff", "svg"].includes(ext);
+  return !!ext && ["png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "tiff", "svg", "heic", "heif"].includes(ext);
 }
-
 function isVideoPath(p?: string) {
   if (!p) return false;
   const ext = p.split(".").pop()?.toLowerCase();
   return !!ext && ["mp4", "mov", "m4v", "avi", "mkv", "webm", "flv"].includes(ext);
 }
-
 function hashId(it: BackendActivityItem) {
-  // Stable key from action + path (path should be unique per file)
   return `${it.action}:${it.path || it.name}`;
 }
-
-// first 15 … last 12 (incl. extension) when > 30 chars
 function shortenName(name: string) {
   if (!name) return name;
   if (name.length <= 30) return name;
-
   const head = name.slice(0, 15);
   const tail = name.slice(-12);
   return `${head}…${tail}`;
 }
+function getFileType(path: string, kind?: string): string {
+  if (kind === "folder") return "folder";
+  const ext = path.split(".").pop()?.toLowerCase();
+  return ext && ext !== path ? ext : kind || "file";
+}
+function formatTimeAgo(timestamp: number): string {
+  const now = Date.now();
+  const seconds = Math.floor((now - timestamp) / 1000);
 
-async function safeResolve(path: string) {
-  try {
-    return await resolveResource(path);
-  } catch {
-    return undefined;
+  if (seconds < 60) {
+    return `${seconds} second${seconds !== 1 ? 's' : ''} ago`;
   }
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `${days} day${days !== 1 ? 's' : ''} ago`;
 }
