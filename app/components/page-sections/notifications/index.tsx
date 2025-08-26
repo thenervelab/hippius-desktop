@@ -151,11 +151,6 @@ const Notifications = () => {
     setSelectedId(id);
   };
 
-  // Clear selected notification when deleted
-  const handleNotificationDeleted = () => {
-    setSelectedId(null);
-  };
-
   const selected = selectedId ? visible.find((n) => n.id === selectedId) : null;
 
   const detail = selected
@@ -271,7 +266,6 @@ const Notifications = () => {
             <NotificationDetailView
               selectedNotification={detail}
               onReadStatusChange={onReadToggle}
-              onDeleted={handleNotificationDeleted}
             />
           </>
         )}

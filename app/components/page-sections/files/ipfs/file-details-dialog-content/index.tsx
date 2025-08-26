@@ -1,5 +1,5 @@
 import React from "react";
-import { BlockTimestamp, Icons } from "@/components/ui";
+import { FormattedTimestamp, Icons } from "@/components/ui";
 import * as TableModule from "@/components/ui/alt-table";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
@@ -146,7 +146,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
         </DetailRow>
 
         <DetailRow label="Date Uploaded">
-          {file.lastChargedAt === 0 ? "Unknown" : <BlockTimestamp blockNumber={file.lastChargedAt} />}
+          {file.createdAt === 0 ? "Unknown" : <FormattedTimestamp timestamp={file.createdAt} />}
         </DetailRow>
 
         <DetailRow label="File Size">
