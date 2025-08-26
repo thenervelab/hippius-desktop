@@ -98,7 +98,7 @@ const NotificationContextMenu: React.FC<NotificationContextMenuProps> = ({
               }}
             >
               <Icons.Trash className="size-4" />
-              <span>Archive this notification</span>
+              <span>Delete this notification</span>
             </button>
           )}
         </div>

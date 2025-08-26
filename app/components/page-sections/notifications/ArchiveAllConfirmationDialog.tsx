@@ -20,7 +20,7 @@ const ArchiveAllConfirmationDialog: React.FC<ArchiveAllConfirmationProps> = ({
     return (
         <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
             <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
-                <Dialog.Title className="sr-only">Archive All Notifications</Dialog.Title>
+                <Dialog.Title className="sr-only">Delete All Notifications</Dialog.Title>
 
                 {/* Top accent bar (mobile only) */}
                 <div className="h-4 bg-primary-50 md:hidden block" />
@@ -48,7 +48,7 @@ const ArchiveAllConfirmationDialog: React.FC<ArchiveAllConfirmationProps> = ({
                             </div>
                         </div>
                         <span className="text-center text-2xl text-grey-10 font-medium">
-                            Archive all notifications?
+                            Delete all notifications?
                         </span>
                     </div>
 
@@ -58,7 +58,7 @@ const ArchiveAllConfirmationDialog: React.FC<ArchiveAllConfirmationProps> = ({
                             <ArrowLeft className="size-6 text-grey-10" />
                         </button>
                         <div className="text-lg font-medium relative">
-                            <span className="capitalize">Archive All Notifications</span>
+                            <span className="capitalize">Delete All Notifications</span>
                         </div>
                         <button onClick={onClose}>
                             <Icons.CloseCircle className="size-6 relative" />
@@ -80,7 +80,7 @@ const ArchiveAllConfirmationDialog: React.FC<ArchiveAllConfirmationProps> = ({
                             disabled={loading}
                             loading={loading}
                         >
-                            {loading ? "Archiving..." : "Archive All"}
+                            {loading ? "Deleting..." : "Delete All"}
                         </CardButton>
 
                         <CardButton

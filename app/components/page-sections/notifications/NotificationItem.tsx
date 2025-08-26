@@ -161,7 +161,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
             <button
               className={cn("absolute top-6 right-2.5 opacity-0 group-hover:opacity-100 transition-opacity text-grey-60 hover:text-error-50", !unread && "top-4")}
               onClick={handleDelete}
-              title="Archive notification"
+              title="Delete notification"
             >
               <Icons.Trash className="size-4" />
             </button>

@@ -229,13 +229,13 @@ const Notifications = () => {
             >
               Mark all as Read
             </button>
-            {/* New: Archive All */}
+            {/* New: Delete All */}
             <button
               className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-error-60 hover:text-white active:bg-error-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
               onClick={handleArchiveAll}
               title="Remove all notifications"
             >
-              Archive All
+              Delete All
             </button>
           </>
         )}

@@ -104,7 +104,7 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
       await refreshUnread();
       toast.success("All notifications archived");
     } catch (error) {
-      console.log("Archive all notifications error:", error);
+      console.log("Delete all notifications error:", error);
       toast.error("Failed to archive notifications");
     } finally {
       setIsArchiving(false);
@@ -142,7 +142,7 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
                 onClick={() => setIsArchiveDialogOpen(true)}
                 title="Remove all notifications"
               >
-                Archive All
+                Delete All
               </button>
             </div>
           </div>
