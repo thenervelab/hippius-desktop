@@ -159,7 +159,7 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
 
             {/* Delete button - appears on hover */}
             <button
-              className={cn("absolute top-6 right-2.5 opacity-0 group-hover:opacity-100 transition-opacity text-grey-60 hover:text-error-50", !unread && "top-4")}
+              className={cn("absolute top-6 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-grey-60 hover:text-error-50", !unread && "top-4")}
               onClick={handleDelete}
               title="Delete notification"
             >
