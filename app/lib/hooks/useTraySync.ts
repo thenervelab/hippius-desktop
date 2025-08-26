@@ -374,7 +374,7 @@ async function captureVideoFrameAsPng(localPath: string): Promise<Uint8Array | n
 }
 
 function dataURLtoUint8Array(dataUrl: string): Uint8Array {
-  const [meta, base64] = dataUrl.split(",");
+  const [base64] = dataUrl.split(",");
   const binStr = atob(base64);
   const len = binStr.length;
   const bytes = new Uint8Array(len);

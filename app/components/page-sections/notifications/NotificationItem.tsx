@@ -13,7 +13,6 @@ import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
-import { X } from "lucide-react";
 
 interface NotificationItemProps {
   id?: number;
