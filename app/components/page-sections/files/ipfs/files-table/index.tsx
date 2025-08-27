@@ -524,7 +524,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
       <div
         className={cn(
           "w-full relative",
-          isRecentFiles ? "max-h-[150px]" : "min-h-[700px]"
+          isRecentFiles ? "min-h-[350px]" : "min-h-[700px]"
         )}
       >
         <TableModule.TableWrapper className="duration-300 delay-300">
