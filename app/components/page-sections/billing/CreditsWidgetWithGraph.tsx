@@ -50,13 +50,13 @@ const CreditsWidgetWithGraph: FC<CreditsWidgetWithGraphProps> = ({
 
     const balancePoints = balanceData
       ? [
-        {
-          timestamp: balanceData.timestamp,
-          date: new Date(balanceData.timestamp),
-          type: "balance",
-          value: balanceData.totalBalance,
-        },
-      ]
+          {
+            timestamp: balanceData.timestamp,
+            date: new Date(balanceData.timestamp),
+            type: "balance",
+            value: balanceData.totalBalance,
+          },
+        ]
       : [];
 
     // Combine and sort all data points chronologically
@@ -117,8 +117,8 @@ const CreditsWidgetWithGraph: FC<CreditsWidgetWithGraphProps> = ({
                   {credits !== undefined
                     ? `${formatCreditBalance(credits)}`
                     : error
-                      ? "ERROR"
-                      : "- - - -"}
+                    ? "ERROR"
+                    : "- - - -"}
                   <span className="text-xs font-medium -translate-y-1 ml-1">
                     Credits
                   </span>

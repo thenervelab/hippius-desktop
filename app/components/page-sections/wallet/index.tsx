@@ -11,8 +11,9 @@ import { PlusCircle } from "lucide-react";
 import AddNewAddressDialog from "./AddNewAddressDialog";
 import { getContacts } from "@/app/lib/helpers/addressBookDb";
 import AddressBookTable from "./AddressBookTable";
-
+import useBalanceTransactions from "@/app/lib/hooks/api/useBalanceTransactions";
 export default function Wallet() {
+  const { data: transactions, isPending, refetch } = useBalanceTransactions();
   const [activeTab, setActiveTab] = useState("Transaction History");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [contacts, setContacts] = useState<
@@ -43,19 +44,19 @@ export default function Wallet() {
   const tabs: TabOption[] = [
     {
       tabName: "Transaction History",
-      icon: <Icons.BoxTime className="size-4" />
+      icon: <Icons.BoxTime className="size-4" />,
     },
     {
       tabName: "Address Book",
-      icon: <Icons.DocumentText className="size-4" />
-    }
+      icon: <Icons.DocumentText className="size-4" />,
+    },
   ];
 
   return (
     <>
       <DashboardTitleWrapper mainText="Wallet">
         <div className="w-full mt-6">
-          <WalletBalanceWidgetWithGraph />
+          <WalletBalanceWidgetWithGraph refetchTransactions={refetch} />
         </div>
 
         <div className="mt-6">
@@ -82,7 +83,12 @@ export default function Wallet() {
           </div>
 
           <div className="flex flex-col animate-in fade-in duration-300 gap-8 w-full shadow-menu rounded-lg bg-white p-4 border border-grey-80">
-            {activeTab === "Transaction History" && <TransactionHistoryTable />}
+            {activeTab === "Transaction History" && (
+              <TransactionHistoryTable
+                transactions={transactions}
+                isPending={isPending}
+              />
+            )}
             {activeTab === "Address Book" && (
               <AddressBookTable
                 contacts={contacts}
