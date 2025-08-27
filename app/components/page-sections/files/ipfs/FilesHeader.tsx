@@ -76,33 +76,34 @@ const FilesHeader: FC<FilesHeaderProps> = ({
 
   return (
     <>
-      <div className="flex justify-between items-center w-full gap-6 flex-wrap">
+      {!isRecentFiles && (
+        <div className="flex items-center gap-4">
+          <StorageStateList
+            storageUsed={formattedStorageSize}
+            numberOfFiles={allFilteredDataLength || 0}
+          />
+        </div>
+      )}
+      <div className="flex justify-between items-center w-full gap-6 flex-wrap mt-5">
         {isRecentFiles ? (
           <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
         ) : (
-          <div className="flex items-center gap-4">
-            <StorageStateList
-              storageUsed={formattedStorageSize}
-              numberOfFiles={allFilteredDataLength || 0}
+          <div className="">
+            <SearchInput
+              className="h-9"
+              value={searchTerm}
+              onChange={handleSearchChange}
+              placeholder="Search file"
             />
           </div>
         )}
-        <div className="flex items-center gap-x-4">
+
+
+        <div className="flex items-center gap-3 flex-wrap">
           <RefreshButton
             refetching={isRefetching || isFetching}
             onClick={() => refetchUserFiles()}
           />
-
-          {!isRecentFiles && (
-            <div className="">
-              <SearchInput
-                className="h-9"
-                value={searchTerm}
-                onChange={handleSearchChange}
-              />
-            </div>
-          )}
-
           <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
             <button
               className={cn(
@@ -132,22 +133,21 @@ const FilesHeader: FC<FilesHeaderProps> = ({
           {isRecentFiles && (
             <button
               onClick={handleViewAllFiles}
-              className="px-4 py-2.5 items-center flex bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+              className="px-2 py-2 items-center flex bg-grey-90  border border-grey-80 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
             >
               View All Files
               <Icons.ArrowRight className="size-[14px] ml-1" />
             </button>
           )}
           {!isRecentFiles && (
-            <div className="flex border border-grey-80 p-1 rounded">
+            <div className="flex border border-grey-80 p-1 rounded cursor-pointer" onClick={() => setIsFilterOpen(true)}>
               <button
-                className="flex justify-center items-center p-1 cursor-pointer bg-white text-grey-70 rounded"
-                onClick={() => setIsFilterOpen(true)}
+                className="flex justify-center items-center p-1 bg-white text-grey-70 rounded"
                 aria-label="Filter"
               >
                 <Icons.Filter className="size-5" />
                 {activeFilters.length > 0 && (
-                  <span className="ml-1 p-1 bg-primary-100 text-primary-30 border border-primary-80 text-xs rounded min-w-4 h-4 flex items-center justify-center">
+                  <span className="ml-1 p-1 bg-primary-100 text-primary-30 border border-primary-80 text-xs rounded min-w-4 h-4 flex items-center justify-center ">
                     {activeFilters.length}
                   </span>
                 )}
@@ -157,26 +157,28 @@ const FilesHeader: FC<FilesHeaderProps> = ({
 
           {/* New: Open Sync Folder button (same style) */}
           <button
+            onClick={() => setIsFolderUploadOpen(true)}
+            className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+          >
+            <Icons.FolderAdd className="size-4" />
+            <span className="ml-1">Add Folder</span>
+          </button>
+
+          <button
             onClick={handleOpenSyncFolder}
             disabled={!syncFolderPath}
-            className="flex items-center justify-between gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors disabled:opacity-50"
+            className="flex items-center justify-between gap-1 h-9 px-2 py-2 bg-grey-100 text-sm font-meidum text-grey-10 border border-grey-80 rounded disabled:opacity-50 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
             title={syncFolderPath ? syncFolderPath : "Sync folder not configured"}
           >
             <Icons.Folder className="size-4" />
             <span className="ml-1">Open Sync Folder</span>
           </button>
 
-          <button
-            onClick={() => setIsFolderUploadOpen(true)}
-            className="flex items-center justify-center gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors"
-          >
-            <Icons.FolderAdd className="size-4" />
-            <span className="ml-1">Add Folder</span>
-          </button>
 
 
           <AddButton ref={addButtonRef} className="h-9" />
         </div>
+
       </div>
 
       {/* Active Filters Display */}

@@ -329,7 +329,7 @@ export default function FolderView({
                             className="h-9"
                             value={searchTerm}
                             onChange={handleSearchChange}
-                            placeholder="Search files..."
+                            placeholder="Search files"
                         />
                     </div>
 
@@ -399,7 +399,7 @@ export default function FolderView({
                         onClick={initiateDownloadFolder}
                         disabled={isDownloading}
                         className={cn(
-                            "flex items-center justify-center gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors",
+                            "flex items-center justify-center gap-1 h-9 px-4 py-2 rounded border border-grey-80 bg-grey-90 text-grey-10 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50",
                             isDownloading && "opacity-70 cursor-not-allowed"
                         )}
                     >

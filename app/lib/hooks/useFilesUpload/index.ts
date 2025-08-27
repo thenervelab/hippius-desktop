@@ -6,6 +6,8 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom } from "jotai";
 import { uploadProgressAtom } from "@/app/components/page-sections/files/ipfs/atoms/query-atoms";
 import { toast } from "sonner";
+import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
+import { basename } from '@tauri-apps/api/path';
 
 export type UploadFilesHandlers = {
   onSuccess?: () => void;
@@ -54,11 +56,18 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   ) {
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
+    const fileNames = await Promise.all(filePaths.map(async path => {
+      const name = await basename(path);
+      return name;
+    }));
+
+    const firstFileName = fileNames[0] ? formatDisplayName(fileNames[0]) : "file";
+
     const msgs = options?.messages;
     const startText =
       filePaths.length > 1
         ? msgs?.startMultiple?.(filePaths.length) ?? `Uploading ${filePaths.length} files: 0%`
-        : msgs?.startSingle ?? "Uploading file: 0%";
+        : msgs?.startSingle ?? `Uploading ${firstFileName}: 0%`;
 
     // If a toastId is given, update that toast; otherwise create a new one
     let localToastId = options?.toastId;
@@ -84,6 +93,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       // upload each file via Tauri using file paths
       for (let i = 0; i < filePaths.length; i++) {
         const filePath = filePaths[i];
+        const fileName = fileNames[i] ? formatDisplayName(fileNames[i]) : `file ${i + 1}`;
 
         let cid;
         console.log("Uploading file:", filePath);
@@ -109,7 +119,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         const uploadingText =
           filePaths.length > 1
             ? msgs?.uploadingMultiple?.(filePaths.length, percent) ?? `Uploading ${filePaths.length} files: ${percent}%`
-            : msgs?.uploadingSingle?.(percent) ?? `Uploading file: ${percent}%`;
+            : msgs?.uploadingSingle?.(percent) ?? `Uploading ${fileName}: ${percent}%`;
 
         // Always update the same toast id
         toast.loading(uploadingText, { id: localToastId });
@@ -124,7 +134,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         const successText =
           filePaths.length > 1
             ? msgs?.successMultiple?.(filePaths.length) ?? `${filePaths.length} files successfully uploaded!`
-            : msgs?.successSingle ?? `File successfully uploaded!`;
+            : msgs?.successSingle ?? `${firstFileName} successfully uploaded!`;
 
         // Convert loading -> success on the same toast id (auto-closes)
         toast.success(successText, { id: localToastId });
@@ -137,7 +147,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       const errorText =
         filePaths.length > 1
           ? msgs?.errorMultiple?.(filePaths.length) ?? `${filePaths.length} files failed to upload!`
-          : msgs?.errorSingle ?? `File failed to upload!`;
+          : msgs?.errorSingle ?? `${firstFileName} failed to upload!`;
 
       // Convert loading -> error on the same toast id
       toast.error(errorText, { id: localToastId });

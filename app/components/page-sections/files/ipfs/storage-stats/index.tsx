@@ -12,18 +12,18 @@ const StorageStateList: FC<StorageStateListProps> = ({
   numberOfFiles,
 }) => {
   return (
-    <div className="flex flex-col flex-wrap gap-2">
+    <div className="flex items-center flex-wrap gap-2">
       <StorageStateItem
         icon={<Icons.FolderCloud className="size-4" />}
         value={storageUsed}
-        className="pr-2"
-        label="Used Storage:"
+        className="border-r border-grey-80 pr-2"
+        label="Total Storage Used:"
       />
       <StorageStateItem
         icon={<Icons.FolderOpen className="size-4" />}
         value={numberOfFiles}
         className="pr-2"
-        label="Files:"
+        label="Number of Files:"
       />
     </div>
   );

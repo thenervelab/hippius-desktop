@@ -39,7 +39,7 @@ export const SearchInput: React.FC<SearchInputProps> = ({
         placeholder={placeholder}
         disabled={disabled}
         autoComplete="new-password"
-        className="w-full sm:max-w-[229px] h-9 font-medium font-grotesk pl-8 pr-3 py-2 text-sm text-gray-700 placeholder-grey-70 border border-grey-80 rounded focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300 hover:border-grey-70 transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
+        className="w-full sm:min-w-[229px] h-9 font-medium font-grotesk pl-8 pr-3 py-2 text-sm text-gray-700 placeholder-grey-70 border border-grey-80 rounded focus:outline-none focus:ring-1 focus:ring-gray-300 focus:border-gray-300 hover:border-grey-70 transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
       />
     </div>
   );

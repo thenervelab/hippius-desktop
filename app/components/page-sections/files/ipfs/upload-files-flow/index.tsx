@@ -9,6 +9,7 @@ import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { basename } from '@tauri-apps/api/path';
 import { invoke } from "@tauri-apps/api/core";
+import { formatDisplayName } from "@/lib/utils/fileTypeUtils"; // Add this import
 
 
 interface UploadFilesFlowProps {
@@ -122,7 +123,12 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
     if (files.length === 0) return;
 
     setIsUploading(true);
-    const toastId = toast.loading("Preparing files for upload...");
+
+    const firstFileName = files.length === 1
+      ? formatDisplayName(files[0].name)
+      : `${files.length} files`;
+
+    const toastId = toast.loading(`Preparing ${firstFileName} for upload...`);
 
     try {
       // Process the files - write browser File objects to disk first
@@ -144,7 +150,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
             processedPaths.push(tempPath);
           } catch (error) {
             console.error(`Error processing file ${fileInfo.name}:`, error);
-            toast.error(`Failed to process file: ${fileInfo.name}`);
+            toast.error(`Failed to process file: ${formatDisplayName(fileInfo.name)}`);
           }
         } else if (fileInfo.path) {
           // This is already a path to a file on disk
@@ -158,16 +164,23 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
         return;
       }
 
-      // Update same toast id for starting upload (optional)
-      toast.loading(`Starting upload...`, { id: toastId });
+      toast.loading(`Starting upload of ${firstFileName}...`, { id: toastId });
 
       reset(); // Close dialog
       // Pass the toast id so the hook reuses and updates the same toast
-      upload(processedPaths, isPrivateView, { toastId });
+      upload(processedPaths, isPrivateView, {
+        toastId,
+        messages: {
+          startSingle: files.length === 1 ? `Uploading ${firstFileName}: 0%` : undefined,
+          uploadingSingle: (percent) => files.length === 1 ? `Uploading ${firstFileName}: ${percent}%` : `Uploading: ${percent}%`,
+          successSingle: files.length === 1 ? `${firstFileName} successfully uploaded!` : undefined,
+          errorSingle: files.length === 1 ? `Failed to upload ${firstFileName}` : undefined
+        }
+      });
     } catch (error) {
       console.error("Error preparing files:", error);
       toast.error(
-        `Error preparing files for upload: ${error instanceof Error ? error.message : String(error)}`,
+        `Error preparing ${firstFileName} for upload: ${error instanceof Error ? error.message : String(error)}`,
         { id: toastId }
       );
       setIsUploading(false);

@@ -357,7 +357,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   }, [error]);
 
   const displayedData = useMemo(() => {
-    return isRecentFiles ? filteredData.slice(0, 2) : filteredData;
+    return isRecentFiles ? filteredData.slice(0, 4) : filteredData;
   }, [filteredData, isRecentFiles]);
 
   const displayedFileCount = useMemo(() => {

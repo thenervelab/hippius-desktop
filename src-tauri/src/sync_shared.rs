@@ -171,6 +171,7 @@ pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
         .chain(pub_state.current_item.iter())
         .cloned()
         .collect();
+    println!("[get_sync_activity] len: {}",recent.len());
     SyncActivityResponse { recent, uploading }
 }
 
