@@ -374,7 +374,7 @@ pub async fn copy_to_sync_and_add_to_db(
 }
 
 // Helper function to calculate size of a file or directory
-fn calculate_local_size(path: &Path) -> std::io::Result<u64> {
+pub fn calculate_local_size(path: &Path) -> std::io::Result<u64> {
     if path.is_file() {
         return std::fs::metadata(path).map(|m| m.len());
     }
