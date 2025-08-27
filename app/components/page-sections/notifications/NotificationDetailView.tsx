@@ -42,9 +42,6 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   if (!selectedNotification) {
     return (
       <div className=" w-full h-[80.9vh]"></div>
-      // <div className="flex items-center justify-center w-full h-[80.9vh] border border-grey-80 rounded p-4">
-      //   <p className="text-grey-60">Select a notification to view details</p>
-      // </div>
     );
   }
 
@@ -149,6 +146,12 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
               isUnread={unread}
               onClose={() => setContextMenu(null)}
               onToggleReadStatus={handleReadStatusToggle}
+              notificationId={id}
+              onArchived={() => {
+                setContextMenu(null);
+              }}
+              onArchiveStart={() => {
+              }}
             />
           )}
         </div>

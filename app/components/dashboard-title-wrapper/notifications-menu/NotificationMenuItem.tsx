@@ -11,6 +11,9 @@ import NotificationType from "@/components/page-sections/notifications/Notificat
 import NotificationContextMenu from "@/components/page-sections/notifications/NotificationContextMenu";
 import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
+import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
+import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
+import { useNotifications } from "@/lib/hooks/useNotifications";
 
 interface NotificationItemProps {
   id?: number;
@@ -47,8 +50,11 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     x: number;
     y: number;
   } | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
   const router = useRouter();
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
+  const refreshUnread = useSetAtom(refreshUnreadCountAtom);
+  const { refresh } = useNotifications();
 
   const handleLinkClick = (e: React.MouseEvent) => {
     handleButtonLink(e, buttonLink, router, setActiveSubMenuItem);
@@ -66,6 +72,22 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent triggering onClick
+
+    if (!id) return;
+
+    try {
+      setIsArchiving(true);
+      await new Promise(r => setTimeout(r, 160)); // Animation delay
+      await deleteNotification(id);
+      await refresh();
+      await refreshUnread();
+    } catch (error) {
+      console.error('Failed to delete notification:', error);
+    }
+  };
+
   return (
     <>
       <InView triggerOnce>
@@ -73,12 +95,12 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
           <div
             ref={ref}
             className={cn(
-              "flex items-start gap-2 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer w-full",
-              selected && "border border-primary-70 bg-primary-100"
+              "flex items-start gap-2 p-3 hover:bg-grey-90 hover:rounded rounded-lg mb-3 bg-white group cursor-pointer w-full transition duration-200 relative",
+              selected && "border border-primary-70 bg-primary-100",
+              isArchiving && "opacity-0 translate-y-1 scale-[0.98]"
             )}
             onClick={() => {
               setActiveSubMenuItem("");
-
               onClick?.();
             }}
             onContextMenu={handleContextMenu}
@@ -137,6 +159,15 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
                 ></div>
               </div>
             </div>
+
+            {/* Delete button - appears on hover */}
+            <button
+              className={cn("absolute top-6 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-grey-60 hover:text-error-50", !unread && "top-4")}
+              onClick={handleDelete}
+              title="Delete Notification"
+            >
+              <Icons.Trash className="size-4" />
+            </button>
           </div>
         )}
       </InView>
@@ -149,6 +180,13 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
           isUnread={unread}
           onClose={() => setContextMenu(null)}
           onToggleReadStatus={handleReadStatusToggle}
+          // New
+          notificationId={id}
+          onArchived={() => {
+            setContextMenu(null);
+            // Remove onClose?.() here to keep the notification menu open
+          }}
+          onArchiveStart={() => setIsArchiving(true)}
         />
       )}
     </>

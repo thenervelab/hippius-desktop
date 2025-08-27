@@ -20,6 +20,8 @@ import {
   settingsDialogOpenAtom,
   activeSettingsTabAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
+import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
+import ArchiveAllConfirmationDialog from "@/components/page-sections/notifications/ArchiveAllConfirmationDialog";
 
 interface Props {
   count: number;
@@ -33,8 +35,9 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
   const router = useRouter();
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
+  const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
 
-  // Dynamic notification options - only include "View All" if there are enabled types
   const notificationOptions = useMemo(
     () => [
       ...(enabledTypes.length > 0 ? [{ label: "View All", value: "all" }] : []),
@@ -48,21 +51,17 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
 
   const [selected, setSelected] = useState(notificationOptions[0]?.value || "");
 
-  // shared store
   const { notifications, refresh, markRead, markUnread, markAllRead } =
     useNotifications();
 
-  // keep list up-to-date every time the menu opens
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  // Load enabled notification types
   useEffect(() => {
     refreshEnabledTypes();
   }, [refreshEnabledTypes]);
 
-  // Update selected value when options change
   useEffect(() => {
     if (
       notificationOptions.length > 0 &&
@@ -72,13 +71,12 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
     }
   }, [notificationOptions, selected]);
 
-  // filtering (case-insensitive match)
   const visible = notifications.filter((n) =>
     selected === "all" ? true : n.type.toLowerCase() === selected
   );
 
   const handleSelect = async (id: number) => {
-    onClose?.(); // close the portal
+    onClose?.();
     router.push(`/notifications?selected=${id}`);
   };
 
@@ -98,9 +96,24 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
     refreshUnread();
   };
 
+  const handleArchiveAllConfirm = async () => {
+    setIsArchiving(true);
+    try {
+      await deleteAllNotifications();
+      await refresh();
+      await refreshUnread();
+      toast.success("All notifications archived");
+    } catch (error) {
+      console.log("Delete all notifications error:", error);
+      toast.error("Failed to archive notifications");
+    } finally {
+      setIsArchiving(false);
+      setIsArchiveDialogOpen(false);
+    }
+  };
+
   const handleOpenSettings = () => {
-    onClose?.(); // Close the menu
-    // Set the active tab to "Notifications" before opening settings
+    onClose?.();
     setActiveSettingsTab("Notifications");
     setSettingsDialogOpen(true);
   };
@@ -117,12 +130,21 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
               value={selected}
               onChange={setSelected}
             />
-            <button
-              className="px-3 py-2 items-center text-sm rounded-md text-grey-70 hover:bg-gray-100 active:bg-gray-200 active:text-gray-700 focus:bg-gray-200 focus:text-gray-700 leading-5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300"
-              onClick={handleAllRead}
-            >
-              Mark all as Read
-            </button>
+            <div className="flex gap-2">
+              <button
+                className="px-3 py-2 items-center text-sm rounded-md text-grey-70 hover:bg-gray-100 active:bg-gray-200 active:text-gray-700 focus:bg-gray-200 focus:text-gray-700 leading-5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-gray-300"
+                onClick={handleAllRead}
+              >
+                Mark all as Read
+              </button>
+              <button
+                className="px-3 py-2 items-center text-sm rounded-md text-grey-70 hover:bg-error-50 hover:text-white active:bg-error-60 leading-5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
+                onClick={() => setIsArchiveDialogOpen(true)}
+                title="Remove all notifications"
+              >
+                Delete All
+              </button>
+            </div>
           </div>
         )}
         {enabledTypes.length === 0 ? (
@@ -142,6 +164,13 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
         )}
       </div>
       <NotificationMenuFooter onClose={onClose} />
+
+      <ArchiveAllConfirmationDialog
+        open={isArchiveDialogOpen}
+        onClose={() => setIsArchiveDialogOpen(false)}
+        onConfirm={handleArchiveAllConfirm}
+        loading={isArchiving}
+      />
     </>
   );
 };

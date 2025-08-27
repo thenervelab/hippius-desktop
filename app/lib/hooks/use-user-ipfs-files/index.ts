@@ -45,6 +45,7 @@ type UserProfileFile = {
   fileSizeInBytes: number;
   lastChargedAt: number;
   cid?: string;
+  createdAt: number;
   fileHash: string;
   selectedValidator?: string;
   isAssigned: boolean;
@@ -131,7 +132,7 @@ export const useUserIpfsFiles = () => {
 
         // Format the data to match what the UI expects
         const formattedFiles = dbFiles.map(
-          (file): FormattedUserIpfsFile & { isErasureCoded: boolean } => {
+          (file): FormattedUserIpfsFile & { isErasureCoded: boolean; createdAt: number } => {
             const isErasureCodedFolder = file.fileName.endsWith(".folder.ec_metadata");
             const isErasureCoded = !isErasureCodedFolder && file.fileName.endsWith(".ec_metadata");
             const isFolder = !isErasureCodedFolder && file.fileName.endsWith(".folder");
@@ -150,7 +151,7 @@ export const useUserIpfsFiles = () => {
               name: displayName || "Unnamed File",
               actualFileName: file.fileName,
               size: file.fileSizeInBytes,
-              createdAt: file.lastChargedAt,
+              createdAt: file.createdAt,
               cid: hexToCid(file.fileHash) ?? "",
               source: file.source || "Unknown",
               minerIds: parseMinerIds(file.minerIds),
