@@ -2,7 +2,7 @@ import {
   createColumnHelper,
   getCoreRowModel,
   useReactTable,
-  getSortedRowModel
+  getSortedRowModel,
 } from "@tanstack/react-table";
 
 import { useMemo, useState } from "react";
@@ -15,14 +15,12 @@ import {
   THead,
   TBody,
   CopyableCell,
-  Pagination
+  Pagination,
 } from "@/components/ui/alt-table";
 import { Loader2 } from "lucide-react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { Dollar } from "@/components/ui/icons";
-import useBalanceTransactions, {
-  TransactionObject
-} from "@/app/lib/hooks/api/useBalanceTransactions";
+import { TransactionObject } from "@/app/lib/hooks/api/useBalanceTransactions";
 import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
@@ -38,7 +36,7 @@ export const formatDate = (
         year: "numeric",
         hour: "2-digit",
         minute: "2-digit",
-        hour12: true
+        hour12: true,
       })
       .replace("AM", "am")
       .replace("PM", "pm");
@@ -49,7 +47,7 @@ export const formatDate = (
     year: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    hour12: true
+    hour12: true,
   })
     .format(date)
     .replace(",", "")
@@ -58,9 +56,15 @@ export const formatDate = (
 
 const columnHelper = createColumnHelper<TransactionObject>();
 const ITEMS_PER_PAGE = 10;
+interface TransactionHistoryTableProps {
+  transactions: TransactionObject[] | undefined;
+  isPending: boolean;
+}
 
-const TransactionHistoryTable: React.FC = () => {
-  const { data: transactions, isPending } = useBalanceTransactions();
+const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
+  transactions,
+  isPending,
+}) => {
   const { polkadotAddress } = useWalletAuth();
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -81,13 +85,17 @@ const TransactionHistoryTable: React.FC = () => {
         id: "block",
         header: "BLOCK",
         cell: (d) => d.getValue(),
-        enableSorting: true
+        enableSorting: true,
       }),
       columnHelper.accessor("amount", {
         id: "amount",
-        header: "AMOUNT",
-        cell: (d) => `$ ${formatBalance(d.getValue(), 6)}`,
-        enableSorting: true
+        header: () => (
+          <span>
+            AMOUNT (<span className="!normal-case">hALPHA</span>)
+          </span>
+        ),
+        cell: (d) => `${formatBalance(d.getValue(), 6)}`,
+        enableSorting: true,
       }),
       columnHelper.accessor("from", {
         id: "from",
@@ -101,8 +109,8 @@ const TransactionHistoryTable: React.FC = () => {
           />
         ),
         meta: {
-          cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]"
-        }
+          cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]",
+        },
       }),
 
       columnHelper.accessor("to", {
@@ -117,8 +125,8 @@ const TransactionHistoryTable: React.FC = () => {
           />
         ),
         meta: {
-          cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]"
-        }
+          cellClassName: "lg:max-w-[400px] lg:min-w-[400px] lg:w-[400px]",
+        },
       }),
 
       columnHelper.accessor(
@@ -137,15 +145,15 @@ const TransactionHistoryTable: React.FC = () => {
             <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
               {info.getValue()}
             </span>
-          )
+          ),
         }
       ),
       columnHelper.accessor("date", {
         id: "date",
         header: "TRANSACTION DATE",
         cell: (d) => formatDate(new Date(d.getValue())),
-        enableSorting: true
-      })
+        enableSorting: true,
+      }),
     ],
     [polkadotAddress] // Add polkadotAddress as dependency
   );
@@ -156,7 +164,7 @@ const TransactionHistoryTable: React.FC = () => {
     columns,
     data: paginatedData,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel()
+    getSortedRowModel: getSortedRowModel(),
   });
 
   return (

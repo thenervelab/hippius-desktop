@@ -8,60 +8,42 @@ import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import Warning from "@/components/ui/icons/Warning";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import BalanceTrends from "./balance-trends";
-import useBalance from "@/app/lib/hooks/api/useBalance";
-import { Account } from "@/app/lib/types";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import SendBalanceDialog, { TRANSACTION_FEE } from "./SendBalanceDialog";
 import ReceiveBalanceDialog from "./ReceiveBalanceDialog";
-
+import useSystemBalance from "@/app/lib/hooks/api/useSystemBalance";
 
 interface WalletBalanceWidgetWithGraphProps {
   className?: string;
+  refetchTransactions?: () => void;
 }
 
 const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
   className,
+  refetchTransactions,
 }) => {
   const { data: balanceInfo, isLoading, error, refetch } = useHippiusBalance();
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
   const { mnemonic, polkadotAddress } = useWalletAuth();
 
-  // Use the balance data for chart
-  const { data: balanceData, isLoading: isBalanceLoading } = useBalance();
-
-  // Prepare data for the chart - only using balance data
+  const {
+    data: balanceDaily,
+    isLoading: isBalanceLoading,
+    refetch: refetchSystemBalance,
+  } = useSystemBalance();
   const chartData = useMemo(() => {
-    if (!balanceData) return [];
-
-    // Create balance data points
-    const balancePoints = balanceData
-      ? [
-        {
-          timestamp: balanceData.timestamp,
-          date: new Date(balanceData.timestamp),
-          type: "balance",
-          value: balanceData.totalBalance,
-        },
-      ]
-      : [];
-
-    // Process the data points
-    const result: Account[] = [];
-
-    balancePoints.forEach((point) => {
-      // Add the data point with current balance value
-      result.push({
-        processed_timestamp: point.timestamp,
-        credit: "0", // We're not using credit data
-        total_balance: point.value,
-      });
+    const rows = balanceDaily ?? [];
+    return rows.map((r) => {
+      return {
+        processed_timestamp: r.timestamp,
+        credit: "0",
+        total_balance: r.totalBalance,
+      };
     });
-
-    return result;
-  }, [balanceData]);
+  }, [balanceDaily]);
 
   const isChartDataLoading = isBalanceLoading;
 
@@ -121,8 +103,8 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
                   {balanceInfo !== undefined
                     ? `${formatCreditBalance(balanceInfo.data.free)}`
                     : error
-                      ? "ERROR"
-                      : "- - - -"}
+                    ? "ERROR"
+                    : "- - - -"}
                   <span className="text-xs font-medium -translate-y-1 ml-1">
                     hALPHA
                   </span>
@@ -130,21 +112,23 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
                 <div className="flex items-center gap-x-2 mt-2">
                   {isLoading ? (
                     <Typography.P size="xs">Loading...</Typography.P>
-                  ) : error && (
-                    <>
-                      <Warning className="size-4" />
-                      <Typography.P size="xs" className="text-error-80">
-                        Account balance not retrieved.
-                      </Typography.P>
-                      <button
-                        className="size-4"
-                        onClick={() => {
-                          refetch();
-                        }}
-                      >
-                        <Refresh />
-                      </button>
-                    </>
+                  ) : (
+                    error && (
+                      <>
+                        <Warning className="size-4" />
+                        <Typography.P size="xs" className="text-error-80">
+                          Account balance not retrieved.
+                        </Typography.P>
+                        <button
+                          className="size-4"
+                          onClick={() => {
+                            refetch();
+                          }}
+                        >
+                          <Refresh />
+                        </button>
+                      </>
+                    )
                   )}
                 </div>
               </div>
@@ -178,9 +162,15 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
         <SendBalanceDialog
           open={sendDialogOpen}
           onClose={() => setSendDialogOpen(false)}
-          availableBalance={+formatCreditBalance(balanceInfo?.data?.free ?? null)}
+          availableBalance={
+            +formatCreditBalance(balanceInfo?.data?.free ?? null)
+          }
           mnemonic={mnemonic || ""}
-          refetchBalance={refetch}
+          refetchBalance={() => {
+            refetch();
+            refetchSystemBalance();
+            refetchTransactions?.();
+          }}
           polkadotAddress={polkadotAddress || ""}
         />
 
