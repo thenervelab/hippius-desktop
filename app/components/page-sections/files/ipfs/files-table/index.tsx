@@ -429,7 +429,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
 
   const headerRows = useMemo(() => (
     table.getHeaderGroups().map((headerGroup) => (
-      <TableModule.Tr key={headerGroup.id}>
+      <TableModule.Tr key={headerGroup.id} draggable={false}>
         {headerGroup.headers.map((header) => (
           <TableModule.Th key={header.id} header={header} />
         ))}

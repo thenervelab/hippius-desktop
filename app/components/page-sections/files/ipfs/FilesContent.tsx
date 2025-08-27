@@ -32,6 +32,7 @@ import FileContextMenu from "@/app/components/ui/context-menu";
 import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 
 interface FilesContentProps {
     isRecentFiles?: boolean;
@@ -153,9 +154,14 @@ const FilesContent: FC<FilesContentProps> = ({
 
         dragCounterRef.current--;
 
-        if (dragCounterRef.current === 0) {
+        if (dragCounterRef.current <= 0) {
+            dragCounterRef.current = 0;
             setIsDragging(false);
             setAnimateCloud(false);
+            if (dragTimeoutRef.current) {
+                clearTimeout(dragTimeoutRef.current);
+                dragTimeoutRef.current = null;
+            }
         }
     }, []);
 
@@ -176,6 +182,7 @@ const FilesContent: FC<FilesContentProps> = ({
 
             if (dragTimeoutRef.current) {
                 clearTimeout(dragTimeoutRef.current);
+                dragTimeoutRef.current = null;
             }
 
             if (addButtonRef?.current && e.dataTransfer.files.length > 0) {
@@ -190,11 +197,45 @@ const FilesContent: FC<FilesContentProps> = ({
         [addButtonRef]
     );
 
+    // Add global event listeners to clean up dragging state when dragging ends outside
+    useEffect(() => {
+        const handleDragEnd = () => {
+            // Only reset if we're currently showing dragging state
+            if (isDragging) {
+                dragCounterRef.current = 0;
+                setIsDragging(false);
+                setAnimateCloud(false);
+                if (dragTimeoutRef.current) {
+                    clearTimeout(dragTimeoutRef.current);
+                    dragTimeoutRef.current = null;
+                }
+            }
+        };
+
+        // Only handle document-level dragleave that indicates leaving the window
+        const handleDocumentDragLeave = (e: globalThis.DragEvent) => {
+            // Check if mouse left the document area
+            if (e.clientX <= 0 || e.clientY <= 0 ||
+                e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+                handleDragEnd();
+            }
+        };
+
+        document.addEventListener('dragend', handleDragEnd);
+        document.addEventListener('dragleave', handleDocumentDragLeave);
+
+        return () => {
+            document.removeEventListener('dragend', handleDragEnd);
+            document.removeEventListener('dragleave', handleDocumentDragLeave);
+        };
+    }, [isDragging]);  // Only re-add listeners if isDragging changes
+
     // Clean up any timers when component unmounts
     useEffect(() => {
         return () => {
             if (dragTimeoutRef.current) {
                 clearTimeout(dragTimeoutRef.current);
+                dragTimeoutRef.current = null;
             }
         };
     }, []);
@@ -317,17 +358,32 @@ const FilesContent: FC<FilesContentProps> = ({
                 }}
                 onDelete={() => {
                     setOpenDeleteModal(false);
-                    const toastId = toast.loading(`Deleting ${fileToDelete?.isFolder ? "folder" : "file"}...`);
 
-                    deleteFile()
-                        .then(() => {
-                            toast.success(fileToDelete?.source === "Hippius" ? "Request submitted. File will be deleted!" : `${fileToDelete?.isFolder ? "Folder" : "File"} removed.`, { id: toastId });
-                            setFileToDelete(null);
-                        })
-                        .catch((error) => {
-                            console.error("Delete error:", error);
-                            toast.error(error.message || `Failed to delete ${fileToDelete?.isFolder ? "folder" : "file"}`, { id: toastId });
-                        });
+                    // Format the filename using the same logic as NameCell
+                    const truncatedName = fileToDelete?.name
+                        ? formatDisplayName(fileToDelete.name)
+                        : fileToDelete?.isFolder ? "folder" : "file";
+
+                    const toastId = toast.loading(`Deleting ${truncatedName}...`);
+
+                    setTimeout(() => {
+                        deleteFile()
+                            .then(() => {
+                                toast.success(
+                                    `${truncatedName} removed.`,
+                                    { id: toastId }
+                                );
+                                setFileToDelete(null);
+                            })
+                            .catch((error) => {
+                                console.error("Delete error:", error);
+                                toast.error(
+                                    error.message || `Failed to delete ${truncatedName}`,
+                                    { id: toastId }
+                                );
+                            });
+                    }, 2000);
+
                 }}
                 button={isDeleting ? "Deleting..." : `Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`}
                 text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""

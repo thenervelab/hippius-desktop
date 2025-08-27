@@ -65,9 +65,9 @@ const NameCell: FC<NameCellProps> = ({
 
 
   return (
-    <div className={className}>
+    <div className={className} draggable={false}>
       {isFolder ? (
-        <Link href={folderUrl} prefetch={false}>
+        <Link href={folderUrl} prefetch={false} draggable={false}>
           <div className="flex items-center">
             <Icon className={cn("size-5 mr-2", color)} />
             <span className="text-grey-20 hover:text-primary-40 hover:underline transition">
