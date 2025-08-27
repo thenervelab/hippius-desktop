@@ -291,9 +291,15 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                                 state.processed_files = state.total_files;
                             }
                             state.current_item = Some(item.clone());
-                            state.recent_items.push_front(item.clone());
-                            if state.recent_items.len() > MAX_RECENT_ITEMS {
-                                state.recent_items.pop_back();
+                            
+                            // Only add to recent items if scope is public and action is uploaded
+                            if item.scope == "public" && item.action == "uploaded" {
+                                if !state.recent_items.iter().any(|i| i.path == item.path && i.action == item.action) {
+                                    state.recent_items.push_front(item.clone());
+                                    if state.recent_items.len() > MAX_RECENT_ITEMS {
+                                        state.recent_items.pop_back();
+                                    }
+                                }
                             }
 
                             if let Some(pool) = DB_POOL.get() {
