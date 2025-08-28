@@ -34,6 +34,7 @@ use tauri::{AppHandle, Manager};
 use crate::events::AppEvent;
 use tauri::Emitter;
 use tokio::process::Command;
+use crate::commands::node::get_aws_binary_path;
 
 // Helper function to format file sizes
 fn format_file_size(size_bytes: usize) -> String {
@@ -116,17 +117,47 @@ pub async fn download_and_decrypt_file(
     println!("[download_and_decrypt_file] Downloading file with CID: {} to: {}", metadata_cid, output_file);
     let api_url = "http://127.0.0.1:5001".to_string(); // Convert to owned String
 
+    // Dynamically get the AWS binary path
+    let aws_binary_path = match get_aws_binary_path().await {
+        Ok(path) => {
+            println!("[download_and_decrypt_file] Found AWS binary at: {}", path.display());
+            path
+        }
+        Err(e) => {
+            eprintln!("[download_and_decrypt_file] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            // Fall back to checking system PATH with which crate
+            if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                println!("[download_and_decrypt_file] Found AWS in system PATH at: {}", path.display());
+                path
+            } else {
+                eprintln!("[download_and_decrypt_file] AWS CLI not found in system PATH or custom location");
+                return Err("AWS CLI not found".to_string());
+            }
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        std::env::var("PATH").unwrap_or_default()
+    );
+
     // Special handling when the 'CID' indicates S3 source
     if metadata_cid == "s3" {
         // If source exists locally, copy; otherwise pull from S3 using aws cli
-        if std::path::Path::new(&source).exists() {
+        if Path::new(&source).exists() {
             std::fs::copy(&source, &output_file)
                 .map_err(|e| format!("Failed to copy from '{}' to '{}': {}", source, output_file, e))?;
             println!("[download_and_decrypt_file] Copied locally from '{}' to '{}'", source, output_file);
             return Ok(());
         } else {
             // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
-            let status = Command::new("aws")
+            let status = Command::new(&aws_binary_path)
+                .env("AWS_PAGER", "")
+                .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("cp")
                 .arg(&source)
@@ -333,6 +364,33 @@ pub async fn download_and_decrypt_folder(
         let source_path = Path::new(&source);
         let destination_path = Path::new(&output_dir).join(&folder_name);
 
+        // Dynamically get the AWS binary path
+        let aws_binary_path = match get_aws_binary_path().await {
+            Ok(path) => {
+                println!("[download_and_decrypt_folder] Found AWS binary at: {}", path.display());
+                path
+            }
+            Err(e) => {
+                eprintln!("[download_and_decrypt_folder] Failed to get AWS binary path: {}, falling back to system PATH", e);
+                if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                    println!("[download_and_decrypt_folder] Found AWS in system PATH at: {}", path.display());
+                    path
+                } else {
+                    eprintln!("[download_and_decrypt_folder] AWS CLI not found in system PATH or custom location");
+                    return Err("AWS CLI not found".to_string());
+                }
+            }
+        };
+
+        // Construct dynamic PATH with OS-appropriate separator
+        let path_separator = if cfg!(windows) { ";" } else { ":" };
+        let dynamic_path = format!(
+            "{}{}{}",
+            aws_binary_path.parent().unwrap().to_string_lossy(),
+            path_separator,
+            std::env::var("PATH").unwrap_or_default()
+        );
+
         // First, check if the source path exists locally
         if source_path.exists() && source_path.is_dir() {
             println!("[i] Source folder exists locally at '{}'. Copying...", source);
@@ -347,11 +405,13 @@ pub async fn download_and_decrypt_folder(
             println!("[i] Source is an S3 path. Downloading with AWS CLI...");
 
             if let Some(parent) = destination_path.parent() {
-                 tokio::fs::create_dir_all(parent).await
-                    .map_err(|e| format!("Failed to create output directory: {}", e))?;
-            }
+                tokio::fs::create_dir_all(parent).await
+                   .map_err(|e| format!("Failed to create output directory: {}", e))?;
+           }
 
-            let status = Command::new("aws")
+            let status = Command::new(&aws_binary_path)
+                .env("AWS_PAGER", "")
+                .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("cp")
                 .arg(&source) 
@@ -398,8 +458,6 @@ pub async fn download_and_decrypt_folder(
             let output_root_clone = output_root_path.clone();
             let encryption_key_clone = encryption_key_bytes.as_ref().map(Arc::clone);
 
-            // We no longer need to clone `source` here because we won't be using it.
-
             async move {
                 println!("[download_and_decrypt_folder] Processing entry with CID: {} to: {:?}", 
                     entry.cid, output_root_clone.join(&entry.file_name));
@@ -421,7 +479,7 @@ pub async fn download_and_decrypt_folder(
                         subfolder_name.to_string(),
                         output_root_clone.to_string_lossy().to_string(),
                         encryption_key_clone.as_ref().map(|k| base64::engine::general_purpose::STANDARD.encode(&**k)),
-                        String::new() // <-- THE FIX: Pass an empty string. The source is not needed for an IPFS subfolder.
+                        String::new() // Pass an empty string as source is not needed for IPFS subfolder
                     ).await {
                         eprintln!("[!] Failed to download/decrypt subfolder {}: {}", subfolder_name, e);
                     }
@@ -841,15 +899,42 @@ pub async fn download_file_public(
     output_file: String,
     source: String,
 ) -> Result<(), String> {
-    let api_url = "http://127.0.0.1:5001"; 
+    let api_url = "http://127.0.0.1:5001";
 
     println!("[download_file_public] Start: file_cid='{}', output_file='{}'", file_cid, output_file);
     // Special handling when the 'CID' indicates S3 source
     if file_cid == "s3" {
-        println!("[download_file_public]  returned source='{}'", source);
+        println!("[download_file_public] returned source='{}'", source);
+
+        // Dynamically get the AWS binary path
+        let aws_binary_path = match get_aws_binary_path().await {
+            Ok(path) => {
+                println!("[download_file_public] Found AWS binary at: {}", path.display());
+                path
+            }
+            Err(e) => {
+                eprintln!("[download_file_public] Failed to get AWS binary path: {}, falling back to system PATH", e);
+                if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                    println!("[download_file_public] Found AWS in system PATH at: {}", path.display());
+                    path
+                } else {
+                    eprintln!("[download_file_public] AWS CLI not found in system PATH or custom location");
+                    return Err("[download_file_public] AWS CLI not found".to_string());
+                }
+            }
+        };
+
+        // Construct dynamic PATH with OS-appropriate separator
+        let path_separator = if cfg!(windows) { ";" } else { ":" };
+        let dynamic_path = format!(
+            "{}{}{}",
+            aws_binary_path.parent().unwrap().to_string_lossy(),
+            path_separator,
+            std::env::var("PATH").unwrap_or_default()
+        );
 
         // If source exists locally, copy; otherwise pull from S3 using aws cli
-        let source_exists = std::path::Path::new(&source).exists();
+        let source_exists = Path::new(&source).exists();
         println!("[download_file_public] Source exists locally? {}", source_exists);
         if source_exists {
             std::fs::copy(&source, &output_file)
@@ -859,7 +944,9 @@ pub async fn download_file_public(
         } else {
             // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
             println!("[download_file_public] Invoking 'aws s3 cp' for source='{}' -> '{}'", source, output_file);
-            let status = Command::new("aws")
+            let status = Command::new(&aws_binary_path)
+                .env("AWS_PAGER", "")
+                .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("cp")
                 .arg(&source)
@@ -1040,6 +1127,33 @@ pub async fn public_download_folder(
         let source_path = Path::new(&source);
         let destination_path = Path::new(&output_dir).join(&folder_name);
 
+        // Dynamically get the AWS binary path
+        let aws_binary_path = match get_aws_binary_path().await {
+            Ok(path) => {
+                println!("[public_download_folder] Found AWS binary at: {}", path.display());
+                path
+            }
+            Err(e) => {
+                eprintln!("[public_download_folder] Failed to get AWS binary path: {}, falling back to system PATH", e);
+                if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                    println!("[public_download_folder] Found AWS in system PATH at: {}", path.display());
+                    path
+                } else {
+                    eprintln!("[public_download_folder] AWS CLI not found in system PATH or custom location");
+                    return Err("[public_download_folder] AWS CLI not found".to_string());
+                }
+            }
+        };
+
+        // Construct dynamic PATH with OS-appropriate separator
+        let path_separator = if cfg!(windows) { ";" } else { ":" };
+        let dynamic_path = format!(
+            "{}{}{}",
+            aws_binary_path.parent().unwrap().to_string_lossy(),
+            path_separator,
+            std::env::var("PATH").unwrap_or_default()
+        );
+
         // First, check if the source path exists locally
         if source_path.exists() && source_path.is_dir() {
             println!("[i] Source folder exists locally at '{}'. Copying...", source);
@@ -1056,11 +1170,13 @@ pub async fn public_download_folder(
 
             // Ensure the parent directory for the output exists
             if let Some(parent) = destination_path.parent() {
-                 tokio::fs::create_dir_all(parent).await
-                    .map_err(|e| format!("Failed to create output directory: {}", e))?;
-            }
+                tokio::fs::create_dir_all(parent).await
+                   .map_err(|e| format!("Failed to create output directory: {}", e))?;
+           }
 
-            let status = Command::new("aws")
+            let status = Command::new(&aws_binary_path)
+                .env("AWS_PAGER", "")
+                .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("cp")
                 .arg(&source) 
@@ -1160,50 +1276,6 @@ async fn public_download_folder_inner(
     }
 
     Ok(())
-}
-
-/// Downloads a folder and its contents recursively from an S3 bucket.
-async fn download_s3_folder_recursive(
-    account_id: &str,
-    scope: &str, // "public" or "private"
-    folder_name: &str,
-    output_dir: &str,
-) -> Result<(), String> {
-    let bucket_name = format!("{}-{}", account_id, scope);
-    let endpoint_url = "https://s3.hippius.com";
-
-    // The S3 source path. The trailing slash is important.
-    let s3_source = format!("s3://{}/{}/", bucket_name, folder_name);
-
-    // The local destination path where the folder will be created.
-    let local_destination = Path::new(output_dir).join(folder_name);
-
-    println!("[S3FolderDownload] Downloading from '{}' to '{}'", s3_source, local_destination.display());
-
-    // Ensure the parent directory of the destination exists
-    if let Some(parent) = local_destination.parent() {
-        tokio::fs::create_dir_all(parent).await
-            .map_err(|e| format!("Failed to create parent directory: {}", e))?;
-    }
-
-    let status = Command::new("aws")
-        .arg("s3")
-        .arg("cp")
-        .arg(&s3_source)
-        .arg(local_destination)
-        .arg("--recursive")
-        .arg("--endpoint-url")
-        .arg(endpoint_url)
-        .status()
-        .await
-        .map_err(|e| format!("Failed to execute 'aws s3 cp' command: {}", e))?;
-
-    if status.success() {
-        println!("[S3FolderDownload] Successfully downloaded folder '{}'", folder_name);
-        Ok(())
-    } else {
-        Err(format!("'aws s3 cp' command failed with status: {}", status))
-    }
 }
 
 #[tauri::command]
@@ -1318,9 +1390,37 @@ pub async fn list_folder_contents(
     // Compute sync root once
     let sync_root = get_sync_root(&scope).await?;
 
-    // --- FIX is on the line below ---
-    let output = Command::new("aws")
+    // Dynamically get the AWS binary path
+    let aws_binary_path = match get_aws_binary_path().await {
+        Ok(path) => {
+            println!("[ListFolderContents] Found AWS binary at: {}", path.display());
+            path
+        }
+        Err(e) => {
+            eprintln!("[ListFolderContents] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                println!("[ListFolderContents] Found AWS in system PATH at: {}", path.display());
+                path
+            } else {
+                eprintln!("[ListFolderContents] AWS CLI not found in system PATH or custom location");
+                return Err("[ListFolderContents] AWS CLI not found".to_string());
+            }
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    // Execute AWS command with dynamic path
+    let output = Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
+        .env("PATH", &dynamic_path)
         .arg("s3")
         .arg("ls")
         .arg(&full_s3_uri_prefix)
