@@ -203,10 +203,34 @@ pub async fn stop_ipfs_daemon() {
 }
 
 #[cfg(target_os = "macos")]
-async fn ensure_ipfs_not_running(_bin_path: &Path) -> Result<(), String> {
-    let output = Command::new("pkill").arg("-f").arg("ipfs daemon").output().await.map_err(|e| format!("Failed to kill IPFS processes: {}", e))?;
+async fn ensure_ipfs_not_running(bin_path: &Path) -> Result<(), String> {
+    let output = Command::new("pkill")
+        .arg("-f")
+        .arg("ipfs daemon")
+        .output()
+        .await
+        .map_err(|e| format!("Failed to kill IPFS processes: {}", e))?;
     if !output.status.success() && !output.stderr.is_empty() {
         eprintln!("pkill stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    let ipfs_path = dirs::home_dir().unwrap().join(".ipfs");
+    if is_ipfs_repo_locked(&ipfs_path).await {
+        // Check if any IPFS process is running
+        let ps_output = Command::new("ps")
+            .arg("-ef")
+            .arg("|")
+            .arg("grep")
+            .arg("ipfs")
+            .output()
+            .await
+            .map_err(|e| format!("Failed to check processes: {}", e))?;
+        if !String::from_utf8_lossy(&ps_output.stdout).contains("ipfs daemon") {
+            // No IPFS daemon running, remove lock file
+            tokio::fs::remove_file(ipfs_path.join("repo.lock"))
+                .await
+                .map_err(|e| format!("Failed to remove repo.lock: {}", e))?;
+        }
     }
     Ok(())
 }
@@ -803,7 +827,7 @@ fn windows_resources_dir() -> Option<std::path::PathBuf> {
     None
 }
 
-async fn get_aws_binary_path() -> Result<PathBuf, String> {
+pub async fn get_aws_binary_path() -> Result<PathBuf, String> {
     let base_dir = dirs::home_dir().ok_or("Could not find home directory")?.join(".aws-cli");
 
     #[cfg(target_os = "windows")]

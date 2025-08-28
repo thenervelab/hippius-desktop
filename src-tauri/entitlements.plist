@@ -32,5 +32,17 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- Add these new entitlements for persistent file access -->
+    <key>com.apple.security.files.all</key>
+    <dict>
+        <key>read</key>
+        <true/>
+        <key>write</key>
+        <true/>
+    </dict>
+    <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+    <array>
+        <string>/</string>
+    </array>
 </dict>
-</plist> 
+</plist>

@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use crate::user_profile_sync::UserProfileFileWithType;
 use crate::utils::file_operations::calculate_local_size;
+use crate::commands::node::get_aws_binary_path;
 
 /// Parses a line from the `aws s3 sync` output to create a RecentItem.
 pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
@@ -433,8 +434,37 @@ pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<V
 
     println!("[ListBucket] Listing contents for bucket: s3://{}", bucket_name);
 
-    let output = Command::new("aws")
+    // Dynamically get the AWS binary path
+    let aws_binary_path = match get_aws_binary_path().await {
+        Ok(path) => {
+            println!("[ListBucket] Found AWS binary at: {}", path.display());
+            path
+        }
+        Err(e) => {
+            eprintln!("[ListBucket] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            // Fall back to checking system PATH with which crate
+            if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                println!("[ListBucket] Found AWS in system PATH at: {}", path.display());
+                path
+            } else {
+                eprintln!("[ListBucket] AWS CLI not found in system PATH or custom location");
+                return Err("AWS CLI not found".to_string());
+            }
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let output = Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
+        .env("PATH", &dynamic_path)
         .arg("s3")
         .arg("ls")
         .arg(format!("s3://{}/", bucket_name))
