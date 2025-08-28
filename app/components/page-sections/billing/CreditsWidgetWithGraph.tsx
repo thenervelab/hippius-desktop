@@ -12,7 +12,6 @@ import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import CreditsTrends from "./credits-trends";
 import useCredits from "@/app/lib/hooks/api/useCredits";
 import { openLinkByKey } from "@/app/lib/utils/links";
-import { toast } from "sonner";
 
 interface CreditsWidgetWithGraphProps {
   className?: string;
@@ -36,9 +35,9 @@ const CreditsWidgetWithGraph: FC<CreditsWidgetWithGraphProps> = ({
   const chartData = useMemo(() => {
     const rows = creditsDaily ?? [];
     return rows.map((r) => {
-      toast.success(
-        `Credits ${r.amount} ${r.date} processed successfully. ${rows.length}`
-      );
+      // toast.success(
+      //   `Credits ${r.amount} ${r.date} processed successfully. ${rows.length}`
+      // );
       return {
         processed_timestamp: r.date,
         credit: r.amount,
@@ -76,8 +75,8 @@ const CreditsWidgetWithGraph: FC<CreditsWidgetWithGraphProps> = ({
                   {credits !== undefined
                     ? `${formatCreditBalance(credits)}`
                     : error
-                    ? "ERROR"
-                    : "- - - -"}
+                      ? "ERROR"
+                      : "- - - -"}
                   <span className="text-xs font-medium -translate-y-1 ml-1">
                     Credits
                   </span>
