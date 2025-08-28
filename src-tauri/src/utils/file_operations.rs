@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use crate::sync_shared::collect_files_recursively;
 use hex;
-use crate::ipfs::get_ipfs_file_size;
+
 use crate::sync_shared::insert_file_if_not_exists;
 use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
@@ -290,14 +290,15 @@ pub async fn copy_to_sync_and_add_to_db(
     let cid_vec = metadata_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec);
 
-    // Get file size from IPFS
-    let file_size_in_bytes = match get_ipfs_file_size(metadata_cid).await {
+    // Calculate file/folder size locally
+    let file_size_in_bytes = match calculate_local_size(original_path) {
         Ok(size) => size as i64,
         Err(e) => {
-            eprintln!("Failed to get IPFS file size for {}: {}", metadata_cid, e);
+            eprintln!("Failed to calculate local size for {}: {}", original_path.display(), e);
             0
         }
     };
+    println!("File size in bytes: {}", file_size_in_bytes);
     if let Some(pool) = DB_POOL.get() {
         // Check if file already exists in user_profiles
         let exists: Option<(String,)> = sqlx::query_as(
@@ -370,6 +371,27 @@ pub async fn copy_to_sync_and_add_to_db(
         }
     }
 
+}
+
+// Helper function to calculate size of a file or directory
+pub fn calculate_local_size(path: &Path) -> std::io::Result<u64> {
+    if path.is_file() {
+        return std::fs::metadata(path).map(|m| m.len());
+    }
+
+    let mut total_size = 0;
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                total_size += calculate_local_size(&path)?;
+            } else {
+                total_size += path.metadata()?.len();
+            }
+        }
+    }
+    Ok(total_size)
 }
 
 pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_folder: bool, should_delete_folder: bool) {
@@ -603,14 +625,15 @@ pub async fn copy_to_sync_folder(
     let cid_vec = metadata_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec);
 
-    // Get file size from IPFS
-    let file_size_in_bytes = match get_ipfs_file_size(metadata_cid).await {
+    // Calculate file/folder size locally
+    let file_size_in_bytes = match calculate_local_size(original_path) {
         Ok(size) => size as i64,
         Err(e) => {
-            eprintln!("Failed to get IPFS file size for {}: {}", metadata_cid, e);
+            eprintln!("Failed to calculate local size for {}: {}", original_path.display(), e);
             0
         }
     };
+    println!("File size in bytes: {}", file_size_in_bytes);
     if let Some(pool) = DB_POOL.get() {
         // Check if folder record already exists
         let exists: Option<(String,)> = sqlx::query_as(

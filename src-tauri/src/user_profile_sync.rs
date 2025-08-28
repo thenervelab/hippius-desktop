@@ -62,7 +62,7 @@ pub struct UserProfileFile {
     pub is_folder: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UserProfileFileWithType {
     pub owner: String,

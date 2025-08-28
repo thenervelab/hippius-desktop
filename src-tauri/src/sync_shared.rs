@@ -14,6 +14,9 @@ use hex;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
+use crate::user_profile_sync::UserProfileFileWithType;
+use crate::utils::file_operations::calculate_local_size;
+use crate::commands::node::get_aws_binary_path;
 
 /// Parses a line from the `aws s3 sync` output to create a RecentItem.
 pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
@@ -102,6 +105,41 @@ pub struct RecentItem {
     pub timestamp: i64,
 }
 
+impl RecentItem {
+    pub fn to_user_profile_file(&self, account_id: &str) -> UserProfileFileWithType {
+        // Calculate file size from local path if available
+        let file_size = if !self.path.is_empty() {
+            let path = Path::new(&self.path);
+            if path.exists() {
+                calculate_local_size(path).unwrap_or(0) as i64
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        UserProfileFileWithType {
+            owner: account_id.to_string(),
+            cid: "".to_string(),    // Not available in RecentItem
+            file_hash: "".to_string(), // Not available in RecentItem
+            file_name: self.name.clone(),
+            file_size_in_bytes: file_size,
+            is_assigned: false,      // Default value
+            last_charged_at: 0,      // Default value
+            main_req_hash: "s3".to_string(), // Indicates this came from S3 sync
+            selected_validator: "".to_string(), // Not available
+            total_replicas: 1,       // Default value
+            block_number: 0,         // Not available
+            profile_cid: "".to_string(), // Not available
+            source: self.path.clone(),
+            miner_ids: None,         // Not available
+            created_at: self.timestamp / 1000, // Convert ms to seconds
+            is_folder: self.kind == "folder",
+            type_: self.scope.clone(),
+        }
+    }
+}
+
 #[derive(serde::Serialize, Clone, Debug, Default)]
 pub struct S3SyncState {
     pub in_progress: bool,
@@ -120,8 +158,8 @@ pub static S3_PUBLIC_SYNC_STATE: Lazy<Arc<Mutex<S3SyncState>>> =
 
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct SyncActivityResponse {
-    pub recent: Vec<RecentItem>,
-    pub uploading: Vec<RecentItem>
+    pub recent: Vec<UserProfileFileWithType>,
+    pub uploading: Vec<UserProfileFileWithType>
 }
 
 // --- Update Tauri Commands to Aggregate Data ---
@@ -153,7 +191,7 @@ pub fn get_sync_status() -> SyncStatusResponse {
 }
 
 #[tauri::command]
-pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
+pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivityResponse {
     let p_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
     let pub_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
     let limit = limit.unwrap_or(100);
@@ -163,16 +201,32 @@ pub fn get_sync_activity(limit: Option<usize>) -> SyncActivityResponse {
         .chain(pub_state.recent_items.iter())
         .cloned()
         .collect();
+    
     // Sort by timestamp (newest first)
     recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     recent.truncate(limit);
-    // Combine currently uploading items
+
+    // Get currently uploading items
     let uploading: Vec<RecentItem> = p_state.current_item.iter()
         .chain(pub_state.current_item.iter())
         .cloned()
         .collect();
-    println!("[get_sync_activity] len: {}",recent.len());
-    SyncActivityResponse { recent, uploading }
+
+    // Convert to unified format with account_id as owner
+    let recent_unified = recent.iter()
+        .map(|item| item.to_user_profile_file(&account_id))
+        .collect();
+        
+    let uploading_unified = uploading.iter()
+        .map(|item| item.to_user_profile_file(&account_id))
+        .collect();
+    println!("[get_sync_activity] Found {} recent items, {} uploading for account {}", 
+        recent.len(), uploading.len(), account_id);
+        
+    SyncActivityResponse { 
+        recent: recent_unified,
+        uploading: uploading_unified 
+    }
 }
 
 pub fn reset_all_sync_state() {
@@ -380,8 +434,37 @@ pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<V
 
     println!("[ListBucket] Listing contents for bucket: s3://{}", bucket_name);
 
-    let output = Command::new("aws")
+    // Dynamically get the AWS binary path
+    let aws_binary_path = match get_aws_binary_path().await {
+        Ok(path) => {
+            println!("[ListBucket] Found AWS binary at: {}", path.display());
+            path
+        }
+        Err(e) => {
+            eprintln!("[ListBucket] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            // Fall back to checking system PATH with which crate
+            if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                println!("[ListBucket] Found AWS in system PATH at: {}", path.display());
+                path
+            } else {
+                eprintln!("[ListBucket] AWS CLI not found in system PATH or custom location");
+                return Err("AWS CLI not found".to_string());
+            }
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let output = Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
+        .env("PATH", &dynamic_path)
         .arg("s3")
         .arg("ls")
         .arg(format!("s3://{}/", bucket_name))

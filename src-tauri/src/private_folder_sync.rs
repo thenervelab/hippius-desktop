@@ -8,7 +8,7 @@ use base64::{encode};
 use std::sync::atomic::Ordering;
 use std::thread;
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, RecentItem, BucketItem, insert_bucket_item_if_absent, bucket_item_from_local, delete_bucket_item_by_name, list_bucket_contents, reconcile_bucket_root};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
@@ -20,6 +20,8 @@ use tauri::{Emitter, Manager};
 use sqlx::SqlitePool;
 use crate::DB_POOL;
 use chrono;
+use std::env;
+use crate::commands::node::get_aws_binary_path;
 
 pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String, seed_phrase: String) {
     {
@@ -35,10 +37,39 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
     let endpoint_url = "https://s3.hippius.com";
     let encoded_seed_phrase = encode(&seed_phrase);
 
-    // --- Bucket creation and preflight checks (No changes needed here) ---
+    // Dynamically get the AWS binary path
+    let aws_binary_path = match get_aws_binary_path().await {
+        Ok(path) => {
+            println!("[PrivateFolderSync] Found AWS binary at: {}", path.display());
+            path
+        }
+        Err(e) => {
+            eprintln!("[PrivateFolderSync] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            // Fall back to checking system PATH with which crate
+            if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                println!("[PrivateFolderSync] Found AWS in system PATH at: {}", path.display());
+                path
+            } else {
+                eprintln!("[PrivateFolderSync] AWS CLI not found in system PATH or custom location");
+                return; // Exit if no AWS CLI is found
+            }
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        env::var("PATH").unwrap_or_default()
+    );
+
+    // --- Bucket creation and preflight checks ---
     println!("[PrivateFolderSync] Ensuring bucket exists: s3://{}", bucket_name);
-    let exists_output = Command::new("aws")
+    let exists_output = Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
+        .env("PATH", &dynamic_path)
         .arg("s3")
         .arg("ls")
         .arg(format!("s3://{}", bucket_name))
@@ -55,8 +86,9 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
         println!("[PrivateFolderSync] Bucket already exists, proceeding.");
     } else {
         loop {
-            let mb_output = Command::new("aws")
+            let mb_output = Command::new(&aws_binary_path)
                 .env("AWS_PAGER", "")
+                .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("mb")
                 .arg(format!("s3://{}", bucket_name))
@@ -75,8 +107,9 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
                             println!("[PrivateFolderSync] Bucket already exists (race condition), proceeding.");
                             true
                         } else {
-                            let verify = Command::new("aws")
+                            let verify = Command::new(&aws_binary_path)
                                 .env("AWS_PAGER", "")
+                                .env("PATH", &dynamic_path)
                                 .arg("s3")
                                 .arg("ls")
                                 .arg(format!("s3://{}", bucket_name))
@@ -99,8 +132,9 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
                 }
                 Err(e) => {
                     eprintln!("[PrivateFolderSync] Failed to execute 'aws s3 mb' command (will retry in 30s): {}", e);
-                    let verify = Command::new("aws")
+                    let verify = Command::new(&aws_binary_path)
                         .env("AWS_PAGER", "")
+                        .env("PATH", &dynamic_path)
                         .arg("s3")
                         .arg("ls")
                         .arg(format!("s3://{}", bucket_name))
@@ -120,8 +154,9 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
         }
     }
 
-    match Command::new("aws")
+    match Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
+        .env("PATH", &dynamic_path)
         .arg("s3")
         .arg("ls")
         .arg(format!("s3://{}", bucket_name))
@@ -162,8 +197,9 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
         let s3_destination = format!("s3://{}/", bucket_name);
 
         println!("[PrivateFolderSync] Starting dry run to calculate changes...");
-        let dry_run_output = Command::new("aws")
+        let dry_run_output = Command::new(&aws_binary_path)
             .env("AWS_PAGER", "")
+            .env("PATH", &dynamic_path)
             .arg("s3")
             .arg("sync")
             .arg(&sync_path)
@@ -213,8 +249,9 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
             state.current_item = None;
         }
 
-        let mut child = Command::new("aws")
+        let mut child = Command::new(&aws_binary_path)
             .env("AWS_PAGER", "")
+            .env("PATH", &dynamic_path)
             .arg("s3")
             .arg("sync")
             .arg(&sync_path)
@@ -253,7 +290,6 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
                             }
                             state.current_item = Some(item.clone());
                             
-                            // Only add to recent items if scope is private and action is uploaded
                             if item.scope == "private" && item.action == "uploaded" {
                                 if !state.recent_items.iter().any(|i| i.path == item.path && i.action == item.action) {
                                     state.recent_items.push_front(item.clone());
@@ -282,14 +318,12 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
                                             };
 
                                             tauri::async_runtime::spawn(async move {
-                                                // Insert into bucket items
                                                 if let Err(e) = insert_bucket_item_if_absent(&pool, &owner, "private", &bucket_item).await {
                                                     eprintln!("[PrivateFolderSync] Failed to insert bucket item '{}': {}", name, e);
                                                 }
                                                 
-                                                // Also insert into file_paths table for non-folder items
                                                 if !is_folder {
-                                                    let file_hash = ""; // You might want to compute this
+                                                    let file_hash = ""; // Compute if needed
                                                     if let Err(e) = sqlx::query(
                                                         "INSERT OR REPLACE INTO file_paths (file_name, file_hash, timestamp, path) VALUES (?, ?, ?, ?)"
                                                     )
