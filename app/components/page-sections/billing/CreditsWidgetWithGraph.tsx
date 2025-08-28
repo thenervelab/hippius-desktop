@@ -11,9 +11,8 @@ import TimeAgo from "react-timeago";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import CreditsTrends from "./credits-trends";
 import useCredits from "@/app/lib/hooks/api/useCredits";
-import useBalance from "@/app/lib/hooks/api/useBalance";
-import { Account } from "@/app/lib/types";
 import { openLinkByKey } from "@/app/lib/utils/links";
+import { toast } from "sonner";
 
 interface CreditsWidgetWithGraphProps {
   className?: string;
@@ -31,64 +30,24 @@ const CreditsWidgetWithGraph: FC<CreditsWidgetWithGraphProps> = ({
   } = useUserCredits();
 
   // Use the new hooks for credits and balance
-  const { data: creditsData, isLoading: isCreditsLoading } = useCredits();
-
-  const { data: balanceData, isLoading: isBalanceLoading } = useBalance();
+  const { data: creditsDaily, isLoading: isCreditsLoading } = useCredits();
 
   // Combine the data into a format that the chart expects
   const chartData = useMemo(() => {
-    if (!creditsData?.length && !balanceData) return [];
-
-    // Create arrays of data points for each type
-    const creditPoints =
-      creditsData?.map((credit) => ({
-        timestamp: credit.date,
-        date: new Date(credit.date),
-        type: "credit",
-        value: credit.amount,
-      })) || [];
-
-    const balancePoints = balanceData
-      ? [
-          {
-            timestamp: balanceData.timestamp,
-            date: new Date(balanceData.timestamp),
-            type: "balance",
-            value: balanceData.totalBalance,
-          },
-        ]
-      : [];
-
-    // Combine and sort all data points chronologically
-    const allPoints = [...creditPoints, ...balancePoints].sort(
-      (a, b) => a.date.getTime() - b.date.getTime()
-    );
-
-    // Process the data points with carry-forward logic
-    const result: Account[] = [];
-    let currentBalance = "0";
-    let currentCredit = "0";
-
-    allPoints.forEach((point) => {
-      // Update the respective current value
-      if (point.type === "credit") {
-        currentCredit = point.value;
-      } else {
-        currentBalance = point.value;
-      }
-
-      // Add the data point with both current values
-      result.push({
-        processed_timestamp: point.timestamp,
-        credit: currentCredit,
-        total_balance: currentBalance,
-      });
+    const rows = creditsDaily ?? [];
+    return rows.map((r) => {
+      toast.success(
+        `Credits ${r.amount} ${r.date} processed successfully. ${rows.length}`
+      );
+      return {
+        processed_timestamp: r.date,
+        credit: r.amount,
+        total_balance: "0",
+      };
     });
+  }, [creditsDaily]);
 
-    return result;
-  }, [creditsData, balanceData]);
-
-  const isChartDataLoading = isCreditsLoading || isBalanceLoading;
+  const isChartDataLoading = isCreditsLoading;
 
   const handleOpenConsoleBillingPage = () => openLinkByKey("BILLING");
   const handleOpenConsoleCreditsPage = () => openLinkByKey("CREDITS");
