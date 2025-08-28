@@ -10,8 +10,15 @@
         {
             "identifier": "opener:allow-open-path",
             "allow": [{
-                "path": "/**/*"
-            }]
+                "path": "/**/*",
+                "recursive": true
+            }],
+            "options": {
+                "ask": {
+                    "message": "Hippius App would like to open your files syncing folder",
+                    "title": "Allow folder access"
+                }
+            }
         },
         {
             "identifier": "fs:allow-exists",
