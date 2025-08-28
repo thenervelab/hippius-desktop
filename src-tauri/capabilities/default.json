@@ -8,6 +8,19 @@
         "opener:default",
         "fs:default",
         {
+            "identifier": "opener:allow-open-path",
+            "allow": [{
+                "path": "/**/*",
+                "recursive": true
+            }],
+            "options": {
+                "ask": {
+                    "message": "Hippius App would like to open your syncing files folder",
+                    "title": "Allow folder access"
+                }
+            }
+        },
+        {
             "identifier": "fs:allow-exists",
             "allow": [{
                 "path": "$APPLOCALDATA/hippius-desktop.db"
