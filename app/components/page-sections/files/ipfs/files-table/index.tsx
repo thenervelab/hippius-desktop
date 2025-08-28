@@ -326,12 +326,10 @@ const FilesTable: FC<FilesTableProps> = memo(({
       cell: (cell) => {
         const value = cell.getValue();
         if (cell.row.original.tempData) return "...";
-        if (value === undefined) return "Unknown";
+        if (value === undefined || value === 0) return "Unknown";
         return (
           <div className="text-grey-20 text-base font-medium">
-            {cell.row.original.isAssigned
-              ? formatBytesFromBigInt(BigInt(value))
-              : "Unknown"}
+            {formatBytesFromBigInt(BigInt(value))}
           </div>
         );
       }
