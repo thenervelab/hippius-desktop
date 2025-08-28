@@ -38,7 +38,6 @@ interface FilesContentProps {
     isRecentFiles?: boolean;
     isLoading: boolean;
     isFetching: boolean;
-    isProcessingTimestamps: boolean;
     filteredData: Array<FormattedUserIpfsFile & { timestamp?: Date | null }>;
     displayedData: Array<FormattedUserIpfsFile & { timestamp?: Date | null }>;
     searchTerm: string;
@@ -70,7 +69,6 @@ const FilesContent: FC<FilesContentProps> = ({
     isRecentFiles = false,
     isLoading,
     isFetching,
-    isProcessingTimestamps,
     filteredData,
     displayedData,
     searchTerm,
@@ -248,7 +246,7 @@ const FilesContent: FC<FilesContentProps> = ({
     };
 
     const renderContent = () => {
-        if (isLoading || isFetching || isProcessingTimestamps) {
+        if (isLoading || isFetching) {
             return <WaitAMoment isRecentFiles={isRecentFiles} />;
         }
 
