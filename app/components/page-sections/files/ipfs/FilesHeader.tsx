@@ -10,6 +10,8 @@ import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
 import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
+import { toast } from "sonner";
+import { useLocalStorage } from "@/lib/hooks/useLocalStorage";
 import { openPath } from '@tauri-apps/plugin-opener';
 
 
@@ -55,6 +57,10 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   syncFolderPath,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  const [syncFolderPermissionGranted, setSyncFolderPermissionGranted] = useLocalStorage(
+    'hippius-sync-folder-permission',
+    false
+  );
   const router = useRouter();
   const { navigateToFilesView } = useFilesNavigation();
 
@@ -64,13 +70,28 @@ const FilesHeader: FC<FilesHeaderProps> = ({
     router.push('/files');
   };
 
-  // New: open active sync folder
   const handleOpenSyncFolder = async () => {
     try {
-      if (!syncFolderPath) return;
+      if (!syncFolderPath) {
+        toast.error("Sync folder not configured");
+        return;
+      }
+
       await openPath(syncFolderPath);
+
+      if (!syncFolderPermissionGranted) {
+        setSyncFolderPermissionGranted(true);
+      }
     } catch (e) {
       console.error("Failed to open sync folder:", e);
+
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      if (errorMessage.includes("permission") || errorMessage.includes("denied")) {
+        toast.error("Permission to open folders was denied. Please try again and allow folder access.");
+        setSyncFolderPermissionGranted(false);
+      } else {
+        toast.error(`Failed to open folder: ${errorMessage}`);
+      }
     }
   };
 
@@ -168,7 +189,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             onClick={handleOpenSyncFolder}
             disabled={!syncFolderPath}
             className="flex items-center justify-between gap-1 h-9 px-2 py-2 bg-grey-100 text-sm font-meidum text-grey-10 border border-grey-80 rounded disabled:opacity-50 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
-            title={syncFolderPath ? syncFolderPath : "Sync folder not configured"}
+            title={syncFolderPath || "Sync folder not configured"}
           >
             <Icons.Folder className="size-4" />
             <span className="ml-1">Open Sync Folder</span>

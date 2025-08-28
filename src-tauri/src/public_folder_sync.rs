@@ -9,7 +9,7 @@ use tokio::time::sleep;
 use base64::{encode};
 use std::sync::atomic::Ordering;
 use std::thread;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
@@ -21,6 +21,8 @@ use serde_json::json;
 use tauri::Emitter;
 use crate::DB_POOL;
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE, RecentItem, BucketItem};
+use std::env;
+use crate::commands::node::get_aws_binary_path;
 
 pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String, seed_phrase: String) {
     {
@@ -36,9 +38,38 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
     let endpoint_url = "https://s3.hippius.com";
     let encoded_seed_phrase = encode(&seed_phrase);
 
+    // Dynamically get the AWS binary path
+    let aws_binary_path = match get_aws_binary_path().await {
+        Ok(path) => {
+            println!("[PublicFolderSync] Found AWS binary at: {}", path.display());
+            path
+        }
+        Err(e) => {
+            eprintln!("[PublicFolderSync] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            // Fall back to checking system PATH with which crate
+            if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                println!("[PublicFolderSync] Found AWS in system PATH at: {}", path.display());
+                path
+            } else {
+                eprintln!("[PublicFolderSync] AWS CLI not found in system PATH or custom location");
+                return; // Exit if no AWS CLI is found
+            }
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        env::var("PATH").unwrap_or_default()
+    );
+
     println!("[PublicFolderSync] Ensuring bucket exists: s3://{}", bucket_name);
-    let exists_output = Command::new("aws")
+    let exists_output = Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
+        .env("PATH", &dynamic_path)
         .arg("s3")
         .arg("ls")
         .arg(format!("s3://{}", bucket_name))
@@ -55,8 +86,9 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         println!("[PublicFolderSync] Bucket already exists, proceeding.");
     } else {
         loop {
-            let mb_output = Command::new("aws")
+            let mb_output = Command::new(&aws_binary_path)
                 .env("AWS_PAGER", "")
+                .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("mb")
                 .arg(format!("s3://{}", bucket_name))
@@ -75,8 +107,9 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                             println!("[PublicFolderSync] Bucket already exists (race condition), proceeding.");
                             true
                         } else {
-                            let verify = Command::new("aws")
+                            let verify = Command::new(&aws_binary_path)
                                 .env("AWS_PAGER", "")
+                                .env("PATH", &dynamic_path)
                                 .arg("s3")
                                 .arg("ls")
                                 .arg(format!("s3://{}", bucket_name))
@@ -99,8 +132,9 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                 }
                 Err(e) => {
                     eprintln!("[PublicFolderSync] Failed to execute 'aws s3 mb' command (will retry in 30s): {}", e);
-                    let verify = Command::new("aws")
+                    let verify = Command::new(&aws_binary_path)
                         .env("AWS_PAGER", "")
+                        .env("PATH", &dynamic_path)
                         .arg("s3")
                         .arg("ls")
                         .arg(format!("s3://{}", bucket_name))
@@ -135,8 +169,9 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         bucket = bucket_name
     );
 
-    match Command::new("aws")
+    match Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
+        .env("PATH", &dynamic_path)
         .arg("s3api")
         .arg("put-bucket-policy")
         .arg("--bucket")
@@ -158,8 +193,9 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         }
     }
 
-    match Command::new("aws")
+    match Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
+        .env("PATH", &dynamic_path)
         .arg("s3")
         .arg("ls")
         .arg(format!("s3://{}", bucket_name))
@@ -200,7 +236,9 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         println!("[PublicFolderSync] Starting dry run to calculate changes...");
         let s3_destination = format!("s3://{}/", bucket_name);
 
-        let dry_run_output = Command::new("aws")
+        let dry_run_output = Command::new(&aws_binary_path)
+            .env("AWS_PAGER", "")
+            .env("PATH", &dynamic_path)
             .arg("s3")
             .arg("sync")
             .arg(&sync_path)
@@ -251,7 +289,9 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             state.total_files = total_changes;
         }
 
-        let mut child = Command::new("aws")
+        let mut child = Command::new(&aws_binary_path)
+            .env("AWS_PAGER", "")
+            .env("PATH", &dynamic_path)
             .arg("s3")
             .arg("sync")
             .arg(&sync_path)
@@ -292,7 +332,6 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                             }
                             state.current_item = Some(item.clone());
                             
-                            // Only add to recent items if scope is public and action is uploaded
                             if item.scope == "public" && item.action == "uploaded" {
                                 if !state.recent_items.iter().any(|i| i.path == item.path && i.action == item.action) {
                                     state.recent_items.push_front(item.clone());
@@ -321,12 +360,10 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                                             };
 
                                             tauri::async_runtime::spawn(async move {
-                                                // Insert into bucket items
                                                 if let Err(e) = insert_bucket_item_if_absent(&pool, &owner, "public", &bucket_item).await {
                                                     eprintln!("[PublicFolderSync] Failed to insert bucket item '{}': {}", name, e);
                                                 }
                                                 
-                                                // Also insert into file_paths table for non-folder items
                                                 if !is_folder {
                                                     let file_hash = ""; // You might want to compute this
                                                     if let Err(e) = sqlx::query(
@@ -399,7 +436,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                     { break std::process::ExitStatus::from_raw(1); }
                     #[cfg(windows)]
                     { break std::process::ExitStatus::from_raw(1); }
-                    }
+                }
             }
         };
 
