@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserIpfsFile, parseMinerIds } from "@/lib/hooks/use-user-ipfs-files";
@@ -7,7 +6,7 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useRef } from "react";
 
 // Match the structure from get_user_synced_files
-type UserProfileFile = {
+export type UserProfileFile = {
     fileName: string;
     fileSizeInBytes: number;
     lastChargedAt: number;
@@ -23,7 +22,7 @@ type UserProfileFile = {
 };
 
 // Use the same response structure as useUserIpfsFiles
-type RecentFilesResponse = {
+export type RecentFilesResponse = {
     recent?: UserProfileFile[];
     uploading?: UserProfileFile[];
 };

@@ -57,7 +57,7 @@ export default function useMarketplaceCredits(
 ): UseQueryResult<MarketplaceCreditObject[], Error> {
   const { polkadotAddress } = useWalletAuth();
   const page = params?.page || 1;
-  const limit = params?.limit || 10;
+  const limit = params?.limit || 100000;
 
   return useQuery<MarketplaceCreditsResponse, Error, MarketplaceCreditObject[]>(
     {
@@ -67,7 +67,7 @@ export default function useMarketplaceCredits(
           throw new Error("No wallet address available");
         }
 
-        const url = `${API_BASE_URL}/marketplace/credit?account_id=${polkadotAddress}`;
+        const url = `${API_BASE_URL}/marketplace/credit?account_id=${polkadotAddress}&limit=${limit}&page=${page}`;
 
         const response = await fetch(url, {
           headers: {
@@ -84,15 +84,17 @@ export default function useMarketplaceCredits(
         return (await response.json()) as MarketplaceCreditsResponse;
       },
       select: (data) => {
-        return data.events.map((event) => ({
-          blockNumber: event.block_number,
-          eventIndex: event.event_index,
-          eventName: event.event_name,
-          amount: event.credits_amount,
-          accountId: event.account_id,
-          transactionType: event.transaction_type || null,
-          date: event.processed_timestamp,
-        }));
+        return data.events
+          .filter((event) => event.event_name === "CreditsConsumed")
+          .map((event) => ({
+            blockNumber: event.block_number,
+            eventIndex: event.event_index,
+            eventName: event.event_name,
+            amount: event.credits_amount,
+            accountId: event.account_id,
+            transactionType: event.transaction_type || null,
+            date: event.processed_timestamp,
+          }));
       },
       placeholderData: keepPreviousData,
       enabled: !!polkadotAddress,

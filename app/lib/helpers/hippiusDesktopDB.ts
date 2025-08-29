@@ -28,7 +28,11 @@ const TABLE_SCHEMA = `
     id INTEGER PRIMARY KEY,
     mnemonic TEXT,
     logoutTimeStamp INTEGER,
-    logoutTimeInMinutes INTEGER DEFAULT 1440
+    logoutTimeInMinutes INTEGER DEFAULT 1440,
+    authToken TEXT,
+    tokenExpiry INTEGER,
+    userId INTEGER,
+    username TEXT
   );
 `;
 
@@ -98,6 +102,35 @@ async function createSchema(db: initSqlJsType.Database) {
   }
 }
 
+// Safe migration for existing DBs: ensure new session columns exist
+export async function ensureSessionAuthColumns(): Promise<boolean> {
+  try {
+    const db = await initHippiusDesktopDB();
+    const info = db.exec("PRAGMA table_info('session')");
+    const cols =
+      info.length && info[0]?.values?.length
+        ? new Set(info[0].values.map((r) => String(r[1])))
+        : new Set<string>();
+
+    const missing: string[] = [];
+    if (!cols.has("authToken")) missing.push("authToken TEXT");
+    if (!cols.has("tokenExpiry")) missing.push("tokenExpiry INTEGER");
+    if (!cols.has("userId")) missing.push("userId INTEGER");
+    if (!cols.has("username")) missing.push("username TEXT");
+
+    if (missing.length) {
+      for (const def of missing) {
+        db.run(`ALTER TABLE session ADD COLUMN ${def}`);
+      }
+      await saveBytes(db.export());
+    }
+    return true;
+  } catch (err) {
+    console.error("Failed to ensure session auth columns:", err);
+    return false;
+  }
+}
+
 /** Single entry point that returns the shared DB instance. */
 export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
   const store = getDefaultStore();
@@ -133,6 +166,26 @@ export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='wallet'"
       );
 
+      // Ensure auth columns on session for both fresh and existing DBs
+      try {
+        const info = db.exec("PRAGMA table_info('session')");
+        const cols =
+          info.length && info[0]?.values?.length
+            ? new Set(info[0].values.map((r) => String(r[1])))
+            : new Set<string>();
+        const toAdd: string[] = [];
+        if (!cols.has("authToken")) toAdd.push("authToken TEXT");
+        if (!cols.has("tokenExpiry")) toAdd.push("tokenExpiry INTEGER");
+        if (!cols.has("userId")) toAdd.push("userId INTEGER");
+        if (!cols.has("username")) toAdd.push("username TEXT");
+        if (toAdd.length) {
+          for (const def of toAdd) db.run(`ALTER TABLE session ADD COLUMN ${def}`);
+          await saveBytes(db.export());
+        }
+      } catch (e) {
+        console.error("Failed to ensure auth columns:", e);
+      }
+
       store.set(hippiusDbAtom, db);
       return db;
     })();
@@ -167,6 +220,10 @@ export async function ensureWalletTable(): Promise<boolean> {
       await createSchema(db);
       await saveBytes(db.export());
     }
+
+    // Ensure auth-related columns exist on session for existing DBs
+    await ensureSessionAuthColumns();
+
     return true;
   } catch (err) {
     console.error("Failed to ensure schema:", err);
