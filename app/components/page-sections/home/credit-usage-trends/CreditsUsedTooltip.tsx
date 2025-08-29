@@ -21,7 +21,7 @@ const CreditUsedTooltip: React.FC<{
   }
 
   // Format the balance with number formatting
-  const formattedBalance = datum.balance.toFixed(10) || "0.00";
+  const formattedBalance = datum.balance.toFixed(6) || "0.00";
 
   return (
     <div>

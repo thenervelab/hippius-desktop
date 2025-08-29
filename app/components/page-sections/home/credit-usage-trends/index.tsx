@@ -22,7 +22,7 @@ import {
   MONTHS,
 } from "@/app/lib/utils/getXlablesForAccounts";
 import CreditUsedTooltip from "./CreditsUsedTooltip";
-import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
+import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
 
 // === Time‐Range Options ===
 const timeRangeOptions: Option[] = [
@@ -51,49 +51,28 @@ const CreditUsageTrends: React.FC<{
     if (!chartData || chartData.length === 0) {
       return [];
     }
+
     return formatAccountsForChartByRange(
       chartData,
       timeRange as "week" | "month" | "lastMonth" | "quarter" | "year" // Add lastMonth to type
     );
   }, [chartData, timeRange]);
-
-  // Calculate total credits used
+  // toast.success(`formatted chart data : ${JSON.stringify(chartData)}`, {
+  //   duration: 400000000000000,
+  // });
+  // Calculate total credits used based on the selected time range
   const totalCreditsUsed = useMemo(() => {
-    if (!chartData || chartData.length === 0) return "0";
-
-    // Sum up the total_balance from all account data
-    const total = chartData.reduce((sum, account) => {
-      // Extract just the numeric part - need to convert from string to BigInt since these are large numbers
-      const balance = BigInt(account.total_balance);
-      // Accumulate the balance
-      // Using BigInt to handle large numbers accurately
-      return sum + balance;
-    }, BigInt(0));
+    if (!formattedChartData || formattedChartData.length === 0) return "0";
+    // toast.success(`formatted chart data : ${JSON.stringify(formattedChartData)}`, {
+    //   duration: 400000000000000,
+    // });
+    // Sum up the balance values from the formatted data (already filtered by time range)
+    const total = formattedChartData.reduce((sum, point) => {
+      return sum + +(point.balance || 0);
+    }, 0);
     // Format to a readable number with commas
-    return formatBalance(total.toString());
-  }, [chartData]);
-
-  // Create “nice” Y ticks that always start at 0
-  function getNiceTicksAlways(min: number, max: number, tickCount = 5) {
-    min = 0;
-    if (max === 0 || Math.abs(max - min) < 1e-6) {
-      max = min + 0.0001;
-    }
-    const rawStep = (max - min) / (tickCount - 1);
-    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
-    let niceStep = magnitude;
-    if (rawStep / niceStep > 5) niceStep *= 5;
-    else if (rawStep / niceStep > 2) niceStep *= 2;
-
-    const lastTick = Math.ceil(max / niceStep) * niceStep;
-    const nTicks = Math.round((lastTick - min) / niceStep) + 1;
-
-    return Array.from(
-      { length: nTicks },
-      (_, i) => +(min + i * niceStep).toFixed(6)
-    );
-  }
-
+    return total.toFixed(6);
+  }, [formattedChartData]);
   // Compute Y‐ticks
   const yTicks = useMemo(() => {
     if (!formattedChartData.length) return [0, 1];

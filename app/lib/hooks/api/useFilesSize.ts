@@ -45,7 +45,7 @@ export default function useFiles(
 ): UseQueryResult<FileObject[], Error> {
   const { polkadotAddress } = useWalletAuth();
   const page = params?.page || 1;
-  const limit = params?.limit || 10;
+  const limit = params?.limit || 100000;
 
   return useQuery<FilesResponse, Error, FileObject[]>({
     queryKey: ["files", polkadotAddress, page, limit],
