@@ -1,9 +1,8 @@
 "use client";
 
 import { FC, useEffect, useRef, useMemo, useState, useCallback } from "react";
-import useUserIpfsFiles, {
-  FormattedUserIpfsFile
-} from "@/lib/hooks/use-user-ipfs-files";
+import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
+import useRecentFiles from "@/lib/hooks/use-recent-files";
 import { WaitAMoment } from "@/components/ui";
 import SyncFolderSelector from "./SyncFolderSelector";
 import {
@@ -21,8 +20,6 @@ import {
   generateActiveFilters,
   ActiveFilter
 } from "@/lib/utils/fileFilterUtils";
-import { usePolkadotApi } from "@/lib/polkadot-api-context";
-import { enrichFilesWithTimestamps } from "@/lib/utils/blockTimestampUtils";
 import { toast } from "sonner";
 import FilesHeader from "./FilesHeader";
 import FilesContent from "./FilesContent";
@@ -32,28 +29,38 @@ import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userP
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
-  const { api } = usePolkadotApi();
   const { polkadotAddress, mnemonic } = useWalletAuth();
   const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
   const isPrivateView = activeSubMenuItem === "Private";
 
+  // Regular files hook
   const {
-    data,
-    isLoading,
+    data: regularFilesData,
+    isLoading: isRegularFilesLoading,
     refetch: refetchUserFiles,
     isRefetching,
-    isFetching,
+    isFetching: isRegularFilesFetching,
     error
   } = useUserIpfsFiles();
+
+  // Recent files hook
+  const {
+    data: recentFilesData,
+    isLoading: isRecentFilesLoading,
+    isFetching: isRecentFilesFetching,
+    refetch: refetchRecentFiles
+  } = useRecentFiles();
+
+  // Set loading and fetching based on current view
+  const isLoading = isRecentFiles ? isRecentFilesLoading : isRegularFilesLoading;
+  const isFetching = isRecentFiles ? isRecentFilesFetching : isRegularFilesFetching;
 
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [shouldResetPagination, setShouldResetPagination] = useState(false);
-  const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] =
-    useState("");
+  const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState("");
   const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState("");
-
 
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -70,47 +77,52 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
   const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
 
-  const [filesWithTimestamps, setFilesWithTimestamps] = useState<
-    Array<FormattedUserIpfsFile & { timestamp?: Date | null }>
-  >([]);
-  const [isProcessingTimestamps, setIsProcessingTimestamps] = useState(false);
-
   // State to track if sync folder is configured
-  const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<
-    boolean | null
-  >(null);
+  const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<boolean | null>(null);
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
 
-  const allFilteredData = useMemo(() => {
-    if (data?.files) {
-      let filtered = data.files.filter((file) => !file.deleted);
-
-      if (
-        activeSubMenuItem &&
-        (activeSubMenuItem === "Private" || activeSubMenuItem === "Public")
-      ) {
-        filtered = filtered.filter((file) => {
-          const fileType = file.type?.toLowerCase() || "";
-          return fileType === activeSubMenuItem.toLowerCase();
-        });
-      }
-
-      return filtered;
+  // Get the appropriate data based on view mode
+  const allData = useMemo(() => {
+    if (isRecentFiles) {
+      console.log("recentFilesData", recentFilesData)
+      return recentFilesData || [];
+    } else if (regularFilesData?.files) {
+      return regularFilesData.files.filter(file => !file.deleted);
     }
     return [];
-  }, [data?.files, activeSubMenuItem]);
+  }, [isRecentFiles, recentFilesData, regularFilesData?.files]);
 
-  // Extract unpinned file details from data
+  // Filter data based on current view (public/private)
+  const allFilteredData = useMemo(() => {
+    if (isRecentFiles) {
+      return allData;
+    }
+
+    let filtered = allData;
+    if (
+      activeSubMenuItem &&
+      (activeSubMenuItem === "Private" || activeSubMenuItem === "Public")
+    ) {
+      filtered = filtered.filter((file) => {
+        const fileType = file.type?.toLowerCase() || "";
+        return fileType === activeSubMenuItem.toLowerCase();
+      });
+    }
+
+    return filtered;
+  }, [allData, activeSubMenuItem, isRecentFiles]);
+
+  // Extract unpinned file details from data (only for regular files view)
   const unpinnedFileDetails = useMemo(() => {
-    if (!data?.files) return [];
+    if (isRecentFiles || !regularFilesData?.files) return [];
 
-    const filteredUnpinnedFiles = data.files.filter((file) => !file.isAssigned);
+    const filteredUnpinnedFiles = regularFilesData.files.filter((file) => !file.isAssigned);
     return filteredUnpinnedFiles.map((file) => ({
       filename: file.name || "Unnamed File",
       cid: decodeHexCid(file.cid),
       createdAt: file.createdAt
     }));
-  }, [data?.files]);
+  }, [regularFilesData?.files, isRecentFiles]);
 
   // Update unpinned files state when unpinned file details change
   useEffect(() => {
@@ -123,50 +135,23 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     }
   }, [unpinnedFileDetails]);
 
-  // Enrich files with timestamps when allFilteredData or api changes
-  useEffect(() => {
-    const enrichFiles = async () => {
-      if (allFilteredData.length && api) {
-        setIsProcessingTimestamps(true);
-        try {
-          const enriched = await enrichFilesWithTimestamps(
-            api,
-            allFilteredData
-          );
-          setFilesWithTimestamps(
-            enriched as Array<
-              FormattedUserIpfsFile & { timestamp?: Date | null }
-            >
-          );
-        } catch (error) {
-          console.error("Error enriching files with timestamps:", error);
-        } finally {
-          setIsProcessingTimestamps(false);
-        }
-      } else {
-        setFilesWithTimestamps([]);
-        setIsProcessingTimestamps(false);
-      }
-    };
-
-    enrichFiles();
-  }, [allFilteredData, api]);
-
+  // Filter data based on search and filter settings
   const filteredData = useMemo(() => {
-    return filterFiles(filesWithTimestamps, {
+    return filterFiles(allFilteredData, {
       searchTerm,
       fileTypes: selectedFileTypes,
       dateFilter: selectedDate,
       fileSize: selectedFileSize
     });
   }, [
-    filesWithTimestamps,
+    allFilteredData,
     searchTerm,
     selectedFileTypes,
     selectedDate,
     selectedFileSize
   ]);
 
+  // Update active filters when filter settings change
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
       selectedFileTypes,
@@ -176,6 +161,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     setActiveFilters(newActiveFilters);
   }, [selectedFileTypes, selectedDate, selectedFileSize]);
 
+  // Reset pagination when filters change
   useEffect(() => {
     setShouldResetPagination(true);
   }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
@@ -222,16 +208,18 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
 
   // Format storage size with proper units based on view type
   const formattedStorageSize = useMemo(() => {
-    if (!data) return "0 B";
+    if (isRecentFiles) return "";
 
-    if (isPrivateView && data.privateStorageSize !== undefined) {
-      return formatBytesFromBigInt(data.privateStorageSize);
-    } else if (!isPrivateView && data.publicStorageSize !== undefined) {
-      return formatBytesFromBigInt(data.publicStorageSize);
+    if (!regularFilesData) return "0 B";
+
+    if (isPrivateView && regularFilesData.privateStorageSize !== undefined) {
+      return formatBytesFromBigInt(regularFilesData.privateStorageSize);
+    } else if (!isPrivateView && regularFilesData.publicStorageSize !== undefined) {
+      return formatBytesFromBigInt(regularFilesData.publicStorageSize);
     } else {
       return "0 B";
     }
-  }, [data, isPrivateView]);
+  }, [regularFilesData, isPrivateView, isRecentFiles]);
 
   // Handle resetting filters
   const handleResetFilters = useCallback(() => {
@@ -246,29 +234,36 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     setSearchTerm(value);
   }, []);
 
+  // Load public sync path
   useEffect(() => {
     (async () => {
       try {
         const publicfolderPath = await getPublicSyncPath();
         setSelectedPublicFolderPath(publicfolderPath);
       } catch {
-        console.error("Failed to load sync folder");
+        console.error("Failed to load public sync folder");
       }
     })();
-  }, [isPrivateView]);
+  }, []);
 
+  // Load private sync path
   useEffect(() => {
     (async () => {
       try {
         const privatefolderPath = await getPrivateSyncPath();
         setSelectedPrivateFolderPath(privatefolderPath);
       } catch {
-        console.error("Failed to load sync folder");
+        console.error("Failed to load private sync folder");
       }
     })();
-  }, [isPrivateView]);
+  }, []);
 
+  // Check if sync path is configured
   useEffect(() => {
+    if (isRecentFiles) {
+      setIsCheckingSyncPath(false);
+      return;
+    }
 
     const checkSyncPath = async () => {
       try {
@@ -290,9 +285,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     };
 
     checkSyncPath();
-  }, [isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath]);
-
-
+  }, [isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath, isRecentFiles]);
 
   // Handle folder selection from SyncFolderSelector
   const handleFolderSelected = useCallback(
@@ -332,22 +325,18 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         );
       }
     },
-    [refetchUserFiles, isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath]
+    [refetchUserFiles, isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath, polkadotAddress, mnemonic]
   );
 
-  // Load the table once on mount and set up interval refresh
+  // Load data on mount and set up interval refresh
   useEffect(() => {
-    // Initial fetch
+    if (isRecentFiles) {
+      return;
+    }
+
     refetchUserFiles();
 
-    // Set up an interval to periodically refetch data
-    const intervalId = setInterval(() => {
-      refetchUserFiles();
-    }, 300000); // Every 5 minutes
-
-    // Clean up interval on unmount
-    return () => clearInterval(intervalId);
-  }, [refetchUserFiles]);
+  }, [refetchUserFiles, isRecentFiles]);
 
   // Log error for debugging
   useEffect(() => {
@@ -356,10 +345,12 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     }
   }, [error]);
 
+  // Get displayed data based on view type
   const displayedData = useMemo(() => {
     return isRecentFiles ? filteredData.slice(0, 4) : filteredData;
   }, [filteredData, isRecentFiles]);
 
+  // Get displayed file count
   const displayedFileCount = useMemo(() => {
     if (searchTerm || activeFilters.length > 0) {
       return filteredData.length;
@@ -372,6 +363,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     activeFilters.length
   ]);
 
+  // Handle file drop events
   useEffect(() => {
     const handleFileDrop = (event: Event) => {
       const customEvent = event as CustomEvent;
@@ -389,7 +381,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       window.removeEventListener("hippius:file-drop", handleFileDrop);
     };
   }, []);
-
 
   // Load user's view mode preference on component mount
   useEffect(() => {
@@ -418,8 +409,20 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       />
     );
   } else {
-    // Compute active sync folder path
-    const syncFolderPath = isPrivateView ? selectedPrivateFolderPath : selectedPublicFolderPath;
+    // Compute active sync folder path - for recent files, prioritize private path
+    let syncFolderPath = "";
+
+    if (isRecentFiles) {
+      // For recent files, prioritize private path, then fall back to public
+      syncFolderPath = selectedPrivateFolderPath || selectedPublicFolderPath;
+    } else {
+      // For regular files view, use the path matching the current view
+      syncFolderPath = isPrivateView ? selectedPrivateFolderPath : selectedPublicFolderPath;
+    }
+
+    // Get file counts for view all button
+    const privateFileCount = regularFilesData?.files.filter(f => f.type?.toLowerCase() === "private").length || 0;
+    const publicFileCount = regularFilesData?.files.filter(f => f.type?.toLowerCase() === "public").length || 0;
 
     content = (
       <div className="w-full relative mt-6">
@@ -436,16 +439,17 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           activeFilters={activeFilters}
           handleRemoveFilter={handleRemoveFilter}
           setIsFilterOpen={setIsFilterOpen}
-          refetchUserFiles={refetchUserFiles}
+          refetchUserFiles={isRecentFiles ? refetchRecentFiles : refetchUserFiles}
           addButtonRef={addButtonRef}
           syncFolderPath={syncFolderPath}
+          privateFileCount={privateFileCount}
+          publicFileCount={publicFileCount}
         />
 
         <FilesContent
           isRecentFiles={isRecentFiles}
           isLoading={isLoading}
           isFetching={isFetching}
-          isProcessingTimestamps={isProcessingTimestamps}
           isPrivateView={isPrivateView}
           filteredData={filteredData}
           displayedData={displayedData}

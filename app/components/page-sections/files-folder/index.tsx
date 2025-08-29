@@ -446,7 +446,6 @@ export default function FolderView({
                             isRecentFiles={false}
                             isLoading={false}
                             isFetching={false}
-                            isProcessingTimestamps={false}
                             filteredData={filteredData}
                             displayedData={filteredData}
                             searchTerm={searchTerm}
