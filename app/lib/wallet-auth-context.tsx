@@ -248,7 +248,7 @@ export function WalletAuthProvider({
     await logout();
   };
 
-  useTrayInit();
+  useTrayInit(polkadotAddress || "");
 
   return (
     <WalletContext.Provider
