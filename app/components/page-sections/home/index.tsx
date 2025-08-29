@@ -11,7 +11,6 @@ import { IPFS_NODE_CONFIG } from "@/app/lib/config";
 import { useIpfsBandwidth } from "@/app/lib/hooks/api/useIpfsBandwidth";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
-import { transformFilesToStorageData } from "@/app/lib/utils/transformFiles";
 import Ipfs from "@/components/page-sections/files/ipfs";
 import { getPrivateSyncPath } from "@/app/lib/utils/syncPathUtils";
 import { Icons } from "@/components/ui";
@@ -111,9 +110,6 @@ const Home: React.FC = () => {
     marketplaceCredits || []
   );
 
-  // Transform files data to the format expected by the storage chart
-  const transformedFilesData = transformFilesToStorageData(filesData || []);
-
   useEffect(() => {
     const checkSyncPath = async () => {
       try {
@@ -148,7 +144,7 @@ const Home: React.FC = () => {
           isLoading={isLoadingCredits}
         />
         <StorageUsageTrends
-          chartData={transformedFilesData}
+          chartData={filesData || []}
           isLoading={isLoadingFiles}
         />
       </div>
