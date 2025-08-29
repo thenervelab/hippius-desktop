@@ -14,7 +14,7 @@ import {
   getWalletRecord,
   clearHippiusDesktopDB,
 } from "./helpers/hippiusDesktopDB";
-import { saveSession, getSession, clearSession } from "./helpers/sessionStore";
+import { saveSession, getSession, clearSession, clearApiAuth } from "./helpers/sessionStore";
 
 import { useRouter } from "next/navigation";
 
@@ -75,8 +75,8 @@ export function WalletAuthProvider({
       invoke("cleanup_sync");
       console.log("[WalletAuth] Sync cleanup completed");
 
-      // Clear session from database
       await clearSession();
+      await clearApiAuth();
     } catch (error) {
       console.error("Failed to cleanup sync on logout:", error);
     }

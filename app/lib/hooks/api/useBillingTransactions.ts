@@ -1,11 +1,6 @@
-import {
-    useQuery,
-    UseQueryOptions,
-    UseQueryResult,
-    keepPreviousData,
-} from "@tanstack/react-query";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { API_BASE_URL } from "@/lib/constants";
+import { useEffect, useState, useCallback } from "react";
+import { API_CONFIG, getAuthHeaders } from "@/app/lib/helpers/sessionStore";
+import { ensureBillingAuth } from "./useBillingAuth";
 
 // Define types based on the indexer API response
 export interface BillingTransferEvent {
@@ -26,60 +21,84 @@ export interface BillingTransfersResponse {
 }
 
 // Modified structure to match new column requirements
-export interface TransactionObject {
-    id: number;
+export type TransactionObject = {
+    id: string | number;
     transaction_type: string;
-    amount: string;
+    amount: number;
     transaction_date: string;
-}
+};
+
+type BillingTransaction = {
+    id: string | number;
+    payment_type: string;
+    amount: number | string;
+    created_at: string;
+};
+
+type BillingTransactionsResponse = {
+    results: BillingTransaction[];
+    count: number;
+    next: string | null;
+    previous: string | null;
+};
 
 export interface UseBillingTransfersParams {
     page?: number;
     limit?: number;
 }
 
-export default function useBillingTransactions(
-    params?: UseBillingTransfersParams,
-    options?: Omit<
-        UseQueryOptions<BillingTransfersResponse, Error, TransactionObject[]>,
-        "queryKey" | "queryFn"
-    >
-): UseQueryResult<TransactionObject[], Error> {
-    const { polkadotAddress } = useWalletAuth();
-    const page = params?.page || 1;
-    const limit = params?.limit || 10;
+export default function useBillingTransactions() {
+    const [data, setData] = useState<TransactionObject[] | null>(null);
+    const [isPending, setIsPending] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
-    return useQuery<BillingTransfersResponse, Error, TransactionObject[]>({
-        queryKey: ["billing-transfers", polkadotAddress, page, limit],
-        queryFn: async () => {
-            if (!polkadotAddress) {
-                throw new Error("No wallet address available");
+    const fetchTransactions = useCallback(async () => {
+        try {
+            setIsPending(true);
+            setError(null);
+            setData(null);
+
+            const authOk = await ensureBillingAuth();
+            if (!authOk.ok) {
+                setData([]);
+                setError(authOk.error || "Not authenticated");
+                return;
             }
 
-            const url = `${API_BASE_URL}/billing-transfers?account=${polkadotAddress}`;
-
-            const response = await fetch(url, {
-                headers: {
-                    accept: "application/json",
-                },
-            });
-
-            if (!response.ok) {
-                throw new Error(`Failed to fetch transfers: ${response.status}`);
+            const headers = await getAuthHeaders();
+            if (!headers) {
+                setData([]);
+                setError("Not authenticated");
+                return;
             }
 
-            return (await response.json()) as BillingTransfersResponse;
-        },
-        select: (data) => {
-            return data.data.map((transfer) => ({
-                id: transfer.id,
-                amount: transfer.amount,
-                transaction_date: transfer.transaction_date,
-                transaction_type: transfer.transaction_type
+            const url = `${API_CONFIG.baseUrl}${API_CONFIG.billing.transactions}`;
+            const res = await fetch(url, { method: "GET", headers });
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error(`Failed to fetch billing transactions: ${res.status} ${text}`);
+            }
+
+            const json: BillingTransactionsResponse = await res.json();
+            const mapped: TransactionObject[] = (json.results || []).map((t) => ({
+                id: t.id,
+                transaction_type: t.payment_type.toLowerCase().includes('stripe') ? 'card' : 'tao',
+                amount: typeof t.amount === "string" ? parseFloat(t.amount) : Number(t.amount ?? 0),
+                transaction_date: t.created_at,
             }));
-        },
-        placeholderData: keepPreviousData,
-        enabled: !!polkadotAddress,
-        ...options,
-    });
+
+            setData(mapped);
+        } catch (e: unknown) {
+            setData([]);
+            setError(e instanceof Error ? e.message : "Unknown error");
+        } finally {
+            setIsPending(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchTransactions();
+    }, [fetchTransactions]);
+
+    return { data, isPending, error, refetch: fetchTransactions };
 }

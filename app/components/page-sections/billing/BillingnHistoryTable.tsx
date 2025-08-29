@@ -4,7 +4,6 @@ import {
   useReactTable,
   getSortedRowModel
 } from "@tanstack/react-table";
-
 import { useMemo, useState } from "react";
 import {
   TableWrapper,
@@ -18,9 +17,9 @@ import {
 } from "@/components/ui/alt-table";
 import { Loader2 } from "lucide-react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { Dollar } from "@/components/ui/icons";
+import { Dollar, TaoLogo } from "@/components/ui/icons";
+import TransactionTypeBadge from "./TransactionTypeBadge";
 import useBillingTransactions, { TransactionObject } from "@/app/lib/hooks/api/useBillingTransactions";
-import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
 
 export const formatDate = (
   date: Date,
@@ -57,6 +56,7 @@ const ITEMS_PER_PAGE = 10;
 
 const BillingHistoryTable: React.FC = () => {
   const { data: transactions, isPending, error } = useBillingTransactions();
+
   const [currentPage, setCurrentPage] = useState(1);
 
   const totalPages = useMemo(
@@ -78,20 +78,40 @@ const BillingHistoryTable: React.FC = () => {
         cell: (d) => d.getValue(),
         enableSorting: true
       }),
-      columnHelper.accessor("transaction_type", {
-        id: "transaction_type",
-        header: "TYPE",
-        cell: (info) => (
-          <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
-            {info.getValue()}
-          </span>
-        ),
-      }),
+      // columnHelper.accessor("transaction_type", {
+      //   id: "transaction_type",
+      //   header: "TYPE",
+      //   cell: (info) => (
+      //     <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
+      //       {info.getValue()}
+      //     </span>
+      //   ),
+      // }),
+      // columnHelper.accessor("amount", {
+      //   id: "amount",
+      //   header: "AMOUNT",
+      //   cell: (d) => `$ ${formatBalance(d.getValue(), 6)}`,
+      //   enableSorting: true
+      // }),
       columnHelper.accessor("amount", {
         id: "amount",
         header: "AMOUNT",
-        cell: (d) => `$ ${formatBalance(d.getValue(), 6)}`,
-        enableSorting: true
+        cell: (d) => {
+          return <div className="flex items-center gap-x-1">
+            {(d.row.original.transaction_type === "tao" ? <TaoLogo className="size-2.5" /> : "$")}
+            <span>{d.getValue().toLocaleString()}</span>
+          </div>;
+        },
+        enableSorting: true,
+      }),
+      columnHelper.accessor("transaction_type", {
+        id: "transaction_type",
+        header: "TRANSACTION TYPE",
+        cell: (d) => {
+          const type = d.getValue();
+          const validType = type === "tao" || type === "card" ? type : null;
+          return <TransactionTypeBadge type={validType} />;
+        },
       }),
       columnHelper.accessor("transaction_date", {
         id: "date",
@@ -136,20 +156,20 @@ const BillingHistoryTable: React.FC = () => {
           </TBody>
         </Table>
 
-        {isPending && (
-          <div className="w-full h-[350px] flex items-center justify-center p-6 animate-fade-in-0.3 opacity-0">
+        {((isPending || transactions === null || !transactions.length || transactions.length === 0) && !error) && (
+          <div className="w-full h-[350px] flex items-center justify-center p-6 animate-fade-in-0.3">
             <Loader2 className="size-6 animate-spin text-grey-50" />
           </div>
         )}
 
-        {((transactions && !transactions.length) || error) && (
+        {((transactions && !transactions.length) || error) && !isPending && transactions !== null && (
           <div className="w-full h-[350px] flex items-center justify-center p-6">
             <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
               <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
                 <Dollar className="absolute size-6" />
               </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[190px] text-center">
-                You do not have any billing history yet
+              <span className="text-grey-60 text-sm font-medium max-w-[260px] text-center">
+                {error ? `Unable to load billing history: ${error}` : "You do not have any billing history yet"}
               </span>
             </div>
           </div>
