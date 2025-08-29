@@ -99,15 +99,12 @@ const Home: React.FC = () => {
   >(null);
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
 
-
   // Fetch marketplace credits with a higher limit to get good chart data
   const { data: marketplaceCredits, isLoading: isLoadingCredits } =
-    useMarketplaceCredits({ limit: 1000 });
+    useMarketplaceCredits();
 
   // Fetch files data for storage usage chart
-  const { data: filesData, isLoading: isLoadingFiles } = useFiles({
-    limit: 1000,
-  });
+  const { data: filesData, isLoading: isLoadingFiles } = useFiles();
 
   // Transform marketplace credits to the format expected by the chart
   const transformedCreditsData = transformMarketplaceCreditsToAccounts(
@@ -116,6 +113,7 @@ const Home: React.FC = () => {
 
   // Transform files data to the format expected by the storage chart
   const transformedFilesData = transformFilesToStorageData(filesData || []);
+
   useEffect(() => {
     const checkSyncPath = async () => {
       try {
@@ -158,7 +156,9 @@ const Home: React.FC = () => {
         <div className="flex items-center justify-center w-full h-full">
           <Icons.Loader className="size-8 animate-spin text-primary-60" />
         </div>
-      ) : isSyncPathConfigured && <Ipfs isRecentFiles />}
+      ) : (
+        isSyncPathConfigured && <Ipfs isRecentFiles />
+      )}
     </div>
   );
 };

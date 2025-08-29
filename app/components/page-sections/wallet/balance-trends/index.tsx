@@ -21,6 +21,7 @@ import {
 import BalanceTrendsTooltip from "./BalanceTrendsTooltip";
 import { COLORS } from "./constants";
 import { WalletAdd } from "@/app/components/ui/icons";
+import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
 
 const timeRangeOptions: Option[] = [
   { value: "week", label: "Last 7 Days" },
@@ -42,19 +43,6 @@ const BalanceTrends: React.FC<{
       timeRange as "week" | "month" | "quarter" | "year"
     );
   }, [chartData, timeRange]);
-
-  function getNiceTicksAlways(min: number, max: number, cnt = 5) {
-    min = 0;
-    if (max === 0 || Math.abs(max - min) < 1e-6) max = min + 0.0001;
-    const rawStep = (max - min) / (cnt - 1);
-    const mag = 10 ** Math.floor(Math.log10(rawStep));
-    let step = mag;
-    if (rawStep / step > 5) step *= 5;
-    else if (rawStep / step > 2) step *= 2;
-    const last = Math.ceil(max / step) * step;
-    const n = Math.round((last - min) / step) + 1;
-    return Array.from({ length: n }, (_, i) => +(min + i * step).toFixed(6));
-  }
 
   const yTicks = useMemo(() => {
     if (!formattedChartData.length) return [0, 1];
@@ -81,14 +69,14 @@ const BalanceTrends: React.FC<{
     xLabels =
       today <= 15
         ? Array.from({ length: today }, (_, i) =>
-          String(i + 1).padStart(2, "0")
-        )
+            String(i + 1).padStart(2, "0")
+          )
         : [
-          ...Array.from({ length: Math.ceil(today / 2) }, (_, i) =>
-            String(1 + i * 2).padStart(2, "0")
-          ),
-          String(today).padStart(2, "0"),
-        ];
+            ...Array.from({ length: Math.ceil(today / 2) }, (_, i) =>
+              String(1 + i * 2).padStart(2, "0")
+            ),
+            String(today).padStart(2, "0"),
+          ];
   } else if (timeRange === "quarter") {
     if (formattedChartData.length) {
       xLabels = getQuarterDateLabels(formattedChartData[0].x, 10);
@@ -96,8 +84,8 @@ const BalanceTrends: React.FC<{
   } else {
     const baseYear = chartData?.length
       ? new Date(
-        chartData[chartData.length - 1].processed_timestamp
-      ).getFullYear()
+          chartData[chartData.length - 1].processed_timestamp
+        ).getFullYear()
       : new Date().getFullYear();
     const now = new Date().getFullYear();
     const months = baseYear === now ? new Date().getMonth() + 1 : 12;
@@ -109,8 +97,9 @@ const BalanceTrends: React.FC<{
       {({ ref }) => (
         <div
           ref={ref}
-          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${className || ""
-            }`}
+          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${
+            className || ""
+          }`}
         >
           <div className="flex justify-between mb-3.5">
             <div className="flex gap-4 items-center">
@@ -129,7 +118,6 @@ const BalanceTrends: React.FC<{
             />
           </div>
           <div className="border border-grey-80 rounded-lg h-[225px] relative">
-
             <div className="relative w-full h-full flex">
               {isLoading ? (
                 <div className="flex items-center justify-center w-full h-full">
