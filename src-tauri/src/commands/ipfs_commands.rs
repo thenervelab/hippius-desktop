@@ -1858,7 +1858,7 @@ pub async fn wipe_s3_objects(
     account_id: String,
     scope: String,
 ) -> Result<(), String> {
-    let bucket_name = format!("{}--{}", account_id, scope);
+    let bucket_name = format!("{}-{}", account_id, scope);
     let s3_uri = format!("s3://{}", bucket_name);
     
     // Dynamically get the AWS binary path
