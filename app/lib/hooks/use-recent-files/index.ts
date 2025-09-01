@@ -61,7 +61,7 @@ const useRecentFiles = () => {
                     accountId: polkadotAddress
                 });
 
-                console.log("Recent files from get_sync_activity:", response);
+                // console.log("Recent files from get_sync_activity:", response);
 
                 // Combine recent and uploading items (if any)
                 const combinedFiles = [

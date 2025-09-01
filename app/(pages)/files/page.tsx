@@ -15,7 +15,7 @@ const FilesPage: FC = () => {
     const mainFolderActualName = getParam("mainFolderActualName", "");
     const subFolderPath = getParam("subFolderPath");
 
-    if (folderCid) {
+    if (folderName) {
         return (
             <DashboardTitleWrapper mainText={`Your Files - ${folderName}`}>
                 <FolderView
