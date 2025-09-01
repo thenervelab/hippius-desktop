@@ -72,10 +72,9 @@ export default function FolderUploadDialog({
             const manifestCid = await invoke<string>(command, {
                 accountId: polkadotAddress,
                 folderPath,
-                seedPhrase: mnemonic
+                seedPhrase: mnemonic,
+                ...(useEncryption ? { source: folderPath } : {})
             });
-
-            console.log("manifestCid", manifestCid)
 
             toast.dismiss(toastId);
             toast.success(`Folder uploaded successfully!`);
