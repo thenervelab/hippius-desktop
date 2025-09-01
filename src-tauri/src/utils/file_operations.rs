@@ -1,4 +1,4 @@
-use crate::commands::substrate_tx::{storage_unpin_request_tauri, FileHashWrapper, FileInputWrapper};
+use crate::commands::substrate_tx::{ FileHashWrapper, FileInputWrapper};
 use crate::utils::ipfs::pin_json_to_ipfs_local;
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use crate::DB_POOL;
@@ -69,39 +69,6 @@ fn build_storage_json(files: &[(String, String)]) -> String {
     serde_json::to_string(&serde_json::Value::Array(json_vec)).unwrap()
 }
 
-pub async fn request_file_storage(
-    file_name: &str,
-    file_cid: &str,
-    api_url: &str,
-    seed_phrase: &str,
-) -> Result<String, String> {
-    // 1. Create the JSON
-    let json = serde_json::json!([{
-        "filename": file_name,
-        "cid": file_cid
-    }]);
-    let json_string = serde_json::to_string(&json).unwrap();
-
-    // 2. Pin JSON to local IPFS node
-    let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
-
-    // 3. Construct FileInput
-    let file_input = FileInputWrapper {
-        file_hash: json_cid.as_bytes().to_vec(),
-        file_name: file_name.as_bytes().to_vec(),
-    };
-
-    // 4. Call storage_request_tauri
-    crate::commands::substrate_tx::storage_request_tauri(
-        vec![file_input],
-        None,
-        seed_phrase.to_string(),
-    )
-    .await?;
-
-    Ok(json_cid)
-}
-
 pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
         let variations = get_file_name_variations(file_name);
@@ -118,21 +85,7 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
             match hashes_result {
                 Ok(hashes) if !hashes.is_empty() => {
                     if let Some((file_hash,)) = hashes.first() {                        
-                        let file_hash_wrapper = FileHashWrapper {
-                            file_hash: file_hash.as_bytes().to_vec(),
-                        };
                         
-                        return storage_unpin_request_tauri(file_hash_wrapper, seed_phrase.to_string(), variant.clone())
-                            .await
-                            .map(|_| ())
-                            .map_err(|e| format!("Unpin request error for variant '{}': {}", variant, e));
-                        
-                        let result1 = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
-                            .bind(variant)
-                            .execute(pool)
-                            .await
-                            .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
-
                         // Also delete from file_paths table
                         let _ = sqlx::query("DELETE FROM file_paths WHERE file_name = ?")
                             .bind(variant)
@@ -395,6 +348,10 @@ pub fn calculate_local_size(path: &Path) -> std::io::Result<u64> {
 }
 
 pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_folder: bool, should_delete_folder: bool) {
+    // Log all parameters
+    println!("[remove_file_from_sync_and_db] Parameters - file_name: {}, is_public: {}, is_folder: {}, should_delete_folder: {}", 
+    file_name, is_public, is_folder, should_delete_folder);
+
     // Choose sync folder path
     let sync_folder = if is_public {
         match get_public_sync_path().await {
@@ -415,7 +372,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
     };
 
     let sync_file_path = sync_folder.join(file_name);
-    
+    println!("[remove_file_from_sync_and_db] sync_file_path: {}, is_folder: {}", sync_file_path.display(), sync_file_path.is_dir());
     // --- Add paths to RECENTLY_DELETED before deletion ---
     let mut paths_to_delete = Vec::new();
     if sync_file_path.is_dir() || is_folder {
@@ -500,63 +457,6 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
 
 }
 
-pub async fn request_erasure_storage(
-    file_name: &str,
-    files: &[(String, String)],
-    api_url: &str,
-    seed_phrase: &str,
-) -> Result<String, String> {
-    if files.is_empty() {
-        return Err("files array cannot be empty".to_string());
-    }
-
-    let json_string = build_storage_json(files);
-
-    let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
-
-    let file_input = FileInputWrapper {
-        file_hash: json_cid.as_bytes().to_vec(),
-        file_name: file_name.as_bytes().to_vec(),
-    };
-
-    crate::commands::substrate_tx::storage_request_tauri(
-        vec![file_input],
-        None,
-        seed_phrase.to_string(),
-    )
-    .await?;
-
-    Ok(json_cid)
-}
-
-pub async fn request_folder_storage(
-    file_name: &str,
-    files: &[(String, String)],
-    api_url: &str,
-    seed_phrase: &str,
-) -> Result<String, String> {
-    if files.is_empty() {
-        return Err("files array cannot be empty".to_string());
-    }
-
-    let json_string = build_storage_json(files);
-
-    let json_cid = pin_json_to_ipfs_local(&json_string, api_url).await?;
-
-    let file_input = FileInputWrapper {
-        file_hash: json_cid.as_bytes().to_vec(),
-        file_name: file_name.as_bytes().to_vec(),
-    };
-
-    crate::commands::substrate_tx::storage_request_tauri(
-        vec![file_input],
-        None,
-        seed_phrase.to_string(),
-    )
-    .await?;
-
-    Ok(json_cid)
-}
 
 pub async fn copy_to_sync_folder(
     original_path: &Path,
