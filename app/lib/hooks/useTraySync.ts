@@ -180,7 +180,7 @@ async function setTrayIconSyncing(isSyncing: boolean, isCompleted: boolean = fal
 
     // If nothing changed, don't update
     if (trayIconState === newState) {
-      logTrayAction("Skipping icon update - already in correct state", { isSyncing, isCompleted, state: trayIconState });
+      // logTrayAction("Skipping icon update - already in correct state", { isSyncing, isCompleted, state: trayIconState });
       return;
     }
 

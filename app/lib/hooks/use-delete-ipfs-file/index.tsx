@@ -49,7 +49,8 @@ export const useDeleteIpfsFile = ({
 
             if (!actualFileToDelete) throw new Error("Cannot find file");
             // Handle file in folder deletion
-            if (folderCid && mainFolderActualName) {
+
+            if (mainFolderActualName) {
                 if (!mnemonic) {
                     throw new Error("Seed phrase required to delete files from folder");
                 }
