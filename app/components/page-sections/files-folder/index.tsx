@@ -182,7 +182,6 @@ export default function FolderView({
     }
 
     const initiateDownloadFolder = async () => {
-        if (!folderCid) return;
 
         try {
             // Ask for output directory
