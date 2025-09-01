@@ -281,19 +281,15 @@ const CardView: FC<CardViewProps> = ({
                               localHandleShowFileDetails(file);
                             }
                           },
-                          ...(file.isAssigned
-                            ? [
-                              {
-                                icon: <Icons.Trash className="size-4" />,
-                                itemTitle: "Delete",
-                                onItemClick: () => {
-                                  setFileToDelete?.(file);
-                                  setOpenDeleteModal?.(true);
-                                },
-                                variant: "destructive" as const
-                              }
-                            ]
-                            : [])
+                          {
+                            icon: <Icons.Trash className="size-4" />,
+                            itemTitle: "Delete",
+                            onItemClick: () => {
+                              setFileToDelete?.(file);
+                              setOpenDeleteModal?.(true);
+                            },
+                            variant: "destructive" as const
+                          }
                         ]}
                       >
                         <Button
