@@ -159,10 +159,11 @@ pub async fn delete_and_unpin_file_by_name(
     file_name: String,
     seed_phrase: String,
 ) -> Result<u64, String> {
+    println!("file_name : {}", file_name);
     let mut is_public = false;
     if let Some(pool) = DB_POOL.get() {
         let row: Option<(String,)> = sqlx::query_as(
-            "SELECT type FROM sync_folder_files WHERE file_name = ? LIMIT 1"
+            "SELECT type FROM user_profiles WHERE file_name = ? LIMIT 1"
         )
         .bind(&file_name)
         .fetch_optional(pool)
