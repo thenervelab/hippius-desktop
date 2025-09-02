@@ -149,3 +149,7 @@ export { default as CopySuccess } from "./CopySuccess";
 export { default as Note2 } from "./Note2";
 export { default as Edit } from "./Edit";
 export { default as Repeat } from "./Repeat";
+export { default as CloseSquare } from "./CloseSquare";
+export { default as Ticket } from "./Ticket";
+export { default as Building } from "./Building";
+export { default as CircularTickGrid } from "./CircularTickGrid";

@@ -230,16 +230,12 @@ const FilesTable: FC<FilesTableProps> = memo(({
         itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
         onItemClick: () => localHandleShowFileDetails(file)
       },
-      ...(file.isAssigned
-        ? [
-          {
-            icon: <Icons.Trash className="size-4" />,
-            itemTitle: "Delete",
-            onItemClick: () => handleDeleteFile(file),
-            variant: "destructive" as const
-          }
-        ]
-        : [])
+      {
+        icon: <Icons.Trash className="size-4" />,
+        itemTitle: "Delete",
+        onItemClick: () => handleDeleteFile(file),
+        variant: "destructive" as const
+      }
     ];
   }, [handleDownload, handleSetSelectedFile, localHandleShowFileDetails, handleDeleteFile, getParam, router]);
 

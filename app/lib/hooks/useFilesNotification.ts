@@ -40,7 +40,7 @@ export function useFilesNotification() {
         setInvokeCount((prevCount) => prevCount + 1);
 
         const status = await invoke<SyncStatusResponse>("get_sync_status");
-        console.log("status", status);
+        // console.log("status", status);
         setSyncStatus(status);
 
         // Update tray sync percentage only when there's a meaningful change

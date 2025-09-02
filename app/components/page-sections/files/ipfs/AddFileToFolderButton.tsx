@@ -77,7 +77,6 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
 
         const dialogContent = useMemo(() => (
             <FolderFileUploadFlow
-                folderCid={folderCid}
                 folderName={folderName}
                 isPrivateFolder={isPrivateFolder}
                 initialFiles={droppedFiles}

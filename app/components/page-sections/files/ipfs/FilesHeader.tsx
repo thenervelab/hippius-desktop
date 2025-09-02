@@ -13,6 +13,11 @@ import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
 import { toast } from "sonner";
 import { useLocalStorage } from "@/lib/hooks/useLocalStorage";
 import { openPath } from '@tauri-apps/plugin-opener';
+import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import DeleteAllFilesConfirmationDialog from "./DeleteAllFilesConfirmationDialog";
+import { useAtomValue } from "jotai";
+import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 
 interface FilesHeaderProps {
@@ -61,8 +66,13 @@ const FilesHeader: FC<FilesHeaderProps> = ({
     'hippius-sync-folder-permission',
     false
   );
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const router = useRouter();
   const { navigateToFilesView } = useFilesNavigation();
+  const { polkadotAddress } = useWalletAuth();
+  const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
+  const currentScope = activeSubMenuItem || (isRecentFiles ? "Private" : "Public");
 
   const handleViewAllFiles = () => {
     // Navigate to the appropriate files view based on the file counts
@@ -92,6 +102,35 @@ const FilesHeader: FC<FilesHeaderProps> = ({
       } else {
         toast.error(`Failed to open folder: ${errorMessage}`);
       }
+    }
+  };
+
+  const handleDeleteAllFiles = async () => {
+    if (!polkadotAddress) {
+      toast.error("Account ID not available");
+      return;
+    }
+
+    setIsDeleting(true);
+    // Create a loading toast that will be updated later
+    const toastId = toast.loading(`Deleting all ${currentScope.toLowerCase()} files...`);
+
+    try {
+      await invoke("wipe_s3_objects", {
+        accountId: polkadotAddress,
+        scope: currentScope.toLowerCase()
+      });
+
+      // Update the toast to success
+      toast.success(`All ${currentScope.toLowerCase()} files have been deleted`, { id: toastId });
+      refetchUserFiles(); // Refresh the file list
+    } catch (error) {
+      console.error("Failed to delete files:", error);
+      // Update the toast to error
+      toast.error(`Failed to delete files: ${error instanceof Error ? error.message : String(error)}`, { id: toastId });
+    } finally {
+      setIsDeleting(false);
+      setIsDeleteDialogOpen(false);
     }
   };
 
@@ -176,7 +215,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             </div>
           )}
 
-          {/* New: Open Sync Folder button (same style) */}
+          {/* Folder Upload button */}
           <button
             onClick={() => setIsFolderUploadOpen(true)}
             className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
@@ -185,6 +224,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             <span className="ml-1">Add Folder</span>
           </button>
 
+          {/* Open Sync Folder button */}
           <button
             onClick={handleOpenSyncFolder}
             disabled={!syncFolderPath}
@@ -195,7 +235,16 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             <span className="ml-1">Open Sync Folder</span>
           </button>
 
-
+          {/* Delete All Files button - not showing in Recent Files view */}
+          {!isRecentFiles && (
+            <button
+              onClick={() => setIsDeleteDialogOpen(true)}
+              className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-error-50 border border-error-60 text-white hover:bg-error-60 active:bg-error-70 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
+            >
+              <Icons.Trash className="size-4" />
+              <span className="ml-1">Delete All Files</span>
+            </button>
+          )}
 
           <AddButton ref={addButtonRef} className="h-9" />
         </div>
@@ -217,6 +266,15 @@ const FilesHeader: FC<FilesHeaderProps> = ({
         open={isFolderUploadOpen}
         onClose={() => setIsFolderUploadOpen(false)}
         onRefresh={refetchUserFiles}
+      />
+
+      {/* Delete All Files Confirmation Dialog */}
+      <DeleteAllFilesConfirmationDialog
+        open={isDeleteDialogOpen}
+        onClose={() => setIsDeleteDialogOpen(false)}
+        onConfirm={handleDeleteAllFiles}
+        loading={isDeleting}
+        scope={currentScope}
       />
     </>
   );

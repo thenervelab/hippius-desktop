@@ -26,7 +26,7 @@ use commands::accounts::{
 };
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
-    upload_file_public, download_file_public, 
+    upload_file_public, download_file_public, wipe_s3_objects,
     encrypt_and_upload_folder, download_and_decrypt_folder, public_download_folder, public_upload_folder, list_folder_contents,
     remove_file_from_public_folder, add_file_to_public_folder, remove_file_from_private_folder, add_file_to_private_folder, add_folder_to_public_folder,
     remove_folder_from_public_folder, add_folder_to_private_folder, remove_folder_from_private_folder
@@ -105,6 +105,7 @@ fn main() {
             create_encryption_key,
             get_encryption_keys,
             import_key,
+            wipe_s3_objects,
             import_app_data,
             export_app_data,
             transfer_balance_tauri,

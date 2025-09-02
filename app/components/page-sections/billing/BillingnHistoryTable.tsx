@@ -13,13 +13,15 @@ import {
   Th,
   THead,
   TBody,
-  Pagination
+  Pagination,
+  CopyableCell
 } from "@/components/ui/alt-table";
 import { Loader2 } from "lucide-react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { Dollar, TaoLogo } from "@/components/ui/icons";
 import TransactionTypeBadge from "./TransactionTypeBadge";
 import useBillingTransactions, { TransactionObject } from "@/app/lib/hooks/api/useBillingTransactions";
+import StatusTypeBadge from "./StatusTypeBadge";
 
 export const formatDate = (
   date: Date,
@@ -75,24 +77,16 @@ const BillingHistoryTable: React.FC = () => {
       columnHelper.accessor("id", {
         id: "id",
         header: "ID",
-        cell: (d) => d.getValue(),
+        cell: (info) => (
+          <CopyableCell
+            copyAbleText={info.getValue() as string}
+            title="Copy Billing ID"
+            toastMessage="Billing ID Copied Successfully!"
+            isTable={true}
+          />
+        ),
         enableSorting: true
       }),
-      // columnHelper.accessor("transaction_type", {
-      //   id: "transaction_type",
-      //   header: "TYPE",
-      //   cell: (info) => (
-      //     <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
-      //       {info.getValue()}
-      //     </span>
-      //   ),
-      // }),
-      // columnHelper.accessor("amount", {
-      //   id: "amount",
-      //   header: "AMOUNT",
-      //   cell: (d) => `$ ${formatBalance(d.getValue(), 6)}`,
-      //   enableSorting: true
-      // }),
       columnHelper.accessor("amount", {
         id: "amount",
         header: "AMOUNT",
@@ -111,6 +105,15 @@ const BillingHistoryTable: React.FC = () => {
           const type = d.getValue();
           const validType = type === "tao" || type === "card" ? type : null;
           return <TransactionTypeBadge type={validType} />;
+        },
+      }),
+      columnHelper.accessor("status", {
+        id: "status",
+        header: "STATUS",
+        cell: (d) => {
+          const status = d.getValue();
+          const validStatus = (status === "failed" || status === "success" || status === "completed" || status === "pending") ? status : null;
+          return <StatusTypeBadge type={validStatus} />;
         },
       }),
       columnHelper.accessor("transaction_date", {
@@ -156,7 +159,7 @@ const BillingHistoryTable: React.FC = () => {
           </TBody>
         </Table>
 
-        {((isPending || transactions === null || !transactions.length || transactions.length === 0) && !error) && (
+        {((isPending) && !error) && (
           <div className="w-full h-[350px] flex items-center justify-center p-6 animate-fade-in-0.3">
             <Loader2 className="size-6 animate-spin text-grey-50" />
           </div>

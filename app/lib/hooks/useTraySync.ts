@@ -180,7 +180,7 @@ async function setTrayIconSyncing(isSyncing: boolean, isCompleted: boolean = fal
 
     // If nothing changed, don't update
     if (trayIconState === newState) {
-      logTrayAction("Skipping icon update - already in correct state", { isSyncing, isCompleted, state: trayIconState });
+      // logTrayAction("Skipping icon update - already in correct state", { isSyncing, isCompleted, state: trayIconState });
       return;
     }
 
@@ -247,8 +247,6 @@ async function setTrayIconSyncing(isSyncing: boolean, isCompleted: boolean = fal
 
 /* ─ Public: keep your existing percent label behavior ─────────── */
 export async function setTraySyncPercent(percent: number | null) {
-  logTrayAction(`setTraySyncPercent called with ${percent}`);
-
   const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
   if (!menu) return;
 

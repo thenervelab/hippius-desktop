@@ -10,7 +10,6 @@ import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { basename } from '@tauri-apps/api/path';
 
 interface FolderFileUploadFlowProps {
-    folderCid: string;
     folderName: string;
     isPrivateFolder: boolean;
     initialFiles?: FileList | null;
@@ -25,7 +24,6 @@ interface FilePathInfo {
 }
 
 const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
-    folderCid,
     folderName,
     isPrivateFolder,
     initialFiles,
@@ -110,7 +108,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     }, [files]);
 
     const handleAddFilesToFolder = async () => {
-        if (!folderCid || !files.length) {
+        if (!files.length) {
             toast.error("No files selected or folder information missing");
             return;
         }
@@ -175,11 +173,6 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     seedPhrase: mnemonic,
                     subfolderPath: folderPath || null
                 };
-
-                console.log("Adding file with params:", {
-                    ...params,
-                    seedPhrase: "[REDACTED]"
-                });
 
                 await invoke<string>(functionName, params);
 

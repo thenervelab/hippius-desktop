@@ -100,7 +100,6 @@ export default function FolderView({
     }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
 
     const loadFolderContents = useCallback(async (showLoading = true) => {
-        if (!folderCid) return;
 
         try {
             if (showLoading) {
@@ -111,9 +110,6 @@ export default function FolderView({
 
             // Parse the folder path into an array of folder names
             const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
-
-            console.log("mainFolderActualName from filesFolder", mainFolderActualName)
-
 
             const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
                 accountId: polkadotAddress,
@@ -186,7 +182,6 @@ export default function FolderView({
     }
 
     const initiateDownloadFolder = async () => {
-        if (!folderCid) return;
 
         try {
             // Ask for output directory

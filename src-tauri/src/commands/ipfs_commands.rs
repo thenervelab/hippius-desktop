@@ -5,8 +5,8 @@ use crate::utils::{
     ipfs::{
         download_from_ipfs, download_from_ipfs_async, upload_to_ipfs, upload_to_ipfs_async, upload_bytes_to_ipfs,
     },
-    file_operations::{request_erasure_storage, copy_to_sync_and_add_to_db, request_folder_storage, get_file_name_variations,
-        request_file_storage , remove_from_sync_folder, copy_to_sync_folder, delete_and_unpin_user_file_records_from_folder}
+    file_operations::{ copy_to_sync_and_add_to_db, get_file_name_variations,
+         remove_from_sync_folder, copy_to_sync_folder, delete_and_unpin_user_file_records_from_folder}
 };
 use fs_extra;
 use futures::TryFutureExt;
@@ -1851,4 +1851,65 @@ pub async fn remove_folder_from_private_folder(
     .await;
 
     Ok(folder_name)
+}
+
+#[tauri::command]
+pub async fn wipe_s3_objects(
+    account_id: String,
+    scope: String,
+) -> Result<(), String> {
+    let bucket_name = format!("{}-{}", account_id, scope);
+    let s3_uri = format!("s3://{}", bucket_name);
+    
+    // Dynamically get the AWS binary path
+    let aws_binary_path = match get_aws_binary_path().await {
+        Ok(path) => {
+            println!("[remove_s3_objects] Found AWS binary at: {}", path.display());
+            path
+        }
+        Err(e) => {
+            eprintln!("[remove_s3_objects] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                println!("[remove_s3_objects] Found AWS in system PATH at: {}", path.display());
+                path
+            } else {
+                eprintln!("[remove_s3_objects] AWS CLI not found in system PATH or custom location");
+                return Err("AWS CLI not found".to_string());
+            }
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    println!("[remove_s3_objects] Removing all objects from bucket: {}", bucket_name);
+    
+    let status = Command::new(&aws_binary_path)
+        .env("AWS_PAGER", "")
+        .env("PATH", &dynamic_path)
+        .arg("s3")
+        .arg("rm")
+        .arg(&s3_uri)
+        .arg("--recursive")
+        .arg("--endpoint-url")
+        .arg("https://s3.hippius.com")
+        .status()
+        .await
+        .map_err(|e| format!("Failed to spawn 'aws s3 rm --recursive': {}", e))?;
+
+    if !status.success() {
+        return Err(format!(
+            "aws s3 rm --recursive failed for bucket '{}' with status {:?}",
+            bucket_name, status.code()
+        ));
+    }
+
+    println!("[remove_s3_objects] Successfully removed all objects from bucket: {}", bucket_name);
+    Ok(())
 }
