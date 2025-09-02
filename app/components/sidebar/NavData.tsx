@@ -57,11 +57,6 @@ export const navItems: NavItemData[] = [
     icon: <Icons.CreditCard />
   },
   {
-    label: "Notifications",
-    path: "/notifications",
-    icon: <Icons.Notification />
-  },
-  {
     label: "Referrals",
     path: "/referrals",
     icon: <Share2Icon className="size-4" />

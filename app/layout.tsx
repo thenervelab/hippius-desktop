@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import "react-circular-progressbar/dist/styles.css";
 import NextTopLoader from "nextjs-toploader";
 import { WalletAuthProvider } from "./lib/wallet-auth-context";
+import PreAuthProvider from "@/app/components/auth/PreAuthProvider";
 import { metadata as appMetadata } from "./metadata";
 import { Suspense } from "react";
 import PageLoader from "@/app/components/PageLoader";
@@ -36,18 +37,20 @@ export default async function RootLayout({
       >
         <Providers>
           <WalletAuthProvider>
-            <NextTopLoader color="#3167DD" showSpinner={false} />
-            <Suspense fallback={<PageLoader />}>
-              <SplashWrapper skipSplash={false}>
-                <div className="flex min-h-screen h-screen">{children}</div>
-              </SplashWrapper>
-            </Suspense>
-            <UpdateDialogWrapper />
-            <Toaster
-              toastOptions={{
-                style: { fontFamily: "var(--font-geist-sans)" },
-              }}
-            />
+            <PreAuthProvider>
+              <NextTopLoader color="#3167DD" showSpinner={false} />
+              <Suspense fallback={<PageLoader />}>
+                <SplashWrapper skipSplash={false}>
+                  <div className="flex min-h-screen h-screen">{children}</div>
+                </SplashWrapper>
+              </Suspense>
+              <UpdateDialogWrapper />
+              <Toaster
+                toastOptions={{
+                  style: { fontFamily: "var(--font-geist-sans)" },
+                }}
+              />
+            </PreAuthProvider>
           </WalletAuthProvider>
         </Providers>
       </body>

@@ -57,7 +57,6 @@ export function useFileViewShared(
   const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
 
   const params = useSearchParams();
-  const folderCid = params.get("folderCid");
   const folderName = params.get("folderName") || "Folder";
   const isPrivateFolder = activeSubMenuItem === "Private";
 
@@ -69,7 +68,6 @@ export function useFileViewShared(
     useDeleteIpfsFile({
       cid: fileToDelete?.cid || "",
       fileToDelete,
-      folderCid: folderCid ?? undefined,
       folderName,
       isPrivateFolder
     });

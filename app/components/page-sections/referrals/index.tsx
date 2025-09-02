@@ -36,7 +36,7 @@ const Referrals: React.FC = () => {
           />
           <DetailsCard
             icon={WalletAdd}
-            title="Total Credits Earned "
+            title="Total Alpha Earned "
             value={totalCredits.toString()}
           />
         </div>

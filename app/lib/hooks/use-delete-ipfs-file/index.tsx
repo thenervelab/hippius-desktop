@@ -15,12 +15,10 @@ import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 export const useDeleteIpfsFile = ({
     cid,
     fileToDelete: file,
-    folderCid,
     isPrivateFolder
 }: {
     cid: string,
     fileToDelete: FormattedUserIpfsFile | null,
-    folderCid?: string,
     folderName?: string,
     isPrivateFolder?: boolean
 }) => {

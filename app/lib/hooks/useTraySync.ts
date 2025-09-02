@@ -247,8 +247,6 @@ async function setTrayIconSyncing(isSyncing: boolean, isCompleted: boolean = fal
 
 /* ─ Public: keep your existing percent label behavior ─────────── */
 export async function setTraySyncPercent(percent: number | null) {
-  logTrayAction(`setTraySyncPercent called with ${percent}`);
-
   const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
   if (!menu) return;
 

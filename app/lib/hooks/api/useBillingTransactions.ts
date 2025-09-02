@@ -26,6 +26,7 @@ export type TransactionObject = {
     transaction_type: string;
     amount: number;
     transaction_date: string;
+    status: string;
 };
 
 type BillingTransaction = {
@@ -33,6 +34,7 @@ type BillingTransaction = {
     payment_type: string;
     amount: number | string;
     created_at: string;
+    status: string;
 };
 
 type BillingTransactionsResponse = {
@@ -85,6 +87,7 @@ export default function useBillingTransactions() {
                 transaction_type: t.payment_type.toLowerCase().includes('stripe') ? 'card' : 'tao',
                 amount: typeof t.amount === "string" ? parseFloat(t.amount) : Number(t.amount ?? 0),
                 transaction_date: t.created_at,
+                status: t.status,
             }));
 
             setData(mapped);

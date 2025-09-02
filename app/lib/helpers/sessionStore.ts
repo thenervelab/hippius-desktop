@@ -12,6 +12,11 @@ export const API_CONFIG = {
   baseUrl: process.env.NEXT_PUBLIC_API_URL || "https://api.hippius.com",
   billing: {
     transactions: "/api/billing/transactions/",
+    activeSubscription: "/api/billing/stripe/active-subscription/",
+    plans: "/api/billing/stripe/subscription-plans/",
+    depositAddress: "/api/billing/deposit-address/",
+    customerPortal: "/api/billing/stripe/customer-portal/",
+    createSubscription: "/api/billing/stripe/create-subscription/"
   },
   auth: {
     mnemonic: "/api/auth/mnemonic/",
