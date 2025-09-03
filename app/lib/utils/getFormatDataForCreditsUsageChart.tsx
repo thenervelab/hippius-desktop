@@ -140,7 +140,7 @@ export function aggregateCreditsByMonth(
 
 export const formatAccountsForChartByRange = (
   accounts: Account[],
-  range: "week" | "month" | "lastMonth" | "quarter" | "year"
+  range: "last7days" | "last30days" | "last60days" | "year"
 ): ChartPoint[] => {
   if (!accounts || accounts.length === 0) {
     return [];
@@ -169,16 +169,14 @@ export const formatAccountsForChartByRange = (
   const now = new Date();
   now.setHours(0, 0, 0, 0);
 
-  if (range === "week") {
-    const currentDay = now.getDay(); // 0 is Sunday, 1 is Monday, etc.
-    const diff = now.getDate() - currentDay + (currentDay === 0 ? -6 : 1); // Adjust when day is Sunday
-    const monday = new Date(now);
-    monday.setDate(diff);
-    monday.setHours(0, 0, 0, 0);
+  if (range === "last7days") {
+    const last7Days = new Date(now);
+    last7Days.setDate(now.getDate() - 6);
+    last7Days.setHours(0, 0, 0, 0);
 
     const weekDates = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(monday);
-      d.setDate(monday.getDate() + i);
+      const d = new Date(last7Days);
+      d.setDate(last7Days.getDate() + i);
       return d;
     });
 
@@ -192,49 +190,29 @@ export const formatAccountsForChartByRange = (
     }));
   }
 
-  if (range === "month") {
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const today = now.getDate();
-    const monthDates = Array.from(
-      { length: today },
-      (_, i) => new Date(year, month, i + 1)
-    );
-    return mapCreditsToDateRange(chartPoints, monthDates, (date) =>
-      String(date.getDate()).padStart(2, "0")
-    );
-  }
+  if (range === "last30days") {
+    const last30Days = new Date(now);
+    last30Days.setDate(now.getDate() - 29);
+    last30Days.setHours(0, 0, 0, 0);
 
-  if (range === "lastMonth") {
-    const lastMonth = new Date(now);
-    lastMonth.setMonth(now.getMonth() - 1);
-
-    const year = lastMonth.getFullYear();
-    const month = lastMonth.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-    const monthDates = Array.from(
-      { length: daysInMonth },
-      (_, i) => new Date(year, month, i + 1)
-    );
-
-    return mapCreditsToDateRange(chartPoints, monthDates, (date) =>
-      String(date.getDate()).padStart(2, "0")
-    );
-  }
-
-  if (range === "quarter") {
-    const q = Math.floor(now.getMonth() / 3);
-    const startMonth = q * 3;
-    const year = now.getFullYear();
-    const start = new Date(year, startMonth, 1);
-    const end = new Date(year, startMonth + 3, 0);
-    const quarterDates = getAllDatesInRange(start, end);
+    const thirtyDaysDates = getAllDatesInRange(last30Days, now);
     return mapCreditsToDateRange(
       chartPoints,
-      quarterDates,
-      (date) =>
-        `${MONTHS[date.getMonth()]} ${String(date.getDate()).padStart(2, "0")}`
+      thirtyDaysDates,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+    );
+  }
+
+  if (range === "last60days") {
+    const last60Days = new Date(now);
+    last60Days.setDate(now.getDate() - 59);
+    last60Days.setHours(0, 0, 0, 0);
+
+    const sixtyDaysDates = getAllDatesInRange(last60Days, now);
+    return mapCreditsToDateRange(
+      chartPoints,
+      sixtyDaysDates,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
     );
   }
 

@@ -13,6 +13,8 @@ import {
   getAvailableUpdate,
 } from "@/components/updater/checkForUpdates";
 import { RecentFilesResponse, UserProfileFile } from "./use-recent-files";
+import { syncPercentAtom, lastUpdatedPercentAtom } from "@/app/lib/store/syncAtoms";
+import { useAtomValue, useAtom } from 'jotai';
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
@@ -72,6 +74,19 @@ const iconPathCache: Record<string, string | undefined | null> = {};
 
 /* ─ Public: create tray once ──────────────────────────────────── */
 export function useTrayInit(polkadotAddress: string) {
+  // Use atom to watch for sync percentage changes
+  const currentPercent = useAtomValue(syncPercentAtom);
+  const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(lastUpdatedPercentAtom);
+
+  // Effect to update tray when sync percent changes
+  useEffect(() => {
+    // Only update if the percentage has actually changed
+    if (currentPercent !== lastUpdatedPercent) {
+      setLastUpdatedPercent(currentPercent);
+      void updateTraySyncPercent(currentPercent);
+    }
+  }, [currentPercent, lastUpdatedPercent, setLastUpdatedPercent]);
+
   useEffect(() => {
     if (menuPromise) return;
 
@@ -246,7 +261,7 @@ async function setTrayIconSyncing(isSyncing: boolean, isCompleted: boolean = fal
 }
 
 /* ─ Public: keep your existing percent label behavior ─────────── */
-export async function setTraySyncPercent(percent: number | null) {
+async function updateTraySyncPercent(percent: number | null) {
   const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
   if (!menu) return;
 
@@ -287,6 +302,13 @@ export async function setTraySyncPercent(percent: number | null) {
 
   // Updated to pass both syncing and completed status
   await setTrayIconSyncing(percent < 100, percent >= 100);
+}
+
+// Deprecated: Keep for backwards compatibility but don't use internally
+export async function setTraySyncPercent(percent: number | null) {
+  // logTrayAction("setTraySyncPercent is deprecated, use syncPercentAtom instead", { percent });
+  // Just forward to the internal implementation for now
+  await updateTraySyncPercent(percent);
 }
 
 /* ─ Sync Activity watcher (debounced & diffed) ────────────────── */
@@ -459,7 +481,7 @@ async function normalizeActivityToRows(
   }
 
   // Keep the list compact
-  return rows.slice(0, 5);
+  return rows;
 }
 
 /* ─ Ensure video thumbnail exists for a local file path ──────── */

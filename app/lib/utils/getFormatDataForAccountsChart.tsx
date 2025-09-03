@@ -82,7 +82,7 @@ export function fillDataWithCarryForward(
 
 export const formatAccountsForChartByRange = (
   accounts: Account[],
-  range: "week" | "month" | "quarter" | "year"
+  range: "last7days" | "last30days" | "last60days" | "year"
 ): ChartPoint[] => {
   if (!accounts?.length) return [];
 
@@ -111,12 +111,17 @@ export const formatAccountsForChartByRange = (
   const now = new Date();
   now.setHours(0, 0, 0, 0);
 
-  if (range === "week") {
+  if (range === "last7days") {
+    const last7Days = new Date(now);
+    last7Days.setDate(now.getDate() - 6);
+    last7Days.setHours(0, 0, 0, 0);
+
     const weekDates = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(now);
-      d.setDate(now.getDate() - (6 - i));
+      const d = new Date(last7Days);
+      d.setDate(last7Days.getDate() + i);
       return d;
     });
+
     return fillDataWithCarryForward(
       chartPoints,
       weekDates,
@@ -127,29 +132,29 @@ export const formatAccountsForChartByRange = (
     }));
   }
 
-  if (range === "month") {
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const today = now.getDate();
-    const monthDates = Array.from(
-      { length: today },
-      (_, i) => new Date(year, month, i + 1)
-    );
-    return fillDataWithCarryForward(chartPoints, monthDates, (date) =>
-      String(date.getDate()).padStart(2, "0")
+  if (range === "last30days") {
+    const last30Days = new Date(now);
+    last30Days.setDate(now.getDate() - 29);
+    last30Days.setHours(0, 0, 0, 0);
+
+    const thirtyDaysDates = getAllDatesInRange(last30Days, now);
+    return fillDataWithCarryForward(
+      chartPoints,
+      thirtyDaysDates,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
     );
   }
 
-  if (range === "quarter") {
-    const q = Math.floor(now.getMonth() / 3) * 3;
-    const start = new Date(now.getFullYear(), q, 1);
-    const end = new Date(now.getFullYear(), q + 3, 0);
-    const quarterDates = getAllDatesInRange(start, end);
+  if (range === "last60days") {
+    const last60Days = new Date(now);
+    last60Days.setDate(now.getDate() - 59);
+    last60Days.setHours(0, 0, 0, 0);
+
+    const sixtyDaysDates = getAllDatesInRange(last60Days, now);
     return fillDataWithCarryForward(
       chartPoints,
-      quarterDates,
-      (date) =>
-        `${MONTHS[date.getMonth()]} ${String(date.getDate()).padStart(2, "0")}`
+      sixtyDaysDates,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
     );
   }
 

@@ -1,58 +1,29 @@
+#![allow(unused_imports)]
 use crate::utils::{
     accounts::{
-        encrypt_file, decrypt_file
+     decrypt_file
     },
     ipfs::{
-        download_from_ipfs, download_from_ipfs_async, upload_to_ipfs, upload_to_ipfs_async, upload_bytes_to_ipfs,
+        download_from_ipfs, download_from_ipfs_async,
     },
-    file_operations::{ copy_to_sync_and_add_to_db, get_file_name_variations,
-         remove_from_sync_folder, copy_to_sync_folder, delete_and_unpin_user_file_records_from_folder}
+    file_operations::{ copy_to_sync_and_add_to_db,
+         remove_from_sync_folder, copy_to_sync_folder}
 };
 use fs_extra;
-use futures::TryFutureExt;
-use uuid::Uuid;
 use std::fs;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use sha2::{Digest, Sha256};
-use tempfile::tempdir;
-use crate::DB_POOL;
 use crate::commands::types::*;
-use crate::constants::folder_sync::{DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
-use crate::sync_shared::{collect_files_recursively, collect_folders_recursively, collect_files_in_folder};
 use std::path::{Path, PathBuf};
 use base64::{Engine as _, engine::general_purpose};
-use sqlx::Row;
-use crate::utils::sync::get_public_sync_path;
-use futures::{future, stream::{self, StreamExt}};
+use futures::stream::{self, StreamExt};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::utils::file_operations::sanitize_name;
-use rayon::prelude::*;
-use crate::utils::folder_tree::FolderNode;
 use std::collections::HashMap;
-use tauri::{AppHandle, Manager};
-use crate::events::AppEvent;
-use tauri::Emitter;
+use tauri::Manager;
 use tokio::process::Command;
 use crate::commands::node::get_aws_binary_path;
 
-// Helper function to format file sizes
-fn format_file_size(size_bytes: usize) -> String {
-    const UNITS: &[&str] = &["bytes", "KB", "MB", "GB", "TB"];
-    let mut size = size_bytes as f64;
-    let mut unit_index = 0;
-    
-    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_index += 1;
-    }
-    
-    if unit_index == 0 {
-        format!("{} {}", size_bytes, UNITS[unit_index])
-    } else {
-        format!("{:.1} {}", size, UNITS[unit_index])
-    }
-}
 
 // Drops the first segment and returns None if the remaining path is empty
 fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<Vec<String>> {
@@ -77,7 +48,7 @@ fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<V
 pub async fn encrypt_and_upload_file(
     account_id: String,
     file_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
 ) -> Result<String, String> {
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
@@ -146,7 +117,7 @@ pub async fn download_and_decrypt_file(
     );
 
     // Special handling when the 'CID' indicates S3 source
-    if metadata_cid == "s3" {
+    if metadata_cid == "s3" || metadata_cid == "local" {
         // If source exists locally, copy; otherwise pull from S3 using aws cli
         if Path::new(&source).exists() {
             std::fs::copy(&source, &output_file)
@@ -315,11 +286,10 @@ async fn reconstruct_and_decrypt_file(
 pub async fn encrypt_and_upload_folder(
     account_id: String,
     folder_path: String,
-    seed_phrase: String,
-    source: String,
+    _seed_phrase: String,
+    _source: String,
 ) -> Result<String, String> {
     println!("[+] Starting encrypted upload for folder: {}", folder_path);
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_path = Path::new(&folder_path);
 
     if !folder_path.is_dir() {
@@ -358,8 +328,7 @@ pub async fn download_and_decrypt_folder(
 ) -> Result<(), String> {
     println!("[+] Starting download for folder with manifest CID: {}", folder_metadata_cid);
 
-    let source_clone = source.clone();
-    if folder_metadata_cid == "s3" {
+    if folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
         println!("[+] Handling S3 folder download for source: {}", source);
         let source_path = Path::new(&source);
         let destination_path = Path::new(&output_dir).join(&folder_name);
@@ -464,7 +433,7 @@ pub async fn download_and_decrypt_folder(
 
                 // Check if the entry is a subfolder metadata (new hierarchical logic)
                 if entry.file_name.ends_with(".folder.ec_metadata") {
-                    let mut subfolder_name = entry.file_name.trim_end_matches(".s.folder.ec_metadata");
+                    let subfolder_name = entry.file_name.trim_end_matches(".s.folder.ec_metadata");
                     // Remove leading '.' and '.s' if present
                     let cleaned_name = subfolder_name.trim_end_matches(".folder.ec_metadata");
                     let subfolder_path = output_root_clone.join(cleaned_name);
@@ -599,11 +568,11 @@ async fn reconstruct_and_decrypt_single_file(
 #[tauri::command]
 pub async fn add_file_to_private_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     file_path: String,
-    seed_phrase: String,
-    encryption_key: Option<String>,
+    _seed_phrase: String,
+    _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>, 
 ) -> Result<String, String> {
     let path = std::path::PathBuf::from(&file_path);
@@ -618,13 +587,6 @@ pub async fn add_file_to_private_folder(
     let folder_name = sanitize_name(&folder_name);
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
     let sanitized_folder_name = sanitize_name(&folder_name);
-
-    let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
-        file_name.clone()
-    } else {
-        format!("{}.ff.ec_metadata", file_name)
-    };
-    let sanitized_file_name = sanitize_name(&final_file_name);
 
     // Build sync subfolder path (if any)
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
@@ -659,7 +621,7 @@ pub async fn remove_file_from_private_folder(
     folder_metadata_cid: String,
     folder_name: String,
     file_name: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     println!("[+] Removing file '{}' from folder '{}'", file_name, folder_name);
@@ -701,160 +663,14 @@ pub async fn remove_file_from_private_folder(
     Ok(folder_name) 
 }
 
-async fn handle_erasure_coding_and_upload(
-    data_to_process: Vec<u8>,
-    k: usize, m: usize, chunk_size: usize,
-    api_url: &Arc<String>
-) -> Result<(Vec<ChunkInfo>, Vec<(String, String)>), String> {
-
-    let (_file_id, shards_to_upload) = tokio::task::spawn_blocking(move || {
-        let r = ReedSolomon::new(k, m - k).map_err(|e| format!("ReedSolomon error: {e}"))?;
-        let file_id = Uuid::new_v4().to_string();
-        let mut all_shards: Vec<(String, Vec<u8>, usize, usize)> = Vec::new();
-
-        let chunks: Vec<Vec<u8>> = data_to_process.chunks(chunk_size).map(|c| {
-            let mut chunk = c.to_vec();
-            if chunk.len() < chunk_size { chunk.resize(chunk_size, 0); }
-            chunk
-        }).collect();
-        
-        for (orig_idx, chunk) in chunks.iter().enumerate() {
-            let sub_block_size = (chunk.len() + k - 1) / k;
-            let sub_blocks: Vec<Vec<u8>> = (0..k).map(|j| {
-                let start = j * sub_block_size;
-                let end = std::cmp::min(start + sub_block_size, chunk.len());
-                let mut sub_block = chunk[start..end].to_vec();
-                if sub_block.len() < sub_block_size { sub_block.resize(sub_block_size, 0); }
-                sub_block
-            }).collect();
-            
-            let mut shards_data: Vec<Option<Vec<u8>>> = sub_blocks.into_iter().map(Some).collect();
-            for _ in k..m { shards_data.push(Some(vec![0u8; sub_block_size])); }
-            
-            let mut shard_refs: Vec<_> = shards_data.iter_mut().map(|x| x.as_mut().unwrap().as_mut_slice()).collect();
-            r.encode(&mut shard_refs).map_err(|e| format!("ReedSolomon encode error: {e}"))?;
-            
-            for (share_idx, shard_data) in shard_refs.iter().enumerate() {
-                let chunk_name = format!("{}_chunk_{}_{}.ec", file_id, orig_idx, share_idx);
-                all_shards.push((chunk_name, shard_data.to_vec(), orig_idx, share_idx));
-            }
-        }
-        Ok::<(String, Vec<(String, Vec<u8>, usize, usize)>), String>((file_id, all_shards))
-    }).await.map_err(|e| e.to_string())??;
-
-    let all_chunk_info = Arc::new(Mutex::new(Vec::new()));
-    let chunk_pairs = Arc::new(Mutex::new(Vec::new()));
-
-    stream::iter(shards_to_upload)
-        .for_each_concurrent(Some(10), |(chunk_name, shard_data, orig_idx, share_idx)| {
-            let api_url_clone = Arc::clone(api_url);
-            let all_chunk_info_clone = Arc::clone(&all_chunk_info);
-            let chunk_pairs_clone = Arc::clone(&chunk_pairs);
-
-            async move {
-                let shard_len = shard_data.len();
-                match upload_bytes_to_ipfs(&api_url_clone, shard_data, &chunk_name).await {
-                    Ok(cid) => {
-                        let info = ChunkInfo {
-                            name: chunk_name.clone(),
-                            path: String::new(),
-                            cid: CidInfo { cid: cid.clone(), filename: chunk_name.clone(), size_bytes: shard_len, encrypted: true, size_formatted: format_file_size(shard_len) },
-                            original_chunk: orig_idx, share_idx, size: shard_len,
-                        };
-                        all_chunk_info_clone.lock().await.push(info);
-                        chunk_pairs_clone.lock().await.push((chunk_name, cid));
-                    },
-                    Err(e) => eprintln!("Failed to upload chunk {}: {}", chunk_name, e),
-                }
-            }
-        }).await;
-    
-    let final_chunk_info = Arc::try_unwrap(all_chunk_info).map_err(|_| "Failed to unwrap Arc for chunk info".to_string())?.into_inner();
-    let final_chunk_pairs = Arc::try_unwrap(chunk_pairs).map_err(|_| "Failed to unwrap Arc for chunk pairs".to_string())?.into_inner();
-
-    Ok((final_chunk_info, final_chunk_pairs))
-}
-
-#[tauri::command]
-pub async fn download_and_decrypt_single_file(
-    metadata_cid: String,
-    output_file: String,
-    api_url: Arc<String>,
-    encryption_key: Option<Arc<Vec<u8>>>,
-) -> Result<(), String> {
-    let metadata_bytes = download_from_ipfs_async(&api_url, &metadata_cid).await
-        .map_err(|e| format!("Failed to download metadata: {}", e))?;
-    let metadata: Metadata = serde_json::from_slice(&metadata_bytes)
-        .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
-
-    if metadata.chunks.is_empty() {
-        return Err(format!("Cannot reconstruct file '{}': metadata contains no chunk information.", metadata.original_file.name));
-    }
-
-    let k = metadata.erasure_coding.k;
-    let m = metadata.erasure_coding.m;
-    let chunk_size = metadata.erasure_coding.chunk_size;
-
-    let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
-    for chunk in &metadata.chunks {
-        chunk_map.entry(chunk.original_chunk).or_default().push(chunk);
-    }
-    
-    let mut reconstructed_chunks_data = Vec::with_capacity(chunk_map.len());
-    for orig_idx in 0..chunk_map.len() {
-        let available_shards = chunk_map.get(&orig_idx).ok_or("Missing chunk group in map")?;
-        let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
-        
-        for shard_info in available_shards.iter() {
-            let data = download_from_ipfs_async(&api_url, &shard_info.cid.cid).await.map_err(|e| e.to_string())?;
-            shards[shard_info.share_idx] = Some(data);
-        }
-
-        if shards.iter().filter(|s| s.is_some()).count() < k {
-            return Err(format!("Not enough shards for chunk {}", orig_idx));
-        }
-        
-        let r = ReedSolomon::new(k, m - k).map_err(|e| e.to_string())?;
-        r.reconstruct_data(&mut shards).map_err(|e| format!("Reconstruction failed: {}", e))?;
-        
-        let mut chunk_data = Vec::new();
-        let mut bytes_collected = 0;
-        let is_last_chunk = orig_idx == chunk_map.len() - 1;
-        let chunk_bytes_needed = if !is_last_chunk {
-            chunk_size
-        } else {
-            metadata.erasure_coding.encrypted_size.saturating_sub(chunk_size * orig_idx)
-        };
-
-        for i in 0..k {
-            if let Some(shard) = &shards[i] {
-                let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
-                chunk_data.extend_from_slice(&shard[..bytes_to_take]);
-                bytes_collected += bytes_to_take;
-                if bytes_collected == chunk_bytes_needed {
-                    break;
-                }
-            }
-        }
-        reconstructed_chunks_data.push(chunk_data);
-    }
-
-    let encrypted_data: Vec<u8> = reconstructed_chunks_data.into_iter().flatten().collect();
-    let decrypted_data = decrypt_file(&encrypted_data, encryption_key.map(|k| (*k).clone())).await?;
-    
-    let actual_hash = format!("{:x}", Sha256::digest(&decrypted_data));
-    if actual_hash != metadata.original_file.hash {
-        return Err(format!("Hash mismatch for {}", metadata.original_file.name));
-    }
-
-    tokio::fs::write(&output_file, &decrypted_data).await.map_err(|e| e.to_string())?;
-    println!("[✔] Successfully downloaded and wrote file to {}", output_file);
-    Ok(())
-}
-
 #[tauri::command]
 pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(path, data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_file(path: String) -> Result<(), String> {
+    std::fs::remove_file(path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -866,7 +682,7 @@ pub fn read_file(path: String) -> Result<Vec<u8>, String> {
 pub async fn upload_file_public(
     account_id: String,
     file_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
 ) -> Result<String, String> {
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
@@ -903,7 +719,7 @@ pub async fn download_file_public(
 
     println!("[download_file_public] Start: file_cid='{}', output_file='{}'", file_cid, output_file);
     // Special handling when the 'CID' indicates S3 source
-    if file_cid == "s3" {
+    if file_cid == "s3" || file_cid == "local" {
         println!("[download_file_public] returned source='{}'", source);
 
         // Dynamically get the AWS binary path
@@ -997,9 +813,8 @@ pub async fn download_file_public(
 pub async fn public_upload_folder(
     account_id: String,
     folder_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
 ) -> Result<String, String> {
-    let api_url = "http://127.0.0.1:5001";
     
     let folder_path = Path::new(&folder_path);
     if !folder_path.is_dir() {
@@ -1015,105 +830,6 @@ pub async fn public_upload_folder(
     Ok(folder_name)
 }
 
-// Recursively upload a folder for public upload, using .folder for root and .s.folder for all subfolders
-fn upload_folder_recursive_public(
-    folder_path: &Path,
-    api_url: &str,
-    is_root: bool,
-    all_files: &mut Vec<(String, String)>,
-) -> Result<(String, String, usize), String> {
-    use std::fs;
-    use crate::commands::types::FileEntry;
-    use tempfile::tempdir;
-    let mut file_entries = Vec::new();
-    let mut files = Vec::new();
-    let mut subfolders = Vec::new();
-
-    // Collect files and subfolders
-    for entry in fs::read_dir(folder_path).map_err(|e| format!("Failed to read dir: {}", e))? {
-        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-        let path = entry.path();
-
-        // Get file or folder name safely
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue, // skip if can't get valid name
-        };
-        
-        // Skip hidden files/folders
-        if name.starts_with('.') {
-            continue;
-        }
-
-        if path.is_dir() {
-            subfolders.push(path);
-        } else {
-            files.push(path);
-        }
-    }
-
-    // Upload files in this folder
-    let mut total_size = 0usize;
-    for file_path in &files {
-        let file_name = file_path.file_name()
-            .ok_or("Invalid file path".to_string())?
-            .to_string_lossy();
-        if file_name.ends_with(".folder") || file_name.ends_with(".s.folder") {
-            continue;
-        }
-        let ipfs_name = if file_name.ends_with(".ff") {
-            file_name.to_string()
-        } else {
-            format!("{}.ff", file_name)
-        };
-        let cid = upload_to_ipfs(api_url, file_path.to_str().unwrap())
-            .map_err(|e| format!("Failed to upload file: {}", e))?;
-        let file_size = file_path.metadata()
-            .map_err(|e| format!("Failed to get file metadata: {}", e))?
-            .len() as usize;
-        file_entries.push(FileEntry {
-            file_name: ipfs_name.clone(),
-            file_size,
-            cid: cid.clone(),
-        });
-        all_files.push((ipfs_name, cid));
-        total_size += file_size;
-    }
-
-    // Recursively process subfolders
-    for subfolder_path in &subfolders {
-        let (meta_name, meta_cid, subfolder_size) = upload_folder_recursive_public(
-            subfolder_path,
-            api_url,
-            false,
-            all_files,
-        )?;
-        // Add subfolder metadata to this folder's entries
-        file_entries.push(FileEntry {
-            file_name: meta_name.clone(),
-            file_size: subfolder_size,
-            cid: meta_cid.clone(),
-        });
-        all_files.push((meta_name, meta_cid));
-        total_size += subfolder_size;
-    }
-
-    // Write and upload metadata for this folder
-    let metadata_name = if is_root {
-        format!("{}.folder", folder_path.file_name().unwrap().to_string_lossy())
-    } else {
-        format!("{}.s.folder", folder_path.file_name().unwrap().to_string_lossy())
-    };
-    let temp_dir = tempdir().map_err(|e| format!("Failed to create temp dir: {}", e))?;
-    let metadata_path = temp_dir.path().join("metadata.json");
-    fs::write(&metadata_path, serde_json::to_vec(&file_entries)
-        .map_err(|e| format!("Failed to serialize metadata: {}", e))?)
-        .map_err(|e| format!("Failed to write metadata: {}", e))?;
-    let metadata_cid = upload_to_ipfs(api_url, metadata_path.to_str().unwrap())
-        .map_err(|e| format!("Failed to upload metadata: {}", e))?;
-    Ok((metadata_name, metadata_cid, total_size))
-}
-
 #[tauri::command]
 pub async fn public_download_folder(
     _account_id: String,
@@ -1122,7 +838,7 @@ pub async fn public_download_folder(
     output_dir: String,
     source: String,
 ) -> Result<(), String> {
-    if folder_metadata_cid == "s3" {
+    if folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
         println!("[+] Handling S3 folder download for source: {}", source);
         let source_path = Path::new(&source);
         let destination_path = Path::new(&output_dir).join(&folder_name);
@@ -1361,7 +1077,7 @@ pub async fn list_folder_contents(
     }
 
     async fn resolve_source(
-        scope: &str,
+        _scope: &str,
         sync_root: &std::path::Path,
         main_folder_name: &str,
         subfolder_path: &Option<Vec<String>>,
@@ -1510,9 +1226,9 @@ pub async fn list_folder_contents(
 async fn list_local_directory(
     dir_path: &Path,
     sync_root: &Path,
-    scope: &str,
-    main_folder_name: &str,
-    subfolder_path: Option<Vec<String>>,
+    _scope: &str,
+    _main_folder_name: &str,
+    _subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
     use std::fs;
     use std::time::UNIX_EPOCH;
@@ -1560,43 +1276,16 @@ async fn list_local_directory(
     Ok(files)
 }
 
-async fn parse_folder_metadata(bytes: &[u8], original_cid: &str) -> Result<Vec<FolderFileEntry>, String> {
-    if let Ok(folder_refs) = serde_json::from_slice::<Vec<FolderFileEntry>>(bytes) {
-            return Ok(folder_refs)
-    }
-    Err(format!("Unknown folder metadata format for CID {}", original_cid))
-}
-
-fn clean_file_name(name: &str) -> String {
-    if let Some(stripped) = name.strip_suffix(".ff.ec_metadata") {
-        // Remove ".ff.ec_metadata" and add ".ec_metadata" back
-        format!("{}.ec_metadata", stripped)
-    } else if let Some(stripped) = name.strip_suffix(".s.folder.ec_metadata") {
-        // Remove ".s.folder.ec_metadata" and add ".ec_metadata" back
-        format!("{}.folder", stripped)
-    } else if let Some(stripped) = name.strip_suffix(".s.folder") {
-        // Remove ".s.folder" and add ".folder" back
-        format!("{}.folder", stripped)
-    } else if let Some(stripped) = name.strip_suffix(".ff") {
-        // Just remove ".ff"
-        stripped.to_string()
-    } else {
-        // Return as is if no matching suffix
-        name.to_string()
-    }
-}
-
 #[tauri::command]
 pub async fn add_file_to_public_folder(
     account_id: String,
     folder_metadata_cid: String,
     folder_name: String,
     file_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    use std::sync::Arc;
-
+    
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
         .file_name()
@@ -1606,10 +1295,8 @@ pub async fn add_file_to_public_folder(
 
     println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
 
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_name = sanitize_name(&folder_name);
-    let file_name = sanitize_name(&file_name);
-
+    
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
     println!(
         "[add_file_to_public_folder] subfolder_path: {:?}, cid: {}, normalized_subfolder: {:?}", 
@@ -1647,13 +1334,12 @@ pub async fn add_file_to_public_folder(
 #[tauri::command]
 pub async fn remove_file_from_public_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     file_name: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_name = sanitize_name(&folder_name);
     
     
@@ -1692,10 +1378,10 @@ pub async fn remove_file_from_public_folder(
 #[tauri::command]
 pub async fn add_folder_to_public_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     folder_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let folder_name = sanitize_name(&folder_name);
@@ -1734,17 +1420,14 @@ pub async fn add_folder_to_public_folder(
 #[tauri::command]
 pub async fn remove_folder_from_public_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     folder_to_remove: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    use std::sync::Arc;
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_name = sanitize_name(&folder_name);
-    
-    
+
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
     // Remove from sync folder
@@ -1774,11 +1457,11 @@ pub async fn remove_folder_from_public_folder(
 #[tauri::command]
 pub async fn add_folder_to_private_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     folder_path: String,
-    seed_phrase: String,
-    encryption_key: Option<String>,
+    _seed_phrase: String,
+    _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     println!("calling private folder add function");
@@ -1815,11 +1498,11 @@ pub async fn add_folder_to_private_folder(
 #[tauri::command]
 pub async fn remove_folder_from_private_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     folder_to_remove: String,
-    seed_phrase: String,
-    encryption_key: Option<String>,
+    _seed_phrase: String,
+    _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let folder_name = sanitize_name(&folder_name);

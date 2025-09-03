@@ -45,10 +45,6 @@ pub struct ErasureCodingInfo {
     pub encrypted_size: usize,
 }
 
-pub const DEFAULT_K: usize = 3;
-pub const DEFAULT_M: usize = 5;
-pub const DEFAULT_CHUNK_SIZE: usize = 1024 * 1024; // 1MB
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileEntry {
     pub file_name: String,
@@ -85,20 +81,6 @@ pub struct FileDetail {
     pub is_folder: bool, // <-- FIX: Added this field
 }
 
-// A helper struct to hold the results from processing each file
-#[derive(Debug)]
-pub struct FileProcessingResult {
-    pub file_entry: FileEntry,
-    pub chunk_pairs: Vec<(String, String)>,
-}
-
-#[derive(Debug)]
-pub struct FileProcessingResultSync {
-    pub file_entry: FileEntry,
-    pub meta_filename: String,
-    pub metadata_cid: String,
-    pub chunk_pairs: Vec<(String, String)>,
-}
 
 #[derive(Serialize, Deserialize)]
 struct FolderMetadata {

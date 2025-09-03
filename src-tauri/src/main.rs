@@ -25,7 +25,7 @@ use commands::accounts::{
     reset_app,
 };
 use commands::ipfs_commands::{
-    download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file,
+    download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file, delete_file,
     upload_file_public, download_file_public, wipe_s3_objects,
     encrypt_and_upload_folder, download_and_decrypt_folder, public_download_folder, public_upload_folder, list_folder_contents,
     remove_file_from_public_folder, add_file_to_public_folder, remove_file_from_private_folder, add_file_to_private_folder, add_folder_to_public_folder,
@@ -40,7 +40,7 @@ use commands::substrate_tx::{
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
-use tauri::{AppHandle, Builder, Manager};
+use tauri::{Builder, Manager};
 use tokio::sync::Mutex;
 
 // Register the new  Tauri command so the frontend can invoke it.
@@ -61,7 +61,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             println!("Another instance attempted to start");
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -78,6 +78,7 @@ fn main() {
             upload_file_public,
             download_file_public,
             write_file,
+            delete_file,
             read_file,
             get_sync_path,
             set_sync_path,

@@ -1,10 +1,7 @@
 use crate::constants::substrate::WSS_ENDPOINT;
-use crate::private_folder_sync;
-use crate::public_folder_sync;
 use crate::utils::accounts::{
     create_and_store_encryption_key, import_encryption_key, list_encryption_keys,
 };
-use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use sqlx::Row;
 
@@ -30,6 +27,7 @@ pub async fn get_encryption_keys() -> Result<Vec<EncryptionKeyInfo>, String> {
 }
 
 #[tauri::command]
+#[allow(deprecated)]
 pub async fn import_key(key_base64: String) -> Result<String, String> {
     // Decode the base64 key
     let key_bytes =
@@ -43,7 +41,7 @@ pub async fn import_key(key_base64: String) -> Result<String, String> {
 pub struct ExportDataResult {
     pub public_sync_path: Option<String>,
     pub private_sync_path: Option<String>,
-    pub encryption_keys: Vec<String>, // base64 encoded keys
+    pub encryption_keys: Vec<String>, 
 }
 
 #[derive(serde::Deserialize)]
@@ -54,6 +52,7 @@ pub struct ImportDataParams {
 }
 
 #[tauri::command]
+#[allow(deprecated)]
 pub async fn import_app_data(params: ImportDataParams) -> Result<String, String> {
     println!("[Import] Starting app data import...");
 

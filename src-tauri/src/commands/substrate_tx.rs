@@ -8,9 +8,6 @@ use crate::DB_POOL;
 use chrono::Utc;
 use serde::Serialize;
 use sqlx::Row;
-use crate::utils::ipfs::{pin_json_to_ipfs_local, download_content_from_ipfs};
-use serde_json::{json, Value};
-use hex;
 use crate::{start_public_folder_sync_tauri, start_private_folder_sync_tauri};
 use crate::commands::syncing::ensure_aws_env;
 
@@ -73,63 +70,6 @@ pub struct SyncPathResult {
 
 pub static SUBSTRATE_TX_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-fn collect_folder_files_recursively<'a>(
-    ipfs_api_url: &'a str,
-    cid: &'a str,
-    file_name: &'a str,
-    files_to_unpin: &'a mut Vec<Value>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
-    Box::pin(async move {
-        // Add the current folder/file itself to the list.
-        files_to_unpin.push(json!({
-            "cid": cid,
-            "filename": file_name
-        }));
-
-        if file_name.trim().ends_with(".folder") || file_name.trim().ends_with(".folder.ec_metadata") {
-            // It's a folder, so process its contents recursively.
-            let content_bytes = download_content_from_ipfs(ipfs_api_url, cid).await?;
-            let folder_contents: Vec<Value> = serde_json::from_slice(&content_bytes)
-                .map_err(|e| format!("Failed to parse folder JSON for {}: {}", cid, e))?;
-
-            for item in folder_contents {
-                if let (Some(item_cid), Some(item_filename)) = (
-                    item["cid"].as_str(),
-                    item["file_name"].as_str(),
-                ) {
-                    collect_folder_files_recursively(
-                        ipfs_api_url,
-                        item_cid,
-                        item_filename,
-                        files_to_unpin,
-                    )
-                    .await?;
-                }
-            }
-        } else if file_name.trim().ends_with(".ec_metadata") {
-            // It's a metadata file, so process its chunks.
-            let content_bytes = download_content_from_ipfs(ipfs_api_url, cid).await?;
-            let metadata: Value = serde_json::from_slice(&content_bytes)
-                .map_err(|e| format!("Failed to parse metadata JSON: {}", e))?;
-
-            if let Some(chunks) = metadata["chunks"].as_array() {
-                for chunk in chunks {
-                    if let (Some(chunk_cid), Some(chunk_filename)) = (
-                        chunk["cid"]["cid"].as_str(),
-                        chunk["cid"]["filename"].as_str(),
-                    ) {
-                        files_to_unpin.push(json!({
-                            "cid": chunk_cid,
-                            "filename": chunk_filename
-                        }));
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    })
-}
 
 #[tauri::command]
 pub async fn set_sync_path(

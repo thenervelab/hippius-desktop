@@ -185,6 +185,14 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
 
                 // Small delay to make progress visible when adding multiple small files
                 if (files.length > 1) await new Promise(r => setTimeout(r, 300));
+                // Only delete temporary files that were created from browser File objects
+                if (file.file && filePath.includes('/tmp/')) {
+                    try {
+                        await invoke("delete_file", { path: filePath });
+                    } catch (error) {
+                        console.error(`Failed to delete temporary file ${filePath}:`, error);
+                    }
+                }
             }
 
             toast.success(

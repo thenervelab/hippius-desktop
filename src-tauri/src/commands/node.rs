@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use once_cell::sync::OnceCell;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
@@ -12,8 +13,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use reqwest::Client;
 use std::path::{Path, PathBuf};
-use tokio::fs; // Changed from std::fs to tokio::fs for async operations
-use std::fs::Permissions;
+use tokio::fs; 
 
 // For macOS/Linux permissions
 #[cfg(unix)]
@@ -240,16 +240,6 @@ async fn ensure_ipfs_not_running(_bin_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn get_system_architecture() -> Result<String, String> {
-    let output = Command::new("uname").arg("-m").output().await.map_err(|e| format!("Failed to detect architecture: {}", e))?;
-    if !output.status.success() { return Err("Failed to detect architecture".into()); }
-    let arch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    match arch.as_str() {
-        "x86_64" => Ok("x86_64".to_string()),
-        "arm64" | "aarch64" => Ok("aarch64".to_string()),
-        _ => Err(format!("Unsupported architecture: {}", arch)),
-    }
-}
 
 #[cfg(target_os = "linux")]
 async fn install_aws_cli() -> Result<(), String> {
@@ -521,16 +511,6 @@ async fn get_aws_state_file() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".hippius").join("aws_install_state"))
 }
 
-async fn should_skip_aws_installation() -> bool {
-    if let Some(state_file) = get_aws_state_file().await {
-        if state_file.exists() {
-            if let Ok(content) = fs::read_to_string(&state_file).await {
-                return content.trim() == "completed" || content.trim() == "attempted";
-            }
-        }
-    }
-    false
-}
 
 async fn mark_aws_installation_complete() {
     if let Some(state_file) = get_aws_state_file().await {

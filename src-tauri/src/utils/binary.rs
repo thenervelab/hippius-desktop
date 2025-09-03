@@ -1,12 +1,9 @@
-use base64::{engine::general_purpose, Engine as _};
 use once_cell::sync::OnceCell;
-use sha2::{Digest, Sha256};
+// use sha2::Digest;
 use std::fs;
 use crate::constants::ipfs::KUBO_VERSION;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration as StdDuration;
-use tauri::Emitter;
 use tokio::sync::Mutex;
 use tokio::task;
 
@@ -23,7 +20,7 @@ pub fn get_binary_path() -> Result<PathBuf, String> {
     Ok(home.join(".hippius").join("bin").join(binary_name))
 }
 
-pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String> {
+pub async fn ensure_ipfs_binary(_app: tauri::AppHandle) -> Result<PathBuf, String> {
     let binary_path = get_binary_path()?;
 
     // If binary already exists, check if it's executable and valid

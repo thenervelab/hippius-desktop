@@ -7,8 +7,7 @@ import {
   enabledNotificationTypesAtom,
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
-import { setTraySyncPercent } from "./useTraySync";
-// import { toast } from "sonner";
+import { syncPercentAtom, syncStatusAtom } from "@/app/lib/store/syncAtoms";
 
 // Define interface for sync status response
 interface SyncStatusResponse {
@@ -19,10 +18,13 @@ interface SyncStatusResponse {
 }
 
 export function useFilesNotification() {
-  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null);
   const [invokeCount, setInvokeCount] = useState<number>(0);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
+
+  // Use both atoms
+  const setSyncPercent = useSetAtom(syncPercentAtom);
+  const [syncStatus, setSyncStatus] = useAtom(syncStatusAtom);
 
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const areFilesNotificationsEnabled = enabledTypes.includes("Files");
@@ -30,27 +32,48 @@ export function useFilesNotification() {
   // Refs to track sync state changes
   const wasInProgress = useRef(false);
   const notificationSent = useRef(false);
-  useEffect(() => {
-    if (!areFilesNotificationsEnabled) return;
+  const lastUpdateTime = useRef(Date.now());
 
-    // Function to get sync status
+  useEffect(() => {
+    // Function to get sync status with additional logging
     const getSyncStatus = async () => {
       try {
         // Increment the invoke counter
         setInvokeCount((prevCount) => prevCount + 1);
 
+        // Get current status
         const status = await invoke<SyncStatusResponse>("get_sync_status");
-        // console.log("status", status);
+        // const syncActivity = await invoke<SyncStatusResponse>("get_sync_activity", {
+        //   accountId: "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2"
+        // });
+
+        // console.log("Sync Activity:", syncActivity);
+
+
+        // Use a timestamp to track freshness of updates
+        const now = Date.now();
+        const timeSinceLastUpdate = now - lastUpdateTime.current;
+
+        // Log every 5 seconds or when status changes
+        if (timeSinceLastUpdate > 5000 ||
+          !syncStatus ||
+          status.in_progress !== syncStatus.in_progress ||
+          status.percent !== syncStatus.percent) {
+          // console.log("[Sync Status]", status, "Time since last log:", timeSinceLastUpdate);
+          lastUpdateTime.current = now;
+        }
+
+        // Update both atoms atomically to keep them in sync
         setSyncStatus(status);
 
-        // Update tray sync percentage only when there's a meaningful change
+        // Update sync percentage atom - this triggers the tray update
         if (status.in_progress) {
-          await setTraySyncPercent(status.percent); // 0–100
+          setSyncPercent(status.percent); // 0–100
         } else if (status.percent === 100) {
-          await setTraySyncPercent(100);
+          setSyncPercent(100);
         } else {
           // If not in progress and not 100%, don't show any sync status
-          await setTraySyncPercent(null);
+          setSyncPercent(null);
         }
 
         // Check if sync was previously in progress
@@ -58,7 +81,7 @@ export function useFilesNotification() {
           wasInProgress.current = true;
         }
 
-        // Check if sync has completed (was in progress, now complete with 100%)
+        // Check if sync has completed
         if (
           wasInProgress.current &&
           !status.in_progress &&
@@ -91,6 +114,9 @@ export function useFilesNotification() {
       }
     };
 
+    // Skip if notifications are disabled
+    if (!areFilesNotificationsEnabled) return;
+
     // Get status immediately
     getSyncStatus();
 
@@ -99,7 +125,14 @@ export function useFilesNotification() {
 
     // Clean up interval on component unmount
     return () => clearInterval(intervalId);
-  }, [areFilesNotificationsEnabled, refreshUnread]);
+  }, [
+    areFilesNotificationsEnabled,
+    refreshUnread,
+    setSyncPercent,
+    syncStatus,
+    setSyncStatus,
+  ]);
+
   useEffect(() => {
     refreshEnabledTypes();
   }, [refreshEnabledTypes]);
