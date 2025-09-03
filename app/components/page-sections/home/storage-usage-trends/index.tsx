@@ -15,19 +15,16 @@ import { Account } from "@/app/lib/types/accounts";
 import { ChartPoint } from "@/app/lib/utils/getFormatDataForCreditsUsageChart";
 import { formatStorageForChartByRange } from "@/app/lib/utils/getFormatDataForStorageUsageChart";
 import { InView } from "react-intersection-observer";
-import {
-  getQuarterDateLabels,
-  MONTHS,
-} from "@/app/lib/utils/getXlablesForAccounts";
 import StorageUsedTooltip from "./StorageUsedTooltip";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
+import { getXLabelsForTimeRange } from "@/app/lib/utils/getXLabelsForTimeRange";
 
 // === Time‐Range Options ===
 const timeRangeOptions: Option[] = [
-  { value: "week", label: "This Week" },
-  { value: "month", label: "This Month" },
-  { value: "lastMonth", label: "Last Month" },
+  { value: "last7days", label: "Last 7 Days" },
+  { value: "last30days", label: "Last 30 Days" },
+  { value: "last60days", label: "Last 60 Days" },
   { value: "year", label: "This Year" },
 ];
 
@@ -42,7 +39,7 @@ const StorageUsageTrends: React.FC<{
   className?: string;
   onRetry?: () => void;
 }> = ({ chartData, isLoading, className }) => {
-  const [timeRange, setTimeRange] = useState<string>("week");
+  const [timeRange, setTimeRange] = useState<string>("last7days");
 
   // Format raw account‐data into ChartPoint[] according to the selected range
   // Now using our storage-specific formatter
@@ -52,7 +49,7 @@ const StorageUsageTrends: React.FC<{
     }
     return formatStorageForChartByRange(
       chartData,
-      timeRange as "week" | "month" | "lastMonth" | "quarter" | "year"
+      timeRange as "last7days" | "last30days" | "last60days" | "year"
     );
   }, [chartData, timeRange]);
 
@@ -65,80 +62,10 @@ const StorageUsageTrends: React.FC<{
   }, [formattedChartData]);
 
   // Build X‐labels (strings) depending on selected range
-  let xLabels: string[] = [];
-  if (timeRange === "week") {
-    const currentWeekDates = (() => {
-      const today = new Date();
-      const currentDay = today.getDay();
-      const diff = today.getDate() - currentDay + (currentDay === 0 ? -6 : 1);
-      const monday = new Date(today.setDate(diff));
-      monday.setHours(0, 0, 0, 0);
+  const xLabels: string[] = useMemo(() => {
+    return getXLabelsForTimeRange(formattedChartData, chartData, timeRange);
+  }, [formattedChartData, chartData, timeRange]);
 
-      return Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(monday);
-        d.setDate(monday.getDate() + i);
-        return d;
-      });
-    })();
-    xLabels = currentWeekDates.map((date) =>
-      date.toLocaleDateString("en-US", { weekday: "short" })
-    );
-  } else if (timeRange === "month" && formattedChartData.length > 0) {
-    const date = new Date();
-    const today = date.getDate();
-    if (today <= 15) {
-      xLabels = Array.from({ length: today }, (_, i) =>
-        String(i + 1).padStart(2, "0")
-      );
-    } else {
-      xLabels = [];
-      for (let i = 1; i <= today; i += 2) {
-        xLabels.push(String(i).padStart(2, "0"));
-      }
-      const todayLabel = String(today).padStart(2, "0");
-      if (!xLabels.includes(todayLabel)) xLabels.push(todayLabel);
-    }
-  } else if (timeRange === "lastMonth" && formattedChartData.length > 0) {
-    // For last month, similar to month but use previous month's dates
-    const now = new Date();
-    const lastMonth = new Date(now);
-    lastMonth.setMonth(lastMonth.getMonth() - 1);
-    const daysInLastMonth = new Date(
-      lastMonth.getFullYear(),
-      lastMonth.getMonth() + 1,
-      0
-    ).getDate();
-
-    if (daysInLastMonth <= 15) {
-      xLabels = Array.from({ length: daysInLastMonth }, (_, i) =>
-        String(i + 1).padStart(2, "0")
-      );
-    } else {
-      xLabels = [];
-      for (let i = 1; i <= daysInLastMonth; i += 2) {
-        xLabels.push(String(i).padStart(2, "0"));
-      }
-      const lastDayLabel = String(daysInLastMonth).padStart(2, "0");
-      if (!xLabels.includes(lastDayLabel)) xLabels.push(lastDayLabel);
-    }
-  } else if (timeRange === "quarter" && formattedChartData.length > 0) {
-    const date = new Date(formattedChartData[0].x || new Date());
-    xLabels = getQuarterDateLabels(date, 10);
-  } else if (timeRange === "year") {
-    const baseYear =
-      chartData && chartData.length
-        ? new Date(
-            chartData[chartData.length - 1].processed_timestamp
-          ).getFullYear()
-        : new Date().getFullYear();
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const monthsToShow = baseYear === currentYear ? now.getMonth() + 1 : 12;
-    xLabels = MONTHS.slice(0, monthsToShow);
-  }
-
-  // Compute a "half‐band" paddingOuter so the first tick sits half a band away
-  const paddingOuter = xLabels.length > 0 ? 1 / (2 * xLabels.length) : 0;
   return (
     <InView triggerOnce threshold={0.2}>
       {({ ref, inView }) => (
@@ -244,11 +171,6 @@ const StorageUsageTrends: React.FC<{
                         angle: -35,
                         dx: -3,
                       }),
-                    }}
-                    bandScaleConfig={{
-                      paddingInner: 0.3,
-                      paddingOuter,
-                      align: 0,
                     }}
                     renderTooltip={(tooltipData) => (
                       <StorageUsedTooltip tooltipData={tooltipData} />
