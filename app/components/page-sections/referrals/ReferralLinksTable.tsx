@@ -60,8 +60,8 @@ export default function ReferralLinksTable() {
         }
       }),
       columnHelper.accessor("reward", {
-        header: "Credits Earned",
-        cell: (info) => `${info.getValue()} Credits`
+        header: "hALPHA EARNED",
+        cell: (info) => `${info.getValue()} hAlpha`
       }),
       columnHelper.display({
         id: "copy",

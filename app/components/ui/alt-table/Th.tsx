@@ -43,7 +43,7 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
         )}
       >
         {canSort ? (
-          <button className="relative flex h-fit w-fit whitespace-nowrap uppercase">
+          <button className={cn("relative flex h-fit w-fit whitespace-nowrap", header.column.columnDef.header !== "hALPHA EARNED" && "uppercase")}>
             {flexRender(header.column.columnDef.header, header.getContext())}
             {sortOrder && (
               <ChevronDown
