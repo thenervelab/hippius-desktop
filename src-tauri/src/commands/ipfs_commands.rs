@@ -1,12 +1,12 @@
 use crate::utils::{
     accounts::{
-        encrypt_file, decrypt_file
+     decrypt_file
     },
     ipfs::{
-        download_from_ipfs, download_from_ipfs_async, upload_to_ipfs, upload_to_ipfs_async, upload_bytes_to_ipfs,
+        download_from_ipfs, download_from_ipfs_async, upload_to_ipfs,  upload_bytes_to_ipfs,
     },
-    file_operations::{ copy_to_sync_and_add_to_db, get_file_name_variations,
-         remove_from_sync_folder, copy_to_sync_folder, delete_and_unpin_user_file_records_from_folder}
+    file_operations::{ copy_to_sync_and_add_to_db,
+         remove_from_sync_folder, copy_to_sync_folder}
 };
 use fs_extra;
 use futures::TryFutureExt;
@@ -14,25 +14,17 @@ use uuid::Uuid;
 use std::fs;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use sha2::{Digest, Sha256};
-use tempfile::tempdir;
-use crate::DB_POOL;
 use crate::commands::types::*;
-use crate::constants::folder_sync::{DEFAULT_K, DEFAULT_M, DEFAULT_CHUNK_SIZE};
-use crate::sync_shared::{collect_files_recursively, collect_folders_recursively, collect_files_in_folder};
 use std::path::{Path, PathBuf};
 use base64::{Engine as _, engine::general_purpose};
 use sqlx::Row;
-use crate::utils::sync::get_public_sync_path;
-use futures::{future, stream::{self, StreamExt}};
+use futures::stream::{self, StreamExt};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::utils::file_operations::sanitize_name;
 use rayon::prelude::*;
-use crate::utils::folder_tree::FolderNode;
 use std::collections::HashMap;
-use tauri::{AppHandle, Manager};
-use crate::events::AppEvent;
-use tauri::Emitter;
+use tauri::Manager;
 use tokio::process::Command;
 use crate::commands::node::get_aws_binary_path;
 
@@ -77,7 +69,7 @@ fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<V
 pub async fn encrypt_and_upload_file(
     account_id: String,
     file_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
 ) -> Result<String, String> {
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
@@ -315,11 +307,10 @@ async fn reconstruct_and_decrypt_file(
 pub async fn encrypt_and_upload_folder(
     account_id: String,
     folder_path: String,
-    seed_phrase: String,
-    source: String,
+    _seed_phrase: String,
+    _source: String,
 ) -> Result<String, String> {
     println!("[+] Starting encrypted upload for folder: {}", folder_path);
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_path = Path::new(&folder_path);
 
     if !folder_path.is_dir() {
@@ -358,7 +349,6 @@ pub async fn download_and_decrypt_folder(
 ) -> Result<(), String> {
     println!("[+] Starting download for folder with manifest CID: {}", folder_metadata_cid);
 
-    let source_clone = source.clone();
     if folder_metadata_cid == "s3" {
         println!("[+] Handling S3 folder download for source: {}", source);
         let source_path = Path::new(&source);
@@ -464,7 +454,7 @@ pub async fn download_and_decrypt_folder(
 
                 // Check if the entry is a subfolder metadata (new hierarchical logic)
                 if entry.file_name.ends_with(".folder.ec_metadata") {
-                    let mut subfolder_name = entry.file_name.trim_end_matches(".s.folder.ec_metadata");
+                    let subfolder_name = entry.file_name.trim_end_matches(".s.folder.ec_metadata");
                     // Remove leading '.' and '.s' if present
                     let cleaned_name = subfolder_name.trim_end_matches(".folder.ec_metadata");
                     let subfolder_path = output_root_clone.join(cleaned_name);
@@ -599,11 +589,11 @@ async fn reconstruct_and_decrypt_single_file(
 #[tauri::command]
 pub async fn add_file_to_private_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     file_path: String,
-    seed_phrase: String,
-    encryption_key: Option<String>,
+    _seed_phrase: String,
+    _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>, 
 ) -> Result<String, String> {
     let path = std::path::PathBuf::from(&file_path);
@@ -618,13 +608,6 @@ pub async fn add_file_to_private_folder(
     let folder_name = sanitize_name(&folder_name);
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
     let sanitized_folder_name = sanitize_name(&folder_name);
-
-    let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
-        file_name.clone()
-    } else {
-        format!("{}.ff.ec_metadata", file_name)
-    };
-    let sanitized_file_name = sanitize_name(&final_file_name);
 
     // Build sync subfolder path (if any)
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
@@ -659,7 +642,7 @@ pub async fn remove_file_from_private_folder(
     folder_metadata_cid: String,
     folder_name: String,
     file_name: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     println!("[+] Removing file '{}' from folder '{}'", file_name, folder_name);
@@ -866,7 +849,7 @@ pub fn read_file(path: String) -> Result<Vec<u8>, String> {
 pub async fn upload_file_public(
     account_id: String,
     file_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
 ) -> Result<String, String> {
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
@@ -997,9 +980,8 @@ pub async fn download_file_public(
 pub async fn public_upload_folder(
     account_id: String,
     folder_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
 ) -> Result<String, String> {
-    let api_url = "http://127.0.0.1:5001";
     
     let folder_path = Path::new(&folder_path);
     if !folder_path.is_dir() {
@@ -1361,7 +1343,7 @@ pub async fn list_folder_contents(
     }
 
     async fn resolve_source(
-        scope: &str,
+        _scope: &str,
         sync_root: &std::path::Path,
         main_folder_name: &str,
         subfolder_path: &Option<Vec<String>>,
@@ -1510,9 +1492,9 @@ pub async fn list_folder_contents(
 async fn list_local_directory(
     dir_path: &Path,
     sync_root: &Path,
-    scope: &str,
-    main_folder_name: &str,
-    subfolder_path: Option<Vec<String>>,
+    _scope: &str,
+    _main_folder_name: &str,
+    _subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
     use std::fs;
     use std::time::UNIX_EPOCH;
@@ -1592,11 +1574,10 @@ pub async fn add_file_to_public_folder(
     folder_metadata_cid: String,
     folder_name: String,
     file_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    use std::sync::Arc;
-
+    
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
         .file_name()
@@ -1606,10 +1587,8 @@ pub async fn add_file_to_public_folder(
 
     println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
 
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_name = sanitize_name(&folder_name);
-    let file_name = sanitize_name(&file_name);
-
+    
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
     println!(
         "[add_file_to_public_folder] subfolder_path: {:?}, cid: {}, normalized_subfolder: {:?}", 
@@ -1647,13 +1626,12 @@ pub async fn add_file_to_public_folder(
 #[tauri::command]
 pub async fn remove_file_from_public_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     file_name: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_name = sanitize_name(&folder_name);
     
     
@@ -1695,7 +1673,7 @@ pub async fn add_folder_to_public_folder(
     folder_metadata_cid: String,
     folder_name: String,
     folder_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let folder_name = sanitize_name(&folder_name);
@@ -1734,17 +1712,14 @@ pub async fn add_folder_to_public_folder(
 #[tauri::command]
 pub async fn remove_folder_from_public_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     folder_to_remove: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    use std::sync::Arc;
-    let api_url = Arc::new("http://127.0.0.1:5001".to_string());
     let folder_name = sanitize_name(&folder_name);
-    
-    
+
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
     // Remove from sync folder
@@ -1774,10 +1749,10 @@ pub async fn remove_folder_from_public_folder(
 #[tauri::command]
 pub async fn add_folder_to_private_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     folder_path: String,
-    seed_phrase: String,
+    _seed_phrase: String,
     encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
@@ -1818,8 +1793,8 @@ pub async fn remove_folder_from_private_folder(
     folder_metadata_cid: String,
     folder_name: String,
     folder_to_remove: String,
-    seed_phrase: String,
-    encryption_key: Option<String>,
+    _seed_phrase: String,
+    _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let folder_name = sanitize_name(&folder_name);

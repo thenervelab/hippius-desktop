@@ -1,12 +1,9 @@
-use base64::{engine::general_purpose, Engine as _};
 use once_cell::sync::OnceCell;
-use sha2::{Digest, Sha256};
+// use sha2::Digest;
 use std::fs;
 use crate::constants::ipfs::KUBO_VERSION;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration as StdDuration;
-use tauri::Emitter;
 use tokio::sync::Mutex;
 use tokio::task;
 

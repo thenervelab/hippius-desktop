@@ -1,21 +1,18 @@
 use crate::user_profile_sync::{start_user_profile_sync_tauri};
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync, list_bucket_contents, store_bucket_listing_in_db};
+use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync};
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use tauri::Manager;
 use tokio::sync::Mutex;
 use std::sync::Arc;
-use std::env;
-use base64::Engine as _;
 use base64::{encode};
 use sqlx;
-use sp_core::{sr25519, crypto::Ss58Codec};
+use sp_core::sr25519;
 use sp_core::Pair;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
 use base64 as b64;
-use tauri::State;
 
 #[derive(Default)]
 pub struct SyncState {
@@ -278,7 +275,6 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
             Ok(None) => {
                 // Create a new subaccount (sr25519) and store it encrypted
                 let (_pair, phrase, _seed) = sr25519::Pair::generate_with_phrase(None);
-                let public = sr25519::Pair::from_phrase(&phrase, None).map(|(p, _)| p.public()).ok();
                 let to_store = if let Some(key) = &maybe_key {
                     let enc = encrypt_phrase(&phrase, key);
                     enc

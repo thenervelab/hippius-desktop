@@ -4,23 +4,21 @@ use std::io::{BufRead, BufReader};
 use std::time::Duration;
 use tauri::AppHandle;
 use tauri::Manager;
-use sqlx::SqlitePool;
 use tokio::time::sleep;
-use base64::{encode};
+use base64::encode;
 use std::sync::atomic::Ordering;
 use std::thread;
-use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::process::ExitStatusExt;
 use crate::sync_shared::parse_s3_sync_line;
 use crate::sync_shared::MAX_RECENT_ITEMS;
-use crate::sync_shared::{insert_bucket_item_if_absent, bucket_item_from_local, delete_bucket_item_by_name, list_bucket_contents, reconcile_bucket_root};
+use crate::sync_shared::{insert_bucket_item_if_absent, delete_bucket_item_by_name};
 use serde_json::json;
 use tauri::Emitter;
 use crate::DB_POOL;
-pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE, RecentItem, BucketItem};
+pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE,  BucketItem};
 use std::env;
 use crate::commands::node::get_aws_binary_path;
 
@@ -36,8 +34,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
 
     let bucket_name = format!("{}-public", account_id);
     let endpoint_url = "https://s3.hippius.com";
-    let encoded_seed_phrase = encode(&seed_phrase);
-
+    
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => {

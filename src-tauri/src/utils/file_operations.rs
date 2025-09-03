@@ -1,5 +1,4 @@
-use crate::commands::substrate_tx::{ FileHashWrapper, FileInputWrapper};
-use crate::utils::ipfs::pin_json_to_ipfs_local;
+// use crate::commands::substrate_tx::{ FileHashWrapper, FileInputWrapper};
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use crate::DB_POOL;
 use std::fs;
@@ -8,9 +7,8 @@ use crate::sync_shared::collect_files_recursively;
 use hex;
 
 use crate::sync_shared::insert_file_if_not_exists;
-use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
-use tokio::time::{Duration, sleep};
+// use std::sync::{Arc, Mutex};
+// use tokio::time::{Duration, sleep};
 
 // Helper to sanitize file/folder names for DB and filesystem operations
 pub fn sanitize_name(name: &str) -> String {
@@ -84,7 +82,7 @@ pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Resu
 
             match hashes_result {
                 Ok(hashes) if !hashes.is_empty() => {
-                    if let Some((file_hash,)) = hashes.first() {                        
+                    if let Some((_file_hash,)) = hashes.first() {                        
                         
                         // Also delete from file_paths table
                         let _ = sqlx::query("DELETE FROM file_paths WHERE file_name = ?")
@@ -266,9 +264,8 @@ pub async fn copy_to_sync_and_add_to_db(
 
         if exists.is_none() {
             println!("inserted main_request_hash {:?}", request_cid);
-            let mut source = "Hippius".to_string();
             let sanitize_name = sanitize_name(&dest_path_str_clone);
-            source = dest_path_str_clone.clone();
+            let source = dest_path_str_clone.clone();
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
@@ -395,7 +392,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
 
         if let Some(pool) = DB_POOL.get() {
             for file in &files {
-                if let Some(file_name_inner) = file.file_name().and_then(|s| s.to_str()) {
+                if let Some(_file_name_inner) = file.file_name().and_then(|s| s.to_str()) {
                     let relative_path = file.strip_prefix(&sync_folder).unwrap_or(file);
                     let relative_path_str = relative_path.to_string_lossy().to_string();
                     if let Err(e) = sqlx::query(
@@ -464,7 +461,7 @@ pub async fn copy_to_sync_folder(
     folder_name: &str,
     account_id: &str,
     metadata_cid: &str,
-    request_cid: &str,
+    _request_cid: &str,
     is_public: bool,
     is_folder: bool,
     meta_folder_name: &str,
@@ -623,7 +620,7 @@ pub async fn remove_from_sync_folder(
     meta_folder_name: &str,
     folder_manifest_cid: &str,
     account_id: &str,
-    requested_cid: &str,
+    _requested_cid: &str,
     subfolder_path: Option<String>,
 ) {
     let sync_folder = if is_public {
@@ -670,7 +667,7 @@ pub async fn remove_from_sync_folder(
 
         if let Some(pool) = DB_POOL.get() {
             for file in &files {
-                if let Some(file_name_inner) = file.file_name().and_then(|s| s.to_str()) {
+                if let Some(_file_name_inner) = file.file_name().and_then(|s| s.to_str()) {
                     let relative_path = file.strip_prefix(&sync_folder).unwrap_or(file);
                     let relative_path_str = relative_path.to_string_lossy().to_string();
                     if let Err(e) = sqlx::query(
@@ -830,32 +827,5 @@ pub async fn insert_file_if_not_exists_in_folder(
         .bind(chrono::Utc::now().timestamp())
         .execute(pool)
         .await;
-    }
-}
-
-pub async fn delete_and_unpin_user_file_records_from_folder(
-    folder_name: &str,
-    seed_phrase: &str,
-) -> Result<u64, String> {
-    if let Some(pool) = DB_POOL.get() {
-        let _ = unpin_user_file_by_name(folder_name, seed_phrase)
-            .await;
-
-        let result = sqlx::query("DELETE FROM user_profiles WHERE file_name = ?")
-            .bind(folder_name)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("DB error (delete user_profiles): {e}"))?;
-
-        // Also delete from file_paths table
-        let _ = sqlx::query("DELETE FROM file_paths WHERE file_name = ?")
-            .bind(folder_name)
-            .execute(pool)
-            .await;
-
-        let total_deleted = result.rows_affected();
-        Ok(total_deleted)
-    } else {
-        Err("DB_POOL not initialized".to_string())
     }
 }

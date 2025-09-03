@@ -40,7 +40,7 @@ use commands::substrate_tx::{
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
-use tauri::{AppHandle, Builder, Manager};
+use tauri::{Builder, Manager};
 use tokio::sync::Mutex;
 
 // Register the new  Tauri command so the frontend can invoke it.

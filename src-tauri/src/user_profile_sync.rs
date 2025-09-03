@@ -16,12 +16,12 @@ use subxt::storage::StorageKeyValuePair;
 use serde_json;
 use sqlx::Row;
 use std::str;
-use sqlx::SqlitePool;
+// use sqlx::SqlitePool;
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 use tauri::Emitter;
 use crate::events::AppEvent;
-use crate::sync_shared::{GLOBAL_CANCEL_TOKEN, reset_all_sync_state};
+use crate::sync_shared::GLOBAL_CANCEL_TOKEN;
 use std::sync::atomic::Ordering;
 
 #[derive(Debug, Serialize)]

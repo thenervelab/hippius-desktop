@@ -1,19 +1,19 @@
 use std::sync::{Arc, Mutex};
 use std::collections::{HashSet, VecDeque};
 use tauri::{AppHandle, Wry};
-use crate::constants::folder_sync::{SyncStatus, SyncStatusResponse}; 
+use crate::constants::folder_sync::{SyncStatusResponse}; 
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path; 
 use std::path::PathBuf;
-use std::fs;
+// use std::fs;
 use std::process::Command;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use hex;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
-use chrono::{DateTime, Utc};
+// use chrono::{DateTime, Utc};
 use crate::user_profile_sync::UserProfileFileWithType;
 use crate::utils::file_operations::calculate_local_size;
 use crate::commands::node::get_aws_binary_path;
@@ -220,8 +220,6 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
     let uploading_unified = uploading.iter()
         .map(|item| item.to_user_profile_file(&account_id))
         .collect();
-    println!("[get_sync_activity] Found {} recent items, {} uploading for account {}", 
-        recent.len(), uploading.len(), account_id);
         
     SyncActivityResponse { 
         recent: recent_unified,
@@ -258,45 +256,6 @@ pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);
 }
 
-// Helper to collect all subfolders
-pub fn collect_folders_recursively(dir: &Path, folders: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-            if name.starts_with('.') {
-                continue; // Skip hidden files and directories
-            }
-        }
-        if path.is_dir() {
-            folders.push(path.clone());
-            collect_folders_recursively(&path, folders)?;
-        }
-    }
-    Ok(())
-}
-
-// Helper to collect files in a single folder (non-recursive)
-pub fn collect_files_in_folder(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-            if name.starts_with('.') {
-                continue; // Skip hidden files and directories
-            }
-        }
-        if path.is_file() {
-            if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
-                if file_name.starts_with('.') {
-                    continue; // Skip hidden files
-                }
-            }
-            files.push(path);
-        }
-    }
-    Ok(())
-}
 
 // Helper function to collect files with their relative paths
 pub fn collect_files_with_relative_paths(
@@ -690,80 +649,3 @@ pub async fn delete_bucket_item_by_name(
     Ok(res.rows_affected())
 }
 
-//  Reconcile DB rows with the given root-level bucket items. Any DB row for this
-// owner/scope (main_req_hash='s3') whose file_name is NOT present in items will be deleted.
-pub async fn reconcile_bucket_root(
-    pool: &SqlitePool,
-    owner: &str,
-    scope: &str,
-    items: &[BucketItem],
-) -> Result<u64, sqlx::Error> {
-    let file_type = if scope == "public" { "public" } else { "private" };
-    // Fetch current names
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT file_name FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'",
-    )
-    .bind(owner)
-    .bind(file_type)
-    .fetch_all(pool)
-    .await?;
-
-    let existing: std::collections::HashSet<String> = rows.into_iter().map(|(n,)| n).collect();
-    let wanted: std::collections::HashSet<String> = items.iter().map(|it| it.path.clone()).collect();
-
-    // Compute names to delete: existing - wanted
-    let to_delete: Vec<String> = existing.difference(&wanted).cloned().collect();
-    if to_delete.is_empty() {
-        return Ok(0);
-    }
-
-    // Delete in a transaction
-    let mut tx = pool.begin().await?;
-    let mut deleted: u64 = 0;
-    for name in to_delete {
-        let res = sqlx::query(
-            "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND file_name = ? AND main_req_hash = 's3'",
-        )
-        .bind(owner)
-        .bind(file_type)
-        .bind(&name)
-        .execute(&mut *tx)
-        .await?;
-        deleted += res.rows_affected();
-    }
-    tx.commit().await?;
-    Ok(deleted)
-}
- 
-// Build a top-level BucketItem from an absolute local file path.
-// Only the first path segment under sync_root is used as the S3 "path" field, so
-// children of an uploaded folder are coalesced into the folder entry.
-pub fn bucket_item_from_local(abs_local: &Path, sync_root: &Path) -> Option<BucketItem> {
-    let rel = abs_local.strip_prefix(sync_root).ok()?;
-    let mut comps = rel.components();
-    let first = comps.next()?; // top-level component under sync root
-    let first_str = first.as_os_str().to_string_lossy().to_string();
-    // If there are remaining components after the first, we treat it as a folder upload
-    // and only store the top folder once.
-    let is_folder = comps.next().is_some();
-
-    let (size, last_modified) = if is_folder {
-        (0, Utc::now().to_rfc3339())
-    } else {
-        let metadata = std::fs::metadata(abs_local).ok()?;
-        let modified = metadata.modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| DateTime::from_timestamp(d.as_secs() as i64, 0).unwrap_or_else(Utc::now))
-            .unwrap_or_else(Utc::now)
-            .to_rfc3339();
-        (metadata.len(), modified)
-    };
-
-    Some(BucketItem {
-        path: first_str,
-        size,
-        last_modified,
-        is_folder,
-    })
-}

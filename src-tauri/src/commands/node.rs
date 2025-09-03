@@ -12,8 +12,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use reqwest::Client;
 use std::path::{Path, PathBuf};
-use tokio::fs; // Changed from std::fs to tokio::fs for async operations
-use std::fs::Permissions;
+use tokio::fs; 
 
 // For macOS/Linux permissions
 #[cfg(unix)]
@@ -521,16 +520,6 @@ async fn get_aws_state_file() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".hippius").join("aws_install_state"))
 }
 
-async fn should_skip_aws_installation() -> bool {
-    if let Some(state_file) = get_aws_state_file().await {
-        if state_file.exists() {
-            if let Ok(content) = fs::read_to_string(&state_file).await {
-                return content.trim() == "completed" || content.trim() == "attempted";
-            }
-        }
-    }
-    false
-}
 
 async fn mark_aws_installation_complete() {
     if let Some(state_file) = get_aws_state_file().await {
