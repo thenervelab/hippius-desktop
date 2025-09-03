@@ -40,7 +40,7 @@ use commands::substrate_tx::{
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
-use tauri::{AppHandle, Builder, Manager};
+use tauri::{Builder, Manager};
 use tokio::sync::Mutex;
 
 // Register the new  Tauri command so the frontend can invoke it.
@@ -61,7 +61,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             println!("Another instance attempted to start");
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();

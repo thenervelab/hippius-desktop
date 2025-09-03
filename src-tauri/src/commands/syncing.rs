@@ -1,21 +1,17 @@
 use crate::user_profile_sync::{start_user_profile_sync_tauri};
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync, list_bucket_contents, store_bucket_listing_in_db};
+use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync};
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use tauri::Manager;
 use tokio::sync::Mutex;
 use std::sync::Arc;
-use std::env;
-use base64::Engine as _;
-use base64::{encode};
 use sqlx;
-use sp_core::{sr25519, crypto::Ss58Codec};
+use sp_core::sr25519;
 use sp_core::Pair;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
 use base64 as b64;
-use tauri::State;
 
 #[derive(Default)]
 pub struct SyncState {
@@ -29,12 +25,13 @@ pub struct AppState {
 
 /// Public helper: resolve/create the subaccount seed and set AWS env vars accordingly
 /// This mirrors the credentials setup used by initialize_sync when starting folder syncs.
+#[allow(deprecated)]
 pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
     // Resolve or create subaccount seed (with encryption and chain-side handling)
     let seed_to_use = resolve_or_create_subaccount_seed(account_id.clone(), mnemonic.clone()).await;
 
     // Configure AWS env
-    let encoded_seed = encode(&seed_to_use);
+    let encoded_seed = b64::encode(&seed_to_use);
     std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
     std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
     std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
@@ -229,6 +226,7 @@ async fn load_encryption_key(pool: &sqlx::SqlitePool) -> Option<SbKey> {
 }
 
 // Helper: encrypt plain text with nonce, return base64 of (nonce || ciphertext)
+#[allow(deprecated)]
 fn encrypt_phrase(plain: &str, key: &SbKey) -> String {
     let nonce = secretbox::gen_nonce();
     let ct = secretbox::seal(plain.as_bytes(), &nonce, key);
@@ -239,6 +237,7 @@ fn encrypt_phrase(plain: &str, key: &SbKey) -> String {
 }
 
 // Helper: try decrypt base64 (nonce||ct), else None
+#[allow(deprecated)]
 fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
     let bytes = b64::decode(b64_in).ok()?;
     if bytes.len() < secretbox::NONCEBYTES { return None; }
@@ -278,7 +277,6 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
             Ok(None) => {
                 // Create a new subaccount (sr25519) and store it encrypted
                 let (_pair, phrase, _seed) = sr25519::Pair::generate_with_phrase(None);
-                let public = sr25519::Pair::from_phrase(&phrase, None).map(|(p, _)| p.public()).ok();
                 let to_store = if let Some(key) = &maybe_key {
                     let enc = encrypt_phrase(&phrase, key);
                     enc
