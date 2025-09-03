@@ -127,7 +127,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       // finish up
       setRequestState("idle");
-      idleTimeout.current = setTimeout(() => {
+      idleTimeout.current = setTimeout(async () => {
         refetchUserFiles();
         onSuccess?.();
 
@@ -138,6 +138,19 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
         // Convert loading -> success on the same toast id (auto-closes)
         toast.success(successText, { id: localToastId });
+        console.log("Upload successful", filePaths);
+
+        // Clean up temporary files
+        for (const filePath of filePaths) {
+          if (filePath.includes('/tmp/')) {
+            try {
+              await invoke("delete_file", { path: filePath });
+            } catch (error) {
+              console.error(`Failed to delete temporary file ${filePath}:`, error);
+            }
+          }
+        }
+
       }, 500);
     } catch (err) {
       setRequestState("idle");

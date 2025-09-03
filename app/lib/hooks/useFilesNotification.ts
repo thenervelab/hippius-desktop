@@ -43,6 +43,12 @@ export function useFilesNotification() {
 
         // Get current status
         const status = await invoke<SyncStatusResponse>("get_sync_status");
+        // const syncActivity = await invoke<SyncStatusResponse>("get_sync_activity", {
+        //   accountId: "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2"
+        // });
+
+        // console.log("Sync Activity:", syncActivity);
+
 
         // Use a timestamp to track freshness of updates
         const now = Date.now();

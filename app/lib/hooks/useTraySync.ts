@@ -481,7 +481,7 @@ async function normalizeActivityToRows(
   }
 
   // Keep the list compact
-  return rows.slice(0, 5);
+  return rows;
 }
 
 /* ─ Ensure video thumbnail exists for a local file path ──────── */

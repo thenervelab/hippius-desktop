@@ -345,11 +345,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     }
   }, [error]);
 
-  // Get displayed data based on view type
-  const displayedData = useMemo(() => {
-    return isRecentFiles ? filteredData.slice(0, 4) : filteredData;
-  }, [filteredData, isRecentFiles]);
-
   // Get displayed file count
   const displayedFileCount = useMemo(() => {
     if (searchTerm || activeFilters.length > 0) {
@@ -452,7 +447,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           isFetching={isFetching}
           isPrivateView={isPrivateView}
           filteredData={filteredData}
-          displayedData={displayedData}
+          displayedData={filteredData}
           searchTerm={searchTerm}
           activeFilters={activeFilters}
           viewMode={viewMode}
