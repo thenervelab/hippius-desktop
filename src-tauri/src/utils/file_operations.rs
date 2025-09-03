@@ -56,18 +56,7 @@ pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
     variations.into_iter().filter(|v| seen.insert(v.clone())).collect()
 }
 
-fn build_storage_json(files: &[(String, String)]) -> String {
-    let json_vec: Vec<_> = files
-        .iter()
-        .map(|(filename, cid)| serde_json::json!({
-            "filename": filename,
-            "cid": cid,
-        }))
-        .collect();
-    serde_json::to_string(&serde_json::Value::Array(json_vec)).unwrap()
-}
-
-pub async fn unpin_user_file_by_name(file_name: &str, seed_phrase: &str) -> Result<(), String> {
+pub async fn unpin_user_file_by_name(file_name: &str, _seed_phrase: &str) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
         let variations = get_file_name_variations(file_name);
         let mut last_error = None;
@@ -264,7 +253,6 @@ pub async fn copy_to_sync_and_add_to_db(
 
         if exists.is_none() {
             println!("inserted main_request_hash {:?}", request_cid);
-            let sanitize_name = sanitize_name(&dest_path_str_clone);
             let source = dest_path_str_clone.clone();
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
@@ -793,39 +781,5 @@ pub async fn remove_from_sync_folder(
             .execute(pool)
             .await;
         }
-    }
-}
-
-pub async fn insert_file_if_not_exists_in_folder(
-    pool: &sqlx::Pool<sqlx::Sqlite>,
-    file_path: &Path,
-    account_id: &str,
-    is_public: bool,
-    is_folder: bool,
-) {
-    let file_name = file_path.to_string_lossy().to_string();
-    let file_type = if is_public { "public" } else { "private" };
-    let entry_type = if is_folder { "folder" } else { "file" };
-
-    let exists: Option<(String,)> = sqlx::query_as(
-        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND type = ? AND owner = ? LIMIT 1"
-    )
-    .bind(&file_name)
-    .bind(file_type)
-    .bind(account_id)
-    .fetch_optional(pool)
-    .await
-    .unwrap_or(None);
-    if exists.is_none() {
-        let _ = sqlx::query(
-            "INSERT INTO sync_folder_files (file_name, type, owner, entry_type, created_at) VALUES (?, ?, ?, ?, ?)"
-        )
-        .bind(&file_name)
-        .bind(file_type)
-        .bind(account_id)
-        .bind(entry_type)
-        .bind(chrono::Utc::now().timestamp())
-        .execute(pool)
-        .await;
     }
 }

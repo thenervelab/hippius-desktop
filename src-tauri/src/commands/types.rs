@@ -81,12 +81,6 @@ pub struct FileDetail {
     pub is_folder: bool, // <-- FIX: Added this field
 }
 
-// A helper struct to hold the results from processing each file
-#[derive(Debug)]
-pub struct FileProcessingResult {
-    pub file_entry: FileEntry,
-    pub chunk_pairs: Vec<(String, String)>,
-}
 
 #[derive(Serialize, Deserialize)]
 struct FolderMetadata {

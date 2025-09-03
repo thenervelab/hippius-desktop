@@ -100,6 +100,7 @@ pub async fn decrypt_file(encrypted_data: &[u8], encryption_key: Option<Vec<u8>>
 }
 
 /// List all encryption keys in the DB (returns base64-encoded key values and their IDs)
+#[allow(deprecated)]
 pub async fn list_encryption_keys() -> Result<Vec<(String, i64)>, String> {
     if let Some(pool) = DB_POOL.get() {
         let rows = sqlx::query("SELECT key, id FROM encryption_keys ORDER BY id DESC")

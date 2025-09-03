@@ -27,6 +27,7 @@ pub async fn get_encryption_keys() -> Result<Vec<EncryptionKeyInfo>, String> {
 }
 
 #[tauri::command]
+#[allow(deprecated)]
 pub async fn import_key(key_base64: String) -> Result<String, String> {
     // Decode the base64 key
     let key_bytes =
@@ -51,6 +52,7 @@ pub struct ImportDataParams {
 }
 
 #[tauri::command]
+#[allow(deprecated)]
 pub async fn import_app_data(params: ImportDataParams) -> Result<String, String> {
     println!("[Import] Starting app data import...");
 

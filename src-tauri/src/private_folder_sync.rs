@@ -1,10 +1,10 @@
+#![allow(unused_imports)]
 use crate::utils::sync::get_private_sync_path;
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
 use tauri::AppHandle;
 use tokio::time::sleep;
-use base64::{encode};
 use std::sync::atomic::Ordering;
 use std::thread;
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE,  BucketItem, insert_bucket_item_if_absent,  delete_bucket_item_by_name};
@@ -21,7 +21,7 @@ use chrono;
 use std::env;
 use crate::commands::node::get_aws_binary_path;
 
-pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String, seed_phrase: String) {
+pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String, _seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(&(account_id.clone(), "private")) {
@@ -33,8 +33,7 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
 
     let bucket_name = format!("{}-private", account_id);
     let endpoint_url = "https://s3.hippius.com";
-    let encoded_seed_phrase = encode(&seed_phrase);
-
+   
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => {

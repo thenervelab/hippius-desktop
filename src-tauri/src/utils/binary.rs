@@ -20,7 +20,7 @@ pub fn get_binary_path() -> Result<PathBuf, String> {
     Ok(home.join(".hippius").join("bin").join(binary_name))
 }
 
-pub async fn ensure_ipfs_binary(app: tauri::AppHandle) -> Result<PathBuf, String> {
+pub async fn ensure_ipfs_binary(_app: tauri::AppHandle) -> Result<PathBuf, String> {
     let binary_path = get_binary_path()?;
 
     // If binary already exists, check if it's executable and valid

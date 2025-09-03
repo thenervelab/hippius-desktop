@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use crate::utils::sync::get_public_sync_path;
 use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
@@ -5,7 +6,6 @@ use std::time::Duration;
 use tauri::AppHandle;
 use tauri::Manager;
 use tokio::time::sleep;
-use base64::encode;
 use std::sync::atomic::Ordering;
 use std::thread;
 #[cfg(unix)]
@@ -22,7 +22,7 @@ pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SY
 use std::env;
 use crate::commands::node::get_aws_binary_path;
 
-pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String, seed_phrase: String) {
+pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String, _seed_phrase: String) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(&(account_id.clone(), "public")) {
@@ -314,7 +314,6 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
 
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            let app_handle_clone = app_handle.clone();
             let account_id_clone = account_id.clone();
             let sync_path_str = sync_path.clone();
             thread::spawn(move || {

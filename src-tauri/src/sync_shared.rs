@@ -257,29 +257,6 @@ pub fn app_close(app: AppHandle<Wry>) {
 }
 
 
-// Helper function to collect files with their relative paths
-pub fn collect_files_with_relative_paths(
-    root: &Path,
-    current: &Path,
-    files: &mut Vec<(PathBuf, String)>,
-) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(current)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() {
-            let relative_path = path.strip_prefix(root)
-                .unwrap()
-                .parent()
-                .and_then(|p| p.to_str())
-                .unwrap_or("")
-                .to_string();
-            files.push((path, relative_path));
-        } else if path.is_dir() {
-            collect_files_with_relative_paths(root, &path, files)?;
-        }
-    }
-    Ok(())
-}
 
 // Helper to collect files recursively
 pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
@@ -300,23 +277,6 @@ pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::i
         }
     }
     Ok(())
-}
-
-pub fn find_top_level_folder(path: &Path, sync_path: &Path) -> Option<PathBuf> {
-    // If the path is already a direct child of sync_path, return it
-    if path.parent().map(|p| p == sync_path).unwrap_or(false) {
-        return Some(path.to_path_buf());
-    }
-    
-    // Otherwise walk up the tree to find the first child of sync_path
-    let mut current = path;
-    while let Some(parent) = current.parent() {
-        if parent == sync_path {
-            return Some(current.to_path_buf());
-        }
-        current = parent;
-    }
-    None
 }
 
 pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str, is_public: bool, is_folder: bool) {

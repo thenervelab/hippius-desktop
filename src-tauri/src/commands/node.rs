@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use once_cell::sync::OnceCell;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
@@ -239,16 +240,6 @@ async fn ensure_ipfs_not_running(_bin_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-async fn get_system_architecture() -> Result<String, String> {
-    let output = Command::new("uname").arg("-m").output().await.map_err(|e| format!("Failed to detect architecture: {}", e))?;
-    if !output.status.success() { return Err("Failed to detect architecture".into()); }
-    let arch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    match arch.as_str() {
-        "x86_64" => Ok("x86_64".to_string()),
-        "arm64" | "aarch64" => Ok("aarch64".to_string()),
-        _ => Err(format!("Unsupported architecture: {}", arch)),
-    }
-}
 
 #[cfg(target_os = "linux")]
 async fn install_aws_cli() -> Result<(), String> {
