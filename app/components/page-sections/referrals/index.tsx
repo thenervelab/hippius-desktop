@@ -26,7 +26,7 @@ const Referrals: React.FC = () => {
           <ReferralLinkCard />
           <DetailsCard
             icon={UserSquare}
-            title="Total Referrals`"
+            title="Total Referrals"
             value={data ? data.totalReferrals : "---"}
           />
           <DetailsCard
@@ -36,7 +36,7 @@ const Referrals: React.FC = () => {
           />
           <DetailsCard
             icon={WalletAdd}
-            title="Total Alpha Earned "
+            title="Total hAlpha Earned "
             value={totalCredits.toString()}
           />
         </div>
