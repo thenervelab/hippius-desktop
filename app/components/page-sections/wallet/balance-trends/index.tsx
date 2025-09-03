@@ -14,18 +14,18 @@ import {
   ChartPoint,
 } from "@/app/lib/utils/getFormatDataForAccountsChart";
 import { InView } from "react-intersection-observer";
-import {
-  getQuarterDateLabels,
-  MONTHS,
-} from "@/app/lib/utils/getXlablesForAccounts";
+
 import BalanceTrendsTooltip from "./BalanceTrendsTooltip";
 import { COLORS } from "./constants";
 import { WalletAdd } from "@/app/components/ui/icons";
 import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
+import { getXLabelsForTimeRange } from "@/app/lib/utils/getXLabelsForTimeRange";
 
+// === Time‐Range Options ===
 const timeRangeOptions: Option[] = [
-  { value: "week", label: "Last 7 Days" },
-  { value: "month", label: "This Month" },
+  { value: "last7days", label: "Last 7 Days" },
+  { value: "last30days", label: "Last 30 Days" },
+  { value: "last60days", label: "Last 60 Days" },
   { value: "year", label: "This Year" },
 ];
 
@@ -34,13 +34,13 @@ const BalanceTrends: React.FC<{
   isLoading?: boolean;
   className?: string;
 }> = ({ chartData, isLoading, className }) => {
-  const [timeRange, setTimeRange] = useState<string>("week");
+  const [timeRange, setTimeRange] = useState<string>("last7days");
 
   const formattedChartData: ChartPoint[] = useMemo(() => {
     if (!chartData?.length) return [];
     return formatAccountsForChartByRange(
       chartData,
-      timeRange as "week" | "month" | "quarter" | "year"
+      timeRange as "last7days" | "last30days" | "last60days" | "year"
     );
   }, [chartData, timeRange]);
 
@@ -52,45 +52,10 @@ const BalanceTrends: React.FC<{
     return getNiceTicksAlways(0, mx, 5);
   }, [formattedChartData]);
 
-  let xLabels: string[] = [];
-  if (timeRange === "week") {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const dates = Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(today);
-      d.setDate(today.getDate() - (6 - i));
-      return d;
-    });
-    xLabels = dates.map((d) =>
-      d.toLocaleDateString("en-US", { weekday: "short" })
-    );
-  } else if (timeRange === "month") {
-    const today = new Date().getDate();
-    xLabels =
-      today <= 15
-        ? Array.from({ length: today }, (_, i) =>
-            String(i + 1).padStart(2, "0")
-          )
-        : [
-            ...Array.from({ length: Math.ceil(today / 2) }, (_, i) =>
-              String(1 + i * 2).padStart(2, "0")
-            ),
-            String(today).padStart(2, "0"),
-          ];
-  } else if (timeRange === "quarter") {
-    if (formattedChartData.length) {
-      xLabels = getQuarterDateLabels(formattedChartData[0].x, 10);
-    }
-  } else {
-    const baseYear = chartData?.length
-      ? new Date(
-          chartData[chartData.length - 1].processed_timestamp
-        ).getFullYear()
-      : new Date().getFullYear();
-    const now = new Date().getFullYear();
-    const months = baseYear === now ? new Date().getMonth() + 1 : 12;
-    xLabels = MONTHS.slice(0, months);
-  }
+  // Build X‐labels (strings) depending on selected range
+  const xLabels: string[] = useMemo(() => {
+    return getXLabelsForTimeRange(formattedChartData, chartData, timeRange);
+  }, [formattedChartData, chartData, timeRange]);
 
   return (
     <InView triggerOnce threshold={0.2}>
