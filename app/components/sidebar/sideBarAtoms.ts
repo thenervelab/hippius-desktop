@@ -5,3 +5,4 @@ export const sidebarCollapsedAtom = atomWithStorage("sidebar-collapsed", false);
 export const settingsDialogOpenAtom = atom(false);
 export const activeSettingsTabAtom = atom("File Settings"); // Default tab
 export const activeSubMenuItemAtom = atom("");
+export const isViewingRecentFilesAtom = atom(false);

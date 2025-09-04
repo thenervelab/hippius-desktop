@@ -1,3 +1,4 @@
+"use client";
 import { Geist } from "next/font/google";
 import localFont from "next/font/local";
 import "@/app/globals.css";
@@ -7,13 +8,12 @@ import "react-circular-progressbar/dist/styles.css";
 import NextTopLoader from "nextjs-toploader";
 import { WalletAuthProvider } from "./lib/wallet-auth-context";
 import PreAuthProvider from "@/app/components/auth/PreAuthProvider";
-import { metadata as appMetadata } from "./metadata";
 import { Suspense } from "react";
 import PageLoader from "@/app/components/PageLoader";
 import SplashWrapper from "./components/splash-screen";
 import UpdateDialogWrapper from "./components/updater/UpdateDialogWrapper";
+import { NavigationLoaderProvider } from "./lib/hooks/useNavigationLoader";
 
-export const metadata = appMetadata;
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
@@ -25,7 +25,7 @@ const geistSans = Geist({
   subsets: ["latin"],
 });
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
@@ -39,17 +39,19 @@ export default async function RootLayout({
           <WalletAuthProvider>
             <PreAuthProvider>
               <NextTopLoader color="#3167DD" showSpinner={false} />
-              <Suspense fallback={<PageLoader />}>
-                <SplashWrapper skipSplash={false}>
-                  <div className="flex min-h-screen h-screen">{children}</div>
-                </SplashWrapper>
-              </Suspense>
-              <UpdateDialogWrapper />
-              <Toaster
-                toastOptions={{
-                  style: { fontFamily: "var(--font-geist-sans)" },
-                }}
-              />
+              <NavigationLoaderProvider>
+                <Suspense fallback={<PageLoader />}>
+                  <SplashWrapper skipSplash={false}>
+                    <div className="flex min-h-screen h-screen">{children}</div>
+                  </SplashWrapper>
+                </Suspense>
+                <UpdateDialogWrapper />
+                <Toaster
+                  toastOptions={{
+                    style: { fontFamily: "var(--font-geist-sans)" },
+                  }}
+                />
+              </NavigationLoaderProvider>
             </PreAuthProvider>
           </WalletAuthProvider>
         </Providers>

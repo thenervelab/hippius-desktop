@@ -1,7 +1,6 @@
 "use client";
 
 import { FC, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Icons, RefreshButton, SearchInput } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import AddButton from "./AddFileButton";
@@ -18,6 +17,7 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 import DeleteAllFilesConfirmationDialog from "./DeleteAllFilesConfirmationDialog";
 import { useAtomValue } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
 
 
 interface FilesHeaderProps {
@@ -57,8 +57,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   setIsFilterOpen,
   refetchUserFiles,
   addButtonRef,
-  privateFileCount = 0,
-  publicFileCount = 0,
   syncFolderPath,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
@@ -68,16 +66,15 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   );
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const router = useRouter();
   const { navigateToFilesView } = useFilesNavigation();
+  const { push } = useNavigationLoader();
   const { polkadotAddress } = useWalletAuth();
   const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
   const currentScope = activeSubMenuItem || (isRecentFiles ? "Private" : "Public");
 
   const handleViewAllFiles = () => {
-    // Navigate to the appropriate files view based on the file counts
-    navigateToFilesView(privateFileCount, publicFileCount);
-    router.push('/files');
+    navigateToFilesView()
+    push('/files');
   };
 
   const handleOpenSyncFolder = async () => {
