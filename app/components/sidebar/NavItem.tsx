@@ -5,11 +5,11 @@ import { ChevronDown } from "lucide-react";
 import * as NavigationMenu from "@radix-ui/react-navigation-menu";
 import { SubMenuItemData } from "./NavData";
 import SubMenuList from "./SubMenuList";
-import { activeSubMenuItemAtom } from "./sideBarAtoms";
+import { activeSubMenuItemAtom, isViewingRecentFilesAtom } from "./sideBarAtoms";
 import { usePathname } from "next/navigation";
 
 import { useState, useEffect, useRef } from "react";
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 
 interface NavItemProps {
   icon: React.ReactNode;
@@ -42,6 +42,8 @@ const NavItem: React.FC<NavItemProps> = ({
   const [activeSubMenuItem, setActiveSubMenuItem] = useAtom(
     activeSubMenuItemAtom
   );
+  const isViewingRecentFiles = useAtomValue(isViewingRecentFilesAtom);
+
 
   const pathname = usePathname();
   const pendingClearRef = useRef<string | null>(null);
@@ -106,6 +108,7 @@ const NavItem: React.FC<NavItemProps> = ({
 
           {activeSubMenuItem &&
             label === "Files" &&
+            !isViewingRecentFiles &&
             (activeSubMenuItem === "Public" ||
               activeSubMenuItem === "Private") &&
             !collapsed && (

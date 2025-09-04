@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
-
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { useSetAtom } from "jotai";
+import { activeSubMenuItemAtom, isViewingRecentFilesAtom } from "@/app/components/sidebar/sideBarAtoms";
+
 import DetailList from "./DetailList";
 
 import CreditUsageTrends from "./credit-usage-trends";
@@ -92,6 +94,8 @@ function useIpfsInfo() {
 const Home: React.FC = () => {
   const ipfsInfo = useIpfsInfo();
   const { download, upload } = useIpfsBandwidth(1000);
+  const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
+  const setIsViewingRecentFiles = useSetAtom(isViewingRecentFilesAtom);
 
   const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<
     boolean | null
@@ -126,6 +130,19 @@ const Home: React.FC = () => {
 
     checkSyncPath();
   }, []);
+
+  // Set active submenu item to "Private" when showing recent files
+  useEffect(() => {
+    if (!isCheckingSyncPath && isSyncPathConfigured) {
+      setActiveSubMenuItem("Private");
+      setIsViewingRecentFiles(true);
+    }
+
+    // Clean up when component unmounts
+    return () => {
+      setIsViewingRecentFiles(false);
+    };
+  }, [isCheckingSyncPath, isSyncPathConfigured, setActiveSubMenuItem, setIsViewingRecentFiles]);
 
   return (
     <div className="flex flex-col mt-6">

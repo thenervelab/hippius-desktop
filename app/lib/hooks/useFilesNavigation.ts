@@ -36,16 +36,7 @@ export function useFilesNavigation() {
 
     // Determine which view to navigate to based on configured paths
     // and file counts (optional)
-    const getTargetFilesView = (privateFileCount = 0, publicFileCount = 0) => {
-        // If both are configured, use file counts to decide
-        if (privateSyncPathConfigured && publicSyncPathConfigured) {
-            // If we have file counts, use them to make a decision
-            if (privateFileCount > 0 || publicFileCount > 0) {
-                return privateFileCount >= publicFileCount ? "Private" : "Public";
-            }
-            // Default to Private when both are configured but we don't have counts
-            return "Private";
-        }
+    const getTargetFilesView = () => {
 
         // If only one is configured, use that one
         if (privateSyncPathConfigured) return "Private";
@@ -56,8 +47,8 @@ export function useFilesNavigation() {
     };
 
     // Navigate to the appropriate view
-    const navigateToFilesView = (privateFileCount = 0, publicFileCount = 0) => {
-        const targetView = getTargetFilesView(privateFileCount, publicFileCount);
+    const navigateToFilesView = () => {
+        const targetView = getTargetFilesView();
         setActiveSubMenuItem(targetView);
     };
 

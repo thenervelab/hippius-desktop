@@ -4,8 +4,8 @@ import cn from "@/app/lib/utils/cn";
 import { SubMenuItemData } from "./NavData";
 import { Graphsheet, RevealTextLine } from "@/components/ui";
 import { ArrowRight } from "lucide-react";
-import { useAtom } from "jotai";
-import { activeSubMenuItemAtom } from "./sideBarAtoms";
+import { useAtom, useAtomValue } from "jotai";
+import { activeSubMenuItemAtom, isViewingRecentFilesAtom } from "./sideBarAtoms";
 interface Props extends SubMenuItemData {
   inView?: boolean;
   onItemClick?: () => void;
@@ -19,10 +19,13 @@ const SubMenuItem: React.FC<Props> = ({
   inView = true,
   onItemClick,
 }) => {
+  const isViewingRecentFiles = useAtomValue(isViewingRecentFilesAtom);
+
   const [activeSubMenuItem, setActiveSubMenuItem] = useAtom(
     activeSubMenuItemAtom
   );
   const active = activeSubMenuItem === label;
+  const visiblyActive = active && !isViewingRecentFiles;
 
   const handleClick = () => {
     if (comingSoon) return;
@@ -35,7 +38,7 @@ const SubMenuItem: React.FC<Props> = ({
       parentClassName="block"
       className="flex items-center py-1.5 px-3.5 h-8 "
     >
-      {active && (
+      {visiblyActive && (
         <Graphsheet
           majorCell={{
             lineColor: [31, 80, 189, 1.0],
@@ -53,8 +56,8 @@ const SubMenuItem: React.FC<Props> = ({
       <div
         className={cn(
           "absolute left-[3px] bg-primary-50 w-0.5 h-[22px] rounded-3xl",
-          !active && "opacity-0 transition-opacity duration-300",
-          !active && !comingSoon && "group-hover:opacity-100"
+          !visiblyActive && !isViewingRecentFiles && "opacity-0 transition-opacity duration-300",
+          (!visiblyActive || isViewingRecentFiles) && !comingSoon && "group-hover:opacity-100"
         )}
       />
       <ArrowRight className={"h-6 w-6 mr-2"} />
@@ -103,8 +106,9 @@ const SubMenuItem: React.FC<Props> = ({
     <Link
       href={path}
       className={cn("transition-all duration-300 relative group", {
-        "bg-blue-50 text-primary-40": active,
-        "hover:bg-gray-100 hover:text-primary-40 text-grey-40": !active,
+        "bg-blue-50 text-primary-40": visiblyActive,
+        "hover:bg-gray-100 hover:text-primary-40": !visiblyActive || isViewingRecentFiles,
+        "text-grey-40": !visiblyActive,
       })}
       onClick={handleClick}
     >
