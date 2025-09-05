@@ -339,6 +339,8 @@ pub struct BucketItem {
     pub size: u64,
     pub last_modified: String,
     pub is_folder: bool, 
+    pub storage_class: String,
+    pub ipfs_hash: String,
 }
 
 /// Lists all root-level files and folders in a given S3 bucket using AWS CLI.
@@ -381,78 +383,122 @@ pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<V
         std::env::var("PATH").unwrap_or_default()
     );
 
+    // Execute aws s3api list-objects-v2 command
     let output = Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
         .env("PATH", &dynamic_path)
-        .arg("s3")
-        .arg("ls")
-        .arg(format!("s3://{}/", bucket_name))
+        .arg("s3api")
+        .arg("list-objects-v2")
+        .arg("--bucket")
+        .arg(&bucket_name)
         .arg("--endpoint-url")
         .arg(endpoint_url)
-        .arg("--recursive")
-        .output();
+        .output()
+        .map_err(|e| format!("Failed to execute aws command: {}", e))?;
 
-    match output {
-        Ok(output) => {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let mut root_files: Vec<BucketItem> = Vec::new();
-                let mut folder_sizes: HashMap<String, u64> = HashMap::new();
-                let mut folder_last_modified: HashMap<String, String> = HashMap::new();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("[ListBucket] Failed to list bucket contents: {}", stderr);
+        return Err(format!("Failed to list bucket contents: {}", stderr));
+    }
 
-                for line in stdout.lines() {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() < 4 {
-                        continue;
+    // Parse the JSON output
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let result: serde_json::Value = serde_json::from_str(&output_str)
+        .map_err(|e| format!("Failed to parse AWS CLI output: {}", e))?;
+
+    let mut root_files: Vec<BucketItem> = Vec::new();
+    let mut folder_sizes: HashMap<String, u64> = HashMap::new();
+    let mut folder_last_modified: HashMap<String, String> = HashMap::new();
+    let mut folder_storage_class: HashMap<String, String> = HashMap::new();
+    let mut folder_ipfs_hash: HashMap<String, String> = HashMap::new();
+
+    // Process each object in the response
+    if let Some(contents) = result["Contents"].as_array() {
+        for item in contents {
+            let storage_class = item["StorageClass"].as_str().unwrap_or("STANDARD").to_string();
+            let ipfs_hash = item["Owner"]
+                .as_object()
+                .and_then(|o| o.get("ID"))
+                .and_then(|id| id.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if let (Some(key), Some(size_val), Some(last_modified)) = (
+                item["Key"].as_str(),
+                item["Size"].as_u64(),
+                item["LastModified"].as_str(),
+            ) {
+                // Parse the last modified date to a consistent format
+                let last_modified_dt = chrono::DateTime::parse_from_rfc3339(last_modified)
+                    .map_err(|_| "Failed to parse last modified date")?;
+                let last_modified_fmt = last_modified_dt.format("%Y-%m-%d %H:%M:%S").to_string();
+
+                if key.ends_with('/') {
+                    // This is a folder (common prefix)
+                    let folder_name = key.trim_end_matches('/').to_string();
+                    if let Some(slash_pos) = folder_name.find('/') {
+                        // This is a subfolder, track the root folder
+                        let root_folder = folder_name[..slash_pos].to_string();
+                        *folder_sizes.entry(root_folder.clone()).or_insert(0) += size_val;
+                        folder_last_modified.insert(root_folder.clone(), last_modified_fmt.clone());
+                        folder_storage_class.insert(root_folder.clone(), storage_class);
+                        folder_ipfs_hash.insert(root_folder.clone(), ipfs_hash);
+                    } else {
+                        // This is a root folder
+                        *folder_sizes.entry(folder_name.clone()).or_insert(0) += size_val;
+                        folder_last_modified.insert(folder_name.clone(), last_modified_fmt.clone());
+                        folder_storage_class.insert(folder_name.clone(), storage_class);
+                        folder_ipfs_hash.insert(folder_name, ipfs_hash);
                     }
-
-                    let last_modified = format!("{} {}", parts[0], parts[1]);
-                    let size_str = parts[2];
-                    let path = parts[3..].join(" ");
-
-                    if let Ok(size) = size_str.parse::<u64>() {
-                        if let Some(slash_index) = path.find('/') {
-                            // This is inside a folder.
-                            let root_folder_name = path[..slash_index].to_string();
-                            *folder_sizes.entry(root_folder_name.clone()).or_insert(0) += size;
-                            
-                            // Keep the last modified date of the latest file in the folder as the folder's last modified date.
-                            folder_last_modified.insert(root_folder_name, last_modified.clone());
-                        } else {
-                            // This is a root file.
-                            root_files.push(BucketItem {
-                                path,
-                                size,
-                                last_modified,
-                                is_folder: false,
-                            });
-                        }
+                } else {
+                    // This is a file
+                    if let Some(slash_pos) = key.find('/') {
+                        // File is inside a folder
+                        let folder_name = key[..slash_pos].to_string();
+                        *folder_sizes.entry(folder_name.clone()).or_insert(0) += size_val;
+                        folder_last_modified.insert(folder_name.clone(), last_modified_fmt.clone());
+                        folder_storage_class.insert(folder_name.clone(), storage_class.clone());
+                        folder_ipfs_hash.insert(folder_name, ipfs_hash);
+                    } else {
+                        // This is a root file
+                        root_files.push(BucketItem {
+                            path: key.to_string(),
+                            size: size_val,
+                            last_modified: last_modified_fmt,
+                            is_folder: false,
+                            storage_class,
+                            ipfs_hash,
+                        });
                     }
                 }
-
-                let mut root_folders: Vec<BucketItem> = folder_sizes.into_iter().map(|(path, size)| {
-                    let last_modified = folder_last_modified.get(&path).cloned().unwrap_or_default();
-                    BucketItem {
-                        path,
-                        size,
-                        last_modified,
-                        is_folder: true,
-                    }
-                }).collect();
-
-                root_files.append(&mut root_folders);
-                Ok(root_files)
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!("[ListBucket] Failed to list bucket contents: {}", stderr);
-                Err(format!("Failed to list bucket contents: {}", stderr))
             }
         }
-        Err(e) => {
-            eprintln!("[ListBucket] Failed to execute 'aws s3 ls' command: {}", e);
-            Err(format!("Failed to execute aws command: {}", e))
-        }
     }
+
+    // Convert folder information to BucketItem
+    let mut root_folders: Vec<BucketItem> = folder_sizes
+        .into_iter()
+        .map(|(path, size)| {
+            let last_modified = folder_last_modified.get(&path).cloned().unwrap_or_default();
+            let storage_class = folder_storage_class.get(&path).cloned().unwrap_or_else(|| "STANDARD".to_string());
+            let ipfs_hash = folder_ipfs_hash.get(&path).cloned().unwrap_or_default();
+            
+            BucketItem {
+                path,
+                size,
+                last_modified,
+                is_folder: true,
+                storage_class,
+                ipfs_hash,
+            }
+        })
+        .collect();
+
+    // Combine root files and folders
+    root_files.append(&mut root_folders);
+    
+    Ok(root_files)
 }
 
 pub async fn store_bucket_listing_in_db(
@@ -478,8 +524,10 @@ pub async fn store_bucket_listing_in_db(
     for it in items {
         let file_name = it.path.clone();
         let source = format!("s3://{}/{}", bucket, it.path);
-        let cid_hex = hex::encode("s3".as_bytes());
+        let cid_hex = hex::encode(it.ipfs_hash.as_bytes());
         let file_hash_hex = cid_hex.clone();
+
+        let is_assigned = it.ipfs_hash != "pending";
 
         // Insert new record
         sqlx::query(
@@ -494,7 +542,7 @@ pub async fn store_bucket_listing_in_db(
         .bind(&cid_hex)
         .bind(&file_hash_hex)
         .bind(it.size as i64)
-        .bind(true)
+        .bind(is_assigned)
         .bind(0i64)
         .bind("s3")
         .bind("")
@@ -541,7 +589,7 @@ pub async fn insert_bucket_items_if_absent(
 
         if exists.is_none() {
             let source = format!("s3://{}/{}", bucket, it.path);
-            let cid_hex = hex::encode("s3".as_bytes());
+            let cid_hex = hex::encode(it.ipfs_hash.as_bytes());
             let file_hash_hex = cid_hex.clone();
 
             sqlx::query(
@@ -554,7 +602,7 @@ pub async fn insert_bucket_items_if_absent(
             .bind(&cid_hex)
             .bind(&file_hash_hex)
             .bind(it.size as i64)
-            .bind(true)
+            .bind(false)
             .bind(0i64)
             .bind("s3")
             .bind("")
