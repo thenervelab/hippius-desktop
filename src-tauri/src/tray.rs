@@ -1,0 +1,1 @@
+// This file can be deleted as we're implementing tray functionality directly in main.rs

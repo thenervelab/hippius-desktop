@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Hippius Status</title>
+    <style>
+        body {
+            background-color: #00CC00;
+            /* Bright green background */
+            color: white;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 15px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+
+        .status {
+            background-color: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>HIPPIUS STATUS WINDOW</h1>
+    <div class="status" id="sync-status">Status window loaded successfully!</div>
+    <p>Loaded at:
+        <script>
+            document.write(new Date().toISOString())
+        </script>
+    </p>
+    <p>If you see this, status.html is found and loaded correctly.</p>
+</body>
+
+</html>

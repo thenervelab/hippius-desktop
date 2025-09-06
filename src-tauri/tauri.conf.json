@@ -27,6 +27,7 @@
     },
     "app": {
         "windows": [{
+            "label": "main",
             "dragDropEnabled": false,
             "title": "Hippius",
             "width": 1320,
@@ -35,7 +36,6 @@
             "center": true,
             "resizable": true
         }],
-
         "security": {
             "capabilities": ["default"],
             "csp": null,
