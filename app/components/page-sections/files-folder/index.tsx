@@ -38,7 +38,8 @@ interface FileEntry {
     last_charged_at: string;
     miner_ids: string | string[];
     source: string;
-    is_folder: boolean
+    is_folder: boolean;
+    main_req_hash: string;
 }
 
 interface FolderViewProps {
