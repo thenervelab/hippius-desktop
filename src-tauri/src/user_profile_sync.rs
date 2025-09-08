@@ -533,11 +533,9 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                     continue;
                                 }
 
-                                let file_hash_raw = bounded_vec_to_string(&storage_request.file_hash.0);
                                 let decoded_hash = decode_file_hash(&storage_request.file_hash.0)
                                     .unwrap_or_else(|_| "Invalid file hash".to_string());
-                                let mut file_hash = file_hash_raw.clone();
-                                let  file_size_in_bytes = 0;
+                                let file_size_in_bytes = 0;
 
                                 let owner_ss58 = format!("{}", storage_request.owner);
                                 let validator_ss58 = format!("{}", storage_request.selected_validator);
@@ -557,7 +555,7 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                     || file_name.ends_with(".folder.ec_metadata")
                                     || file_name.ends_with("-folder.ec_metadata");
 
-                                let mut file_type = if file_name.ends_with(".ec_metadata")
+                                let file_type = if file_name.ends_with(".ec_metadata")
                                     || file_name.ends_with(".folder.ec_metadata")
                                     || file_name.ends_with("-folder.ec_metadata") {
                                     "private".to_string()
@@ -582,7 +580,7 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                 };
 
                                 let cid_vec = "pending".to_string().as_bytes().to_vec();
-                                file_hash = hex::encode(cid_vec);
+                                let file_hash = hex::encode(cid_vec);
 
                                 let mut source = "Hippius".to_string();
                                 if file_type == "public" && public_sync_path.is_some() {

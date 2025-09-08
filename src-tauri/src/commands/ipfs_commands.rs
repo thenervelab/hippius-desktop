@@ -119,9 +119,6 @@ pub async fn download_and_decrypt_file(
         path_separator,
         std::env::var("PATH").unwrap_or_default()
     );
-
-    let cid_hex = hex::encode(metadata_cid.as_bytes());
-    let file_hash_hex = cid_hex.clone();
     
     // Special handling when the 'CID' indicates S3 source
     if main_req_hash == "s3" || metadata_cid == "s3" || metadata_cid == "local" {
@@ -335,9 +332,6 @@ pub async fn download_and_decrypt_folder(
     main_req_hash: String,
 ) -> Result<(), String> {
     println!("[+] Starting download for folder with manifest CID: {}", folder_metadata_cid);
-
-    let cid_hex = hex::encode(folder_metadata_cid.as_bytes());
-    let folder_hash_hex = cid_hex.clone();
 
     if main_req_hash == "s3" || folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
         println!("[+] Handling S3 folder download for source: {}", source);
@@ -726,11 +720,6 @@ pub async fn download_file_public(
     main_req_hash: String,
 ) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001";
-
-    println!("[download_file_public] Start: file_cid='{}', output_file='{}'", file_cid, output_file);
-
-    let cid_hex = hex::encode(file_cid.as_bytes());
-    let file_hash_hex = cid_hex.clone();
     
     if main_req_hash == "s3" || file_cid == "s3" || file_cid == "local" {
         println!("[download_file_public] returned source='{}'", source);
@@ -852,9 +841,7 @@ pub async fn public_download_folder(
     source: String,
     main_req_hash: String,
 ) -> Result<(), String> {
-    let cid_hex = hex::encode(folder_metadata_cid.as_bytes());
-    let folder_hash_hex = cid_hex.clone();
-    
+
     if main_req_hash == "s3" || folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
         println!("[+] Handling S3 folder download for source: {}", source);
         let source_path = Path::new(&source);
@@ -990,7 +977,7 @@ async fn public_download_folder_inner(
                 subfolder_metadata_cid,
                 subfolder_name,
                 &output_path.to_string_lossy(),
-                main_req_hash.clone(),
+                main_req_hash,
             )).await {
                 eprintln!("[public_download_folder] Failed to download subfolder {}: {}", subfolder_name, e);
             }
@@ -1150,8 +1137,6 @@ pub async fn list_folder_contents(
     println!("[ListFolderContents] AWS CLI output: {}", result);
     
     let mut direct_files: Vec<FileDetail> = Vec::new();
-    let mut subfolders: HashSet<String> = HashSet::new();
-
     // Process Contents (files) and extract subfolders
     if let Some(contents) = result["Contents"].as_array() {
         println!("[ListFolderContents] Found {} content items", contents.len());
