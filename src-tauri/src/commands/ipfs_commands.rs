@@ -437,35 +437,32 @@ pub async fn download_and_decrypt_folder(
             let api_url_clone = Arc::clone(&api_url);
             let output_root_clone = output_root_path.clone();
             let encryption_key_clone = encryption_key_bytes.as_ref().map(Arc::clone);
+            let main_req_hash_clone = main_req_hash.clone();
 
             async move {
                 println!("[download_and_decrypt_folder] Processing entry with CID: {} to: {:?}", 
                     entry.cid, output_root_clone.join(&entry.file_name));
 
-                // Check if the entry is a subfolder metadata (new hierarchical logic)
                 if entry.file_name.ends_with(".folder.ec_metadata") {
                     let subfolder_name = entry.file_name.trim_end_matches(".s.folder.ec_metadata");
-                    // Remove leading '.' and '.s' if present
                     let cleaned_name = subfolder_name.trim_end_matches(".folder.ec_metadata");
                     let subfolder_path = output_root_clone.join(cleaned_name);
                     if let Err(e) = tokio::fs::create_dir_all(&subfolder_path).await {
                         eprintln!("[!] Failed to create subfolder {}: {}", subfolder_name, e);
                         return;
                     }
-                    // Recursively call download_and_decrypt_folder for subfolder
                     if let Err(e) = download_and_decrypt_folder(
-                        String::new(), // _account_id not needed for recursion
+                        String::new(), 
                         entry.cid.clone(),
                         subfolder_name.to_string(),
                         output_root_clone.to_string_lossy().to_string(),
                         encryption_key_clone.as_ref().map(|k| base64::engine::general_purpose::STANDARD.encode(&**k)),
-                        String::new(), // Pass an empty string as source is not needed for IPFS,
-                        main_req_hash.clone(),
+                        String::new(),
+                        main_req_hash_clone.clone(),
                     ).await {
                         eprintln!("[!] Failed to download/decrypt subfolder {}: {}", subfolder_name, e);
                     }
-                } else { // Combined the two identical `else if` and `else` blocks
-                    // Handle regular file
+                } else { 
                     let file_metadata_bytes = match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
                         Ok(bytes) => bytes,
                         Err(e) => {
@@ -940,6 +937,7 @@ pub async fn public_download_folder(
         &folder_metadata_cid,
         &folder_name,
         &output_dir,
+        &main_req_hash,
     ).await
 }
 
@@ -948,6 +946,7 @@ async fn public_download_folder_inner(
     folder_metadata_cid: &str,
     folder_name: &str,
     output_dir: &str,
+    main_req_hash: &str,
 ) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001";
     
@@ -990,7 +989,8 @@ async fn public_download_folder_inner(
                 _account_id,
                 subfolder_metadata_cid,
                 subfolder_name,
-                &output_path.to_string_lossy()
+                &output_path.to_string_lossy(),
+                main_req_hash.clone(),
             )).await {
                 eprintln!("[public_download_folder] Failed to download subfolder {}: {}", subfolder_name, e);
             }
@@ -1002,11 +1002,10 @@ async fn public_download_folder_inner(
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
             }
-            if let Err(e) = download_file_public(entry.cid.clone(), output_file_path.to_string_lossy().to_string(), "".to_string(), main_req_hash.clone()).await {
+            if let Err(e) = download_file_public(entry.cid.clone(), output_file_path.to_string_lossy().to_string(), "".to_string(), main_req_hash.to_string()).await {
                 eprintln!("[public_download_folder] Failed to download file {}: {}", clean_file_name, e);
             }
         } else {
-            // Log or ignore unexpected entries
             println!("[public_download_folder] Skipping unknown entry: {}", entry.file_name);
         }
     }
