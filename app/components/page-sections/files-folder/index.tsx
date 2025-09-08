@@ -150,7 +150,8 @@ export default function FolderView({
                         isErasureCoded,
                         isFolder: isFolder || entry.is_folder,
                         parentFolderId: folderCid,
-                        parentFolderName: folderName
+                        parentFolderName: folderName,
+                        mainReqHash: entry.main_req_hash
                     };
                 }
             );

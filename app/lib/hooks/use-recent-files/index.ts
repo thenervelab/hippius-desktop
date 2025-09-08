@@ -19,6 +19,7 @@ export type UserProfileFile = {
     minerIds: string;
     isFolder: boolean;
     type: string;
+    mainReqHash: string;
 };
 
 // Use the same response structure as useUserIpfsFiles
@@ -61,7 +62,7 @@ const useRecentFiles = () => {
                     accountId: polkadotAddress
                 });
 
-                // console.log("Recent files from get_sync_activity:", response);
+                console.log("Recent files from get_sync_activity:", response);
 
                 // Combine recent and uploading items (if any)
                 const combinedFiles = [
@@ -100,7 +101,8 @@ const useRecentFiles = () => {
                         fileHash: file.fileHash,
                         isFolder: isFolder || file.isFolder || false,
                         type: file.type || (file.source === "private" ? "Private" : "Public"),
-                        isErasureCoded: isErasureCoded || false
+                        isErasureCoded: isErasureCoded || false,
+                        mainReqHash: file.mainReqHash || "",
                     };
                 });
 

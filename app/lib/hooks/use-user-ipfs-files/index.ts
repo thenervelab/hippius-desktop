@@ -29,6 +29,7 @@ export type FormattedUserIpfsFile = {
   isErasureCoded: boolean;
   parentFolderId?: string;
   parentFolderName?: string;
+  mainReqHash: string;
 };
 
 // Updated to include file size breakdown
@@ -53,6 +54,7 @@ type UserProfileFile = {
   minerIds: string;
   isFolder: boolean;
   type: string;
+  mainReqHash: string;
 };
 
 interface FileSizeBreakdown {
@@ -161,7 +163,8 @@ export const useUserIpfsFiles = () => {
               fileDetails: [],
               isFolder: file.isFolder,
               type: file.type,
-              isErasureCoded
+              isErasureCoded,
+              mainReqHash: file.mainReqHash,
             };
           }
         );

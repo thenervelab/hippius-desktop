@@ -15,6 +15,7 @@ export type BackendActivityItem = {
     created_at?: string;
     file_hash?: string;
     miner_ids?: string | string[];
+    main_req_hash?: string;
 };
 
 export type SyncActivityResponse = {
@@ -75,6 +76,7 @@ export function useSyncActivity() {
                 isErasureCoded,
                 isFolder: isFolder,
                 type: item.scope?.toLowerCase() || "unknown", // Use scope as type (private/public)
+                mainReqHash: item.main_req_hash || "",
             };
         });
     };
