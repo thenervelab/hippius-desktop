@@ -21,6 +21,10 @@ use crate::DB_POOL;
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE,  BucketItem};
 use std::env;
 use crate::commands::node::get_aws_binary_path;
+use sp_core::sr25519;
+use sp_core::Pair;
+use sp_core::crypto::Ss58Codec;
+use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 
 pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String, _seed_phrase: String) {
     {
@@ -32,8 +36,55 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         syncing_accounts.insert((account_id.clone(), "public"));
     }
 
-    let bucket_name = format!("{}-public", account_id);
-    let endpoint_url = "https://s3.hippius.com";
+    // Get sub-account from database
+    let sub_account = loop {
+        match DB_POOL.get() {
+            Some(pool) => {
+                match sqlx::query_as::<_, (String,)>(r#"
+                    SELECT sub_account_seed_phrase 
+                    FROM sub_accounts 
+                    WHERE account_id = ? 
+                    LIMIT 1
+                    "#)
+                    .bind(&account_id)
+                    .fetch_optional(pool)
+                    .await
+                {
+                    Ok(Some((sub_account_seed_phrase,))) => {
+                        // Try to decrypt if we have a key, otherwise use as-is
+                        let maybe_key = load_encryption_key(pool).await;
+                        let phrase = if let Some(key) = &maybe_key {
+                            decrypt_phrase(&sub_account_seed_phrase, key).unwrap_or_else(|| sub_account_seed_phrase.clone())
+                        } else {
+                            sub_account_seed_phrase
+                        };
+                        // Convert seed phrase to SS58 address
+                        if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
+                            let ss58 = pair.public().to_ss58check();
+                            break ss58;
+                        } else {
+                            eprintln!("[PublicFolderSync] Failed to convert seed phrase to SS58 address");
+                            tokio::time::sleep(Duration::from_secs(15)).await;
+                        }
+                    },
+                    Ok(None) => {
+                        println!("[PublicFolderSync] No sub-account found for account {}, waiting 15 seconds...", account_id);
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                    }
+                    Err(e) => {
+                        eprintln!("[PublicFolderSync] Error querying sub-accounts: {}", e);
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                    }
+                }
+            }
+            None => {
+                eprintln!("[PublicFolderSync] Database pool not available, waiting 15 seconds...");
+                tokio::time::sleep(Duration::from_secs(15)).await;
+            }
+        }
+    };
+
+    let bucket_name = format!("{}-public", sub_account);
     
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
@@ -71,7 +122,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         .arg("ls")
         .arg(format!("s3://{}", bucket_name))
         .arg("--endpoint-url")
-        .arg(endpoint_url)
+        .arg("https://s3.hippius.com")
         .output();
 
     let bucket_exists = match exists_output {
@@ -90,7 +141,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                 .arg("mb")
                 .arg(format!("s3://{}", bucket_name))
                 .arg("--endpoint-url")
-                .arg(endpoint_url)
+                .arg("https://s3.hippius.com")
                 .output();
 
             let proceed = match mb_output {
@@ -111,7 +162,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                                 .arg("ls")
                                 .arg(format!("s3://{}", bucket_name))
                                 .arg("--endpoint-url")
-                                .arg(endpoint_url)
+                                .arg("https://s3.hippius.com")
                                 .output();
 
                             match verify {
@@ -120,7 +171,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                                     true
                                 }
                                 _ => {
-                                    eprintln!("[PublicFolderSync] Failed to create bucket, will retry in 30s: {}", stderr);
+                                    eprintln!("[PublicFolderSync] Failed to create bucket, will retry in 15s: {}", stderr);
                                     false
                                 }
                             }
@@ -128,7 +179,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                     }
                 }
                 Err(e) => {
-                    eprintln!("[PublicFolderSync] Failed to execute 'aws s3 mb' command (will retry in 30s): {}", e);
+                    eprintln!("[PublicFolderSync] Failed to execute 'aws s3 mb' command (will retry in 15s): {}", e);
                     let verify = Command::new(&aws_binary_path)
                         .env("AWS_PAGER", "")
                         .env("PATH", &dynamic_path)
@@ -136,7 +187,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                         .arg("ls")
                         .arg(format!("s3://{}", bucket_name))
                         .arg("--endpoint-url")
-                        .arg(endpoint_url)
+                        .arg("https://s3.hippius.com")
                         .output();
                     matches!(verify, Ok(v) if v.status.success())
                 }
@@ -145,7 +196,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             if proceed {
                 break;
             } else {
-                thread::sleep(Duration::from_secs(30));
+                thread::sleep(Duration::from_secs(15));
                 continue;
             }
         }
@@ -176,7 +227,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         .arg("--policy")
         .arg(&bucket_policy)
         .arg("--endpoint-url")
-        .arg(endpoint_url)
+        .arg("https://s3.hippius.com")
         .output()
     {
         Ok(o) if o.status.success() => {
@@ -197,7 +248,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         .arg("ls")
         .arg(format!("s3://{}", bucket_name))
         .arg("--endpoint-url")
-        .arg(endpoint_url)
+        .arg("https://s3.hippius.com")
         .output()
     {
         Ok(o) if o.status.success() => {
@@ -241,7 +292,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             .arg(&sync_path)
             .arg(&s3_destination)
             .arg("--endpoint-url")
-            .arg(endpoint_url)
+            .arg("https://s3.hippius.com")
             .arg("--delete")
             .arg("--dryrun")
             .arg("--exclude")
@@ -294,7 +345,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             .arg(&sync_path)
             .arg(&s3_destination)
             .arg("--endpoint-url")
-            .arg(endpoint_url)
+            .arg("https://s3.hippius.com")
             .arg("--delete")
             .arg("--acl")
             .arg("public-read")

@@ -20,6 +20,10 @@ use crate::DB_POOL;
 use chrono;
 use std::env;
 use crate::commands::node::get_aws_binary_path;
+use sp_core::sr25519;
+use sp_core::Pair;
+use sp_core::crypto::Ss58Codec;
+use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 
 pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String, _seed_phrase: String) {
     {
@@ -31,7 +35,55 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
         syncing_accounts.insert((account_id.clone(), "private"));
     }
 
-    let bucket_name = format!("{}-private", account_id);
+    // Get sub-account from database
+    let sub_account = loop {
+        match DB_POOL.get() {
+            Some(pool) => {
+                match sqlx::query_as::<_, (String,)>(r#"
+                    SELECT sub_account_seed_phrase 
+                    FROM sub_accounts 
+                    WHERE account_id = ? 
+                    LIMIT 1
+                    "#)
+                    .bind(&account_id)
+                    .fetch_optional(pool)
+                    .await
+                {
+                    Ok(Some((sub_account_seed_phrase,))) => {
+                        // Try to decrypt if we have a key, otherwise use as-is
+                        let maybe_key = load_encryption_key(pool).await;
+                        let phrase = if let Some(key) = &maybe_key {
+                            decrypt_phrase(&sub_account_seed_phrase, key).unwrap_or_else(|| sub_account_seed_phrase.clone())
+                        } else {
+                            sub_account_seed_phrase
+                        };
+                        // Convert seed phrase to SS58 address
+                        if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
+                            let ss58 = pair.public().to_ss58check();
+                            break ss58;
+                        } else {
+                            eprintln!("[PrivateFolderSync] Failed to convert seed phrase to SS58 address");
+                            tokio::time::sleep(Duration::from_secs(15)).await;
+                        }
+                    },
+                    Ok(None) => {
+                        println!("[PrivateFolderSync] No sub-account found for account {}, waiting 15 seconds...", account_id);
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                    }
+                    Err(e) => {
+                        eprintln!("[PrivateFolderSync] Error querying sub-accounts: {}", e);
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                    }
+                }
+            }
+            None => {
+                eprintln!("[PrivateFolderSync] Database pool not available, waiting 15 seconds...");
+                tokio::time::sleep(Duration::from_secs(15)).await;
+            }
+        }
+    };
+
+    let bucket_name = format!("{}-private", sub_account);
     let endpoint_url = "https://s3.hippius.com";
    
     // Dynamically get the AWS binary path
@@ -120,7 +172,7 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
                                     true
                                 }
                                 _ => {
-                                    eprintln!("[PrivateFolderSync] Failed to create bucket, will retry in 30s: {}", stderr);
+                                    eprintln!("[PrivateFolderSync] Failed to create bucket, will retry in 15s: {}", stderr);
                                     false
                                 }
                             }
@@ -128,7 +180,7 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
                     }
                 }
                 Err(e) => {
-                    eprintln!("[PrivateFolderSync] Failed to execute 'aws s3 mb' command (will retry in 30s): {}", e);
+                    eprintln!("[PrivateFolderSync] Failed to execute 'aws s3 mb' command (will retry in 15s): {}", e);
                     let verify = Command::new(&aws_binary_path)
                         .env("AWS_PAGER", "")
                         .env("PATH", &dynamic_path)
@@ -145,7 +197,7 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
             if proceed {
                 break;
             } else {
-                thread::sleep(Duration::from_secs(30));
+                thread::sleep(Duration::from_secs(15));
                 continue;
             }
         }
