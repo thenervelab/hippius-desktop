@@ -12,6 +12,7 @@ use sp_core::Pair;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
 use base64 as b64;
+use std::process::Command;
 
 #[derive(Default)]
 pub struct SyncState {
@@ -23,8 +24,6 @@ pub struct AppState {
     pub sync: Mutex<SyncState>,
 }
 
-/// Public helper: resolve/create the subaccount seed and set AWS env vars accordingly
-/// This mirrors the credentials setup used by initialize_sync when starting folder syncs.
 #[allow(deprecated)]
 pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
     // Resolve or create subaccount seed (with encryption and chain-side handling)
@@ -35,6 +34,15 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
     std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
     std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
     std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
+    
+    // Configure AWS S3 multipart upload settings
+    let _ = Command::new("aws")
+        .args(["configure", "set", "default.s3.multipart_chunksize", "134217728"])
+        .status();
+        
+    let _ = Command::new("aws")
+        .args(["configure", "set", "default.s3.multipart_threshold", "134217728"])
+        .status();
 }
 
 #[tauri::command]
