@@ -7,12 +7,17 @@ import { saveBackendData } from "./backendDataDb";
 import { getWalletRecord } from "./hippiusDesktopDB";
 import { hashPasscode } from "./crypto";
 
-
+export interface SubAccount {
+  account_id: string;
+  sub_account_seed_phrase: string;
+  created_at: string;
+}
 
 export interface BackendData {
   public_sync_path: string;
   private_sync_path: string;
   encryption_keys: string[];
+  sub_accounts: SubAccount[];
 }
 
 /**

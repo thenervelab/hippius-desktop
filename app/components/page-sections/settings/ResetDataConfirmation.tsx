@@ -20,7 +20,7 @@ const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
   onClose,
   onConfirm,
   onBack,
-  loading = false
+  loading = false,
 }) => {
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [showPasscodeModal, setShowPasscodeModal] = useState(false);
@@ -72,7 +72,7 @@ const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
     <>
       <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
         <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
-          <Dialog.Title className="sr-only">Reset App Data</Dialog.Title>
+          <Dialog.Title className="sr-only">Reset App</Dialog.Title>
 
           {/* Top accent bar (mobile only) */}
           <div className="h-4 bg-primary-50 md:hidden block" />
@@ -85,12 +85,12 @@ const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
                   majorCell={{
                     lineColor: [31, 80, 189, 1.0],
                     lineWidth: 2,
-                    cellDim: 200
+                    cellDim: 200,
                   }}
                   minorCell={{
                     lineColor: [49, 103, 211, 1.0],
                     lineWidth: 1,
-                    cellDim: 20
+                    cellDim: 20,
                   }}
                   className="absolute w-full h-full duration-500 opacity-30 z-0"
                 />
@@ -110,7 +110,7 @@ const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
                 <ArrowLeft className="size-6 text-grey-10" />
               </button>
               <div className="text-lg font-medium relative">
-                <span className="capitalize">Reset App Data</span>
+                <span className="capitalize">Reset App</span>
               </div>
               <button onClick={onClose}>
                 <Icons.CloseCircle className="size-6 relative" />
@@ -120,9 +120,9 @@ const ResetDataConfirmation: React.FC<ResetDataConfirmationProps> = ({
             {/* Message */}
             <div className="font-medium text-base text-grey-20 mb-4 text-center">
               This clears all Hippius data stored on this device. This includes
-              your encrypted seed, sub‑account seeds, backend data, and notifications. On‑chain
-              data and IPFS files stay intact and can be restored. Back up before
-              you proceed.
+              your encrypted seed, sub‑account seeds, backend data, and
+              notifications. On‑chain data and IPFS files stay intact and can be
+              restored. Back up before you proceed.
             </div>
 
             {/* Backup Button */}

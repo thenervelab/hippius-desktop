@@ -1,40 +1,32 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import AccessKeyForm from "./AccessKeyForm";
 import SetNewPassCodeForm from "./signup/SetNewPasscodeForm";
-import { hasWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
-import LoginWithPassCodeForm from "./LoginWithPasscodeForm";
 import AuthLayout from "./AuthLayout";
 import LoginFooter from "./LoginFooter";
 
-const Login = () => {
+const LoginWithAccessKey = () => {
   const [showPasscodeFields, setShowPasscodeFields] = useState(false);
   const [mnemonic, setMnemonic] = useState("");
-  const [hasWallet, setHasWallet] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    hasWalletRecord().then(setHasWallet);
-  }, []);
 
   return (
     <AuthLayout>
       <>
-        {hasWallet ? (
-          <LoginWithPassCodeForm />
-        ) : showPasscodeFields ? (
+        {showPasscodeFields ? (
           <SetNewPassCodeForm mnemonic={mnemonic} />
         ) : (
           <AccessKeyForm
+            showGoBack
             setShowPasscodeFields={setShowPasscodeFields}
             setMnemonic={setMnemonic}
             mnemonic={mnemonic}
           />
         )}
-        <LoginFooter hasWallet={hasWallet ? true : false} />
+        <LoginFooter />
       </>
     </AuthLayout>
   );
 };
 
-export default Login;
+export default LoginWithAccessKey;
