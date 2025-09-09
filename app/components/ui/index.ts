@@ -42,3 +42,4 @@ export { default as IconButton } from "./IconButton";
 export { default as BackButton } from "./back-button";
 export { default as AppVersion } from "./AppVersion";
 export { default as ChartGridOverlay } from "./chart-grid-overly";
+export { default as CustomTooltip } from "./CustomTooltip";
