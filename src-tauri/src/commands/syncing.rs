@@ -82,9 +82,9 @@ pub async fn initialize_sync(
         let account_clone3 = account_for_bg.clone();
         let mnemonic_clone = mnemonic_for_bg.clone();
 
-        let user_profile_task = tokio::spawn(async move {
-            start_user_profile_sync_tauri(app_handle_clone, account_clone).await;
-        });
+        // let user_profile_task = tokio::spawn(async move {
+        //     start_user_profile_sync_tauri(app_handle_clone, account_clone).await;
+        // });
 
         // Check DB-configured sync paths and only spawn tasks if present
         let private_enabled = match get_private_sync_path().await {
@@ -125,7 +125,7 @@ pub async fn initialize_sync(
         // Record task handles into global AppState so cleanup can abort them
         let state = app_for_bg.state::<Arc<AppState>>();
         let mut guard = state.sync.lock().await;
-        guard.tasks.push(user_profile_task);
+        // guard.tasks.push(user_profile_task);
         if let Some(handle) = public_folder_task { guard.tasks.push(handle); }
         if let Some(handle) = folder_task { guard.tasks.push(handle); }
 
