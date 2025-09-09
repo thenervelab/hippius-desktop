@@ -219,7 +219,7 @@ pub async fn register_task(app: tauri::AppHandle, handle: tokio::task::JoinHandl
 }
 
 // Helper: load first encryption key from DB
-async fn load_encryption_key(pool: &sqlx::SqlitePool) -> Option<SbKey> {
+pub async fn load_encryption_key(pool: &sqlx::SqlitePool) -> Option<SbKey> {
     match sqlx::query_as::<_, (Vec<u8>,)>("SELECT key FROM encryption_keys ORDER BY id ASC LIMIT 1")
         .fetch_optional(pool)
         .await
@@ -246,7 +246,7 @@ fn encrypt_phrase(plain: &str, key: &SbKey) -> String {
 
 // Helper: try decrypt base64 (nonce||ct), else None
 #[allow(deprecated)]
-fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
+pub fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
     let bytes = b64::decode(b64_in).ok()?;
     if bytes.len() < secretbox::NONCEBYTES { return None; }
     let (nonce_b, ct) = bytes.split_at(secretbox::NONCEBYTES);

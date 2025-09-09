@@ -22,7 +22,7 @@ use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::accounts::{
     create_encryption_key, export_app_data, get_encryption_keys, import_app_data, import_key,
-    reset_app,
+    reset_app, get_all_subaccount_addresses
 };
 use commands::ipfs_commands::{
     download_and_decrypt_file, encrypt_and_upload_file, read_file, write_file, delete_file,
@@ -100,6 +100,7 @@ fn main() {
             download_and_decrypt_folder,
             remove_file_from_public_folder,
             reset_app,
+            get_all_subaccount_addresses,
             add_file_to_public_folder,
             remove_file_from_private_folder,
             add_file_to_private_folder,

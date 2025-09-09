@@ -3,7 +3,11 @@ use crate::utils::accounts::{
     create_and_store_encryption_key, import_encryption_key, list_encryption_keys,
 };
 use chrono::Utc;
+use sp_core::sr25519;
+use sp_core::crypto::Ss58Codec;
+use sp_core::Pair;
 use sqlx::Row;
+use crate::commands::syncing::{load_encryption_key, decrypt_phrase};
 
 #[tauri::command]
 pub async fn create_encryption_key() -> Result<(), String> {
@@ -404,4 +408,46 @@ pub async fn reset_app() -> Result<(), String> {
 
     println!("[Reset App] App reset completed.");
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_all_subaccount_addresses() -> Result<Vec<(String, String)>, String> {
+    let pool = match crate::DB_POOL.get() {
+        Some(pool) => pool,
+        None => return Err("Database pool not available".to_string()),
+    };
+
+    // Get all sub-account seed phrases
+    let sub_accounts = match sqlx::query_as::<_, (String, String)>(
+        "SELECT account_id, sub_account_seed_phrase FROM sub_accounts"
+    )
+    .fetch_all(pool)
+    .await {
+        Ok(accounts) => accounts,
+        Err(e) => return Err(format!("Failed to fetch sub-accounts: {}", e)),
+    };
+
+    let mut result = Vec::new();
+    
+    // Try to load encryption key for decryption
+    let maybe_key = load_encryption_key(pool).await;
+
+    for (account_id, encrypted_phrase) in sub_accounts {
+        // Try to decrypt if we have a key, otherwise use as-is
+        let phrase = if let Some(key) = &maybe_key {
+            decrypt_phrase(&encrypted_phrase, key).unwrap_or_else(|| encrypted_phrase.clone())
+        } else {
+            encrypted_phrase
+        };
+
+        // Convert mnemonic to keypair and get SS58 address
+        if let Ok((pair, _seed)) = sr25519::Pair::from_phrase(&phrase, None) {
+            let ss58 = pair.public().to_ss58check();
+            result.push((account_id, ss58));
+        } else {
+            eprintln!("Failed to create keypair from phrase for account_id: {}", account_id);
+        }
+    }
+
+    Ok(result)
 }
