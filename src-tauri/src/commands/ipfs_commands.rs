@@ -1,13 +1,16 @@
 #![allow(unused_imports)]
-use crate::utils::{
-    accounts::{
-     decrypt_file
-    },
-    ipfs::{
-        download_from_ipfs, download_from_ipfs_async,
-    },
-    file_operations::{ copy_to_sync_and_add_to_db,
-         remove_from_sync_folder, copy_to_sync_folder}
+use crate::{
+    DB_POOL,
+    utils::{
+        accounts::{
+            decrypt_file
+        },
+        ipfs::{
+            download_from_ipfs, download_from_ipfs_async,
+        },
+        file_operations::{ copy_to_sync_and_add_to_db,
+             remove_from_sync_folder, copy_to_sync_folder}
+    }
 };
 use fs_extra;
 use std::fs;
@@ -23,7 +26,7 @@ use std::collections::HashMap;
 use tauri::Manager;
 use tokio::process::Command;
 use crate::commands::node::get_aws_binary_path;
-
+use std::collections::HashSet;
 
 // Drops the first segment and returns None if the remaining path is empty
 fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<Vec<String>> {
@@ -84,6 +87,7 @@ pub async fn download_and_decrypt_file(
     output_file: String,
     encryption_key: Option<String>,
     source: String,
+    main_req_hash: String,
 ) -> Result<(), String> {
     println!("[download_and_decrypt_file] Downloading file with CID: {} to: {}", metadata_cid, output_file);
     let api_url = "http://127.0.0.1:5001".to_string(); // Convert to owned String
@@ -115,9 +119,9 @@ pub async fn download_and_decrypt_file(
         path_separator,
         std::env::var("PATH").unwrap_or_default()
     );
-
+    
     // Special handling when the 'CID' indicates S3 source
-    if metadata_cid == "s3" || metadata_cid == "local" {
+    if main_req_hash == "s3" || metadata_cid == "s3" || metadata_cid == "local" {
         // If source exists locally, copy; otherwise pull from S3 using aws cli
         if Path::new(&source).exists() {
             std::fs::copy(&source, &output_file)
@@ -325,10 +329,11 @@ pub async fn download_and_decrypt_folder(
     output_dir: String,
     encryption_key: Option<String>,
     source: String,
+    main_req_hash: String,
 ) -> Result<(), String> {
     println!("[+] Starting download for folder with manifest CID: {}", folder_metadata_cid);
 
-    if folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
+    if main_req_hash == "s3" || folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
         println!("[+] Handling S3 folder download for source: {}", source);
         let source_path = Path::new(&source);
         let destination_path = Path::new(&output_dir).join(&folder_name);
@@ -426,34 +431,32 @@ pub async fn download_and_decrypt_folder(
             let api_url_clone = Arc::clone(&api_url);
             let output_root_clone = output_root_path.clone();
             let encryption_key_clone = encryption_key_bytes.as_ref().map(Arc::clone);
+            let main_req_hash_clone = main_req_hash.clone();
 
             async move {
                 println!("[download_and_decrypt_folder] Processing entry with CID: {} to: {:?}", 
                     entry.cid, output_root_clone.join(&entry.file_name));
 
-                // Check if the entry is a subfolder metadata (new hierarchical logic)
                 if entry.file_name.ends_with(".folder.ec_metadata") {
                     let subfolder_name = entry.file_name.trim_end_matches(".s.folder.ec_metadata");
-                    // Remove leading '.' and '.s' if present
                     let cleaned_name = subfolder_name.trim_end_matches(".folder.ec_metadata");
                     let subfolder_path = output_root_clone.join(cleaned_name);
                     if let Err(e) = tokio::fs::create_dir_all(&subfolder_path).await {
                         eprintln!("[!] Failed to create subfolder {}: {}", subfolder_name, e);
                         return;
                     }
-                    // Recursively call download_and_decrypt_folder for subfolder
                     if let Err(e) = download_and_decrypt_folder(
-                        String::new(), // _account_id not needed for recursion
+                        String::new(), 
                         entry.cid.clone(),
                         subfolder_name.to_string(),
                         output_root_clone.to_string_lossy().to_string(),
                         encryption_key_clone.as_ref().map(|k| base64::engine::general_purpose::STANDARD.encode(&**k)),
-                        String::new() // Pass an empty string as source is not needed for IPFS subfolder
+                        String::new(),
+                        main_req_hash_clone.clone(),
                     ).await {
                         eprintln!("[!] Failed to download/decrypt subfolder {}: {}", subfolder_name, e);
                     }
-                } else { // Combined the two identical `else if` and `else` blocks
-                    // Handle regular file
+                } else { 
                     let file_metadata_bytes = match download_from_ipfs_async(&api_url_clone, &entry.cid).await {
                         Ok(bytes) => bytes,
                         Err(e) => {
@@ -714,12 +717,11 @@ pub async fn download_file_public(
     file_cid: String,
     output_file: String,
     source: String,
+    main_req_hash: String,
 ) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001";
-
-    println!("[download_file_public] Start: file_cid='{}', output_file='{}'", file_cid, output_file);
-    // Special handling when the 'CID' indicates S3 source
-    if file_cid == "s3" || file_cid == "local" {
+    
+    if main_req_hash == "s3" || file_cid == "s3" || file_cid == "local" {
         println!("[download_file_public] returned source='{}'", source);
 
         // Dynamically get the AWS binary path
@@ -765,8 +767,8 @@ pub async fn download_file_public(
                 .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("cp")
-                .arg(&source)
-                .arg(&output_file)
+                .arg(&source) 
+                .arg(&output_file) 
                 .arg("--endpoint-url")
                 .arg("https://s3.hippius.com")
                 .status()
@@ -837,8 +839,10 @@ pub async fn public_download_folder(
     folder_name: String,
     output_dir: String,
     source: String,
+    main_req_hash: String,
 ) -> Result<(), String> {
-    if folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
+
+    if main_req_hash == "s3" || folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
         println!("[+] Handling S3 folder download for source: {}", source);
         let source_path = Path::new(&source);
         let destination_path = Path::new(&output_dir).join(&folder_name);
@@ -920,6 +924,7 @@ pub async fn public_download_folder(
         &folder_metadata_cid,
         &folder_name,
         &output_dir,
+        &main_req_hash,
     ).await
 }
 
@@ -928,6 +933,7 @@ async fn public_download_folder_inner(
     folder_metadata_cid: &str,
     folder_name: &str,
     output_dir: &str,
+    main_req_hash: &str,
 ) -> Result<(), String> {
     let api_url = "http://127.0.0.1:5001";
     
@@ -970,7 +976,8 @@ async fn public_download_folder_inner(
                 _account_id,
                 subfolder_metadata_cid,
                 subfolder_name,
-                &output_path.to_string_lossy()
+                &output_path.to_string_lossy(),
+                main_req_hash,
             )).await {
                 eprintln!("[public_download_folder] Failed to download subfolder {}: {}", subfolder_name, e);
             }
@@ -982,11 +989,10 @@ async fn public_download_folder_inner(
                 fs::create_dir_all(parent)
                     .map_err(|e| format!("Failed to create parent directory {}: {}", parent.display(), e))?;
             }
-            if let Err(e) = download_file_public(entry.cid.clone(), output_file_path.to_string_lossy().to_string(), "".to_string()).await {
+            if let Err(e) = download_file_public(entry.cid.clone(), output_file_path.to_string_lossy().to_string(), "".to_string(), main_req_hash.to_string()).await {
                 eprintln!("[public_download_folder] Failed to download file {}: {}", clean_file_name, e);
             }
         } else {
-            // Log or ignore unexpected entries
             println!("[public_download_folder] Skipping unknown entry: {}", entry.file_name);
         }
     }
@@ -1003,31 +1009,6 @@ pub async fn list_folder_contents(
 ) -> Result<Vec<FileDetail>, String> {
     println!("[ListFolderContents] Received main_folder_name: {:?}", main_folder_name);
     println!("[ListFolderContents] Received subfolder_path: {:?}", subfolder_path);
-
-    // Get the sync root path first
-    let sync_root = get_sync_root(&scope).await?;
-    
-    // Build the local path to check
-    let mut local_path = sync_root.clone();
-    
-    // Add main folder name if not already in subfolder_path
-    if let Some(paths) = subfolder_path.as_ref() {
-        if paths.is_empty() {
-            local_path = local_path.join(&main_folder_name);
-        } else {
-            for part in paths {
-                local_path = local_path.join(part);
-            }
-        }
-    } else {
-        local_path = local_path.join(&main_folder_name);
-    }
-    
-    // Check if local path exists and is a directory
-    if local_path.is_dir() {
-        println!("[ListFolderContents] Found local directory: {:?}", local_path);
-        return list_local_directory(&local_path, &sync_root, &scope, &main_folder_name, subfolder_path).await;
-    }
     
     // Fall back to S3 if local directory doesn't exist
     let bucket_name = format!("{}-{}", account_id, scope);
@@ -1047,20 +1028,18 @@ pub async fn list_folder_contents(
         if scope == "public" {
             crate::utils::sync::get_public_sync_path()
                 .await
-                .map(|s| PathBuf::from(s)) // Convert String to PathBuf
+                .map(|s| PathBuf::from(s))
                 .map_err(|e| e.to_string())
         } else {
             crate::utils::sync::get_private_sync_path()
                 .await
-                .map(|s| PathBuf::from(s)) // Convert String to PathBuf
+                .map(|s| PathBuf::from(s))
                 .map_err(|e| e.to_string())
         }
     }
 
     async fn db_lookup_path_by_name(file_name: &str) -> Option<String> {
-        // Use global DB pool if available
         if let Some(pool) = crate::DB_POOL.get() {
-            // Return the most recent path for the given file name
             match sqlx::query_scalar::<_, String>(
                 "SELECT path FROM file_paths WHERE file_name = ?1 ORDER BY timestamp DESC LIMIT 1",
             )
@@ -1085,7 +1064,6 @@ pub async fn list_folder_contents(
         fallback_s3: &str,
     ) -> String {
         use std::path::PathBuf;
-        // Decide which prefix to use under the sync root
         let local_prefix = match subfolder_path {
             Some(paths) if !paths.is_empty() => paths.join("/"),
             _ => main_folder_name.to_string(),
@@ -1096,10 +1074,8 @@ pub async fn list_folder_contents(
             return candidate.to_string_lossy().to_string();
         }
 
-        // Try DB fallback by file_name
         if let Some(p) = db_lookup_path_by_name(item_name).await { return p; }
 
-        // Default to S3 URL
         fallback_s3.to_string()
     }
 
@@ -1124,7 +1100,7 @@ pub async fn list_folder_contents(
         }
     };
 
-    // Construct dynamic PATH with OS-appropriate separator
+    // Construct dynamic PATH
     let path_separator = if cfg!(windows) { ";" } else { ":" };
     let dynamic_path = format!(
         "{}{}{}",
@@ -1133,14 +1109,16 @@ pub async fn list_folder_contents(
         std::env::var("PATH").unwrap_or_default()
     );
 
-    // Execute AWS command with dynamic path
+    // Execute aws s3api list-objects-v2 command with prefix
     let output = Command::new(&aws_binary_path)
         .env("AWS_PAGER", "")
         .env("PATH", &dynamic_path)
-        .arg("s3")
-        .arg("ls")
-        .arg(&full_s3_uri_prefix)
-        .arg("--recursive")
+        .arg("s3api")
+        .arg("list-objects-v2")
+        .arg("--bucket")
+        .arg(&bucket_name)
+        .arg("--prefix")
+        .arg(&s3_prefix)
         .arg("--endpoint-url")
         .arg(endpoint_url)
         .output()
@@ -1152,129 +1130,130 @@ pub async fn list_folder_contents(
         return Err(format!("Failed to list S3 folder contents: {}", stderr));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Parse the JSON output
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let result: serde_json::Value = serde_json::from_str(&output_str)
+        .map_err(|e| format!("Failed to parse AWS CLI output: {}", e))?;
+    println!("[ListFolderContents] AWS CLI output: {}", result);
+    
     let mut direct_files: Vec<FileDetail> = Vec::new();
-    let mut subfolder_data: HashMap<String, (u64, String)> = HashMap::new();
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 4 { continue; }
-
-        let last_modified = format!("{} {}", parts[0], parts[1]);
-        let size: u64 = parts[2].parse().unwrap_or(0);
-        let full_s3_key = parts[3..].join(" ");
-
-        if let Some(relative_path) = full_s3_key.strip_prefix(&s3_prefix) {
-            if let Some(slash_index) = relative_path.find('/') {
-                let subfolder_name = relative_path[..slash_index].to_string();
-                let entry = subfolder_data.entry(subfolder_name).or_insert((0, String::new()));
-                entry.0 += size;
-                entry.1 = last_modified;
-            } else {
-                if relative_path.is_empty() { continue; }
-                let s3_url = format!("s3://{}/{}", bucket_name, full_s3_key);
-                let src = resolve_source(
-                    &scope,
-                    &sync_root,
-                    &main_folder_name,
-                    &subfolder_path,
-                    relative_path,
-                    &s3_url,
-                ).await;
-                direct_files.push(FileDetail {
-                    file_name: relative_path.to_string(),
-                    cid: "s3".to_string(),
-                    source: src,
-                    file_hash: hex::encode(full_s3_key.as_bytes()),
-                    miner_ids: String::new(),
-                    file_size: size,
-                    created_at: "0".to_string(),
-                    last_charged_at: "0".to_string(),
-                    is_folder: false,
-                });
+    // Process Contents (files) and extract subfolders
+    if let Some(contents) = result["Contents"].as_array() {
+        println!("[ListFolderContents] Found {} content items", contents.len());
+        
+        // First pass: collect all items and calculate folder sizes
+        let mut folder_sizes: HashMap<String, u64> = HashMap::new();
+        let mut folder_ipfs_hashes: HashMap<String, String> = HashMap::new();
+        let mut file_items = Vec::new();
+        
+        for item in contents {
+            if let (Some(key), Some(size), Some(last_modified)) = (
+                item["Key"].as_str(),
+                item["Size"].as_u64(),
+                item["LastModified"].as_str(),
+            ) {
+                // Skip the folder marker object itself
+                if key.ends_with('/') { continue; }
+                
+                // Get IPFS hash from Owner.ID if available
+                let ipfs_hash = item["Owner"]
+                    .as_object()
+                    .and_then(|o| o.get("ID"))
+                    .and_then(|id| id.as_str())
+                    .unwrap_or("pending")
+                    .to_string();
+                
+                // Get relative path by removing the s3_prefix
+                if let Some(relative_path) = key.strip_prefix(&s3_prefix) {
+                    if relative_path.is_empty() { continue; }
+                    
+                    if let Some(slash_index) = relative_path.find('/') {
+                        // This is inside a subfolder
+                        let folder_name = &relative_path[..slash_index];
+                        *folder_sizes.entry(folder_name.to_string()).or_insert(0) += size;
+                        if !ipfs_hash.is_empty() {
+                            folder_ipfs_hashes.insert(folder_name.to_string(), ipfs_hash.clone());
+                        }
+                    } else {
+                        // This is a direct file
+                        file_items.push((relative_path.to_string(), size, ipfs_hash, last_modified.to_string()));
+                    }
+                }
             }
         }
-    }
+        
+        // Process direct files
+        for (relative_path, size, ipfs_hash, last_modified) in file_items {
+            let s3_url = format!("s3://{}/{}{}", bucket_name, s3_prefix, relative_path);
+            let src = resolve_source(
+                &scope,
+                &sync_root,
+                &main_folder_name,
+                &subfolder_path,
+                &relative_path,
+                &s3_url,
+            ).await;
+            
+            // Parse the last modified date
+            let last_modified_dt = chrono::DateTime::parse_from_rfc3339(&last_modified)
+                .map(|dt| dt.timestamp().to_string())
+                .unwrap_or_else(|_| "0".to_string());
 
-    for (folder_name, (total_size, _)) in subfolder_data {
-        let folder_s3_key = format!("{}{}", s3_prefix, folder_name);
-        let s3_url = format!("s3://{}/{}", bucket_name, folder_s3_key);
-        let src = resolve_source(
-            &scope,
-            &sync_root,
-            &main_folder_name,
-            &subfolder_path,
-            &folder_name,
-            &s3_url,
-        ).await;
-        direct_files.push(FileDetail {
-            file_name: folder_name,
-            cid: "s3".to_string(),
-            source: src,
-            file_hash: hex::encode(folder_s3_key.as_bytes()),
-            miner_ids: String::new(),
-            file_size: total_size,
-            created_at: "0".to_string(),
-            last_charged_at: "0".to_string(),
-            is_folder: true,
-        });
+            let cid_hex = hex::encode(ipfs_hash.as_bytes());
+            let file_hash_hex = cid_hex.clone();
+            
+            direct_files.push(FileDetail {
+                file_name: relative_path,
+                cid: if cid_hex.is_empty() { "pending".to_string() } else { cid_hex.clone() },
+                source: src,
+                file_hash: if file_hash_hex.is_empty() { "pending".to_string() } else { file_hash_hex },
+                miner_ids: String::new(),
+                file_size: size,
+                created_at: last_modified_dt.clone(),
+                last_charged_at: last_modified_dt,
+                is_folder: false,
+                main_req_hash: "s3".to_string(),
+            });
+        }
+        
+        // Add subfolders to the result with their sizes and IPFS hashes
+        for (folder_name, size) in folder_sizes {
+            let folder_key = format!("{}{}/", s3_prefix, folder_name);
+            let s3_url = format!("s3://{}/{}", bucket_name, folder_key);
+            let src = resolve_source(
+                &scope,
+                &sync_root,
+                &main_folder_name,
+                &subfolder_path,
+                &folder_name,
+                &s3_url,
+            ).await;
+            
+            let ipfs_hash = folder_ipfs_hashes.get(&folder_name).cloned().unwrap_or_default();
+            let cid_hex = hex::encode(ipfs_hash.as_bytes());
+            let file_hash_hex = cid_hex.clone();
+            
+            direct_files.push(FileDetail {
+                file_name: folder_name,
+                cid: if cid_hex.is_empty() { "pending".to_string() } else { cid_hex.clone() },
+                source: src,
+                file_hash: if file_hash_hex.is_empty() { "pending".to_string() } else { file_hash_hex },
+                miner_ids: String::new(),
+                file_size: size,
+                created_at: "0".to_string(),
+                last_charged_at: "0".to_string(),
+                is_folder: true,
+                main_req_hash: "s3".to_string(),
+            });
+        }
+    } else {
+        println!("[ListFolderContents] No Contents found in response");
     }
+    
     println!("files are : {:?}", direct_files);
     Ok(direct_files)
 }
 
-async fn list_local_directory(
-    dir_path: &Path,
-    sync_root: &Path,
-    _scope: &str,
-    _main_folder_name: &str,
-    _subfolder_path: Option<Vec<String>>,
-) -> Result<Vec<FileDetail>, String> {
-    use std::fs;
-    use std::time::UNIX_EPOCH;
-    
-    let mut files = Vec::new();
-    
-    for entry in fs::read_dir(dir_path).map_err(|e| format!("Failed to read directory: {}", e))? {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let path = entry.path();
-        let file_name = path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
-            
-        if file_name.starts_with('.') {
-            continue; // Skip hidden files
-        }
-        
-        let metadata = fs::metadata(&path).map_err(|e| format!("Failed to get metadata: {}", e))?;
-        let is_folder = metadata.is_dir();
-        
-        // Get relative path from sync root
-        let relative_path = path.strip_prefix(sync_root)
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-            
-        // Get last modified time
-        let modified = metadata.modified()
-            .map(|t| t.duration_since(UNIX_EPOCH).map(|d| d.as_secs().to_string()).unwrap_or_default())
-            .unwrap_or_default();
-            
-        files.push(FileDetail {
-            file_name,
-            cid: "local".to_string(),
-            source: path.to_string_lossy().to_string(),
-            file_hash: hex::encode(relative_path.as_bytes()),
-            miner_ids: String::new(),
-            file_size: metadata.len(),
-            created_at: modified.clone(),
-            last_charged_at: modified,
-            is_folder,
-        });
-    }
-    
-    Ok(files)
-}
 
 #[tauri::command]
 pub async fn add_file_to_public_folder(

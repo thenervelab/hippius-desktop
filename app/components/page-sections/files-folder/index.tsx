@@ -38,7 +38,8 @@ interface FileEntry {
     last_charged_at: string;
     miner_ids: string | string[];
     source: string;
-    is_folder: boolean
+    is_folder: boolean;
+    main_req_hash: string;
 }
 
 interface FolderViewProps {
@@ -149,7 +150,8 @@ export default function FolderView({
                         isErasureCoded,
                         isFolder: isFolder || entry.is_folder,
                         parentFolderId: folderCid,
-                        parentFolderName: folderName
+                        parentFolderName: folderName,
+                        mainReqHash: entry.main_req_hash
                     };
                 }
             );

@@ -9,6 +9,7 @@ import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { cn } from "@/lib/utils";
 import InfoTooltip from "@/components/ui/info-tooltip";
+import FileSyncTypeBadge from "./FileSyncTypeBadge";
 
 // Constants for block time calculation
 const BLOCKS_PER_EPOCH = 100; // Half epoch is 100 blocks
@@ -23,6 +24,7 @@ export type FileDetail = {
   filename: string;
   cid: string;
   createdAt?: number;
+  type?: string;
 };
 
 interface FileDetailsDialogProps {
@@ -324,12 +326,15 @@ const FileDetailsDialog: React.FC<FileDetailsDialogProps> = ({
                           <Icons.BoxSimple2 className="size-5 relative text-primary-50" />
                         </AbstractIconWrapper>
                         <div className="flex flex-col justify-center">
-                          <div className="text-sm font-medium text-grey-10 truncate flex items-center gap-2">
-                            <span>
-                              {detail.filename.length > 16
-                                ? `${detail.filename.slice(0, 7)}...${detail.filename.slice(-7)}`
-                                : detail.filename}
-                            </span>
+                          <div className="flex items-center gap-1 justify-center">
+                            <div className="text-sm font-medium text-grey-10 truncate flex items-center gap-2">
+                              <span>
+                                {detail.filename.length > 14
+                                  ? `${detail.filename.slice(0, 5)}...${detail.filename.slice(-7)}`
+                                  : detail.filename}
+                              </span>
+                            </div>
+                            <FileSyncTypeBadge type={detail.type === "public" || detail.type === "private" ? detail.type : null} />
                           </div>
                           <div className="flex items-center mt-1">
                             <div className="text-xs text-grey-70">

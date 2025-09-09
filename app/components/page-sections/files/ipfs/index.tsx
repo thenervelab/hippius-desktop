@@ -120,7 +120,8 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     return filteredUnpinnedFiles.map((file) => ({
       filename: file.name || "Unnamed File",
       cid: decodeHexCid(file.cid),
-      createdAt: file.createdAt
+      createdAt: file.createdAt,
+      type: file.type?.toLowerCase() || "public"
     }));
   }, [regularFilesData?.files, isRecentFiles]);
 

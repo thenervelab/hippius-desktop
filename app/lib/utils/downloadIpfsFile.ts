@@ -76,7 +76,8 @@ const downloadRegularIpfsFile = async (file: FormattedUserIpfsFile) => {
     await invoke("download_file_public", {
       fileCid: decodeHexCid(cid),
       outputFile: filePath,
-      source: file.source
+      source: file.source,
+      mainReqHash: file.mainReqHash
     });
 
     toast.success(`Download complete: ${name}`, { id: toastId });
@@ -115,7 +116,8 @@ const downloadEncryptedIpfsFile = async (
       accountId: polkadotAddress,
       metadataCid: cid,
       outputFile: savePath,
-      source: file.source
+      source: file.source,
+      mainReqHash: file.mainReqHash
     });
 
     toast.success(`Download complete: ${name}`, {

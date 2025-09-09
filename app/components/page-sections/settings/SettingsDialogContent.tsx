@@ -12,7 +12,7 @@ import { useAtom } from "jotai";
 import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
-import EncryptionKey from "./encryption-key";
+// import EncryptionKey from "./encryption-key";
 import CustomizeRPC from "./CustomizeRPC";
 import { Clock } from "lucide-react";
 import SessionTimeoutSettings from "./SessionTimeoutSettings";
@@ -41,10 +41,10 @@ const SettingsDialogContent: React.FC = () => {
       tabName: "Sub Accounts",
       icon: <Icons.KeySquare className="size-4" />,
     },
-    {
-      tabName: "Encryption Key",
-      icon: <Icons.Key className="size-4" />,
-    },
+    // {
+    //   tabName: "Encryption Key",
+    //   icon: <Icons.Key className="size-4" />,
+    // },
 
     {
       tabName: "Notifications",
@@ -149,7 +149,7 @@ const SettingsDialogContent: React.FC = () => {
                 </RevealTextLine>
               </>
             )}
-
+            {/* 
             {activeTab === "Encryption Key" && (
               <RevealTextLine
                 rotate
@@ -158,7 +158,7 @@ const SettingsDialogContent: React.FC = () => {
               >
                 <EncryptionKey />
               </RevealTextLine>
-            )}
+            )} */}
 
             {activeTab === "Customize RPC" && (
               <RevealTextLine

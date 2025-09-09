@@ -9,8 +9,8 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
-import { HIPPIUS_EXPLORER_CONFIG } from "@/app/lib/config";
-import { useNodeLocations } from "@/app/lib/hooks/api/useNodeLocations";
+// import { HIPPIUS_EXPLORER_CONFIG } from "@/app/lib/config";
+// import { useNodeLocations } from "@/app/lib/hooks/api/useNodeLocations";
 import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
 
 interface DetailRowProps {
@@ -34,40 +34,40 @@ const DetailRow: React.FC<DetailRowProps> = ({
   </div>
 );
 
-interface FileLocationItemProps {
-  location: string;
-  lastChild?: boolean;
-}
+// interface FileLocationItemProps {
+//   location: string;
+//   lastChild?: boolean;
+// }
 
-const FileLocationItem: React.FC<FileLocationItemProps> = ({
-  location,
-  lastChild
-}) => (
-  <div className="inline-flex items-center text-base text-grey-20">
-    {location}
-    {!lastChild && (
-      <span className="mx-2 h-1 w-1 bg-grey-80 rounded-full"></span>
-    )}
-  </div>
-);
+// const FileLocationItem: React.FC<FileLocationItemProps> = ({
+//   location,
+//   lastChild
+// }) => (
+//   <div className="inline-flex items-center text-base text-grey-20">
+//     {location}
+//     {!lastChild && (
+//       <span className="mx-2 h-1 w-1 bg-grey-80 rounded-full"></span>
+//     )}
+//   </div>
+// );
 
-interface NodeItemProps {
-  nodeId: string;
-}
+// interface NodeItemProps {
+//   nodeId: string;
+// }
 
-const NodeItem: React.FC<NodeItemProps> = ({ nodeId }) => (
-  <div className="inline-flex items-center gap-1 hover:bg-grey-90 border border-grey-80 rounded px-2 py-1 text-xs text-grey-10 mr-2 mb-2">
-    <TableModule.CopyableCell
-      title="Copy Node ID"
-      toastMessage="Node ID Copied Successfully!"
-      copyAbleText={nodeId}
-      link={`${HIPPIUS_EXPLORER_CONFIG.baseUrl}/nodes/${nodeId}`}
-      linkClass="group-hover:underline group-hover:text-primary-50 hover:underline"
-      forSmallScreen
-      className="max-sm:[200px] max-w-[400px] h-full"
-    />
-  </div>
-);
+// const NodeItem: React.FC<NodeItemProps> = ({ nodeId }) => (
+//   <div className="inline-flex items-center gap-1 hover:bg-grey-90 border border-grey-80 rounded px-2 py-1 text-xs text-grey-10 mr-2 mb-2">
+//     <TableModule.CopyableCell
+//       title="Copy Node ID"
+//       toastMessage="Node ID Copied Successfully!"
+//       copyAbleText={nodeId}
+//       link={`${HIPPIUS_EXPLORER_CONFIG.baseUrl}/nodes/${nodeId}`}
+//       linkClass="group-hover:underline group-hover:text-primary-50 hover:underline"
+//       forSmallScreen
+//       className="max-sm:[200px] max-w-[400px] h-full"
+//     />
+//   </div>
+// );
 
 interface FileDetailsDialogContentProps {
   file?: FormattedUserIpfsFile;
@@ -78,15 +78,15 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
 }) => {
   const isPrivateView = useIsPrivateView();
 
-  const minerIds = file
-    ? Array.isArray(file.minerIds)
-      ? file.minerIds
-      : typeof file.minerIds === "string"
-        ? [file.minerIds]
-        : []
-    : [];
+  // const minerIds = file
+  //   ? Array.isArray(file.minerIds)
+  //     ? file.minerIds
+  //     : typeof file.minerIds === "string"
+  //       ? [file.minerIds]
+  //       : []
+  //   : [];
 
-  const { uniqueLocations, isLoading } = useNodeLocations(minerIds);
+  // const { uniqueLocations, isLoading } = useNodeLocations(minerIds);
 
   if (!file) return null;
 
@@ -105,13 +105,13 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
       ? formatBytesFromBigInt(BigInt(file.size))
       : "Unknown";
 
-  const fallbackLocations = ["Loading locations..."];
+  // const fallbackLocations = ["Loading locations..."];
 
-  const locationsToShow = isLoading
-    ? fallbackLocations
-    : uniqueLocations.length > 0
-      ? uniqueLocations
-      : ["Location data unavailable"];
+  // const locationsToShow = isLoading
+  //   ? fallbackLocations
+  //   : uniqueLocations.length > 0
+  //     ? uniqueLocations
+  //     : ["Location data unavailable"];
 
   const handleViewOnExplorer = async () => {
     try {
@@ -173,7 +173,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
           </div>
         </DetailRow>
 
-        <DetailRow label="Block">{file.lastChargedAt}</DetailRow>
+        {/* <DetailRow label="Block">{file.lastChargedAt}</DetailRow>
 
         <DetailRow label="File Location">
           <div className="flex flex-wrap">
@@ -213,7 +213,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
             View on Explorer
             <Icons.SendSquare2 className="size-5 text-primary-50" />
           </div>
-        </DetailRow>
+        </DetailRow> */}
       </div>
     </div>
   );
