@@ -223,7 +223,6 @@ pub async fn reset_app() -> Result<(), String> {
         "encryption_keys",
         "sync_paths",
         "wss_endpoint",
-        "sub_accounts",
     ];
 
     for table in tables_to_clear {
