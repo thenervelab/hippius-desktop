@@ -41,14 +41,23 @@ pub async fn import_key(key_base64: String) -> Result<String, String> {
 pub struct ExportDataResult {
     pub public_sync_path: Option<String>,
     pub private_sync_path: Option<String>,
-    pub encryption_keys: Vec<String>, 
+    pub encryption_keys: Vec<String>,
+    pub sub_accounts: Vec<SubAccountExport>,
 }
 
 #[derive(serde::Deserialize)]
 pub struct ImportDataParams {
     pub public_sync_path: Option<String>,
     pub private_sync_path: Option<String>,
-    pub encryption_keys: Vec<String>, // base64 encoded keys
+    pub encryption_keys: Vec<String>,
+    pub sub_accounts: Option<Vec<SubAccountExport>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SubAccountExport {
+    pub account_id: String,
+    pub sub_account_seed_phrase: String,
+    pub created_at: Option<String>,
 }
 
 #[tauri::command]
@@ -153,11 +162,48 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
         imported_items.push(format!("{} encryption key(s)", key_count));
     }
 
+    // Import sub-accounts if any
+    if let Some(sub_accounts) = params.sub_accounts {
+        let mut imported_count = 0;
+        for account in sub_accounts {
+            let result = sqlx::query(
+                "INSERT OR REPLACE INTO sub_accounts (account_id, sub_account_seed_phrase, created_at) 
+                 VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))"
+            )
+            .bind(&account.account_id)
+            .bind(&account.sub_account_seed_phrase)
+            .bind(account.created_at)
+            .execute(pool)
+            .await;
+
+            match result {
+                Ok(_) => {
+                    imported_count += 1;
+                    println!(
+                        "[Import] Imported sub-account for account ID: {}",
+                        account.account_id
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[Import] Failed to import sub-account for account ID {}: {}",
+                        account.account_id, e
+                    );
+                    // Continue with other accounts instead of failing completely
+                }
+            }
+        }
+
+        if imported_count > 0 {
+            imported_items.push(format!("{} sub-account(s)", imported_count));
+        }
+    }
+
     if imported_items.is_empty() {
         return Err("No data was imported. Please check your input data.".to_string());
     }
 
-    let success_message = format!("Successfully imported: {}", imported_items.join(", "));
+    let success_message = format!("Successfully imported data");
     println!("[Import] {}", success_message);
     Ok(success_message)
 }
@@ -193,9 +239,32 @@ pub async fn export_app_data() -> Result<ExportDataResult, String> {
 
     let encryption_keys: Vec<String> = keys.into_iter().map(|(key, _id)| key).collect();
 
+    // Get sub-accounts
+    let sub_accounts_rows = sqlx::query(
+    "SELECT account_id, sub_account_seed_phrase, created_at FROM sub_accounts"
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch sub-accounts: {}", e))?;
+
+    let sub_accounts = sub_accounts_rows
+    .into_iter()
+    .map(|row| {
+        let account_id: String = row.get("account_id");
+        let sub_account_seed_phrase: String = row.get("sub_account_seed_phrase");
+        let created_at: Option<String> = row.get("created_at");
+        
+        SubAccountExport {
+            account_id,
+            sub_account_seed_phrase,
+            created_at,
+        }
+    })
+    .collect::<Vec<_>>();
     println!(
-        "[Export] Exported {} encryption keys, public path: {:?}, private path: {:?}",
+        "[Export] Exported {} encryption keys, {} sub-accounts, public path: {:?}, private path: {:?}",
         encryption_keys.len(),
+        sub_accounts.len(),
         public_sync_path,
         private_sync_path
     );
@@ -204,6 +273,7 @@ pub async fn export_app_data() -> Result<ExportDataResult, String> {
         public_sync_path,
         private_sync_path,
         encryption_keys,
+        sub_accounts,
     })
 }
 
