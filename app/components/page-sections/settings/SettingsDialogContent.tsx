@@ -63,7 +63,7 @@ const SettingsDialogContent: React.FC = () => {
       icon: <Icons.Wallet className="size-4" />,
     },
     {
-      tabName: "Reset App Data",
+      tabName: "Reset App",
       icon: <Icons.Trash className="size-4" />,
     },
   ];
@@ -119,7 +119,7 @@ const SettingsDialogContent: React.FC = () => {
               </RevealTextLine>
             )}
 
-            {activeTab === "Reset App Data" && (
+            {activeTab === "Reset App" && (
               <RevealTextLine
                 rotate
                 reveal={inView}

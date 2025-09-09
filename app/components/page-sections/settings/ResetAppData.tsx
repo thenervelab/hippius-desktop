@@ -51,7 +51,7 @@ const ResetAppData = () => {
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <SectionHeader
               Icon={Icons.Trash}
-              title="Reset App Data"
+              title="Reset App"
               subtitle="This will erase all Hippius data stored on this device. On‑chain data and IPFS files stay intact and can be restored."
               info="Use this option if you're experiencing issues or want to start fresh. Your blockchain data and files stored on the decentralized network remain secure and accessible after reset."
             />
@@ -59,13 +59,13 @@ const ResetAppData = () => {
 
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <CardButton
-              className="text-base h-[48px]"
+              className="text-base h-[48px] max-w-[180px]"
               variant="error"
               onClick={openDialog}
             >
               <div className="flex items-center gap-2">
                 <Trash className="size-4" />
-                <span>Reset App Data</span>
+                <span>Reset App</span>
               </div>
             </CardButton>
           </RevealTextLine>

@@ -25,6 +25,10 @@ import SeedPasscodeModal from "./SeedPasscodeModal";
 import { generateMnemonic } from "@/app/lib/helpers/mnemonic";
 import { InView } from "react-intersection-observer";
 
+import { invoke } from "@tauri-apps/api/core";
+
+type BackendSubAccountTuple = [string, string]; // [accountId, address]
+
 const SubAccounts: React.FC = () => {
   const { subs, loading: tableLoading, reload } = useSubAccounts();
   const { api, isConnected } = usePolkadotApi();
@@ -42,6 +46,10 @@ const SubAccounts: React.FC = () => {
   const [generatedMnemonic, setGeneratedMnemonic] = useState("");
   const [error, setError] = useState("");
   const [generatingKey, setGeneratingKey] = useState(false);
+
+  // Backend sub accounts state
+  const [fetchingBackendData, setFetchingBackendData] = useState(false);
+  const [disabledAccounts, setDisabledAccounts] = useState<Set<string>>(new Set());
 
   // For direct seed saving (when generated from New Account)
   const [isPasscodeModalOpen, setIsPasscodeModalOpen] = useState(false);
@@ -67,6 +75,38 @@ const SubAccounts: React.FC = () => {
   } | null>(null);
   const [txLoading, setTxLoading] = useState(false);
 
+  // Fetch backend sub account details
+  const fetchBackendSubAccounts = useCallback(async () => {
+    setFetchingBackendData(true);
+    try {
+      const response = await invoke<BackendSubAccountTuple[]>('get_all_subaccount_addresses');
+      console.log("Backend sub account details:", response);
+
+      if (Array.isArray(response)) {
+
+        const backendAddresses = new Set<string>(
+          response.map(([, address]) => address)
+        );
+
+        setDisabledAccounts(backendAddresses);
+        console.log("Disabled accounts:", [...backendAddresses]);
+
+        console.log("Backend account mappings:",
+          response.map(([accountId, address]) => ({ accountId, address }))
+        );
+      } else {
+        console.error("Unexpected response format from get_all_subaccount_addresses");
+        setDisabledAccounts(new Set<string>());
+      }
+    } catch (error) {
+      console.error("Error fetching backend sub account details:", error);
+      toast.error("Failed to fetch sub account details from backend");
+      setDisabledAccounts(new Set<string>());
+    } finally {
+      setFetchingBackendData(false);
+    }
+  }, []);
+
   // Load the list of accounts with seeds
   const loadAccountsWithSeeds = useCallback(async () => {
     try {
@@ -88,6 +128,16 @@ const SubAccounts: React.FC = () => {
   useEffect(() => {
     loadAccountsWithSeeds();
   }, [loadAccountsWithSeeds, subs]);
+
+  // Fetch backend data when the component mounts
+  useEffect(() => {
+    fetchBackendSubAccounts();
+  }, [fetchBackendSubAccounts]);
+
+  // Check if an account is disabled
+  const isAccountDisabled = useCallback((address: string) => {
+    return disabledAccounts.has(address);
+  }, [disabledAccounts]);
 
   const queueTx = useCallback(
     (tx: any, successMsg: string, title: string, desc: string) => {
@@ -388,10 +438,11 @@ const SubAccounts: React.FC = () => {
 
           <SubAccountTable
             subs={subs}
-            loading={tableLoading}
+            loading={tableLoading || fetchingBackendData}
             onDelete={onDelete}
             hasSeed={checkHasSeed}
             onSeedUpdated={handleSeedUpdated}
+            isDisabled={isAccountDisabled}
           />
 
           <SubAccountModal

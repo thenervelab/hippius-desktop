@@ -12,6 +12,7 @@ use sp_core::Pair;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
 use base64 as b64;
+use std::process::Command;
 
 #[derive(Default)]
 pub struct SyncState {
@@ -23,8 +24,6 @@ pub struct AppState {
     pub sync: Mutex<SyncState>,
 }
 
-/// Public helper: resolve/create the subaccount seed and set AWS env vars accordingly
-/// This mirrors the credentials setup used by initialize_sync when starting folder syncs.
 #[allow(deprecated)]
 pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
     // Resolve or create subaccount seed (with encryption and chain-side handling)
@@ -35,6 +34,15 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
     std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
     std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
     std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
+    
+    // Configure AWS S3 multipart upload settings
+    let _ = Command::new("aws")
+        .args(["configure", "set", "default.s3.multipart_chunksize", "134217728"])
+        .status();
+        
+    let _ = Command::new("aws")
+        .args(["configure", "set", "default.s3.multipart_threshold", "134217728"])
+        .status();
 }
 
 #[tauri::command]
@@ -74,9 +82,9 @@ pub async fn initialize_sync(
         let account_clone3 = account_for_bg.clone();
         let mnemonic_clone = mnemonic_for_bg.clone();
 
-        let user_profile_task = tokio::spawn(async move {
-            start_user_profile_sync_tauri(app_handle_clone, account_clone).await;
-        });
+        // let user_profile_task = tokio::spawn(async move {
+        //     start_user_profile_sync_tauri(app_handle_clone, account_clone).await;
+        // });
 
         // Check DB-configured sync paths and only spawn tasks if present
         let private_enabled = match get_private_sync_path().await {
@@ -117,7 +125,7 @@ pub async fn initialize_sync(
         // Record task handles into global AppState so cleanup can abort them
         let state = app_for_bg.state::<Arc<AppState>>();
         let mut guard = state.sync.lock().await;
-        guard.tasks.push(user_profile_task);
+        // guard.tasks.push(user_profile_task);
         if let Some(handle) = public_folder_task { guard.tasks.push(handle); }
         if let Some(handle) = folder_task { guard.tasks.push(handle); }
 
@@ -211,7 +219,7 @@ pub async fn register_task(app: tauri::AppHandle, handle: tokio::task::JoinHandl
 }
 
 // Helper: load first encryption key from DB
-async fn load_encryption_key(pool: &sqlx::SqlitePool) -> Option<SbKey> {
+pub async fn load_encryption_key(pool: &sqlx::SqlitePool) -> Option<SbKey> {
     match sqlx::query_as::<_, (Vec<u8>,)>("SELECT key FROM encryption_keys ORDER BY id ASC LIMIT 1")
         .fetch_optional(pool)
         .await
@@ -238,7 +246,7 @@ fn encrypt_phrase(plain: &str, key: &SbKey) -> String {
 
 // Helper: try decrypt base64 (nonce||ct), else None
 #[allow(deprecated)]
-fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
+pub fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
     let bytes = b64::decode(b64_in).ok()?;
     if bytes.len() < secretbox::NONCEBYTES { return None; }
     let (nonce_b, ct) = bytes.split_at(secretbox::NONCEBYTES);

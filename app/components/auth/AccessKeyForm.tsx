@@ -4,7 +4,13 @@ import { useState } from "react";
 import { Label } from "@/components/ui/label";
 import { AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Icons, Input, RevealTextLine } from "@/components/ui";
+import {
+  BackButton,
+  Button,
+  Icons,
+  Input,
+  RevealTextLine,
+} from "@/components/ui";
 import { Eye, EyeOff, Key } from "@/components/ui/icons";
 import { InView } from "react-intersection-observer";
 import { isMnemonicValid } from "@/app/lib/helpers/validateMnemonic";
@@ -13,12 +19,14 @@ interface AccessKeyFormProps {
   setShowPasscodeFields: React.Dispatch<React.SetStateAction<boolean>>;
   setMnemonic: React.Dispatch<React.SetStateAction<string>>;
   mnemonic: string;
+  showGoBack?: boolean;
 }
 
 const AccessKeyForm: React.FC<AccessKeyFormProps> = ({
   setShowPasscodeFields,
   setMnemonic,
   mnemonic,
+  showGoBack = false,
 }) => {
   const [error, setError] = useState<string | null>(null);
   const [logginIn, setLoggingIn] = useState(false);
@@ -49,6 +57,13 @@ const AccessKeyForm: React.FC<AccessKeyFormProps> = ({
         <div ref={ref} className="w-full flex flex-col">
           <div className="text-grey-10 opacity-0 animate-fade-in-0.5 w-full  flex flex-col">
             <form onSubmit={handleLogin}>
+              {showGoBack && (
+                <div className=" mb-2">
+                  <RevealTextLine rotate reveal={inView} className="delay-300">
+                    <BackButton href={"login"} text="Back" />
+                  </RevealTextLine>
+                </div>
+              )}
               <div className="text-grey-10 xl:mb-8 mb-6 xl:text-[32px] text-2xl font-medium">
                 <RevealTextLine rotate reveal={inView} className="delay-300">
                   Unlock Your Hippius Account

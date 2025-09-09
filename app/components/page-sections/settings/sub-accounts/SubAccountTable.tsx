@@ -17,7 +17,7 @@ import {
   CopyableCell,
   Pagination
 } from "@/components/ui/alt-table";
-import { Loader2 } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
 import { SubAccount } from "@/app/lib/hooks/api/useSubAccounts";
 import { Icons } from "@/app/components/ui";
 import { ShieldSecurity } from "@/app/components/ui/icons";
@@ -26,6 +26,8 @@ import { getWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import SeedPasscodeModal from "./SeedPasscodeModal";
 import ViewSeedModal from "./ViewSeedModal";
+import CustomTooltip from "@/app/components/ui/CustomTooltip";
+import { cn } from "@/app/lib/utils";
 
 type Props = {
   subs: SubAccount[];
@@ -33,6 +35,7 @@ type Props = {
   onDelete: (addr: string) => void;
   hasSeed: (addr: string) => boolean;
   onSeedUpdated?: () => void;
+  isDisabled?: (address: string) => boolean;
 };
 
 const columnHelper = createColumnHelper<SubAccount>();
@@ -43,7 +46,8 @@ const SubAccountTable: React.FC<Props> = ({
   loading,
   onDelete,
   hasSeed,
-  onSeedUpdated
+  onSeedUpdated,
+  isDisabled = () => false,
 }) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedAddress, setSelectedAddress] = useState("");
@@ -107,12 +111,31 @@ const SubAccountTable: React.FC<Props> = ({
         header: "Address",
         cell: (cell) => {
           const value = cell.getValue();
+          const disabled = isDisabled(value);
+
           return (
-            <CopyableCell
-              title="Copy Address"
-              toastMessage="Address Copied Successfully!"
-              copyAbleText={value}
-            />
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <CopyableCell
+                  title="Copy Address"
+                  toastMessage="Address Copied Successfully!"
+                  copyAbleText={value}
+                />
+                {disabled && (
+                  <CustomTooltip
+                    tooltip={
+                      <div className="max-w-[220px]">
+                        This sub-account is being used to store and sync files to S3 from our backend.
+                        It cannot be deleted to ensure secure synchronization of your files.
+                      </div>
+                    }
+                    className="cursor-pointer mt-1"
+                  >
+                    <Lock className="size-4 ml-1" />
+                  </CustomTooltip>
+                )}
+              </div>
+            </div>
           );
         }
       }),
@@ -135,6 +158,7 @@ const SubAccountTable: React.FC<Props> = ({
         cell: ({ row }) => {
           const address = row.original.address;
           const seedExists = hasSeed(address);
+          const disabled = isDisabled(address);
 
           return (
             <div className="flex justify-center">
@@ -142,7 +166,8 @@ const SubAccountTable: React.FC<Props> = ({
                 <button
                   onClick={() => handleViewSeed(address)}
                   title="View Seed"
-                  className="text-grey-70 hover:text-primary-50 transition"
+                  className={cn("text-grey-70 hover:text-primary-50 transition", { 'cursor-not-allowed opacity-50 pointer-events-none': disabled })}
+                  disabled={disabled}
                 >
                   <ShieldSecurity className="size-5 text-primary-40" />
                 </button>
@@ -150,7 +175,8 @@ const SubAccountTable: React.FC<Props> = ({
                 <button
                   onClick={() => handleSetSeed(address)}
                   title="Set Seed"
-                  className="text-grey-70 hover:text-primary-50 transition"
+                  className={cn("text-grey-70 hover:text-primary-50 transition", { 'cursor-not-allowed opacity-50 pointer-events-none': disabled })}
+                  disabled={disabled}
                 >
                   <Icons.AddCircle className="size-5" />
                 </button>
@@ -165,12 +191,14 @@ const SubAccountTable: React.FC<Props> = ({
         header: "",
         cell: ({ row }) => {
           const s = row.original;
+          const disabled = isDisabled(s.address);
           return (
             <div className="flex justify-center items-center">
               <button
                 onClick={() => onDelete(s.address)}
-                title="Delete"
-                className="text-grey-70 hover:text-red-600 transition"
+                title={disabled ? "Cannot delete disabled account" : "Delete"}
+                disabled={disabled}
+                className={cn("text-grey-70 hover:text-red-600 transition", { "cursor-not-allowed opacity-50": disabled })}
               >
                 <Icons.Trash className="size-5" />
               </button>
@@ -179,7 +207,7 @@ const SubAccountTable: React.FC<Props> = ({
         }
       })
     ],
-    [hasSeed]
+    [hasSeed, isDisabled, onDelete]
   );
 
   const table = useReactTable({
@@ -190,7 +218,7 @@ const SubAccountTable: React.FC<Props> = ({
 
   return (
     <>
-      <TableWrapper className="mt-4 bg-white">
+      <TableWrapper className="mt-4 bg-white overflow-visible">
         {loading ? (
           <div className="p-8 flex justify-center">
             <Loader2 className="animate-spin text-gray-500 size-8" />
@@ -214,13 +242,18 @@ const SubAccountTable: React.FC<Props> = ({
                 ))}
               </THead>
               <TBody>
-                {table.getRowModel().rows.map((row) => (
-                  <Tr key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      <Td key={cell.id} cell={cell} />
-                    ))}
-                  </Tr>
-                ))}
+                {table.getRowModel().rows.map((row) => {
+                  return (
+                    <Tr
+                      key={row.id}
+                      className="border-t border-grey-80"
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <Td key={cell.id} cell={cell} />
+                      ))}
+                    </Tr>
+                  );
+                })}
               </TBody>
             </Table>
           </>

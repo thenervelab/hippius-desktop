@@ -30,6 +30,11 @@ export async function saveBackendData(data: BackendData, passcode: string): Prom
     // Clear the backend_data table before saving new record
     db.run(`DELETE FROM backend_data`);
 
+
+    if (!Array.isArray(data.sub_accounts)) {
+        data.sub_accounts = [];
+    }
+
     // Convert data to string for encryption
     const dataString = JSON.stringify(data);
 
@@ -44,7 +49,7 @@ export async function saveBackendData(data: BackendData, passcode: string): Prom
     );
 
     await saveBytes(db.export());
-    console.log("Backend data table cleared and new data saved successfully");
+    console.log("Backend data saved successfully");
 }
 
 /**
