@@ -353,6 +353,8 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                                                 size: if is_folder { 0 } else { abs_path.metadata().map(|m| m.len()).unwrap_or(0) },
                                                 last_modified: String::new(),
                                                 is_folder,
+                                                storage_class: "Standard".to_string(),
+                                                ipfs_hash: "pending".to_string(),
                                             };
 
                                             tauri::async_runtime::spawn(async move {

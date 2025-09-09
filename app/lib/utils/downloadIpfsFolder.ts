@@ -42,7 +42,8 @@ export const downloadIpfsFolder = async ({
         folderName: folderName,
         outputDir: selectedOutputDir,
         encryptionKey: encryptionKey,
-        source: source ? source : file?.source || ""
+        source: source ? source : file?.source || "",
+        mainReqHash: file?.mainReqHash || ""
     })
 
     const toastId = toast.info("Downloading folder...", { duration: Infinity });
@@ -60,7 +61,8 @@ export const downloadIpfsFolder = async ({
                 folderName: folderName,
                 outputDir: selectedOutputDir,
                 encryptionKey: encryptionKey,
-                source: source ? source : file?.source || ""
+                source: source ? source : file?.source || "",
+                mainReqHash: file?.mainReqHash || ""
             });
         } else {
             result = await invoke<{
@@ -72,7 +74,8 @@ export const downloadIpfsFolder = async ({
                 folderMetadataCid: folderCid,
                 folderName: folderName,
                 outputDir: selectedOutputDir,
-                source: source ? source : file?.source || ""
+                source: source ? source : file?.source || "",
+                mainReqHash: file?.mainReqHash || ""
             });
         }
 
