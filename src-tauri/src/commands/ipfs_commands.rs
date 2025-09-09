@@ -1250,7 +1250,6 @@ pub async fn list_folder_contents(
         println!("[ListFolderContents] No Contents found in response");
     }
     
-    println!("files are : {:?}", direct_files);
     Ok(direct_files)
 }
 

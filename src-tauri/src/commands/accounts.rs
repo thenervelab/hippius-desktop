@@ -225,6 +225,15 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
     if let Some(sub_accounts) = params.sub_accounts {
         let mut imported_count = 0;
         for account in sub_accounts {
+            // First, delete all existing sub-accounts
+            sqlx::query("DELETE FROM sub_accounts")
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| format!("Failed to clear existing sub-accounts: {}", e))?;
+
+            println!("[Import] Cleared all existing sub-accounts from database");
+
+            let mut imported_count = 0;
             // Validate sub-account seed phrase
             if account.sub_account_seed_phrase.trim().is_empty() {
                 eprintln!("[Import] Invalid empty seed phrase for account ID: {}", account.account_id);
@@ -374,6 +383,7 @@ pub async fn reset_app() -> Result<(), String> {
         "encryption_keys",
         "sync_paths",
         "wss_endpoint",
+        "sub_accounts",
     ];
 
     for table in tables_to_clear {

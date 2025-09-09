@@ -333,44 +333,53 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct BucketItem {
-    pub path: String,
-    pub size: u64,
-    pub last_modified: String,
-    pub is_folder: bool, 
-    pub storage_class: String,
-    pub ipfs_hash: String,
-}
+/// Helper function to list all S3 buckets
+async fn list_all_buckets(aws_binary_path: &std::path::Path, dynamic_path: &str) -> Result<Vec<String>, String> {
+    let endpoint_url = "https://s3.hippius.com";
+    
+    let output = Command::new(aws_binary_path)
+        .env("AWS_PAGER", "")
+        .env("PATH", dynamic_path)
+        .arg("s3api")
+        .arg("list-buckets")
+        .arg("--endpoint-url")
+        .arg(endpoint_url)
+        .output()
+        .map_err(|e| format!("Failed to execute aws command: {}", e))?;
 
-/// Lists all root-level files and folders in a given S3 bucket using AWS CLI.
-/// Folders will have their total size calculated by summing up the sizes of their contents.
-pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<Vec<BucketItem>, String> {
-    if scope != "public" && scope != "private" {
-        return Err("Invalid scope provided. Must be 'public' or 'private'.".to_string());
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to list buckets: {}", stderr));
     }
 
-    let bucket_name = format!("{}-{}", account_id, scope);
-    let endpoint_url = "https://s3.hippius.com";
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let result: serde_json::Value = serde_json::from_str(&output_str)
+        .map_err(|e| format!("Failed to parse AWS CLI output: {}", e))?;
 
-    println!("[ListBucket] Listing contents for bucket: s3://{}", bucket_name);
+    let buckets = result["Buckets"]
+        .as_array()
+        .ok_or_else(|| "No buckets found in response".to_string())?
+        .iter()
+        .filter_map(|b| b["Name"].as_str().map(String::from))
+        .collect::<Vec<_>>();
+
+    Ok(buckets)
+}
+
+/// Lists all files and folders across all S3 buckets
+pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<Vec<BucketItem>, String> {
+    println!("[ListAllBuckets] Listing contents for all buckets");
 
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => {
-            println!("[ListBucket] Found AWS binary at: {}", path.display());
+            println!("[ListAllBuckets] Found AWS binary at: {}", path.display());
             path
         }
         Err(e) => {
-            eprintln!("[ListBucket] Failed to get AWS binary path: {}, falling back to system PATH", e);
-            // Fall back to checking system PATH with which crate
-            if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
-                println!("[ListBucket] Found AWS in system PATH at: {}", path.display());
-                path
-            } else {
-                eprintln!("[ListBucket] AWS CLI not found in system PATH or custom location");
-                return Err("AWS CLI not found".to_string());
-            }
+            eprintln!("[ListAllBuckets] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            which::which(if cfg!(windows) { "aws.exe" } else { "aws" })
+                .map_err(|_| "AWS CLI not found in system PATH".to_string())?
         }
     };
 
@@ -383,95 +392,185 @@ pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<V
         std::env::var("PATH").unwrap_or_default()
     );
 
-    // Execute aws s3api list-objects-v2 command
-    let output = Command::new(&aws_binary_path)
-        .env("AWS_PAGER", "")
-        .env("PATH", &dynamic_path)
-        .arg("s3api")
-        .arg("list-objects-v2")
-        .arg("--bucket")
-        .arg(&bucket_name)
-        .arg("--endpoint-url")
-        .arg(endpoint_url)
-        .output()
-        .map_err(|e| format!("Failed to execute aws command: {}", e))?;
+    // Get all bucket names and filter based on scope
+    let mut bucket_names = list_all_buckets(&aws_binary_path, &dynamic_path).await?;
+    println!("[ListAllBuckets] Found {} buckets before filtering", bucket_names.len());
+    
+    // Filter buckets based on scope
+    if scope == "private" {
+        bucket_names.retain(|name| name.ends_with("-private"));
+    } else if scope == "public" {
+        bucket_names.retain(|name| !name.ends_with("-private"));
+    } else {
+        return Err("Invalid scope. Must be 'public' or 'private'.".to_string());
+    }
+    
+    println!("[ListAllBuckets] Found {} buckets after filtering for scope '{}'", bucket_names.len(), scope);
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("[ListBucket] Failed to list bucket contents: {}", stderr);
-        return Err(format!("Failed to list bucket contents: {}", stderr));
+    let mut all_items = Vec::new();
+    let mut errors = Vec::new();
+
+    // Process each bucket in parallel
+    let handles: Vec<_> = bucket_names.into_iter().map(|bucket_name| {
+        let aws_path = aws_binary_path.clone();
+        let path_clone = dynamic_path.clone();
+        
+        tokio::spawn(async move {
+            match list_single_bucket_contents(&aws_path, &path_clone, &bucket_name).await {
+                Ok(items) => {
+                    Ok(items)
+                }
+                Err(e) => {
+                    eprintln!("[ListAllBuckets] Error processing bucket {}: {}", bucket_name, e);
+                    Err((bucket_name, e))
+                }
+            }
+        })
+    }).collect();
+
+    // Wait for all buckets to be processed
+    for handle in handles {
+        match handle.await {
+            Ok(Ok(items)) => all_items.extend(items),
+            Ok(Err((bucket, e))) => errors.push(format!("{}: {}", bucket, e)),
+            Err(e) => errors.push(format!("Task failed: {}", e)),
+        }
     }
 
-    // Parse the JSON output
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let result: serde_json::Value = serde_json::from_str(&output_str)
-        .map_err(|e| format!("Failed to parse AWS CLI output: {}", e))?;
+    if !errors.is_empty() {
+        eprintln!("[ListAllBuckets] Completed with {} errors: {:?}", errors.len(), errors);
+        if all_items.is_empty() {
+            return Err(format!("Failed to list any buckets: {}", errors.join("; ")));
+        }
+    }
 
+    // Remove duplicates based on path and size
+    let mut seen = std::collections::HashSet::new();
+    all_items.retain(|item| {
+        let key = (item.path.clone(), item.size);
+        let is_new = !seen.contains(&key);
+        if is_new {
+            seen.insert(key);
+        }
+        is_new
+    });
+
+    println!("[ListAllBuckets] Found {} unique items across all buckets (after removing duplicates)", all_items.len());
+    
+    Ok(all_items)
+}
+
+/// Lists contents of a single bucket
+async fn list_single_bucket_contents(
+    aws_binary_path: &std::path::Path,
+    dynamic_path: &str,
+    bucket_name: &str,
+) -> Result<Vec<BucketItem>, String> {
+    let endpoint_url = "https://s3.hippius.com";
+    let mut all_objects = Vec::new();
+    let mut continuation_token: Option<String> = None;
+    let mut is_truncated = true;
+
+    println!("[ListBucket] Listing contents for bucket: s3://{}", bucket_name);
+
+    // Handle pagination
+    while is_truncated {
+        let mut command = Command::new(aws_binary_path);
+        command
+            .env("AWS_PAGER", "")
+            .env("PATH", dynamic_path)
+            .arg("s3api")
+            .arg("list-objects-v2")
+            .arg("--bucket")
+            .arg(bucket_name)
+            .arg("--endpoint-url")
+            .arg(endpoint_url);
+
+        if let Some(token) = &continuation_token {
+            command.arg("--continuation-token").arg(token);
+        }
+
+        let output = command
+            .output()
+            .map_err(|e| format!("Failed to execute aws command: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Skip non-existent buckets instead of failing
+            if stderr.contains("NoSuchBucket") {
+                println!("[ListBucket] Bucket {} does not exist, skipping", bucket_name);
+                return Ok(Vec::new());
+            }
+            return Err(format!("Failed to list bucket contents: {}", stderr));
+        }
+
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        let result: serde_json::Value = serde_json::from_str(&output_str)
+            .map_err(|e| format!("Failed to parse AWS CLI output: {}", e))?;
+
+        if let Some(contents) = result["Contents"].as_array() {
+            all_objects.extend(contents.iter().cloned());
+        }
+
+        is_truncated = result["IsTruncated"].as_bool().unwrap_or(false);
+        continuation_token = result["NextContinuationToken"]
+            .as_str()
+            .map(String::from);
+    }
+
+    // Process the collected objects
     let mut root_files: Vec<BucketItem> = Vec::new();
     let mut folder_sizes: HashMap<String, u64> = HashMap::new();
     let mut folder_last_modified: HashMap<String, String> = HashMap::new();
     let mut folder_storage_class: HashMap<String, String> = HashMap::new();
     let mut folder_ipfs_hash: HashMap<String, String> = HashMap::new();
 
-    // Process each object in the response
-    if let Some(contents) = result["Contents"].as_array() {
-        for item in contents {
-            let storage_class = item["StorageClass"].as_str().unwrap_or("STANDARD").to_string();
-            let ipfs_hash = item["Owner"]
-                .as_object()
-                .and_then(|o| o.get("ID"))
-                .and_then(|id| id.as_str())
-                .unwrap_or("")
-                .to_string();
+    for item in all_objects {
+        let storage_class = item["StorageClass"].as_str().unwrap_or("STANDARD").to_string();
+        let ipfs_hash = item["Owner"]
+            .as_object()
+            .and_then(|o| o.get("ID"))
+            .and_then(|id| id.as_str())
+            .unwrap_or("")
+            .to_string();
 
-            if let (Some(key), Some(size_val), Some(last_modified)) = (
-                item["Key"].as_str(),
-                item["Size"].as_u64(),
-                item["LastModified"].as_str(),
-            ) {
-                // Parse the last modified date to a consistent format
-                let last_modified_dt = chrono::DateTime::parse_from_rfc3339(last_modified)
-                    .map_err(|_| "Failed to parse last modified date")?;
-                let last_modified_fmt = last_modified_dt.format("%Y-%m-%d %H:%M:%S").to_string();
+        if let (Some(key), Some(size_val), Some(last_modified)) = (
+            item["Key"].as_str(),
+            item["Size"].as_u64(),
+            item["LastModified"].as_str(),
+        ) {
+            let last_modified_dt = chrono::DateTime::parse_from_rfc3339(last_modified)
+                .map_err(|_| "Failed to parse last modified date")?;
+            let last_modified_fmt = last_modified_dt.format("%Y-%m-%d %H:%M:%S").to_string();
 
-                if key.ends_with('/') {
-                    // This is a folder (common prefix)
-                    let folder_name = key.trim_end_matches('/').to_string();
-                    if let Some(slash_pos) = folder_name.find('/') {
-                        // This is a subfolder, track the root folder
-                        let root_folder = folder_name[..slash_pos].to_string();
-                        *folder_sizes.entry(root_folder.clone()).or_insert(0) += size_val;
-                        folder_last_modified.insert(root_folder.clone(), last_modified_fmt.clone());
-                        folder_storage_class.insert(root_folder.clone(), storage_class);
-                        folder_ipfs_hash.insert(root_folder.clone(), ipfs_hash);
-                    } else {
-                        // This is a root folder
-                        *folder_sizes.entry(folder_name.clone()).or_insert(0) += size_val;
-                        folder_last_modified.insert(folder_name.clone(), last_modified_fmt.clone());
-                        folder_storage_class.insert(folder_name.clone(), storage_class);
-                        folder_ipfs_hash.insert(folder_name, ipfs_hash);
-                    }
+            if key.ends_with('/') {
+                let folder_name = key.trim_end_matches('/').to_string();
+                if let Some(slash_pos) = folder_name.find('/') {
+                    let root_folder = folder_name[..slash_pos].to_string();
+                    *folder_sizes.entry(root_folder.clone()).or_insert(0) += size_val;
+                    folder_last_modified.insert(root_folder.clone(), last_modified_fmt.clone());
+                    folder_storage_class.insert(root_folder.clone(), storage_class.clone());
+                    folder_ipfs_hash.insert(root_folder, ipfs_hash);
                 } else {
-                    // This is a file
-                    if let Some(slash_pos) = key.find('/') {
-                        // File is inside a folder
-                        let folder_name = key[..slash_pos].to_string();
-                        *folder_sizes.entry(folder_name.clone()).or_insert(0) += size_val;
-                        folder_last_modified.insert(folder_name.clone(), last_modified_fmt.clone());
-                        folder_storage_class.insert(folder_name.clone(), storage_class.clone());
-                        folder_ipfs_hash.insert(folder_name, ipfs_hash);
-                    } else {
-                        // This is a root file
-                        root_files.push(BucketItem {
-                            path: key.to_string(),
-                            size: size_val,
-                            last_modified: last_modified_fmt,
-                            is_folder: false,
-                            storage_class,
-                            ipfs_hash,
-                        });
-                    }
+                    *folder_sizes.entry(folder_name.clone()).or_insert(0) += size_val;
+                    folder_last_modified.insert(folder_name.clone(), last_modified_fmt.clone());
+                    folder_storage_class.insert(folder_name.clone(), storage_class.clone());
+                    folder_ipfs_hash.insert(folder_name, ipfs_hash);
                 }
+            } else if let Some(slash_pos) = key.find('/') {
+                let folder_name = key[..slash_pos].to_string();
+                *folder_sizes.entry(folder_name.clone()).or_insert(0) += size_val;
+                folder_last_modified.insert(folder_name.clone(), last_modified_fmt.clone());
+                folder_storage_class.insert(folder_name, storage_class);
+            } else {
+                root_files.push(BucketItem {
+                    path: key.to_string(),
+                    size: size_val,
+                    last_modified: last_modified_fmt,
+                    is_folder: false,
+                    storage_class: storage_class.clone(),
+                    ipfs_hash,
+                });
             }
         }
     }
@@ -498,7 +597,18 @@ pub async fn list_bucket_contents(account_id: String, scope: String) -> Result<V
     // Combine root files and folders
     root_files.append(&mut root_folders);
     
+    println!("[ListBucket] Found {} items in bucket {}", root_files.len(), bucket_name);
     Ok(root_files)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BucketItem {
+    pub path: String,
+    pub size: u64,
+    pub last_modified: String,
+    pub is_folder: bool, 
+    pub storage_class: String,
+    pub ipfs_hash: String,
 }
 
 pub async fn store_bucket_listing_in_db(
@@ -656,4 +766,3 @@ pub async fn delete_bucket_item_by_name(
     .await?;
     Ok(res.rows_affected())
 }
-
