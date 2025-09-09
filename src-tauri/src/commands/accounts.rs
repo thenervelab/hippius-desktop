@@ -60,6 +60,15 @@ pub struct SubAccountExport {
     pub created_at: Option<String>,
 }
 
+
+use sha2::{Digest, Sha256};
+pub fn generate_key_fingerprint(key_bytes: &[u8]) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    hasher.update(key_bytes);
+    let result = hasher.finalize();
+    Ok(hex::encode(result))
+}
+
 #[tauri::command]
 #[allow(deprecated)]
 pub async fn import_app_data(params: ImportDataParams) -> Result<String, String> {
@@ -71,57 +80,72 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
     };
 
     let mut imported_items = Vec::new();
+    let mut skipped_items = Vec::new();
     let timestamp = Utc::now().timestamp();
 
-    // Import sync paths
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to start transaction: {}", e))?;
+
+    // Import public sync path
     if let Some(public_path) = params.public_sync_path {
         if !public_path.trim().is_empty() {
             println!("[Import] Importing public sync path: {}", public_path);
-            let result = sqlx::query(
-                "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
-                ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
-            )
-            .bind(&public_path)
-            .bind("public")
-            .bind(timestamp)
-            .execute(pool)
-            .await;
+            let existing_path: Option<(String,)> = sqlx::query_as("SELECT path FROM sync_paths WHERE type = ?")
+                .bind("public")
+                .fetch_optional(&mut *tx) // Fix: Dereference tx
+                .await
+                .map_err(|e| format!("Failed to check existing public sync path: {}", e))?;
 
-            match result {
-                Ok(_) => {
-                    imported_items.push("public sync path".to_string());
-                    println!("[Import] Public sync path imported successfully");
-                }
-                Err(e) => {
-                    eprintln!("[Import] Failed to import public sync path: {}", e);
-                    return Err(format!("Failed to import public sync path: {}", e));
-                }
+            if existing_path.map(|p| p.0) != Some(public_path.clone()) {
+                let result = sqlx::query(
+                    "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
+                     ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
+                )
+                .bind(&public_path)
+                .bind("public")
+                .bind(timestamp)
+                .execute(&mut *tx) // Fix: Dereference tx
+                .await
+                .map_err(|e| format!("Failed to import public sync path: {}", e))?;
+
+                imported_items.push("public sync path".to_string());
+                println!("[Import] Public sync path imported successfully");
+            } else {
+                skipped_items.push("public sync path (duplicate)".to_string());
+                println!("[Import] Public sync path already exists, skipping");
             }
         }
     }
 
+    // Import private sync path
     if let Some(private_path) = params.private_sync_path {
         if !private_path.trim().is_empty() {
             println!("[Import] Importing private sync path: {}", private_path);
-            let result = sqlx::query(
-                "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
-                ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
-            )
-            .bind(&private_path)
-            .bind("private")
-            .bind(timestamp)
-            .execute(pool)
-            .await;
+            let existing_path: Option<(String,)> = sqlx::query_as("SELECT path FROM sync_paths WHERE type = ?")
+                .bind("private")
+                .fetch_optional(&mut *tx) // Fix: Dereference tx
+                .await
+                .map_err(|e| format!("Failed to check existing private sync path: {}", e))?;
 
-            match result {
-                Ok(_) => {
-                    imported_items.push("private sync path".to_string());
-                    println!("[Import] Private sync path imported successfully");
-                }
-                Err(e) => {
-                    eprintln!("[Import] Failed to import private sync path: {}", e);
-                    return Err(format!("Failed to import private sync path: {}", e));
-                }
+            if existing_path.map(|p| p.0) != Some(private_path.clone()) {
+                let result = sqlx::query(
+                    "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
+                     ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
+                )
+                .bind(&private_path)
+                .bind("private")
+                .bind(timestamp)
+                .execute(&mut *tx) // Fix: Dereference tx
+                .await
+                .map_err(|e| format!("Failed to import private sync path: {}", e))?;
+
+                imported_items.push("private sync path".to_string());
+                println!("[Import] Private sync path imported successfully");
+            } else {
+                skipped_items.push("private sync path (duplicate)".to_string());
+                println!("[Import] Private sync path already exists, skipping");
             }
         }
     }
@@ -130,47 +154,60 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
     let mut key_count = 0;
     for key_base64 in params.encryption_keys {
         if !key_base64.trim().is_empty() {
-            println!("[Import] Importing encryption key...");
+            println!("[Import] Processing encryption key...");
 
-            // Decode the base64 key
-            let key_bytes = match base64::decode(key_base64) {
-                Ok(bytes) => bytes,
+            // Decode and validate the base64 key
+            let key_bytes = match base64::decode(&key_base64) {
+                Ok(bytes) => {
+                    if bytes.len() != 32 { // Adjust length as needed
+                        eprintln!("[Import] Invalid encryption key length: {}", bytes.len());
+                        skipped_items.push("encryption key (invalid length)".to_string());
+                        continue;
+                    }
+                    bytes
+                }
                 Err(e) => {
                     eprintln!("[Import] Invalid base64 encoding for encryption key: {}", e);
-                    continue; // Skip this key and continue with others
+                    skipped_items.push("encryption key (invalid base64)".to_string());
+                    continue;
                 }
             };
 
-            // Import the key with deduplication check
+            // Generate the key fingerprint
+            let key_fingerprint = match generate_key_fingerprint(&key_bytes) {
+                Ok(fp) => fp,
+                Err(e) => {
+                    eprintln!("[Import] Failed to generate key fingerprint: {}", e);
+                    skipped_items.push("encryption key (fingerprint error)".to_string());
+                    continue;
+                }
+            };
+
+            // Check if key with this fingerprint already exists
+            let key_exists: Option<(i64,)> = sqlx::query_as(
+                "SELECT 1 FROM encryption_keys WHERE fingerprint = ?"
+            )
+            .bind(&key_fingerprint)
+            .fetch_optional(&mut *tx) // Fix: Dereference tx
+            .await
+            .map_err(|e| format!("Failed to check for existing key: {}", e))?;
+
+            if key_exists.is_some() {
+                println!("[Import] Encryption key already exists, skipping");
+                skipped_items.push("encryption key (duplicate)".to_string());
+                continue;
+            }
+
+            // Import the key
             match import_encryption_key(key_bytes).await {
                 Ok(key_name) => {
-                    // Check if this key already exists in the database
-                    let exists: (i64,) = match sqlx::query_as(
-                        "SELECT 1 FROM encryption_keys WHERE key_name = ?"
-                    )
-                    .bind(&key_name)
-                    .fetch_optional(pool)
-                    .await {
-                        Ok(Some(row)) => row,
-                        Ok(None) => {
-                            key_count += 1;
-                            println!(
-                                "[Import] Encryption key imported successfully: {}",
-                                key_name
-                            );
-                            continue;
-                        }
-                        Err(e) => {
-                            eprintln!("[Import] Failed to check for existing key: {}", e);
-                            continue;
-                        }
-                    };
-                    
-                    println!("[Import] Encryption key already exists, skipping: {}", key_name);
+                    key_count += 1;
+                    println!("[Import] Encryption key imported successfully: {}", key_name);
                 }
                 Err(e) => {
                     eprintln!("[Import] Failed to import encryption key: {}", e);
-                    // Continue with other keys instead of failing completely
+                    skipped_items.push("encryption key (import failed)".to_string());
+                    continue;
                 }
             }
         }
@@ -184,20 +221,25 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
     if let Some(sub_accounts) = params.sub_accounts {
         let mut imported_count = 0;
         for account in sub_accounts {
+            // Validate sub-account seed phrase
+            if account.sub_account_seed_phrase.trim().is_empty() {
+                eprintln!("[Import] Invalid empty seed phrase for account ID: {}", account.account_id);
+                skipped_items.push(format!("sub-account {} (empty seed)", account.account_id));
+                continue;
+            }
+
             // Check if sub-account already exists
             let exists: Option<(i64,)> = sqlx::query_as(
                 "SELECT 1 FROM sub_accounts WHERE account_id = ?"
             )
             .bind(&account.account_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx) // Fix: Dereference tx
             .await
-            .map_err(|e| {
-                eprintln!("[Import] Failed to check for existing sub-account: {}", e);
-                e
-            })?;
+            .map_err(|e| format!("Failed to check for existing sub-account: {}", e))?;
 
             if exists.is_some() {
                 println!("[Import] Sub-account already exists, skipping: {}", account.account_id);
+                skipped_items.push(format!("sub-account {} (duplicate)", account.account_id));
                 continue;
             }
 
@@ -208,25 +250,12 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
             .bind(&account.account_id)
             .bind(&account.sub_account_seed_phrase)
             .bind(account.created_at)
-            .execute(pool)
-            .await;
+            .execute(&mut *tx) // Fix: Dereference tx
+            .await
+            .map_err(|e| format!("Failed to import sub-account for account ID {}: {}", account.account_id, e))?;
 
-            match result {
-                Ok(_) => {
-                    imported_count += 1;
-                    println!(
-                        "[Import] Imported sub-account for account ID: {}",
-                        account.account_id
-                    );
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[Import] Failed to import sub-account for account ID {}: {}",
-                        account.account_id, e
-                    );
-                    // Continue with other accounts instead of failing completely
-                }
-            }
+            imported_count += 1;
+            println!("[Import] Imported sub-account for account ID: {}", account.account_id);
         }
 
         if imported_count > 0 {
@@ -234,11 +263,24 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
         }
     }
 
-    if imported_items.is_empty() {
-        return Err("No new data was imported. All items already exist.".to_string());
-    }
+    // Commit the transaction
+    tx.commit()
+        .await
+        .map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
-    let success_message = format!("Successfully imported {}", imported_items.join(", "));
+    // Construct success message
+    let mut message_parts = Vec::new();
+    if !imported_items.is_empty() {
+        message_parts.push(format!("Successfully imported {}", imported_items.join(", ")));
+    }
+    if !skipped_items.is_empty() {
+        message_parts.push(format!("Skipped {}", skipped_items.join(", ")));
+    }
+    let success_message = if message_parts.is_empty() {
+        "No new data was imported. All items already exist.".to_string()
+    } else {
+        message_parts.join("; ")
+    };
     println!("[Import] {}", success_message);
     Ok(success_message)
 }
