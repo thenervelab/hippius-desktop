@@ -126,7 +126,7 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
         }
     }
 
-    // Import encryption keys
+    // Import encryption keys with deduplication
     let mut key_count = 0;
     for key_base64 in params.encryption_keys {
         if !key_base64.trim().is_empty() {
@@ -141,14 +141,32 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
                 }
             };
 
-            // Import the key
+            // Import the key with deduplication check
             match import_encryption_key(key_bytes).await {
                 Ok(key_name) => {
-                    key_count += 1;
-                    println!(
-                        "[Import] Encryption key imported successfully: {}",
-                        key_name
-                    );
+                    // Check if this key already exists in the database
+                    let exists: (i64,) = match sqlx::query_as(
+                        "SELECT 1 FROM encryption_keys WHERE key_name = ?"
+                    )
+                    .bind(&key_name)
+                    .fetch_optional(pool)
+                    .await {
+                        Ok(Some(row)) => row,
+                        Ok(None) => {
+                            key_count += 1;
+                            println!(
+                                "[Import] Encryption key imported successfully: {}",
+                                key_name
+                            );
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!("[Import] Failed to check for existing key: {}", e);
+                            continue;
+                        }
+                    };
+                    
+                    println!("[Import] Encryption key already exists, skipping: {}", key_name);
                 }
                 Err(e) => {
                     eprintln!("[Import] Failed to import encryption key: {}", e);
@@ -162,12 +180,29 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
         imported_items.push(format!("{} encryption key(s)", key_count));
     }
 
-    // Import sub-accounts if any
+    // Import sub-accounts with deduplication
     if let Some(sub_accounts) = params.sub_accounts {
         let mut imported_count = 0;
         for account in sub_accounts {
+            // Check if sub-account already exists
+            let exists: Option<(i64,)> = sqlx::query_as(
+                "SELECT 1 FROM sub_accounts WHERE account_id = ?"
+            )
+            .bind(&account.account_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                eprintln!("[Import] Failed to check for existing sub-account: {}", e);
+                e
+            })?;
+
+            if exists.is_some() {
+                println!("[Import] Sub-account already exists, skipping: {}", account.account_id);
+                continue;
+            }
+
             let result = sqlx::query(
-                "INSERT OR REPLACE INTO sub_accounts (account_id, sub_account_seed_phrase, created_at) 
+                "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase, created_at) 
                  VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))"
             )
             .bind(&account.account_id)
@@ -200,10 +235,10 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
     }
 
     if imported_items.is_empty() {
-        return Err("No data was imported. Please check your input data.".to_string());
+        return Err("No new data was imported. All items already exist.".to_string());
     }
 
-    let success_message = format!("Successfully imported data");
+    let success_message = format!("Successfully imported {}", imported_items.join(", "));
     println!("[Import] {}", success_message);
     Ok(success_message)
 }
