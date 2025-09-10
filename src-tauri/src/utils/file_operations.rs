@@ -1,14 +1,14 @@
-// use crate::commands::substrate_tx::{ FileHashWrapper, FileInputWrapper};
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use crate::DB_POOL;
 use std::fs;
 use std::path::{Path, PathBuf};
 use crate::sync_shared::collect_files_recursively;
 use hex;
-
+use crate::commands::syncing::{load_encryption_key, decrypt_phrase};
+use sp_core::sr25519;
+use sp_core::crypto::Ss58Codec;
+use sp_core::Pair;
 use crate::sync_shared::insert_file_if_not_exists;
-// use std::sync::{Arc, Mutex};
-// use tokio::time::{Duration, sleep};
 
 // Helper to sanitize file/folder names for DB and filesystem operations
 pub fn sanitize_name(name: &str) -> String {
@@ -104,13 +104,6 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     should_delete_folder: bool,
 ) -> Result<u64, String> {
     if let Some(pool) = DB_POOL.get() {
-        if let Err(e) = unpin_user_file_by_name(file_name, seed_phrase).await {
-            println!(
-                "[DB Cleanup] Warning: could not unpin '{}': {}. Proceeding with DB record deletion.",
-                file_name, e
-            );
-        }
-
         let sanitized_file_name = sanitize_name(file_name);
 
         let is_folder = sqlx::query_scalar::<_, bool>(
@@ -121,21 +114,11 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         .await
         .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
         .unwrap_or(false);
-
-        let result = sqlx::query("DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?")
-            .bind(&sanitized_file_name)
-            .bind(if is_public { "public" } else { "private" })
-            .execute(pool)
-            .await
-            .map_err(|e| format!("DB error (delete sync_folder_files): {e}"))?;
-
         
-
         // Remove from sync folder
         remove_file_from_sync_and_db(&sanitized_file_name, is_public, is_folder, should_delete_folder).await;
 
-        let total_deleted = result.rows_affected();
-        Ok(total_deleted)
+        Ok(1)
     } else {
         Err("DB_POOL not initialized".to_string())
     }
@@ -241,6 +224,34 @@ pub async fn copy_to_sync_and_add_to_db(
     };
     println!("File size in bytes: {}", file_size_in_bytes);
     if let Some(pool) = DB_POOL.get() {
+        // Get sub-account to construct bucket_name
+        let bucket_name = match sqlx::query_as::<_, (String,)>(
+            "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1"
+        )
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await {
+            Ok(Some((sub_account_seed_phrase,))) => {
+                // Try to decrypt if we have a key, otherwise use as-is
+                let maybe_key = load_encryption_key(pool).await;
+                let phrase = if let Some(key) = &maybe_key {
+                    decrypt_phrase(&sub_account_seed_phrase, key)
+                        .unwrap_or_else(|| sub_account_seed_phrase.clone())
+                } else {
+                    sub_account_seed_phrase
+                };
+                // Convert seed phrase to SS58 address
+                if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
+                    let ss58 = pair.public().to_ss58check();
+                    format!("{}-{}", ss58, if is_public { "public" } else { "private" })
+                } else {
+                    eprintln!("Failed to convert seed phrase to SS58 address");
+                    String::new()
+                }
+            },
+            _ => String::new(),
+        };
+
         // Check if file already exists in user_profiles
         let exists: Option<(String,)> = sqlx::query_as(
             "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
@@ -258,8 +269,8 @@ pub async fn copy_to_sync_and_add_to_db(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
                     main_req_hash, selected_validator, total_replicas, block_number, processed_timestamp, profile_cid, 
-                    source, miner_ids, created_at, type, is_folder
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?)"
+                    source, miner_ids, created_at, type, is_folder, bucket_name
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?, ?)"
             )
             .bind(account_id)
             .bind(metadata_cid)
@@ -271,6 +282,7 @@ pub async fn copy_to_sync_and_add_to_db(
             .bind(source)   // source
             .bind(if is_public { "public" } else { "private" })  // type
             .bind(is_folder)
+            .bind(bucket_name)
             .execute(pool)
             .await;
 
@@ -334,10 +346,6 @@ pub fn calculate_local_size(path: &Path) -> std::io::Result<u64> {
 }
 
 pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_folder: bool, should_delete_folder: bool) {
-    // Log all parameters
-    println!("[remove_file_from_sync_and_db] Parameters - file_name: {}, is_public: {}, is_folder: {}, should_delete_folder: {}", 
-    file_name, is_public, is_folder, should_delete_folder);
-
     // Choose sync folder path
     let sync_folder = if is_public {
         match get_public_sync_path().await {
@@ -358,7 +366,6 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
     };
 
     let sync_file_path = sync_folder.join(file_name);
-    println!("[remove_file_from_sync_and_db] sync_file_path: {}, is_folder: {}", sync_file_path.display(), sync_file_path.is_dir());
     // --- Add paths to RECENTLY_DELETED before deletion ---
     let mut paths_to_delete = Vec::new();
     if sync_file_path.is_dir() || is_folder {
@@ -397,9 +404,20 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                         );
                     }
                 }
-                if should_delete_folder && file.exists() {
-                    if let Err(e) = fs::remove_file(file) {
-                        eprintln!("Failed to remove file from sync folder: {}", e);
+                if should_delete_folder {
+                    if file.exists() {
+                        if let Err(e) = fs::remove_file(file) {
+                            eprintln!("Failed to remove file from sync folder: {}", e);
+                        }
+                    }else{
+                        // Try S3 removal as fallback
+                        if let Some(file_str) = file.to_str() {
+                            if let Some(source) = get_source_from_user_profiles(file_str).await {
+                                if let Err(e) = execute_aws_s3_rm(&source) {
+                                    eprintln!("Failed to remove file from S3: {}", e);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -417,14 +435,33 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
             }
         }
 
-        if should_delete_folder && sync_file_path.exists() {
-            if let Err(e) = fs::remove_dir_all(&sync_file_path) {
-                eprintln!("Failed to remove folder from sync folder: {}", e);
+        if should_delete_folder {
+            if sync_file_path.exists() {
+                if let Err(e) = fs::remove_dir_all(&sync_file_path) {
+                    eprintln!("Failed to remove folder from sync folder: {}", e);
+                }
+            }else{
+                // Try S3 removal as fallback
+                if let Some(source) = get_source_from_user_profiles(file_name).await {
+                    if let Err(e) = execute_aws_s3_rm(&source) {
+                        eprintln!("Failed to remove folder from S3: {}", e);
+                    }
+                }
             }
         }
-    } else if should_delete_folder && sync_file_path.exists() {
-        if let Err(e) = fs::remove_file(&sync_file_path) {
-            eprintln!("Failed to remove file from sync folder: {}", e);
+    } else if should_delete_folder  {
+
+        if sync_file_path.exists() {
+            if let Err(e) = fs::remove_file(&sync_file_path) {
+                eprintln!("Failed to remove file from sync folder: {}", e);
+            }
+        }else{
+            // Try S3 removal as fallback
+            if let Some(source) = get_source_from_user_profiles(file_name).await {
+                if let Err(e) = execute_aws_s3_rm(&source) {
+                    eprintln!("Failed to remove file from S3: {}", e);
+                }
+            }
         }
 
         if let Some(pool) = DB_POOL.get() {
@@ -442,7 +479,6 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
     }
 
 }
-
 
 pub async fn copy_to_sync_folder(
     original_path: &Path,
@@ -521,6 +557,34 @@ pub async fn copy_to_sync_folder(
     };
     println!("File size in bytes: {}", file_size_in_bytes);
     if let Some(pool) = DB_POOL.get() {
+        // Get sub-account to construct bucket_name
+        let bucket_name = match sqlx::query_as::<_, (String,)>(
+            "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1"
+        )
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await {
+            Ok(Some((sub_account_seed_phrase,))) => {
+                // Try to decrypt if we have a key, otherwise use as-is
+                let maybe_key = load_encryption_key(pool).await;
+                let phrase = if let Some(key) = &maybe_key {
+                    decrypt_phrase(&sub_account_seed_phrase, key)
+                        .unwrap_or_else(|| sub_account_seed_phrase.clone())
+                } else {
+                    sub_account_seed_phrase
+                };
+                // Convert seed phrase to SS58 address
+                if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
+                    let ss58 = pair.public().to_ss58check();
+                    format!("{}-{}", ss58, if is_public { "public" } else { "private" })
+                } else {
+                    eprintln!("Failed to convert seed phrase to SS58 address");
+                    String::new()
+                }
+            },
+            _ => String::new(),
+        };
+
         // Check if folder record already exists
         let exists: Option<(String,)> = sqlx::query_as(
             "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
@@ -541,6 +605,7 @@ pub async fn copy_to_sync_folder(
                     main_req_hash = ?,
                     type = ?,
                     is_folder = ?,
+                    bucket_name = ?,
                     processed_timestamp = CURRENT_TIMESTAMP
                 WHERE owner = ? AND file_name = ?"
             )
@@ -550,19 +615,22 @@ pub async fn copy_to_sync_folder(
             .bind("s3")
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
+            .bind(bucket_name)
             .bind(account_id)
             .bind(meta_folder_name)
             .execute(pool)
             .await;
+
         } else {
             let source = target_folder.to_string_lossy().to_string();
+
             // Insert new record
             let _ = sqlx::query(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
                     main_req_hash, selected_validator, total_replicas, block_number, processed_timestamp, profile_cid, 
-                    source, miner_ids, created_at, type, is_folder
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?)"
+                    source, miner_ids, created_at, type, is_folder, bucket_name
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?, ?)"
             )
             .bind(account_id)
             .bind(metadata_cid)
@@ -574,6 +642,7 @@ pub async fn copy_to_sync_folder(
             .bind(source)
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
+            .bind(bucket_name)
             .execute(pool)
             .await;
         }
@@ -672,9 +741,19 @@ pub async fn remove_from_sync_folder(
                         );
                     }
                 }
+
                 if file.exists() {
                     if let Err(e) = fs::remove_file(file) {
                         eprintln!("Failed to remove file from sync folder: {}", e);
+                    }
+                }else{
+                    // Try S3 removal as fallback
+                    if let Some(file_str) = file.to_str() {
+                        if let Some(source) = get_source_from_user_profiles(file_str).await {
+                            if let Err(e) = execute_aws_s3_rm(&source) {
+                                eprintln!("Failed to remove file from S3: {}", e);
+                            }
+                        }    
                     }
                 }
             }
@@ -698,9 +777,27 @@ pub async fn remove_from_sync_folder(
                 eprintln!("Failed to remove folder from sync folder: {}", e);
             }
         }
+        else{
+            // Try S3 removal as fallback
+            if let Some(source) = get_source_from_user_profiles(meta_folder_name).await {
+                if let Err(e) = execute_aws_s3_rm(&source) {
+                    eprintln!("Failed to remove folder from S3: {}", e);
+                }
+            }
+        }
     } else if sync_file_path.exists() {
-        if let Err(e) = fs::remove_file(&sync_file_path) {
-            eprintln!("Failed to remove file from sync folder: {}", e);
+        // For file removal (around line 763-765):
+        if sync_file_path.exists() {
+            if let Err(e) = fs::remove_file(&sync_file_path) {
+                eprintln!("Failed to remove file from sync folder: {}", e);
+            }
+        }else{
+            // Try S3 removal as fallback
+            if let Some(source) = get_source_from_user_profiles(meta_folder_name).await {
+                if let Err(e) = execute_aws_s3_rm(&source) {
+                    eprintln!("Failed to remove file from S3: {}", e);
+                }
+            }
         }
 
         if let Some(pool) = DB_POOL.get() {
@@ -722,6 +819,34 @@ pub async fn remove_from_sync_folder(
     let cid_vec = folder_manifest_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec);
     if let Some(pool) = DB_POOL.get() {
+        // Get sub-account to construct bucket_name
+        let bucket_name = match sqlx::query_as::<_, (String,)>(
+            "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1"
+        )
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await {
+            Ok(Some((sub_account_seed_phrase,))) => {
+                // Try to decrypt if we have a key, otherwise use as-is
+                let maybe_key = load_encryption_key(pool).await;
+                let phrase = if let Some(key) = &maybe_key {
+                    decrypt_phrase(&sub_account_seed_phrase, key)
+                        .unwrap_or_else(|| sub_account_seed_phrase.clone())
+                } else {
+                    sub_account_seed_phrase
+                };
+                // Convert seed phrase to SS58 address
+                if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
+                    let ss58 = pair.public().to_ss58check();
+                    format!("{}-{}", ss58, if is_public { "public" } else { "private" })
+                } else {
+                    eprintln!("Failed to convert seed phrase to SS58 address");
+                    String::new()
+                }
+            },
+            _ => String::new(),
+        };
+
         // Check if folder record already exists
         let exists: Option<(String,)> = sqlx::query_as(
             "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
@@ -742,6 +867,7 @@ pub async fn remove_from_sync_folder(
                     main_req_hash = ?,
                     type = ?,
                     is_folder = ?,
+                    bucket_name = ?,
                     processed_timestamp = CURRENT_TIMESTAMP
                 WHERE owner = ? AND file_name = ?"
             )
@@ -751,6 +877,7 @@ pub async fn remove_from_sync_folder(
             .bind("s3")
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
+            .bind(bucket_name)
             .bind(account_id)
             .bind(meta_folder_name)
             .execute(pool)
@@ -765,8 +892,8 @@ pub async fn remove_from_sync_folder(
                 "INSERT INTO user_profiles (
                     owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
                     main_req_hash, selected_validator, total_replicas, block_number, processed_timestamp, profile_cid, 
-                    source, miner_ids, created_at, type, is_folder
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?)"
+                    source, miner_ids, created_at, type, is_folder, bucket_name
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?, ?)"
             )
             .bind(account_id)
             .bind(folder_manifest_cid)
@@ -778,8 +905,38 @@ pub async fn remove_from_sync_folder(
             .bind(source)
             .bind(if is_public { "public" } else { "private" })
             .bind(true)
+            .bind(bucket_name)
             .execute(pool)
             .await;
         }
     }
+}
+
+fn execute_aws_s3_rm(path: &str) -> Result<(), String> {
+    let output = std::process::Command::new("aws")
+        .args(["s3", "rm", path])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Failed to delete from S3: {}", error_msg))
+    }
+}
+
+// Add this helper function to get source from user_profiles
+async fn get_source_from_user_profiles(file_name: &str) -> Option<String> {
+    if let Some(pool) = DB_POOL.get() {
+        if let Ok(Some((source,))) = sqlx::query_as::<_, (String,)>(
+            "SELECT source FROM user_profiles WHERE file_name = ?"
+        )
+        .bind(file_name)
+        .fetch_optional(pool)
+        .await {
+            return Some(source);
+        }
+    }
+    None
 }

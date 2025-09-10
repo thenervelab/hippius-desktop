@@ -36,6 +36,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("created_at", "INTEGER"),
                 ("type", "TEXT DEFAULT 'public'"),
                 ("is_folder", "BOOLEAN DEFAULT 0"),
+                ("bucket_name", "TEXT"),
             ],
         ),
         (
