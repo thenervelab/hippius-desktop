@@ -671,9 +671,26 @@ pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
     std::fs::write(path, data).map_err(|e| e.to_string())
 }
 
+
 #[tauri::command]
 pub fn delete_file(path: String) -> Result<(), String> {
-    std::fs::remove_file(path).map_err(|e| e.to_string())
+    if std::path::Path::new(&path).exists() {
+        // If file exists locally, remove it
+        std::fs::remove_file(&path).map_err(|e| e.to_string())
+    } else {
+        // If file doesn't exist locally, try to remove from S3
+        let output = std::process::Command::new("aws")
+            .args(["s3", "rm", &path])
+            .output()
+            .map_err(|e| e.to_string())?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            Err(format!("Failed to delete from S3: {}", error_msg))
+        }
+    }
 }
 
 #[tauri::command]
@@ -1319,7 +1336,6 @@ pub async fn remove_file_from_public_folder(
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let folder_name = sanitize_name(&folder_name);
-    
     
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 

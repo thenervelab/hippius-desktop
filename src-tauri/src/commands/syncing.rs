@@ -1,4 +1,3 @@
-use crate::user_profile_sync::{start_user_profile_sync_tauri};
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
 use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync};

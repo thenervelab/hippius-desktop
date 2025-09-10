@@ -261,7 +261,6 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             eprintln!("[PublicFolderSync] Preflight: failed to execute aws: {}", e);
         }
     }
-
     loop {
         if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
             println!("[PublicFolderSync] Global cancellation detected, stopping sync for account {}", account_id);
@@ -283,6 +282,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
 
         println!("[PublicFolderSync] Starting dry run to calculate changes...");
         let s3_destination = format!("s3://{}/", bucket_name);
+        let bucket_name_clone = bucket_name.clone();  // Create a new clone for this iteration
 
         let dry_run_output = Command::new(&aws_binary_path)
             .env("AWS_PAGER", "")
@@ -406,6 +406,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                                                 is_folder,
                                                 storage_class: "Standard".to_string(),
                                                 ipfs_hash: "pending".to_string(),
+                                                bucket_name: bucket_name_clone.clone(),
                                             };
 
                                             tauri::async_runtime::spawn(async move {

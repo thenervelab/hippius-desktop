@@ -570,6 +570,7 @@ async fn list_single_bucket_contents(
                     is_folder: false,
                     storage_class: storage_class.clone(),
                     ipfs_hash,
+                    bucket_name: bucket_name.to_string(),
                 });
             }
         }
@@ -590,6 +591,7 @@ async fn list_single_bucket_contents(
                 is_folder: true,
                 storage_class,
                 ipfs_hash,
+                bucket_name: bucket_name.to_string(),
             }
         })
         .collect();
@@ -609,6 +611,7 @@ pub struct BucketItem {
     pub is_folder: bool, 
     pub storage_class: String,
     pub ipfs_hash: String,
+    pub bucket_name: String,
 }
 
 pub async fn store_bucket_listing_in_db(
@@ -618,7 +621,6 @@ pub async fn store_bucket_listing_in_db(
     items: &[BucketItem],
 ) -> Result<usize, sqlx::Error> {
     let file_type = if scope == "public" { "public" } else { "private" };
-    let bucket = format!("{}-{}", owner, file_type);
 
     // Remove any existing S3-derived records for this owner and scope to avoid duplicates
     sqlx::query(
@@ -633,19 +635,19 @@ pub async fn store_bucket_listing_in_db(
 
     for it in items {
         let file_name = it.path.clone();
-        let source = format!("s3://{}/{}", bucket, it.path);
+        let source = format!("s3://{}/{}", it.bucket_name, it.path);
         let cid_hex = hex::encode(it.ipfs_hash.as_bytes());
         let file_hash_hex = cid_hex.clone();
 
         let is_assigned = it.ipfs_hash != "pending";
 
-        // Insert new record
+        // Insert new record with bucket_name
         sqlx::query(
             "INSERT INTO user_profiles (
                 file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, 
                 main_req_hash, selected_validator, total_replicas, block_number, profile_cid, 
-                source, miner_ids, type, is_folder, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                source, miner_ids, type, is_folder, created_at, bucket_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(&file_name)
         .bind(owner)
@@ -666,6 +668,7 @@ pub async fn store_bucket_listing_in_db(
         .bind(chrono::DateTime::parse_from_rfc3339(&it.last_modified)
             .unwrap_or_else(|_| chrono::Utc::now().into())
             .timestamp() as i64)
+        .bind(&it.bucket_name)  // Add bucket_name
         .execute(pool)
         .await?;
         stored += 1;
@@ -682,8 +685,6 @@ pub async fn insert_bucket_items_if_absent(
     items: &[BucketItem],
 ) -> Result<usize, sqlx::Error> {
     let file_type = if scope == "public" { "public" } else { "private" };
-    let bucket = format!("{}-{}", owner, file_type);
-
     let mut stored = 0usize;
 
     for it in items {
@@ -698,14 +699,14 @@ pub async fn insert_bucket_items_if_absent(
         .await?;
 
         if exists.is_none() {
-            let source = format!("s3://{}/{}", bucket, it.path);
+            let source = format!("s3://{}/{}", it.bucket_name, it.path);
             let cid_hex = hex::encode(it.ipfs_hash.as_bytes());
             let file_hash_hex = cid_hex.clone();
 
             sqlx::query(
                 "INSERT INTO user_profiles (
-                    file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder, created_at, bucket_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(&file_name)
             .bind(owner)
@@ -726,6 +727,7 @@ pub async fn insert_bucket_items_if_absent(
             .bind(chrono::DateTime::parse_from_rfc3339(&it.last_modified)
                 .unwrap_or_else(|_| chrono::Utc::now().into())
                 .timestamp() as i64)
+            .bind(&it.bucket_name)
             .execute(pool)
             .await?;
 
