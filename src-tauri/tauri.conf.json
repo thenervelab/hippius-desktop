@@ -41,17 +41,8 @@
             "csp": null,
             "assetProtocol": {
                 "enable": true,
-                "scope": [
-                    "$HOME/**", "%USERPROFILE%/**", "$RESOURCE/**",
-                    "$HOME/Documents/**",
-                    "$HOME/Downloads/**",
-                    "$HOME/Pictures/**",
-                    "$HOME/Music/**",
-                    "$HOME/Movies/**",
-                    "$HOME/Desktop/**"
-                ]
-            },
-            "freezePrototype": true
+                "scope": ["$HOME/**", "%USERPROFILE%/**", "$RESOURCE/**"]
+            }
         }
     },
     "bundle": {
