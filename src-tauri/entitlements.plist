@@ -2,12 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Basic sandboxing -->
     <key>com.apple.security.app-sandbox</key>
     <true/>
+    
+    <!-- Network access -->
     <key>com.apple.security.network.client</key>
     <true/>
     <key>com.apple.security.network.server</key>
     <true/>
+    
+    <!-- File access -->
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
     <key>com.apple.security.files.downloads.read-write</key>
@@ -22,10 +27,14 @@
     <true/>
     <key>com.apple.security.files.desktop.read-write</key>
     <true/>
+    
+    <!-- Bookmark support (simplified) -->
     <key>com.apple.security.files.bookmarks.app-scope</key>
     <true/>
     <key>com.apple.security.files.bookmarks.document-scope</key>
     <true/>
+    
+    <!-- Code signing -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
@@ -42,7 +51,12 @@
     </dict>
     <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
     <array>
-        <string>/</string>
+        <string>~/Documents</string>
+        <string>~/Downloads</string>
+        <string>~/Pictures</string>
+        <string>~/Music</string>
+        <string>~/Movies</string>
+        <string>~/Desktop</string>
     </array>
 </dict>
 </plist>
