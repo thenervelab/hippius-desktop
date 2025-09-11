@@ -33,6 +33,8 @@ export function useFilesNotification() {
   const wasInProgress = useRef(false);
   const notificationSent = useRef(false);
   const lastUpdateTime = useRef(Date.now());
+  // Ref to track the last sync complete timestamp to prevent duplicate notifications
+  const lastSyncCompleteTime = useRef<number | null>(null);
 
   useEffect(() => {
     // Function to get sync status with additional logging
@@ -43,12 +45,6 @@ export function useFilesNotification() {
 
         // Get current status
         const status = await invoke<SyncStatusResponse>("get_sync_status");
-        // const syncActivity = await invoke<SyncStatusResponse>("get_sync_activity", {
-        //   accountId: "5CRyFwmSHJC7EeGLGbU1G8ycuoxu8sQxExhfBhkwNPtQU5n2"
-        // });
-
-        // console.log("Sync Activity:", syncActivity);
-
 
         // Use a timestamp to track freshness of updates
         const now = Date.now();
@@ -76,38 +72,47 @@ export function useFilesNotification() {
           setSyncPercent(null);
         }
 
-        // Check if sync was previously in progress
-        if (status.in_progress) {
+        // Track when sync starts
+        if (status.in_progress && !wasInProgress.current) {
           wasInProgress.current = true;
-        }
-
-        // Check if sync has completed
-        if (
-          wasInProgress.current &&
-          !status.in_progress &&
-          status.percent === 100 &&
-          !notificationSent.current
-        ) {
-          // Add notification for completed sync
-          const timestamp = new Date().toISOString();
-          const notificationSubtype = `FileSyncComplete-${timestamp}`;
-
-          await addNotification({
-            notificationType: "Files",
-            notificationSubtype: notificationSubtype,
-            notificationTitleText: "Files Sync Complete!",
-            notificationDescription: `All your files have been successfully synchronized. Your files are now up to date.`,
-            notificationLinkText: "View Files",
-            notificationLink: "/files",
-          });
-
-          notificationSent.current = true;
-          await refreshUnread();
-        }
-
-        // If sync is starting again, reset notification sent flag
-        if (status.in_progress && status.percent < 100) {
           notificationSent.current = false;
+        }
+
+        // Check if sync has completed - with additional time-based check
+        const syncCompleted = wasInProgress.current &&
+          !status.in_progress &&
+          status.percent === 100;
+
+        if (syncCompleted && !notificationSent.current) {
+          const now = Date.now();
+          // Only send notification if we haven't sent one in the last 5 seconds
+          const shouldSendNotification =
+            lastSyncCompleteTime.current === null ||
+            (now - lastSyncCompleteTime.current) > 5000;
+
+          if (shouldSendNotification) {
+            // Add notification for completed sync
+            const timestamp = new Date().toISOString();
+            const notificationSubtype = `FileSyncComplete-${timestamp}`;
+
+            await addNotification({
+              notificationType: "Files",
+              notificationSubtype: notificationSubtype,
+              notificationTitleText: "Files Sync Complete!",
+              notificationDescription: `All your files have been successfully synchronized. Your files are now up to date.`,
+              notificationLinkText: "View Files",
+              notificationLink: "/files",
+            });
+
+            notificationSent.current = true;
+            lastSyncCompleteTime.current = now;
+            await refreshUnread();
+          }
+        }
+
+        // Reset wasInProgress when sync is no longer in progress
+        if (!status.in_progress) {
+          wasInProgress.current = false;
         }
       } catch (error) {
         console.error("Failed to get sync status:", error);
@@ -117,10 +122,7 @@ export function useFilesNotification() {
     // Skip if notifications are disabled
     if (!areFilesNotificationsEnabled) return;
 
-    // Get status immediately
-    getSyncStatus();
-
-    // Set up interval to periodically refresh the status
+    // Set up interval to periodically refresh the status - don't call immediately
     const intervalId = setInterval(getSyncStatus, 1000);
 
     // Clean up interval on component unmount
