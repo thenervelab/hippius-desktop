@@ -34,14 +34,26 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
     std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
     std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
     
-    // Configure AWS S3 multipart upload settings
-    let _ = Command::new("aws")
-        .args(["configure", "set", "default.s3.multipart_chunksize", "134217728"])
-        .status();
+    // Helper function to run aws configure commands
+    fn run_aws_configure(args: &[&str]) {
+        use std::process::Command;
         
-    let _ = Command::new("aws")
-        .args(["configure", "set", "default.s3.multipart_threshold", "134217728"])
-        .status();
+        let mut cmd = Command::new("aws");
+        cmd.args(args);
+        
+        // Add Windows-specific flags to suppress terminal window
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        
+        let _ = cmd.status();
+    }
+    
+    // Configure AWS S3 multipart upload settings
+    run_aws_configure(&["configure", "set", "default.s3.multipart_chunksize", "134217728"]);
+    run_aws_configure(&["configure", "set", "default.s3.multipart_threshold", "134217728"]);
 }
 
 #[tauri::command]

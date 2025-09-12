@@ -913,8 +913,19 @@ pub async fn remove_from_sync_folder(
 }
 
 fn execute_aws_s3_rm(path: &str) -> Result<(), String> {
-    let output = std::process::Command::new("aws")
-        .args(["s3", "rm", path])
+    use std::process::Command;
+    
+    let mut cmd = Command::new("aws");
+    cmd.args(["s3", "rm", path]);
+    
+    // Add Windows-specific flags to suppress terminal window
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let output = cmd
         .output()
         .map_err(|e| e.to_string())?;
 

@@ -130,7 +130,8 @@ pub async fn download_and_decrypt_file(
             return Ok(());
         } else {
             // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
-            let status = Command::new(&aws_binary_path)
+            let mut command = Command::new(&aws_binary_path);
+            command
                 .env("AWS_PAGER", "")
                 .env("PATH", &dynamic_path)
                 .arg("s3")
@@ -138,7 +139,16 @@ pub async fn download_and_decrypt_file(
                 .arg(&source)
                 .arg(&output_file)
                 .arg("--endpoint-url")
-                .arg("https://s3.hippius.com")
+                .arg("https://s3.hippius.com");
+
+            // Add Windows-specific flags to suppress terminal window
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+
+            let status = command
                 .status()
                 .await
                 .map_err(|e| format!("Failed to spawn aws s3 cp: {}", e))?;
@@ -149,7 +159,6 @@ pub async fn download_and_decrypt_file(
                     source, output_file, status.code()
                 ));
             }
-
             println!(
                 "[download_and_decrypt_file] Downloaded from S3 '{}' to '{}' via aws cli",
                 source, output_file
@@ -383,20 +392,30 @@ pub async fn download_and_decrypt_folder(
                    .map_err(|e| format!("Failed to create output directory: {}", e))?;
            }
 
-            let status = Command::new(&aws_binary_path)
+            let mut command = Command::new(&aws_binary_path);
+            command
                 .env("AWS_PAGER", "")
                 .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("cp")
-                .arg(&source) 
-                .arg(&destination_path) 
-                .arg("--recursive") 
+                .arg(&source)
+                .arg(&destination_path)
+                .arg("--recursive")
                 .arg("--endpoint-url")
-                .arg("https://s3.hippius.com")
+                .arg("https://s3.hippius.com");
+            
+            // Add Windows-specific flags to suppress terminal window
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            
+            let status = command
                 .status()
                 .await
                 .map_err(|e| format!("Failed to spawn 'aws s3 cp --recursive': {}", e))?;
-
+            
             if !status.success() {
                 return Err(format!(
                     "aws s3 cp --recursive failed for source '{}' with status {:?}",
@@ -674,13 +693,24 @@ pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_file(path: String) -> Result<(), String> {
+    use std::process::Command;
+    
     if std::path::Path::new(&path).exists() {
         // If file exists locally, remove it
         std::fs::remove_file(&path).map_err(|e| e.to_string())
     } else {
         // If file doesn't exist locally, try to remove from S3
-        let output = std::process::Command::new("aws")
-            .args(["s3", "rm", &path])
+        let mut cmd = Command::new("aws");
+        cmd.args(["s3", "rm", &path]);
+        
+        // Add Windows-specific flags to suppress terminal window
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let output = cmd
             .output()
             .map_err(|e| e.to_string())?;
 
@@ -779,19 +809,29 @@ pub async fn download_file_public(
         } else {
             // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
             println!("[download_file_public] Invoking 'aws s3 cp' for source='{}' -> '{}'", source, output_file);
-            let status = Command::new(&aws_binary_path)
+            let mut command = Command::new(&aws_binary_path);
+            command
                 .env("AWS_PAGER", "")
                 .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("cp")
-                .arg(&source) 
-                .arg(&output_file) 
+                .arg(&source)
+                .arg(&output_file)
                 .arg("--endpoint-url")
-                .arg("https://s3.hippius.com")
+                .arg("https://s3.hippius.com");
+            
+            // Add Windows-specific flags to suppress terminal window
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            
+            let status = command
                 .status()
                 .await
                 .map_err(|e| format!("[download_file_public] Failed to spawn aws s3 cp (is AWS CLI on PATH?): {}", e))?;
-
+            
             if !status.success() {
                 return Err(format!(
                     "[download_file_public] aws s3 cp failed for source '{}' to '{}' with status {:?}",
@@ -911,20 +951,30 @@ pub async fn public_download_folder(
                    .map_err(|e| format!("Failed to create output directory: {}", e))?;
            }
 
-            let status = Command::new(&aws_binary_path)
+            let mut command = Command::new(&aws_binary_path);
+            command
                 .env("AWS_PAGER", "")
                 .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("cp")
-                .arg(&source) 
-                .arg(&destination_path) 
-                .arg("--recursive") 
+                .arg(&source)
+                .arg(&destination_path)
+                .arg("--recursive")
                 .arg("--endpoint-url")
-                .arg("https://s3.hippius.com")
+                .arg("https://s3.hippius.com");
+            
+            // Add Windows-specific flags to suppress terminal window
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            
+            let status = command
                 .status()
                 .await
                 .map_err(|e| format!("Failed to spawn 'aws s3 cp --recursive': {}", e))?;
-
+            
             if !status.success() {
                 return Err(format!(
                     "aws s3 cp --recursive failed for source '{}' with status {:?}",
@@ -1161,7 +1211,8 @@ pub async fn list_folder_contents(
     );
 
     // Execute aws s3api list-objects-v2 command with prefix
-    let output = Command::new(&aws_binary_path)
+    let mut command = Command::new(&aws_binary_path);
+    command
         .env("AWS_PAGER", "")
         .env("PATH", &dynamic_path)
         .arg("s3api")
@@ -1171,7 +1222,16 @@ pub async fn list_folder_contents(
         .arg("--prefix")
         .arg(&s3_prefix)
         .arg("--endpoint-url")
-        .arg(endpoint_url)
+        .arg(endpoint_url);
+
+    // Add Windows-specific flags to suppress terminal window
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let output = command
         .output()
         .await
         .map_err(|e| format!("Failed to execute aws command: {}", e))?;
@@ -1601,7 +1661,8 @@ pub async fn wipe_s3_objects(
 
     println!("[remove_s3_objects] Removing all objects from bucket: {}", bucket_name);
     
-    let status = Command::new(&aws_binary_path)
+    let mut command = Command::new(&aws_binary_path);
+    command
         .env("AWS_PAGER", "")
         .env("PATH", &dynamic_path)
         .arg("s3")
@@ -1609,18 +1670,27 @@ pub async fn wipe_s3_objects(
         .arg(&s3_uri)
         .arg("--recursive")
         .arg("--endpoint-url")
-        .arg("https://s3.hippius.com")
+        .arg("https://s3.hippius.com");
+    
+    // Add Windows-specific flags to suppress terminal window
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    
+    let status = command
         .status()
         .await
         .map_err(|e| format!("Failed to spawn 'aws s3 rm --recursive': {}", e))?;
-
+    
     if !status.success() {
         return Err(format!(
             "aws s3 rm --recursive failed for bucket '{}' with status {:?}",
             bucket_name, status.code()
         ));
     }
-
+    
     println!("[remove_s3_objects] Successfully removed all objects from bucket: {}", bucket_name);
     Ok(())
 }

@@ -336,14 +336,24 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
 /// Helper function to list all S3 buckets
 async fn list_all_buckets(aws_binary_path: &std::path::Path, dynamic_path: &str) -> Result<Vec<String>, String> {
     let endpoint_url = "https://s3.hippius.com";
-    
-    let output = Command::new(aws_binary_path)
+        
+    let mut command = Command::new(aws_binary_path);
+    command
         .env("AWS_PAGER", "")
         .env("PATH", dynamic_path)
         .arg("s3api")
         .arg("list-buckets")
         .arg("--endpoint-url")
-        .arg(endpoint_url)
+        .arg(endpoint_url);
+
+    // Add Windows-specific flags to suppress terminal window
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let output = command
         .output()
         .map_err(|e| format!("Failed to execute aws command: {}", e))?;
 
@@ -485,11 +495,18 @@ async fn list_single_bucket_contents(
             .arg(bucket_name)
             .arg("--endpoint-url")
             .arg(endpoint_url);
-
+        
         if let Some(token) = &continuation_token {
             command.arg("--continuation-token").arg(token);
         }
-
+        
+        // Add Windows-specific flags to suppress terminal window
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        
         let output = command
             .output()
             .map_err(|e| format!("Failed to execute aws command: {}", e))?;

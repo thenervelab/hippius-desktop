@@ -115,16 +115,25 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
     );
 
     println!("[PublicFolderSync] Ensuring bucket exists: s3://{}", bucket_name);
-    let exists_output = Command::new(&aws_binary_path)
+    let mut command = Command::new(&aws_binary_path);
+    command
         .env("AWS_PAGER", "")
         .env("PATH", &dynamic_path)
         .arg("s3")
         .arg("ls")
         .arg(format!("s3://{}", bucket_name))
         .arg("--endpoint-url")
-        .arg("https://s3.hippius.com")
-        .output();
-
+        .arg("https://s3.hippius.com");
+    
+    // Add Windows-specific flags to suppress terminal window
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    
+    let exists_output = command.output();
+    
     let bucket_exists = match exists_output {
         Ok(ref o) if o.status.success() => true,
         _ => false,
@@ -134,16 +143,25 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         println!("[PublicFolderSync] Bucket already exists, proceeding.");
     } else {
         loop {
-            let mb_output = Command::new(&aws_binary_path)
+            let mut command = Command::new(&aws_binary_path);
+            command
                 .env("AWS_PAGER", "")
                 .env("PATH", &dynamic_path)
                 .arg("s3")
                 .arg("mb")
                 .arg(format!("s3://{}", bucket_name))
                 .arg("--endpoint-url")
-                .arg("https://s3.hippius.com")
-                .output();
-
+                .arg("https://s3.hippius.com");
+            
+            // Add Windows-specific flags to suppress terminal window
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            }
+            
+            let mb_output = command.output();
+            
             let proceed = match mb_output {
                 Ok(output) => {
                     if output.status.success() {
@@ -155,16 +173,25 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                             println!("[PublicFolderSync] Bucket already exists (race condition), proceeding.");
                             true
                         } else {
-                            let verify = Command::new(&aws_binary_path)
+                            let mut verify_command = Command::new(&aws_binary_path);
+                            verify_command
                                 .env("AWS_PAGER", "")
                                 .env("PATH", &dynamic_path)
                                 .arg("s3")
                                 .arg("ls")
                                 .arg(format!("s3://{}", bucket_name))
                                 .arg("--endpoint-url")
-                                .arg("https://s3.hippius.com")
-                                .output();
-
+                                .arg("https://s3.hippius.com");
+                            
+                            // Add Windows-specific flags to suppress terminal window
+                            #[cfg(target_os = "windows")]
+                            {
+                                use std::os::windows::process::CommandExt;
+                                verify_command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                            }
+                            
+                            let verify = verify_command.output();
+                            
                             match verify {
                                 Ok(v) if v.status.success() => {
                                     println!("[PublicFolderSync] Bucket accessible after failed create, proceeding.");
@@ -180,15 +207,24 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                 }
                 Err(e) => {
                     eprintln!("[PublicFolderSync] Failed to execute 'aws s3 mb' command (will retry in 15s): {}", e);
-                    let verify = Command::new(&aws_binary_path)
+                    let mut verify_command = Command::new(&aws_binary_path);
+                    verify_command
                         .env("AWS_PAGER", "")
                         .env("PATH", &dynamic_path)
                         .arg("s3")
                         .arg("ls")
                         .arg(format!("s3://{}", bucket_name))
                         .arg("--endpoint-url")
-                        .arg("https://s3.hippius.com")
-                        .output();
+                        .arg("https://s3.hippius.com");
+                    
+                    // Add Windows-specific flags to suppress terminal window
+                    #[cfg(target_os = "windows")]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        verify_command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                    }
+                    
+                    let verify = verify_command.output();
                     matches!(verify, Ok(v) if v.status.success())
                 }
             };
@@ -217,7 +253,9 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         bucket = bucket_name
     );
 
-    match Command::new(&aws_binary_path)
+    // First command: put-bucket-policy
+    let mut policy_cmd = Command::new(&aws_binary_path);
+    policy_cmd
         .env("AWS_PAGER", "")
         .env("PATH", &dynamic_path)
         .arg("s3api")
@@ -227,35 +265,53 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         .arg("--policy")
         .arg(&bucket_policy)
         .arg("--endpoint-url")
-        .arg("https://s3.hippius.com")
-        .output()
+        .arg("https://s3.hippius.com");
+
+    // Add Windows-specific flags to suppress terminal window
+    #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        policy_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    match policy_cmd.output() {
         Ok(o) if o.status.success() => {
             println!("[PublicFolderSync] Applied public-read bucket policy to '{}'.", bucket_name);
         }
         Ok(o) => {
-            eprintln!("[PublicFolderSync] Failed to apply bucket policy (exit {}), stderr: {}", o.status, String::from_utf8_lossy(&o.stderr));
+            eprintln!("[PublicFolderSync] Failed to apply bucket policy (exit {}), stderr: {}", 
+                    o.status, String::from_utf8_lossy(&o.stderr));
         }
         Err(e) => {
             eprintln!("[PublicFolderSync] Error executing 'aws s3api put-bucket-policy': {}", e);
         }
     }
 
-    match Command::new(&aws_binary_path)
+    // Second command: s3 ls
+    let mut ls_cmd = Command::new(&aws_binary_path);
+    ls_cmd
         .env("AWS_PAGER", "")
         .env("PATH", &dynamic_path)
         .arg("s3")
         .arg("ls")
         .arg(format!("s3://{}", bucket_name))
         .arg("--endpoint-url")
-        .arg("https://s3.hippius.com")
-        .output()
+        .arg("https://s3.hippius.com");
+
+    // Add Windows-specific flags to suppress terminal window
+    #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        ls_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    match ls_cmd.output() {
         Ok(o) if o.status.success() => {
             println!("[PublicFolderSync] Preflight: AWS CLI can access bucket 's3://{}'", bucket_name);
         }
         Ok(o) => {
-            eprintln!("[PublicFolderSync] Preflight: 'aws s3 ls' failed (exit {}) stderr: {}", o.status, String::from_utf8_lossy(&o.stderr));
+            eprintln!("[PublicFolderSync] Preflight: 'aws s3 ls' failed (exit {}) stderr: {}", 
+                    o.status, String::from_utf8_lossy(&o.stderr));
         }
         Err(e) => {
             eprintln!("[PublicFolderSync] Preflight: failed to execute aws: {}", e);
@@ -284,7 +340,8 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         let s3_destination = format!("s3://{}/", bucket_name);
         let bucket_name_clone = bucket_name.clone();  // Create a new clone for this iteration
 
-        let dry_run_output = Command::new(&aws_binary_path)
+        let mut dry_run_cmd = Command::new(&aws_binary_path);
+        dry_run_cmd
             .env("AWS_PAGER", "")
             .env("PATH", &dynamic_path)
             .arg("s3")
@@ -302,9 +359,17 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             .arg("--exclude")
             .arg("*.tmp")
             .arg("--exclude")
-            .arg(".git/*")
-            .output();
-
+            .arg(".git/*");
+        
+        // Add Windows-specific flags to suppress terminal window
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            dry_run_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        
+        let dry_run_output = dry_run_cmd.output();
+        
         let total_changes = match dry_run_output {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -337,7 +402,8 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             state.total_files = total_changes;
         }
 
-        let mut child = Command::new(&aws_binary_path)
+        let mut sync_cmd = Command::new(&aws_binary_path);
+        sync_cmd
             .env("AWS_PAGER", "")
             .env("PATH", &dynamic_path)
             .arg("s3")
@@ -359,7 +425,16 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             .arg("--exclude")
             .arg(".git/*")
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        
+        // Add Windows-specific flags to suppress terminal window
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            sync_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        
+        let mut child = sync_cmd
             .spawn()
             .expect("Failed to spawn 'aws s3 sync' command for public sync");
 
