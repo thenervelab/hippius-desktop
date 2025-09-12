@@ -1027,8 +1027,42 @@ pub async fn list_folder_contents(
     println!("[ListFolderContents] Received main_folder_name: {:?}", main_folder_name);
     println!("[ListFolderContents] Received subfolder_path: {:?}", subfolder_path);
     
-    // Fall back to S3 if local directory doesn't exist
-    let bucket_name = format!("{}-{}", account_id, scope);
+    // First try to get the bucket name from the database
+    let bucket_name = match crate::DB_POOL.get() {
+        Some(pool) => {
+            // Query the database to get the bucket name for this main_folder_name
+            let file_type = if scope == "public" { "public" } else { "private" };
+            
+            match sqlx::query_scalar::<_, String>(
+                "SELECT DISTINCT bucket_name FROM user_profiles 
+                 WHERE file_name = ?1 AND type = ?2 AND bucket_name IS NOT NULL 
+                 LIMIT 1"
+            )
+            .bind(&main_folder_name)
+            .bind(file_type)
+            .fetch_optional(pool)
+            .await
+            {
+                Ok(Some(bucket)) => {
+                    println!("[ListFolderContents] Found bucket name in database: {}", bucket);
+                    bucket
+                },
+                Ok(None) => {
+                    println!("[ListFolderContents] No bucket name found in database, falling back to default format");
+                    format!("{}-{}", account_id, scope)
+                },
+                Err(e) => {
+                    eprintln!("[ListFolderContents] Error querying database for bucket name: {}", e);
+                    format!("{}-{}", account_id, scope)
+                }
+            }
+        },
+        None => {
+            eprintln!("[ListFolderContents] Database pool not initialized, using default bucket name format");
+            format!("{}-{}", account_id, scope)
+        }
+    };
+
     let endpoint_url = "https://s3.hippius.com";
 
     let path_parts = subfolder_path
