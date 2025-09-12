@@ -9,7 +9,8 @@ import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import Warning from "@/components/ui/icons/Warning";
 import TimeAgo from "react-timeago";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
-import TopUpDialog from "@/app/components/page-sections/billing/TopUpDialog";
+import { openLinkByKey } from "@/app/lib/utils/links";
+
 
 interface CreditsWidgetProps {
   className?: string;
@@ -25,6 +26,9 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({
     refetch,
     dataUpdatedAt,
   } = useUserCredits();
+
+  const handleOpenConsoleCreditsPage = () => openLinkByKey("CREDITS");
+
 
 
   return (
@@ -98,18 +102,15 @@ const CreditsWidget: FC<CreditsWidgetProps> = ({
         </div>
       </div>
       <div className="relative bg-grey-100 w-full border-grey-80 border-t">
-        <TopUpDialog
-          trigger={
-            <CardButton
-              className="w-full mt-4 h-[50px]"
-            >
-              <div className="flex items-center gap-2 text-lg font-medium">
-                <AddCircle className="size-4" />
-                Add Credits
-              </div>
-            </CardButton>
-          }
-        />
+        <CardButton
+          className="w-full mt-4 h-[50px]"
+          onClick={handleOpenConsoleCreditsPage}
+        >
+          <div className="flex items-center gap-2 text-lg font-medium">
+            <AddCircle className="size-4" />
+            Add Credits
+          </div>
+        </CardButton>
       </div>
     </div>
   );
