@@ -1,54 +1,35 @@
 "use client";
 
-import { FC, useMemo, useState } from "react";
+import { FC, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Refresh, WalletAdd } from "@/components/ui/icons";
 import * as Typography from "@/components/ui/typography";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import Warning from "@/components/ui/icons/Warning";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
-import BalanceTrends from "./balance-trends";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import SendBalanceDialog, { TRANSACTION_FEE } from "./SendBalanceDialog";
 import ReceiveBalanceDialog from "./ReceiveBalanceDialog";
-import useSystemBalance from "@/app/lib/hooks/api/useSystemBalance";
 
-interface WalletBalanceWidgetWithGraphProps {
+interface WalletBalanceWidgetProps {
   className?: string;
   refetchTransactions?: () => void;
+  refetchSystemBalance?: () => void;
 }
 
-const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
+const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
   className,
   refetchTransactions,
+  refetchSystemBalance,
 }) => {
   const { data: balanceInfo, isLoading, error, refetch } = useHippiusBalance();
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
   const { mnemonic, polkadotAddress } = useWalletAuth();
 
-  const {
-    data: balanceDaily,
-    isLoading: isBalanceLoading,
-    refetch: refetchSystemBalance,
-  } = useSystemBalance();
-  const chartData = useMemo(() => {
-    const rows = balanceDaily ?? [];
-    return rows.map((r) => {
-      return {
-        processed_timestamp: r.timestamp,
-        credit: "0",
-        total_balance: r.totalBalance,
-      };
-    });
-  }, [balanceDaily]);
-
-  const isChartDataLoading = isBalanceLoading;
-
   const handleSendBalance = () => {
-    // Check if balance is available
     if (!balanceInfo?.data?.free) {
       toast.error("Balance information not available. Please try again later.");
       return;
@@ -56,7 +37,6 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
 
     const currentBalance = +formatCreditBalance(balanceInfo.data.free);
 
-    // Check if balance is zero
     if (currentBalance <= 0) {
       toast.error(
         "Your balance is zero. Please add funds to your account first."
@@ -64,7 +44,6 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
       return;
     }
 
-    // Check if balance is too low to cover transaction fee
     if (currentBalance <= parseFloat(TRANSACTION_FEE)) {
       toast.error(
         `Your balance (${currentBalance} hALPHA) is too low to cover the transaction fee (${TRANSACTION_FEE} hALPHA). Please add funds to your account first.`
@@ -80,14 +59,9 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
   };
 
   return (
-    <div className="w-full relative">
-      <div
-        className={cn(
-          "relative gap-4 overflow-hidden h-[310px] grid grid-cols-[auto_minmax(0,1fr)]",
-          className
-        )}
-      >
-        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between relative min-w-[298px] max-w-[300px]">
+    <>
+      <div className={cn("w-full", className)}>
+        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[310px]">
           <div className="flex flex-col w-full items-start">
             <div className="flex gap-4 items-center">
               <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
@@ -103,8 +77,8 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
                   {balanceInfo !== undefined
                     ? `${formatCreditBalance(balanceInfo.data.free)}`
                     : error
-                    ? "ERROR"
-                    : "- - - -"}
+                      ? "ERROR"
+                      : "- - - -"}
                   <span className="text-xs font-medium -translate-y-1 ml-1">
                     hALPHA
                   </span>
@@ -158,36 +132,30 @@ const WalletBalanceWidgetWithGraph: FC<WalletBalanceWidgetWithGraphProps> = ({
             </CardButton>
           </div>
         </div>
-        {/* Send Balance Dialog */}
-        <SendBalanceDialog
-          open={sendDialogOpen}
-          onClose={() => setSendDialogOpen(false)}
-          availableBalance={
-            +formatCreditBalance(balanceInfo?.data?.free ?? null)
-          }
-          mnemonic={mnemonic || ""}
-          refetchBalance={() => {
-            refetch();
-            refetchSystemBalance();
-            refetchTransactions?.();
-          }}
-          polkadotAddress={polkadotAddress || ""}
-        />
-
-        {/* Receive Balance Dialog */}
-        <ReceiveBalanceDialog
-          open={receiveDialogOpen}
-          onClose={() => setReceiveDialogOpen(false)}
-          polkadotAddress={polkadotAddress || ""}
-        />
-        <BalanceTrends
-          className="min-w-0"
-          chartData={chartData}
-          isLoading={isChartDataLoading}
-        />
       </div>
-    </div>
+
+      <SendBalanceDialog
+        open={sendDialogOpen}
+        onClose={() => setSendDialogOpen(false)}
+        availableBalance={
+          +formatCreditBalance(balanceInfo?.data?.free ?? null)
+        }
+        mnemonic={mnemonic || ""}
+        refetchBalance={() => {
+          refetch();
+          refetchSystemBalance?.();
+          refetchTransactions?.();
+        }}
+        polkadotAddress={polkadotAddress || ""}
+      />
+
+      <ReceiveBalanceDialog
+        open={receiveDialogOpen}
+        onClose={() => setReceiveDialogOpen(false)}
+        polkadotAddress={polkadotAddress || ""}
+      />
+    </>
   );
 };
 
-export default WalletBalanceWidgetWithGraph;
+export default WalletBalanceWidget;

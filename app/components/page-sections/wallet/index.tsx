@@ -1,8 +1,10 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 
-import WalletBalanceWidgetWithGraph from "./WalletBalanceWidgetWithGraph";
+import WalletBalanceWidget from "./WalletBalanceWidget";
+import StakeWidget from "./StakeWidget";
+import BridgeWidget from "./BridgeWidget";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import TransactionHistoryTable from "./TransactionHistoryTable";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
@@ -12,8 +14,16 @@ import AddNewAddressDialog from "./AddNewAddressDialog";
 import { getContacts } from "@/app/lib/helpers/addressBookDb";
 import AddressBookTable from "./AddressBookTable";
 import useBalanceTransactions from "@/app/lib/hooks/api/useBalanceTransactions";
+import useSystemBalance from "@/app/lib/hooks/api/useSystemBalance";
+import BalanceTrends from "./balance-trends";
+
 export default function Wallet() {
   const { data: transactions, isPending, refetch } = useBalanceTransactions();
+  const {
+    data: balanceDaily,
+    isLoading: isBalanceLoading,
+    refetch: refetchSystemBalance,
+  } = useSystemBalance();
   const [activeTab, setActiveTab] = useState("Transaction History");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [contacts, setContacts] = useState<
@@ -25,6 +35,19 @@ export default function Wallet() {
     }>
   >([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const chartData = useMemo(() => {
+    const rows = balanceDaily ?? [];
+    return rows.map((r) => {
+      return {
+        processed_timestamp: r.timestamp,
+        credit: "0",
+        total_balance: r.totalBalance,
+      };
+    });
+  }, [balanceDaily]);
+
+  const isChartDataLoading = isBalanceLoading;
 
   useEffect(() => {
     if (activeTab === "Address Book") {
@@ -55,8 +78,21 @@ export default function Wallet() {
   return (
     <>
       <DashboardTitleWrapper mainText="Wallet">
-        <div className="w-full mt-6">
-          <WalletBalanceWidgetWithGraph refetchTransactions={refetch} />
+        <div className="w-full mt-6 grid grid-cols-3 gap-4">
+          <WalletBalanceWidget
+            refetchTransactions={refetch}
+            refetchSystemBalance={refetchSystemBalance}
+          />
+          <StakeWidget />
+          <BridgeWidget />
+        </div>
+
+        <div className="col-span-3 mt-4">
+          <BalanceTrends
+            className="min-w-0"
+            chartData={chartData}
+            isLoading={isChartDataLoading}
+          />
         </div>
 
         <div className="mt-6">
