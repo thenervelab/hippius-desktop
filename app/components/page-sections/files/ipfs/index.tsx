@@ -62,6 +62,10 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState("");
   const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState("");
 
+  // Loading states for sync paths
+  const [isLoadingPrivatePath, setIsLoadingPrivatePath] = useState(true);
+  const [isLoadingPublicPath, setIsLoadingPublicPath] = useState(true);
+
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
 
@@ -239,10 +243,13 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   useEffect(() => {
     (async () => {
       try {
+        setIsLoadingPublicPath(true);
         const publicfolderPath = await getPublicSyncPath();
         setSelectedPublicFolderPath(publicfolderPath);
       } catch {
         console.error("Failed to load public sync folder");
+      } finally {
+        setIsLoadingPublicPath(false);
       }
     })();
   }, []);
@@ -251,10 +258,13 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   useEffect(() => {
     (async () => {
       try {
+        setIsLoadingPrivatePath(true);
         const privatefolderPath = await getPrivateSyncPath();
         setSelectedPrivateFolderPath(privatefolderPath);
       } catch {
         console.error("Failed to load private sync folder");
+      } finally {
+        setIsLoadingPrivatePath(false);
       }
     })();
   }, []);
@@ -269,6 +279,13 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     const checkSyncPath = async () => {
       try {
         setIsCheckingSyncPath(true);
+
+        // Wait for both paths to finish loading
+        const isStillLoading = isPrivateView ? isLoadingPrivatePath : isLoadingPublicPath;
+        if (isStillLoading) {
+          return; // Don't check yet, still loading
+        }
+
         const syncPath = isPrivateView
           ? selectedPrivateFolderPath
           : selectedPublicFolderPath;
@@ -286,7 +303,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     };
 
     checkSyncPath();
-  }, [isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath, isRecentFiles]);
+  }, [isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath, isRecentFiles, isLoadingPrivatePath, isLoadingPublicPath]);
 
   // Handle folder selection from SyncFolderSelector
   const handleFolderSelected = useCallback(
@@ -303,12 +320,14 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             return;
           }
           await setPrivateSyncPath(path, polkadotAddress, mnemonic);
+          setSelectedPrivateFolderPath(path);
         } else {
           if (path === selectedPrivateFolderPath) {
             toast.error("Public sync folder cannot be the same as private sync folder");
             return;
           }
           await setPublicSyncPath(path, polkadotAddress, mnemonic);
+          setSelectedPublicFolderPath(path);
         }
         toast.success(
           `${isPrivateView ? "Private" : "Public"} sync folder set successfully`
@@ -395,7 +414,12 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
 
   // Determine what content to render
   let content;
-  if (isCheckingSyncPath) {
+
+  // Show loading while checking sync path or while loading sync paths
+  const isLoadingSyncPaths = isPrivateView ? isLoadingPrivatePath : isLoadingPublicPath;
+  const shouldShowLoading = isCheckingSyncPath || isLoadingSyncPaths;
+
+  if (shouldShowLoading) {
     content = <WaitAMoment />;
   } else if (isSyncPathConfigured === false && !isRecentFiles) {
     content = (

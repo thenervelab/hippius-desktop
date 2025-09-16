@@ -11,7 +11,6 @@ use sp_core::Pair;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
 use base64 as b64;
-use std::process::Command;
 
 #[derive(Default)]
 pub struct SyncState {

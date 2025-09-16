@@ -7,6 +7,8 @@ use tauri::AppHandle;
 use tokio::time::sleep;
 use std::sync::atomic::Ordering;
 use std::thread;
+use crate::utils::fs_watcher::{FsWatcher, FsEvent};
+use tokio::sync::mpsc;
 pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE,  BucketItem, insert_bucket_item_if_absent,  delete_bucket_item_by_name};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -19,11 +21,90 @@ use tauri::{Emitter, Manager};
 use crate::DB_POOL;
 use chrono;
 use std::env;
+use log::error;
 use crate::commands::node::get_aws_binary_path;
 use sp_core::sr25519;
 use sp_core::Pair;
 use sp_core::crypto::Ss58Codec;
 use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
+use sqlx::SqlitePool;
+
+async fn handle_fs_events(
+    mut rx: mpsc::UnboundedReceiver<FsEvent>,
+    pool: SqlitePool,
+    owner: String,
+    bucket_name: String,
+) {    
+    while let Some(event) = rx.recv().await {
+        match event {
+            FsEvent::Create(path, is_dir) => {             
+                let file_name = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+                    .to_string();
+                
+                if file_name.is_empty() {
+                    continue;
+                }
+                
+                
+                let size = if is_dir {
+                    0
+                } else {
+                    std::fs::metadata(&path).ok()
+                        .map(|m| m.len())
+                        .unwrap_or_else(|| {
+                            println!("[PrivateFolderSync] Could not get metadata for: {}", file_name);
+                            0
+                        })
+                };
+                
+                let bucket_item = BucketItem {
+                    path: file_name.clone(),
+                    size,
+                    last_modified: chrono::Utc::now().to_rfc3339(),
+                    is_folder: is_dir,
+                    storage_class: "STANDARD".to_string(),
+                    ipfs_hash: "".to_string(),
+                    bucket_name: bucket_name.clone(),
+                };
+                
+                match insert_bucket_item_if_absent(&pool, &owner, "public", &bucket_item).await {
+                    Ok(_) => println!("[PrivateFolderSync] Successfully inserted '{}'", file_name),
+                    Err(e) => error!("[PrivateFolderSync] Failed to insert '{}': {}", file_name, e),
+                }
+            },
+            FsEvent::Remove(path, is_dir) => {
+                let file_name = match path.file_name() {
+                    Some(name) => name.to_string_lossy().into_owned(),
+                    None => {
+                        error!("[PrivateFolderSync] Could not get file name from path: {:?}", path);
+                        continue;
+                    }
+                };
+                
+                if file_name.is_empty() {
+                    continue;
+                }
+                
+                match delete_bucket_item_by_name(&pool, &owner, "private", &file_name).await {
+                    Ok(rows_affected) => {
+                        if rows_affected > 0 {
+                            println!("[PrivateFolderSync] Successfully deleted '{}' from database ({} rows affected)", 
+                                   file_name, rows_affected);
+                        } else {
+                            println!("[PrivateFolderSync] No matching record found for '{}' in database", file_name);
+                        }
+                    },
+                    Err(e) => {
+                        error!("[PrivateFolderSync] Failed to delete '{}': {}", file_name, e);
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String, _seed_phrase: String) {
     {
@@ -266,6 +347,48 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
             eprintln!("[PrivateFolderSync] Preflight: failed to execute aws: {}", e);
         }
     }
+    let sync_path = match get_private_sync_path().await {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("[PrivateFolderSync] Failed to get private sync path: {}", e);
+            sleep(Duration::from_secs(60)).await;
+            return;
+        }
+    };
+
+    // Create directory if it doesn't exist
+    if let Err(e) = std::fs::create_dir_all(&sync_path) {
+        eprintln!("[PrivateFolderSync] Failed to create sync directory: {}", e);
+        return;
+    }
+
+    // Set up file system watcher
+    let (tx, rx) = mpsc::unbounded_channel();
+    let _watcher = match FsWatcher::new(&sync_path, tx) {
+        Ok(watcher) => watcher,
+        Err(e) => {
+            eprintln!("[PrivateFolderSync] Failed to create file system watcher: {}", e);
+            return;
+        }
+    };
+
+    let pool = match DB_POOL.get() {
+        Some(p) => p.clone(),
+        None => {
+            eprintln!("[PrivateFolderSync] Database pool not available");
+            return;
+        }
+    };
+    
+    // Clone values for the async task
+    let owner_clone = account_id.clone();
+    let bucket_name_clone = bucket_name.clone();
+    let pool_clone = pool.clone();
+    
+    tokio::spawn(async move {
+        handle_fs_events(rx, pool_clone, owner_clone, bucket_name_clone).await
+    });
+
     loop {
         if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
             println!("[PrivateFolderSync] Global cancellation detected, stopping sync for account {}", account_id);
@@ -275,15 +398,6 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
             }
             return;
         }
-
-        let sync_path = match get_private_sync_path().await {
-            Ok(path) => path,
-            Err(e) => {
-                eprintln!("[PrivateFolderSync] Failed to get private sync path: {}", e);
-                sleep(Duration::from_secs(60)).await;
-                continue;
-            }
-        };
 
         let s3_destination = format!("s3://{}/", bucket_name);
         let bucket_name_clone = bucket_name.clone();
