@@ -279,13 +279,13 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     const checkSyncPath = async () => {
       try {
         setIsCheckingSyncPath(true);
-        
+
         // Wait for both paths to finish loading
         const isStillLoading = isPrivateView ? isLoadingPrivatePath : isLoadingPublicPath;
         if (isStillLoading) {
           return; // Don't check yet, still loading
         }
-        
+
         const syncPath = isPrivateView
           ? selectedPrivateFolderPath
           : selectedPublicFolderPath;
@@ -414,11 +414,11 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
 
   // Determine what content to render
   let content;
-  
+
   // Show loading while checking sync path or while loading sync paths
   const isLoadingSyncPaths = isPrivateView ? isLoadingPrivatePath : isLoadingPublicPath;
   const shouldShowLoading = isCheckingSyncPath || isLoadingSyncPaths;
-  
+
   if (shouldShowLoading) {
     content = <WaitAMoment />;
   } else if (isSyncPathConfigured === false && !isRecentFiles) {
