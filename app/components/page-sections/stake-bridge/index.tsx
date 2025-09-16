@@ -29,11 +29,11 @@ const StakeBridge = () => {
     const tabs: TabOption[] = [
         {
             tabName: "Stake hAlpha",
-            icon: <Icons.Refresh className="size-4" />,
+            icon: <Icons.MoneyReceive className="size-4" />,
         },
         {
             tabName: "Bridge hAlpha",
-            icon: <Icons.Repeat className="size-4" />,
+            icon: <Icons.Money className="size-4" />,
         },
     ];
 
