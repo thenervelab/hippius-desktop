@@ -685,7 +685,7 @@ pub async fn store_bucket_listing_in_db(
         .bind(chrono::DateTime::parse_from_rfc3339(&it.last_modified)
             .unwrap_or_else(|_| chrono::Utc::now().into())
             .timestamp() as i64)
-        .bind(&it.bucket_name)  // Add bucket_name
+        .bind(&it.bucket_name)
         .execute(pool)
         .await?;
         stored += 1;

@@ -15,6 +15,7 @@ dependencies = [
  "futures",
  "hex",
  "lazy_static",
+ "log",
  "notify",
  "once_cell",
  "parity-scale-codec",
