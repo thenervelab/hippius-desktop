@@ -56,7 +56,7 @@ const SubMenuItem: React.FC<Props> = ({
       <div
         className={cn(
           "absolute left-[3px] bg-primary-50 w-0.5 h-[22px] rounded-3xl",
-          !visiblyActive && !isViewingRecentFiles && "opacity-0 transition-opacity duration-300",
+          (!visiblyActive || isViewingRecentFiles) && "opacity-0 transition-opacity duration-300",
           (!visiblyActive || isViewingRecentFiles) && !comingSoon && "group-hover:opacity-100"
         )}
       />
