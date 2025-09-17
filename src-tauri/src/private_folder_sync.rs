@@ -69,7 +69,7 @@ async fn handle_fs_events(
                     bucket_name: bucket_name.clone(),
                 };
                 
-                match insert_bucket_item_if_absent(&pool, &owner, "public", &bucket_item).await {
+                match insert_bucket_item_if_absent(&pool, &owner, "private", &bucket_item).await {
                     Ok(_) => println!("[PrivateFolderSync] Successfully inserted '{}'", file_name),
                     Err(e) => error!("[PrivateFolderSync] Failed to insert '{}': {}", file_name, e),
                 }
