@@ -6,7 +6,7 @@ import {
   uploadToIpfsAndSubmitToBlockcahinRequestStateAtom,
   uploadFileCIDsToIpfsAtom,
   uploadProgressAtom,
-  insufficientCreditsDialogOpenAtom
+  insufficientCreditsDialogOpenAtom,
 } from "@/components/page-sections/files/ipfs/atoms/query-atoms";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
@@ -16,9 +16,10 @@ import { generateId } from "@/lib/utils/generateId";
 import { File } from "lucide-react";
 import { Icons, CardButton } from "@/components/ui";
 import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
-import { save } from '@tauri-apps/plugin-dialog';
-import { writeTextFile } from '@tauri-apps/plugin-fs';
-import { downloadDir } from '@tauri-apps/api/path';
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { downloadDir } from "@tauri-apps/api/path";
+import { triggerUnpinnedFilesRefetchAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 type Entry = {
   id: string;
@@ -30,15 +31,12 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
   const [ipfsFilesToAdd, setIpfsFilesToAdd] = useState<Entry[]>([]);
   const [processedFiles, setProcessedFiles] = useState<Set<string>>(new Set());
   const [files, setFiles] = useState<File[] | null>(null);
-  const {
-    refetch: getUserCredits,
-  } = useUserCredits();
+  const { refetch: getUserCredits } = useUserCredits();
 
   const { refetch: refetchUserFiles } = useUserIpfsFiles();
   const { mutateAsync: submitFiles, isPending: submittingFiles } = useAtomValue(
     submitFilesToBlockchainAtom
   );
-
 
   const { mutateAsync: uploadFileCids, isPending: uploadingFiles } =
     useAtomValue(uploadFileCIDsToIpfsAtom);
@@ -46,9 +44,13 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
   const setRquestState = useSetAtom(
     uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
   );
-
+  const setTriggerUnpinnedFilesRefetch = useSetAtom(
+    triggerUnpinnedFilesRefetchAtom
+  );
   const setUploadProgress = useSetAtom(uploadProgressAtom);
-  const setInsufficientCreditsDialogOpen = useSetAtom(insufficientCreditsDialogOpenAtom);
+  const setInsufficientCreditsDialogOpen = useSetAtom(
+    insufficientCreditsDialogOpenAtom
+  );
 
   const { api, isConnected } = usePolkadotApi();
 
@@ -67,7 +69,10 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
 
     // Filter out already processed files
     const newFiles = Array.from(files).filter(
-      (file) => !processedFiles.has(file.name + "-" + file.size + "-" + file.lastModified)
+      (file) =>
+        !processedFiles.has(
+          file.name + "-" + file.size + "-" + file.lastModified
+        )
     );
 
     if (newFiles.length === 0) {
@@ -91,7 +96,9 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
           setIpfsFilesToAdd((prevEntries) => [...prevEntries, ...newEntries]);
           setProcessedFiles(newProcessedFileIds);
 
-          toast.success(`Added ${totalValidEntries} entries from ${filesProcessed} new files`);
+          toast.success(
+            `Added ${totalValidEntries} entries from ${filesProcessed} new files`
+          );
 
           if (totalInvalidEntries > 0) {
             toast.warning(`Skipped ${totalInvalidEntries} invalid entries`);
@@ -108,7 +115,9 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
       const fileId = file.name + "-" + file.size + "-" + file.lastModified;
 
       if (!file.name.toLowerCase().endsWith(".csv")) {
-        toast.error(`Invalid file format: ${file.name}. Only CSV files are supported.`);
+        toast.error(
+          `Invalid file format: ${file.name}. Only CSV files are supported.`
+        );
         processNextFile(index + 1);
         return;
       }
@@ -128,7 +137,9 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
           // Parse CSV content
           const content = event.target.result;
           // Handle different line endings (CRLF, LF)
-          const lines = content.split(/\r?\n/).filter((line) => line.trim() !== "");
+          const lines = content
+            .split(/\r?\n/)
+            .filter((line) => line.trim() !== "");
 
           if (lines.length === 0) {
             toast.warning(`CSV file is empty: ${file.name}`);
@@ -138,7 +149,8 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
 
           // Check if the first line is a header
           const firstLine = lines[0].toLowerCase();
-          const hasHeader = firstLine.includes("name") && firstLine.includes("cid");
+          const hasHeader =
+            firstLine.includes("name") && firstLine.includes("cid");
           const startIndex = hasHeader ? 1 : 0;
 
           // Track successful and failed entries
@@ -159,7 +171,9 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
               while ((match = regex.exec(line)) !== null) {
                 let value = match[1];
                 if (value.startsWith('"') && value.endsWith('"')) {
-                  value = value.substring(1, value.length - 1).replace(/""/g, '"');
+                  value = value
+                    .substring(1, value.length - 1)
+                    .replace(/""/g, '"');
                 }
                 parts.push(value);
               }
@@ -209,7 +223,6 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
 
           // Process next file
           processNextFile(index + 1);
-
         } catch (error) {
           console.error(`Error parsing CSV file ${file.name}:`, error);
           toast.error(`Failed to parse CSV file: ${file.name}`);
@@ -279,11 +292,14 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
         setUploadProgress(0);
 
         refetchUserFiles();
-
+        setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
       })
       .catch((error) => {
         setRquestState("idle");
-        if (error instanceof Error && error.message.includes("Insufficient Credits")) {
+        if (
+          error instanceof Error &&
+          error.message.includes("Insufficient Credits")
+        ) {
           setInsufficientCreditsDialogOpen(true);
         } else if (error instanceof Error) {
           toast.error(error.message);
@@ -302,14 +318,16 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
 
       const downloadsPath = await downloadDir();
 
-      const suggestedName = 'ipfs-csv-template.csv';
+      const suggestedName = "ipfs-csv-template.csv";
 
       const savePath = await save({
         defaultPath: `${downloadsPath}/${suggestedName}`,
-        filters: [{
-          name: 'CSV Files',
-          extensions: ['csv']
-        }]
+        filters: [
+          {
+            name: "CSV Files",
+            extensions: ["csv"],
+          },
+        ],
       });
 
       if (!savePath) {
@@ -319,10 +337,14 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
       await writeTextFile(savePath, csvContent);
 
       // Show success message
-      toast.success('CSV template downloaded successfully!');
+      toast.success("CSV template downloaded successfully!");
     } catch (error) {
-      console.error('Error downloading CSV template:', error);
-      toast.error(`Failed to download CSV template: ${error instanceof Error ? error.message : String(error)}`);
+      console.error("Error downloading CSV template:", error);
+      toast.error(
+        `Failed to download CSV template: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   };
 
@@ -365,7 +387,9 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
         aria-label="Download CSV template"
       >
         <Icons.DocumentDownload className="size-4" />
-        <div className="text-sm font-semibold text-underline ml-2">Download CSV Template</div>
+        <div className="text-sm font-semibold text-underline ml-2">
+          Download CSV Template
+        </div>
       </div>
 
       <div className="flex flex-col gap-y-2 mt-4">
@@ -376,7 +400,11 @@ const AddCSVFlow: FC<{ reset: () => void }> = ({ reset }) => {
         >
           Submit
         </CardButton>
-        <CardButton className="w-full" variant="secondary" onClick={handleReset}>
+        <CardButton
+          className="w-full"
+          variant="secondary"
+          onClick={handleReset}
+        >
           Cancel
         </CardButton>
       </div>

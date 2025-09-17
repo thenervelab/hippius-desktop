@@ -7,7 +7,8 @@ import { useSetAtom } from "jotai";
 import { uploadProgressAtom } from "@/app/components/page-sections/files/ipfs/atoms/query-atoms";
 import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
-import { basename } from '@tauri-apps/api/path';
+import { basename } from "@tauri-apps/api/path";
+import { triggerUnpinnedFilesRefetchAtom } from "../../global-atoms/unpinAtoms";
 
 export type UploadFilesHandlers = {
   onSuccess?: () => void;
@@ -35,6 +36,9 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   const setProgress = useSetAtom(uploadProgressAtom);
   const { data: credits } = useUserCredits();
   const { refetch: refetchUserFiles } = useUserIpfsFiles();
+  const setTriggerUnpinnedFilesRefetch = useSetAtom(
+    triggerUnpinnedFilesRefetchAtom
+  );
   const { mnemonic, polkadotAddress } = useWalletAuth();
 
   const [requestState, setRequestState] = useState<
@@ -56,17 +60,22 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   ) {
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
-    const fileNames = await Promise.all(filePaths.map(async path => {
-      const name = await basename(path);
-      return name;
-    }));
+    const fileNames = await Promise.all(
+      filePaths.map(async (path) => {
+        const name = await basename(path);
+        return name;
+      })
+    );
 
-    const firstFileName = fileNames[0] ? formatDisplayName(fileNames[0]) : "file";
+    const firstFileName = fileNames[0]
+      ? formatDisplayName(fileNames[0])
+      : "file";
 
     const msgs = options?.messages;
     const startText =
       filePaths.length > 1
-        ? msgs?.startMultiple?.(filePaths.length) ?? `Uploading ${filePaths.length} files: 0%`
+        ? msgs?.startMultiple?.(filePaths.length) ??
+          `Uploading ${filePaths.length} files: 0%`
         : msgs?.startSingle ?? `Uploading ${firstFileName}: 0%`;
 
     // If a toastId is given, update that toast; otherwise create a new one
@@ -93,7 +102,9 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       // upload each file via Tauri using file paths
       for (let i = 0; i < filePaths.length; i++) {
         const filePath = filePaths[i];
-        const fileName = fileNames[i] ? formatDisplayName(fileNames[i]) : `file ${i + 1}`;
+        const fileName = fileNames[i]
+          ? formatDisplayName(fileNames[i])
+          : `file ${i + 1}`;
 
         let cid;
         console.log("Uploading file:", filePath);
@@ -101,13 +112,13 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           cid = await invoke<string>("encrypt_and_upload_file", {
             accountId: polkadotAddress,
             filePath: filePath,
-            seedPhrase: mnemonic
+            seedPhrase: mnemonic,
           });
         } else {
           cid = await invoke<string>("upload_file_public", {
             accountId: polkadotAddress,
             filePath: filePath,
-            seedPhrase: mnemonic
+            seedPhrase: mnemonic,
           });
         }
         cids.push(cid);
@@ -118,8 +129,10 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
         const uploadingText =
           filePaths.length > 1
-            ? msgs?.uploadingMultiple?.(filePaths.length, percent) ?? `Uploading ${filePaths.length} files: ${percent}%`
-            : msgs?.uploadingSingle?.(percent) ?? `Uploading ${fileName}: ${percent}%`;
+            ? msgs?.uploadingMultiple?.(filePaths.length, percent) ??
+              `Uploading ${filePaths.length} files: ${percent}%`
+            : msgs?.uploadingSingle?.(percent) ??
+              `Uploading ${fileName}: ${percent}%`;
 
         // Always update the same toast id
         toast.loading(uploadingText, { id: localToastId });
@@ -129,11 +142,13 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       setRequestState("idle");
       idleTimeout.current = setTimeout(async () => {
         refetchUserFiles();
+        setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
         onSuccess?.();
 
         const successText =
           filePaths.length > 1
-            ? msgs?.successMultiple?.(filePaths.length) ?? `${filePaths.length} files successfully uploaded!`
+            ? msgs?.successMultiple?.(filePaths.length) ??
+              `${filePaths.length} files successfully uploaded!`
             : msgs?.successSingle ?? `${firstFileName} successfully uploaded!`;
 
         // Convert loading -> success on the same toast id (auto-closes)
@@ -142,15 +157,17 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
         // Clean up temporary files
         for (const filePath of filePaths) {
-          if (filePath.includes('/tmp/')) {
+          if (filePath.includes("/tmp/")) {
             try {
               await invoke("delete_file", { path: filePath });
             } catch (error) {
-              console.error(`Failed to delete temporary file ${filePath}:`, error);
+              console.error(
+                `Failed to delete temporary file ${filePath}:`,
+                error
+              );
             }
           }
         }
-
       }, 500);
     } catch (err) {
       setRequestState("idle");
@@ -159,7 +176,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       const errorText =
         filePaths.length > 1
-          ? msgs?.errorMultiple?.(filePaths.length) ?? `${filePaths.length} files failed to upload!`
+          ? msgs?.errorMultiple?.(filePaths.length) ??
+            `${filePaths.length} files failed to upload!`
           : msgs?.errorSingle ?? `${firstFileName} failed to upload!`;
 
       // Convert loading -> error on the same toast id

@@ -9,13 +9,14 @@ import {
   uploadToIpfsAndSubmitToBlockcahinRequestStateAtom,
   uploadFileCIDsToIpfsAtom,
   uploadProgressAtom,
-  insufficientCreditsDialogOpenAtom
+  insufficientCreditsDialogOpenAtom,
 } from "@/components/page-sections/files/ipfs/atoms/query-atoms";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { generateId } from "@/lib/utils/generateId";
 import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
+import { triggerUnpinnedFilesRefetchAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 type Entry = {
   id: string;
@@ -29,11 +30,8 @@ const AddCidFlow: FC<{
   const [ipfsFilesToAdd, setIpfsFilesToAdd] = useState<Entry[]>([
     { id: generateId(), cid: "", name: "" },
   ]);
-  const {
-    refetch: getUserCredits,
-  } = useUserCredits();
+  const { refetch: getUserCredits } = useUserCredits();
   const { refetch: refetchUserFiles } = useUserIpfsFiles();
-
 
   const { mutateAsync: submitFiles } = useAtomValue(
     submitFilesToBlockchainAtom
@@ -46,9 +44,14 @@ const AddCidFlow: FC<{
   const setRquestState = useSetAtom(
     uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
   );
+  const setTriggerUnpinnedFilesRefetch = useSetAtom(
+    triggerUnpinnedFilesRefetchAtom
+  );
 
   const setUploadProgress = useSetAtom(uploadProgressAtom);
-  const setInsufficientCreditsDialogOpen = useSetAtom(insufficientCreditsDialogOpenAtom);
+  const setInsufficientCreditsDialogOpen = useSetAtom(
+    insufficientCreditsDialogOpenAtom
+  );
 
   const { api, isConnected } = usePolkadotApi();
 
@@ -133,14 +136,23 @@ const AddCidFlow: FC<{
       })
       .then(() => {
         setRquestState("idle");
-        toast.success(validEntries ? `${validEntries.length} CID${validEntries.length > 1 ? "s" : ""} submitted successfully!` : "CIDs submitted successfully!");
+        toast.success(
+          validEntries
+            ? `${validEntries.length} CID${
+                validEntries.length > 1 ? "s" : ""
+              } submitted successfully!`
+            : "CIDs submitted successfully!"
+        );
         setUploadProgress(0);
         refetchUserFiles();
-
+        setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
       })
       .catch((error) => {
         setRquestState("idle");
-        if (error instanceof Error && error.message.includes("Insufficient Credits")) {
+        if (
+          error instanceof Error &&
+          error.message.includes("Insufficient Credits")
+        ) {
           setInsufficientCreditsDialogOpen(true);
         } else if (error instanceof Error) {
           toast.error(error.message);
@@ -217,11 +229,17 @@ const AddCidFlow: FC<{
         <CardButton
           className="w-full"
           onClick={handleSubmit}
-          disabled={ipfsFilesToAdd.some((entry) => entry.cid === "" || entry.name === "")}
+          disabled={ipfsFilesToAdd.some(
+            (entry) => entry.cid === "" || entry.name === ""
+          )}
         >
           Submit
         </CardButton>
-        <CardButton className="w-full" variant="secondary" onClick={handleCancel}>
+        <CardButton
+          className="w-full"
+          variant="secondary"
+          onClick={handleCancel}
+        >
           Cancel
         </CardButton>
       </div>
