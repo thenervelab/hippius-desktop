@@ -30,16 +30,26 @@ export type FileDetail = {
 interface FileDetailsDialogProps {
   open: boolean;
   unpinnedFiles: FileDetail[];
+  onExpandedChange?: (expanded: boolean) => void;
+  syncDialogOpen?: boolean;
+  syncDialogExpanded?: boolean;
+  syncDialogRef?: React.RefObject<HTMLElement | null>;
 }
 
 type EpochProgress = {
   percentage: number;
   timeRemaining: { hours: number; minutes: number; total: number };
 };
+const GAP = 40; // px gap above the sync dialog (tweak to taste)
+const FALLBACK_BOTTOM = 24; // when no sync dialog is present
 
 const UnpinFilesDialog: React.FC<FileDetailsDialogProps> = ({
   open,
   unpinnedFiles,
+  onExpandedChange,
+  syncDialogOpen = false,
+  syncDialogExpanded = false,
+  syncDialogRef,
 }) => {
   const dialogContentRef = useRef<HTMLDivElement>(null);
   const fileListRef = useRef<HTMLDivElement>(null);
@@ -202,10 +212,44 @@ const UnpinFilesDialog: React.FC<FileDetailsDialogProps> = ({
   }, []);
 
   const toggleExpanded = useCallback(() => {
-    setIsExpanded((v) => !v);
-  }, []);
+    setIsExpanded((v) => {
+      const newValue = !v;
+      onExpandedChange?.(newValue);
+      return newValue;
+    });
+  }, [onExpandedChange]);
 
   if (!unpinnedFiles?.length) return null;
+
+  const [bottomPx, setBottomPx] = useState<number>(FALLBACK_BOTTOM);
+
+  // Recompute bottom whenever the sync dialog height changes
+  useEffect(() => {
+    const el = syncDialogRef?.current as HTMLElement | null;
+
+    const compute = () => {
+      const h = el?.offsetHeight ?? 0;
+      // If sync dialog is visible and has height, position above it; else fallback
+      setBottomPx(h > 0 ? h + GAP : FALLBACK_BOTTOM);
+    };
+
+    compute();
+
+    if (!el) return;
+
+    // Watch for expand/collapse and content changes
+    const ro = new ResizeObserver(() => compute());
+    ro.observe(el);
+
+    // Also respond to window resizes
+    const onWin = () => compute();
+    window.addEventListener("resize", onWin);
+
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", onWin);
+    };
+  }, [syncDialogRef, syncDialogOpen, syncDialogExpanded]);
 
   // find max remaining - this will be the same for all files now
   const { hours: maxH, minutes: maxM } =
@@ -229,7 +273,9 @@ const UnpinFilesDialog: React.FC<FileDetailsDialogProps> = ({
           ref={dialogContentRef}
           onClick={(e) => e.stopPropagation()}
           className={cn(
-            "fixed right-4 sm:right-12 bottom-20 sm:bottom-7 z-[2] outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
+            "fixed z-[2] outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
+            "right-4 sm:right-12",
+            bottomPx ? `bottom-${bottomPx}` : `bottom-${FALLBACK_BOTTOM}`,
             isExpanded ? "w-[378px]" : "w-16 sm:w-[220px]"
           )}
         >
