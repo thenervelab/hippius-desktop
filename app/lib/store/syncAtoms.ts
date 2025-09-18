@@ -19,6 +19,3 @@ export const syncStatusAtom = atom<{
   in_progress: boolean;
   percent: number;
 } | null>(null);
-
-// Atom to trigger sync activity refetch
-export const triggerSyncActivityRefetchAtom = atom<number>(0);

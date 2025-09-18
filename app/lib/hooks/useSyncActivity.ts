@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
+// import { toast } from "sonner";
 
 // Sync Activity types based on useTraySync.ts
 export type SyncActivityItem = {
@@ -173,6 +174,13 @@ const useSyncActivity = () => {
           return [];
         }
 
+        // toast.success(`Files: ${JSON.stringify(response)}`, {
+        //   action: {
+        //     label: "Copy",
+        //     onClick: () =>
+        //       navigator.clipboard.writeText(JSON.stringify(response, null, 2)),
+        //   },
+        // });
         // Track processed files with a Map using fileHash as key to avoid duplicates
         const processedFiles = new Map<string, SyncActivityItem>();
 

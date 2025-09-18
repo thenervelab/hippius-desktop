@@ -5,27 +5,17 @@ import { useAtom, useAtomValue } from "jotai";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import useSyncActivity from "../lib/hooks/useSyncActivity";
-import {
-  syncPercentAtom,
-  syncStatusAtom,
-  triggerSyncActivityRefetchAtom,
-} from "../lib/store/syncAtoms";
-// import { toast } from "sonner";
+import { syncPercentAtom, syncStatusAtom } from "../lib/store/syncAtoms";
+import { toast } from "sonner";
 
 const SyncStatusHandler: React.FC = () => {
   const { data: syncFiles, isLoading, refetch } = useSyncActivity();
   const [isSyncOpen, setIsSyncOpen] = useState(false);
-  const [triggerCount] = useAtom(triggerSyncActivityRefetchAtom);
   // Get sync status from atoms
   const syncPercent = useAtomValue(syncPercentAtom);
   const syncStatus = useAtomValue(syncStatusAtom);
   // toast.success(`Files: ${JSON.stringify(syncFiles)}`);
   // Listen for refetch triggers from other components
-  useEffect(() => {
-    if (triggerCount > 0) {
-      refetch();
-    }
-  }, [triggerCount, refetch]);
 
   // Update dialog state based on sync activity and status
   useEffect(() => {
@@ -38,11 +28,12 @@ const SyncStatusHandler: React.FC = () => {
 
     // Show dialog if there's active sync or uploading files
     if (hasActiveSync || hasSyncFiles || hasUploadingFiles) {
+      refetch();
       setIsSyncOpen(true);
     } else {
       setIsSyncOpen(false);
     }
-  }, [syncFiles, syncPercent, syncStatus]);
+  }, [syncFiles, syncPercent, syncStatus, refetch]);
 
   // Don't render anything if there are no sync files and no active sync
   if (!syncFiles || (syncFiles.length === 0 && !syncStatus?.in_progress)) {

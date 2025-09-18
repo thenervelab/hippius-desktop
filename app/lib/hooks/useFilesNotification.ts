@@ -8,6 +8,7 @@ import {
   refreshEnabledTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { syncPercentAtom, syncStatusAtom } from "@/app/lib/store/syncAtoms";
+// import { toast } from "sonner";
 
 // Define interface for sync status response
 interface SyncStatusResponse {
@@ -50,11 +51,13 @@ export function useFilesNotification() {
         const now = Date.now();
         const timeSinceLastUpdate = now - lastUpdateTime.current;
 
-        // Log every 5 seconds or when status changes
-        if (timeSinceLastUpdate > 5000 ||
+        // Log every 3 seconds or when status changes
+        if (
+          timeSinceLastUpdate > 3000 ||
           !syncStatus ||
           status.in_progress !== syncStatus.in_progress ||
-          status.percent !== syncStatus.percent) {
+          status.percent !== syncStatus.percent
+        ) {
           // console.log("[Sync Status]", status, "Time since last log:", timeSinceLastUpdate);
           lastUpdateTime.current = now;
         }
@@ -79,7 +82,8 @@ export function useFilesNotification() {
         }
 
         // Check if sync has completed - with additional time-based check
-        const syncCompleted = wasInProgress.current &&
+        const syncCompleted =
+          wasInProgress.current &&
           !status.in_progress &&
           status.percent === 100;
 
@@ -88,7 +92,7 @@ export function useFilesNotification() {
           // Only send notification if we haven't sent one in the last 5 seconds
           const shouldSendNotification =
             lastSyncCompleteTime.current === null ||
-            (now - lastSyncCompleteTime.current) > 5000;
+            now - lastSyncCompleteTime.current > 5000;
 
           if (shouldSendNotification) {
             // Add notification for completed sync
