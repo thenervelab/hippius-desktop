@@ -10,7 +10,7 @@ import {
   syncStatusAtom,
   triggerSyncActivityRefetchAtom,
 } from "../lib/store/syncAtoms";
-import { toast } from "sonner";
+// import { toast } from "sonner";
 
 const SyncStatusHandler: React.FC = () => {
   const { data: syncFiles, isLoading, refetch } = useSyncActivity();
@@ -26,15 +26,6 @@ const SyncStatusHandler: React.FC = () => {
       refetch();
     }
   }, [triggerCount, refetch]);
-
-  // Poll sync files every 3 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      refetch();
-    }, 3000); // 3 seconds
-
-    return () => clearInterval(interval);
-  }, [refetch]);
 
   // Update dialog state based on sync activity and status
   useEffect(() => {
@@ -59,12 +50,10 @@ const SyncStatusHandler: React.FC = () => {
   }
 
   return (
-    <>
-      <SyncStatusDialog
-        open={!isLoading && isSyncOpen}
-        syncFiles={syncFiles || []}
-      />
-    </>
+    <SyncStatusDialog
+      open={!isLoading && isSyncOpen}
+      syncFiles={syncFiles || []}
+    />
   );
 };
 
