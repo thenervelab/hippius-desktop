@@ -9,6 +9,7 @@ import { triggerUnpinnedFilesRefetchAtom } from "../lib/global-atoms/unpinAtoms"
 import { syncPercentAtom, syncStatusAtom } from "../lib/store/syncAtoms";
 import useSyncActivity from "../lib/hooks/useSyncActivity";
 import SyncStatusHandler from "./SyncStatusHandler";
+import { createPortal } from "react-dom";
 
 const UnpinnedFilesHandler: React.FC = () => {
   const {
@@ -17,16 +18,7 @@ const UnpinnedFilesHandler: React.FC = () => {
     refetch,
   } = useUnpinnedStorageRequests();
   const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
-  const [isUnpinnedExpanded, setIsUnpinnedExpanded] = useState(false);
   const [triggerCount] = useAtom(triggerUnpinnedFilesRefetchAtom);
-  const syncDialogRef = useRef<HTMLDivElement | null>(null);
-  // Get sync state for positioning
-
-  const { data: syncFiles } = useSyncActivity();
-  const syncPercent = useAtomValue(syncPercentAtom);
-  const syncStatus = useAtomValue(syncStatusAtom);
-  const [isSyncOpen, setIsSyncOpen] = useState(false);
-  const [isSyncExpanded, setIsSyncExpanded] = useState(false);
 
   // Listen for refetch triggers from other components
   useEffect(() => {
@@ -35,47 +27,34 @@ const UnpinnedFilesHandler: React.FC = () => {
     }
   }, [triggerCount, refetch]);
 
-  // Calculate sync dialog state
-  useEffect(() => {
-    const hasActiveSync =
-      syncStatus?.in_progress || (syncPercent !== null && syncPercent < 100);
-    const hasSyncFiles = syncFiles && syncFiles.length > 0;
-    const hasUploadingFiles = syncFiles?.some(
-      (file) => file.status === "uploading"
-    );
-
-    setIsSyncOpen(Boolean(hasActiveSync || hasSyncFiles || hasUploadingFiles));
-  }, [syncFiles, syncPercent, syncStatus]);
-
   // Update dialog state based on unpinned files
   useEffect(() => {
     if (unpinnedFiles && unpinnedFiles.length > 0) {
       setIsUnpinnedOpen(true);
     } else {
       setIsUnpinnedOpen(false);
-      setIsUnpinnedExpanded(false);
     }
   }, [unpinnedFiles]);
 
   return (
     <>
-      {/* Render unpinned files dialog */}
-      {unpinnedFiles && unpinnedFiles.length > 0 && (
-        <UnpinFilesDialog
-          open={!isLoading && isUnpinnedOpen}
-          unpinnedFiles={unpinnedFiles as FileDetail[]}
-          onExpandedChange={setIsUnpinnedExpanded}
-          syncDialogOpen={isSyncOpen}
-          syncDialogExpanded={isSyncExpanded}
-          syncDialogRef={syncDialogRef}
-        />
-      )}
+      {createPortal(
+        <div className="fixed z-[999999] right-4 sm:right-12 bottom-20 sm:bottom-7 pointer-events-none">
+          {/* Render unpinned files dialog */}
+          <div className="flex flex-col gap-4 items-end pointer-events-auto">
+            {unpinnedFiles && unpinnedFiles.length > 0 && (
+              <UnpinFilesDialog
+                open={!isLoading && isUnpinnedOpen}
+                unpinnedFiles={unpinnedFiles as FileDetail[]}
+              />
+            )}
 
-      {/* Render sync status dialog with unpinned dialog state */}
-      <SyncStatusHandler
-        ref={syncDialogRef}
-        onSyncExpandedChange={setIsSyncExpanded}
-      />
+            {/* Render sync status dialog with unpinned dialog state */}
+            <SyncStatusHandler />
+          </div>
+        </div>,
+        document.body
+      )}
     </>
   );
 };
