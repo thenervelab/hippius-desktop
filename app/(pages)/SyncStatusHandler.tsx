@@ -27,6 +27,15 @@ const SyncStatusHandler: React.FC = () => {
     }
   }, [triggerCount, refetch]);
 
+  // Poll sync files every 3 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refetch();
+    }, 3000); // 3 seconds
+
+    return () => clearInterval(interval);
+  }, [refetch]);
+
   // Update dialog state based on sync activity and status
   useEffect(() => {
     const hasActiveSync =
@@ -50,10 +59,12 @@ const SyncStatusHandler: React.FC = () => {
   }
 
   return (
-    <SyncStatusDialog
-      open={!isLoading && isSyncOpen}
-      syncFiles={syncFiles || []}
-    />
+    <>
+      <SyncStatusDialog
+        open={!isLoading && isSyncOpen}
+        syncFiles={syncFiles || []}
+      />
+    </>
   );
 };
 
