@@ -41,7 +41,7 @@ export type UserIpfsResponse = {
   length: number;
 };
 
-type UserProfileFile = {
+export type UserProfileFile = {
   fileName: string;
   fileSizeInBytes: number;
   lastChargedAt: number;
@@ -57,7 +57,7 @@ type UserProfileFile = {
   mainReqHash: string;
 };
 
-interface FileSizeBreakdown {
+export interface FileSizeBreakdown {
   publicSize: number;
   privateSize: number;
 }
@@ -109,7 +109,7 @@ export const useUserIpfsFiles = () => {
           const sizeBreakdown = await invoke<FileSizeBreakdown>(
             "get_user_total_file_size",
             {
-              owner: polkadotAddress
+              owner: polkadotAddress,
             }
           );
 
@@ -126,7 +126,7 @@ export const useUserIpfsFiles = () => {
         const dbFiles = await invoke<UserProfileFile[]>(
           "get_user_synced_files",
           {
-            owner: polkadotAddress
+            owner: polkadotAddress,
           }
         );
 
@@ -134,20 +134,31 @@ export const useUserIpfsFiles = () => {
 
         // Format the data to match what the UI expects
         const formattedFiles = dbFiles.map(
-          (file): FormattedUserIpfsFile & { isErasureCoded: boolean; createdAt: number } => {
-            const isErasureCodedFolder = file.fileName.endsWith(".folder.ec_metadata");
-            const isErasureCoded = !isErasureCodedFolder && file.fileName.endsWith(".ec_metadata");
-            const isFolder = !isErasureCodedFolder && file.fileName.endsWith(".folder");
+          (
+            file
+          ): FormattedUserIpfsFile & {
+            isErasureCoded: boolean;
+            createdAt: number;
+          } => {
+            const isErasureCodedFolder = file.fileName.endsWith(
+              ".folder.ec_metadata"
+            );
+            const isErasureCoded =
+              !isErasureCodedFolder && file.fileName.endsWith(".ec_metadata");
+            const isFolder =
+              !isErasureCodedFolder && file.fileName.endsWith(".folder");
 
             let displayName = file.fileName;
             if (isErasureCodedFolder) {
-              displayName = file.fileName.slice(0, -".folder.ec_metadata".length);
+              displayName = file.fileName.slice(
+                0,
+                -".folder.ec_metadata".length
+              );
             } else if (isErasureCoded) {
               displayName = file.fileName.slice(0, -".ec_metadata".length);
             } else if (isFolder) {
               displayName = file.fileName.slice(0, -".folder".length);
             }
-
 
             return {
               name: displayName || "Unnamed File",
@@ -174,7 +185,7 @@ export const useUserIpfsFiles = () => {
         return {
           files: formattedFiles,
           publicStorageSize,
-          privateStorageSize
+          privateStorageSize,
         };
       } catch (error) {
         console.error("Error fetching user files from DB:", error);
@@ -188,9 +199,9 @@ export const useUserIpfsFiles = () => {
     select: (data) => {
       return {
         ...data,
-        length: data.files.length
+        length: data.files.length,
       };
-    }
+    },
   });
 };
 

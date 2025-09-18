@@ -9,8 +9,9 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
-// import { HIPPIUS_EXPLORER_CONFIG } from "@/app/lib/config";
-// import { useNodeLocations } from "@/app/lib/hooks/api/useNodeLocations";
+import { HIPPIUS_EXPLORER_CONFIG } from "@/app/lib/config";
+import { useNodeLocations } from "@/app/lib/hooks/api/useNodeLocations";
+import { useFileNodes } from "@/app/lib/hooks/api/useFileNodes";
 import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
 
 interface DetailRowProps {
@@ -34,40 +35,40 @@ const DetailRow: React.FC<DetailRowProps> = ({
   </div>
 );
 
-// interface FileLocationItemProps {
-//   location: string;
-//   lastChild?: boolean;
-// }
+interface FileLocationItemProps {
+  location: string;
+  lastChild?: boolean;
+}
 
-// const FileLocationItem: React.FC<FileLocationItemProps> = ({
-//   location,
-//   lastChild
-// }) => (
-//   <div className="inline-flex items-center text-base text-grey-20">
-//     {location}
-//     {!lastChild && (
-//       <span className="mx-2 h-1 w-1 bg-grey-80 rounded-full"></span>
-//     )}
-//   </div>
-// );
+const FileLocationItem: React.FC<FileLocationItemProps> = ({
+  location,
+  lastChild
+}) => (
+  <div className="inline-flex items-center text-base text-grey-20">
+    {location}
+    {!lastChild && (
+      <span className="mx-2 h-1 w-1 bg-grey-80 rounded-full"></span>
+    )}
+  </div>
+);
 
-// interface NodeItemProps {
-//   nodeId: string;
-// }
+interface NodeItemProps {
+  nodeId: string;
+}
 
-// const NodeItem: React.FC<NodeItemProps> = ({ nodeId }) => (
-//   <div className="inline-flex items-center gap-1 hover:bg-grey-90 border border-grey-80 rounded px-2 py-1 text-xs text-grey-10 mr-2 mb-2">
-//     <TableModule.CopyableCell
-//       title="Copy Node ID"
-//       toastMessage="Node ID Copied Successfully!"
-//       copyAbleText={nodeId}
-//       link={`${HIPPIUS_EXPLORER_CONFIG.baseUrl}/nodes/${nodeId}`}
-//       linkClass="group-hover:underline group-hover:text-primary-50 hover:underline"
-//       forSmallScreen
-//       className="max-sm:[200px] max-w-[400px] h-full"
-//     />
-//   </div>
-// );
+const NodeItem: React.FC<NodeItemProps> = ({ nodeId }) => (
+  <div className="inline-flex items-center gap-1 hover:bg-grey-90 border border-grey-80 rounded px-2 py-1 text-xs text-grey-10 mr-2 mb-2">
+    <TableModule.CopyableCell
+      title="Copy Node ID"
+      toastMessage="Node ID Copied Successfully!"
+      copyAbleText={nodeId}
+      link={`${HIPPIUS_EXPLORER_CONFIG.baseUrl}/nodes/${nodeId}`}
+      linkClass="group-hover:underline group-hover:text-primary-50 hover:underline"
+      forSmallScreen
+      className="max-sm:[200px] max-w-[400px] h-full"
+    />
+  </div>
+);
 
 interface FileDetailsDialogContentProps {
   file?: FormattedUserIpfsFile;
@@ -78,43 +79,62 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
 }) => {
   const isPrivateView = useIsPrivateView();
 
-  // const minerIds = file
-  //   ? Array.isArray(file.minerIds)
-  //     ? file.minerIds
-  //     : typeof file.minerIds === "string"
-  //       ? [file.minerIds]
-  //       : []
-  //   : [];
+  // Get CID for API calls
+  const decodedCid = file ? decodeHexCid(file.cid) : null;
+  const isCidValid = decodedCid && decodedCid !== "pending";
 
-  // const { uniqueLocations, isLoading } = useNodeLocations(minerIds);
+  // Fetch nodes for the file CID
+  const { data: nodesData, isLoading: isNodesLoading, error: nodesError } = useFileNodes(isCidValid ? decodedCid : null);
+
+  // Extract node IDs from the response
+  const minerIds = nodesData?.nodes || [];
+
+  // Fetch locations for the nodes
+  const { uniqueLocations, isLoading: isLocationsLoading } = useNodeLocations(minerIds);
 
   if (!file) return null;
 
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
-  const decodedCid = decodeHexCid(file.cid);
+  // decodedCid is already defined above
   const { icon: Icon, color } = getFileIcon(
     fileType ?? undefined,
     !!file.isFolder
   );
 
   // Format file size
-  const fileSize = !file.isAssigned
-    ? "Unknown"
-    : file.size
-      ? formatBytesFromBigInt(BigInt(file.size))
-      : "Unknown";
+  const fileSize = file.size
+    ? formatBytesFromBigInt(BigInt(file.size))
+    : "Unknown";
 
-  // const fallbackLocations = ["Loading locations..."];
+  // Determine what to show for locations
+  const getLocationsDisplay = () => {
+    if (!isCidValid) {
+      return ["No CID available"];
+    }
+    if (isNodesLoading || isLocationsLoading) {
+      return ["Loading locations..."];
+    }
+    if (nodesError) {
+      return ["Failed to load node data"];
+    }
+    if (minerIds.length === 0) {
+      return ["No nodes available"];
+    }
+    if (uniqueLocations.length === 0) {
+      return ["No location data available"];
+    }
+    return uniqueLocations;
+  };
 
-  // const locationsToShow = isLoading
-  //   ? fallbackLocations
-  //   : uniqueLocations.length > 0
-  //     ? uniqueLocations
-  //     : ["Location data unavailable"];
+  const locationsToShow = getLocationsDisplay();
 
   const handleViewOnExplorer = async () => {
     try {
+      if (!decodedCid) {
+        console.error("No CID available");
+        return;
+      }
       await openUrl(`http://hipstats.com/cid-tracker/${decodedCid}`);
     } catch (error) {
       console.error("Failed to open Explorer:", error);
@@ -157,23 +177,27 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
         </DetailRow>
 
         <DetailRow label="CID">
-          <TableModule.CopyableCell
-            title="Copy CID"
-            toastMessage="CID Copied Successfully!"
-            copyAbleText={decodedCid}
-            isTable={true}
-            className="max-sm:[200px] max-w-[400px] h-full"
-          />
-          <div
-            className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
-            onClick={handleViewOnExplorer}
-          >
-            View CID Tracker
-            <Icons.SendSquare2 className="size-5 text-primary-50" />
-          </div>
+          {isCidValid ? (
+            <>
+              <TableModule.CopyableCell
+                title="Copy CID"
+                toastMessage="CID Copied Successfully!"
+                copyAbleText={decodedCid || ""}
+                isTable={true}
+                className="max-sm:[200px] max-w-[400px] h-full"
+              />
+              <div
+                className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
+                onClick={handleViewOnExplorer}
+              >
+                View CID Tracker
+                <Icons.SendSquare2 className="size-5 text-primary-50" />
+              </div>
+            </>
+          ) : (
+            <span className="text-grey-50">No CID available</span>
+          )}
         </DetailRow>
-
-        {/* <DetailRow label="Block">{file.lastChargedAt}</DetailRow>
 
         <DetailRow label="File Location">
           <div className="flex flex-wrap">
@@ -185,35 +209,45 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
               />
             ))}
           </div>
-          <div
-            className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
-            onClick={handleViewOnExplorer}
-          >
-            View on Explorer
-            <Icons.SendSquare2 className="size-5 text-primary-50" />
-          </div>
+          {isCidValid && (
+            <div
+              className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
+              onClick={handleViewOnExplorer}
+            >
+              View on Explorer
+              <Icons.SendSquare2 className="size-5 text-primary-50" />
+            </div>
+          )}
         </DetailRow>
 
         <DetailRow label="Nodes" lastChild>
           <div className="flex flex-wrap">
-            {minerIds.length > 0 ? (
-              minerIds.map((nodeId, idx) => (
-                <NodeItem key={idx} nodeId={nodeId} />
-              ))
+            {isCidValid ? (
+              minerIds.length > 0 ? (
+                minerIds.map((nodeId, idx) => (
+                  <NodeItem key={idx} nodeId={nodeId} />
+                ))
+              ) : (
+                <span className="text-grey-50">
+                  {isNodesLoading ? "Loading nodes..." : "No nodes available"}
+                </span>
+              )
             ) : (
               <span className="text-grey-50">
-                No node information available
+                No CID available
               </span>
             )}
           </div>
-          <div
-            className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
-            onClick={handleViewOnExplorer}
-          >
-            View on Explorer
-            <Icons.SendSquare2 className="size-5 text-primary-50" />
-          </div>
-        </DetailRow> */}
+          {isCidValid && (
+            <div
+              className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
+              onClick={handleViewOnExplorer}
+            >
+              View on Explorer
+              <Icons.SendSquare2 className="size-5 text-primary-50" />
+            </div>
+          )}
+        </DetailRow>
       </div>
     </div>
   );

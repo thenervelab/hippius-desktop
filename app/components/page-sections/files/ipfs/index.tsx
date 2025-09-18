@@ -9,24 +9,26 @@ import {
   getPrivateSyncPath,
   setPrivateSyncPath,
   getPublicSyncPath,
-  setPublicSyncPath
+  setPublicSyncPath,
 } from "@/lib/utils/syncPathUtils";
 import { formatBytesFromBigInt } from "@/lib/utils";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
-import { FileDetail } from "./files-table/UnpinFilesDialog";
 import { FileTypes } from "@/lib/types/fileTypes";
 import {
   filterFiles,
   generateActiveFilters,
-  ActiveFilter
+  ActiveFilter,
 } from "@/lib/utils/fileFilterUtils";
 import { toast } from "sonner";
 import FilesHeader from "./FilesHeader";
 import FilesContent from "./FilesContent";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
-import { getViewModePreference, saveViewModePreference } from "@/lib/utils/userPreferencesDb";
+import {
+  getViewModePreference,
+  saveViewModePreference,
+} from "@/lib/utils/userPreferencesDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { triggerUnpinnedFilesRefetchAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, mnemonic } = useWalletAuth();
@@ -40,7 +42,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     refetch: refetchUserFiles,
     isRefetching,
     isFetching: isRegularFilesFetching,
-    error
+    error,
   } = useUserIpfsFiles();
 
   // Recent files hook
@@ -48,18 +50,23 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     data: recentFilesData,
     isLoading: isRecentFilesLoading,
     isFetching: isRecentFilesFetching,
-    refetch: refetchRecentFiles
+    refetch: refetchRecentFiles,
   } = useRecentFiles();
 
   // Set loading and fetching based on current view
-  const isLoading = isRecentFiles ? isRecentFilesLoading : isRegularFilesLoading;
-  const isFetching = isRecentFiles ? isRecentFilesFetching : isRegularFilesFetching;
+  const isLoading = isRecentFiles
+    ? isRecentFilesLoading
+    : isRegularFilesLoading;
+  const isFetching = isRecentFiles
+    ? isRecentFilesFetching
+    : isRegularFilesFetching;
 
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [shouldResetPagination, setShouldResetPagination] = useState(false);
-  const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState("");
+  const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] =
+    useState("");
   const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState("");
 
   // Loading states for sync paths
@@ -78,20 +85,21 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   // Active filters state
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
 
-  const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
-  const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
-
   // State to track if sync folder is configured
-  const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<boolean | null>(null);
+  const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<
+    boolean | null
+  >(null);
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
-
+  const setTriggerUnpinnedFilesRefetch = useSetAtom(
+    triggerUnpinnedFilesRefetchAtom
+  );
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
     if (isRecentFiles) {
-      console.log("recentFilesData", recentFilesData)
+      console.log("recentFilesData", recentFilesData);
       return recentFilesData || [];
     } else if (regularFilesData?.files) {
-      return regularFilesData.files.filter(file => !file.deleted);
+      return regularFilesData.files.filter((file) => !file.deleted);
     }
     return [];
   }, [isRecentFiles, recentFilesData, regularFilesData?.files]);
@@ -116,44 +124,20 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     return filtered;
   }, [allData, activeSubMenuItem, isRecentFiles]);
 
-  // Extract unpinned file details from data (only for regular files view)
-  const unpinnedFileDetails = useMemo(() => {
-    if (isRecentFiles || !regularFilesData?.files) return [];
-
-    const filteredUnpinnedFiles = regularFilesData.files.filter((file) => !file.isAssigned);
-    return filteredUnpinnedFiles.map((file) => ({
-      filename: file.name || "Unnamed File",
-      cid: decodeHexCid(file.cid),
-      createdAt: file.createdAt,
-      type: file.type?.toLowerCase() || "public"
-    }));
-  }, [regularFilesData?.files, isRecentFiles]);
-
-  // Update unpinned files state when unpinned file details change
-  useEffect(() => {
-    if (unpinnedFileDetails.length > 0) {
-      setUnpinnedFiles(unpinnedFileDetails);
-      setIsUnpinnedOpen(true);
-    } else {
-      setUnpinnedFiles(null);
-      setIsUnpinnedOpen(false);
-    }
-  }, [unpinnedFileDetails]);
-
   // Filter data based on search and filter settings
   const filteredData = useMemo(() => {
     return filterFiles(allFilteredData, {
       searchTerm,
       fileTypes: selectedFileTypes,
       dateFilter: selectedDate,
-      fileSize: selectedFileSize
+      fileSize: selectedFileSize,
     });
   }, [
     allFilteredData,
     searchTerm,
     selectedFileTypes,
     selectedDate,
-    selectedFileSize
+    selectedFileSize,
   ]);
 
   // Update active filters when filter settings change
@@ -219,7 +203,10 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
 
     if (isPrivateView && regularFilesData.privateStorageSize !== undefined) {
       return formatBytesFromBigInt(regularFilesData.privateStorageSize);
-    } else if (!isPrivateView && regularFilesData.publicStorageSize !== undefined) {
+    } else if (
+      !isPrivateView &&
+      regularFilesData.publicStorageSize !== undefined
+    ) {
       return formatBytesFromBigInt(regularFilesData.publicStorageSize);
     } else {
       return "0 B";
@@ -281,7 +268,9 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         setIsCheckingSyncPath(true);
 
         // Wait for both paths to finish loading
-        const isStillLoading = isPrivateView ? isLoadingPrivatePath : isLoadingPublicPath;
+        const isStillLoading = isPrivateView
+          ? isLoadingPrivatePath
+          : isLoadingPublicPath;
         if (isStillLoading) {
           return; // Don't check yet, still loading
         }
@@ -303,7 +292,24 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     };
 
     checkSyncPath();
-  }, [isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath, isRecentFiles, isLoadingPrivatePath, isLoadingPublicPath]);
+  }, [
+    isPrivateView,
+    selectedPrivateFolderPath,
+    selectedPublicFolderPath,
+    isRecentFiles,
+    isLoadingPrivatePath,
+    isLoadingPublicPath,
+  ]);
+
+  const refreshUserFilesWithPinningQueue = useCallback(() => {
+    refetchUserFiles();
+    setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
+  }, [refetchUserFiles, setTriggerUnpinnedFilesRefetch]);
+
+  const refreshRecentFilesWithPinningQueue = useCallback(() => {
+    refetchRecentFiles();
+    setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
+  }, [refetchRecentFiles, setTriggerUnpinnedFilesRefetch]);
 
   // Handle folder selection from SyncFolderSelector
   const handleFolderSelected = useCallback(
@@ -316,14 +322,18 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
 
         if (isPrivateView) {
           if (path === selectedPublicFolderPath) {
-            toast.error("Private sync folder cannot be the same as public sync folder");
+            toast.error(
+              "Private sync folder cannot be the same as public sync folder"
+            );
             return;
           }
           await setPrivateSyncPath(path, polkadotAddress, mnemonic);
           setSelectedPrivateFolderPath(path);
         } else {
           if (path === selectedPrivateFolderPath) {
-            toast.error("Public sync folder cannot be the same as private sync folder");
+            toast.error(
+              "Public sync folder cannot be the same as private sync folder"
+            );
             return;
           }
           await setPublicSyncPath(path, polkadotAddress, mnemonic);
@@ -335,17 +345,25 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         setIsSyncPathConfigured(true);
 
         // Refresh files to get any new files from the configured path
-        refetchUserFiles();
+        refreshUserFilesWithPinningQueue();
         return true;
       } catch (error) {
         console.error("Failed to set sync folder:", error);
         toast.error(
-          `Failed to set sync folder: ${error instanceof Error ? error.message : "Unknown error"
+          `Failed to set sync folder: ${
+            error instanceof Error ? error.message : "Unknown error"
           }`
         );
       }
     },
-    [refetchUserFiles, isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath, polkadotAddress, mnemonic]
+    [
+      refreshUserFilesWithPinningQueue,
+      isPrivateView,
+      selectedPrivateFolderPath,
+      selectedPublicFolderPath,
+      polkadotAddress,
+      mnemonic,
+    ]
   );
 
   // Load data on mount and set up interval refresh
@@ -354,9 +372,8 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       return;
     }
 
-    refetchUserFiles();
-
-  }, [refetchUserFiles, isRecentFiles]);
+    refreshUserFilesWithPinningQueue();
+  }, [refreshUserFilesWithPinningQueue, isRecentFiles]);
 
   // Log error for debugging
   useEffect(() => {
@@ -375,7 +392,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     filteredData.length,
     allFilteredData.length,
     searchTerm,
-    activeFilters.length
+    activeFilters.length,
   ]);
 
   // Handle file drop events
@@ -416,7 +433,9 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   let content;
 
   // Show loading while checking sync path or while loading sync paths
-  const isLoadingSyncPaths = isPrivateView ? isLoadingPrivatePath : isLoadingPublicPath;
+  const isLoadingSyncPaths = isPrivateView
+    ? isLoadingPrivatePath
+    : isLoadingPublicPath;
   const shouldShowLoading = isCheckingSyncPath || isLoadingSyncPaths;
 
   if (shouldShowLoading) {
@@ -437,12 +456,18 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       syncFolderPath = selectedPrivateFolderPath || selectedPublicFolderPath;
     } else {
       // For regular files view, use the path matching the current view
-      syncFolderPath = isPrivateView ? selectedPrivateFolderPath : selectedPublicFolderPath;
+      syncFolderPath = isPrivateView
+        ? selectedPrivateFolderPath
+        : selectedPublicFolderPath;
     }
 
     // Get file counts for view all button
-    const privateFileCount = regularFilesData?.files.filter(f => f.type?.toLowerCase() === "private").length || 0;
-    const publicFileCount = regularFilesData?.files.filter(f => f.type?.toLowerCase() === "public").length || 0;
+    const privateFileCount =
+      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
+        .length || 0;
+    const publicFileCount =
+      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "public")
+        .length || 0;
 
     content = (
       <div className="w-full relative mt-6">
@@ -459,7 +484,11 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           activeFilters={activeFilters}
           handleRemoveFilter={handleRemoveFilter}
           setIsFilterOpen={setIsFilterOpen}
-          refetchUserFiles={isRecentFiles ? refetchRecentFiles : refetchUserFiles}
+          refetchUserFiles={
+            isRecentFiles
+              ? refreshRecentFilesWithPinningQueue
+              : refreshUserFilesWithPinningQueue
+          }
           addButtonRef={addButtonRef}
           syncFolderPath={syncFolderPath}
           privateFileCount={privateFileCount}
@@ -478,8 +507,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           viewMode={viewMode}
           shouldResetPagination={shouldResetPagination}
           handlePaginationReset={handlePaginationReset}
-          unpinnedFiles={unpinnedFiles}
-          isUnpinnedOpen={isUnpinnedOpen}
           isFilterOpen={isFilterOpen}
           setIsFilterOpen={setIsFilterOpen}
           selectedFileTypes={selectedFileTypes}

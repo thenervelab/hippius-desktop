@@ -13,8 +13,11 @@ import {
   getAvailableUpdate,
 } from "@/components/updater/checkForUpdates";
 import { RecentFilesResponse, UserProfileFile } from "./use-recent-files";
-import { syncPercentAtom, lastUpdatedPercentAtom } from "@/app/lib/store/syncAtoms";
-import { useAtomValue, useAtom } from 'jotai';
+import {
+  syncPercentAtom,
+  lastUpdatedPercentAtom,
+} from "@/app/lib/store/syncAtoms";
+import { useAtomValue, useAtom } from "jotai";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
@@ -42,7 +45,8 @@ let lastRowsSignature = "";
 
 // Runtime check for icon rows
 const hasIconMenuItems =
-  typeof (TauriIconMenuItem as unknown as { new?: unknown })?.new === "function";
+  typeof (TauriIconMenuItem as unknown as { new?: unknown })?.new ===
+  "function";
 
 /* ─ Backend payload types ─────────────────────────────────────── */
 type BackendActivityItem = {
@@ -55,7 +59,6 @@ type BackendActivityItem = {
   file_type?: string;
 };
 
-
 type SyncActivityRow = {
   id: string;
   fileName: string;
@@ -65,8 +68,8 @@ type SyncActivityRow = {
   fileType: string;
   timestamp?: number;
   progress?: number;
-  path?: string;     // thumbnail/icon path for menu item
-  rawPath?: string;  // actual file path
+  path?: string; // thumbnail/icon path for menu item
+  rawPath?: string; // actual file path
 };
 
 // Cache for resolved generic icons
@@ -76,7 +79,9 @@ const iconPathCache: Record<string, string | undefined | null> = {};
 export function useTrayInit(polkadotAddress: string) {
   // Use atom to watch for sync percentage changes
   const currentPercent = useAtomValue(syncPercentAtom);
-  const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(lastUpdatedPercentAtom);
+  const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
+    lastUpdatedPercentAtom
+  );
 
   // Effect to update tray when sync percent changes
   useEffect(() => {
@@ -100,7 +105,11 @@ export function useTrayInit(polkadotAddress: string) {
       defaultIconPath = defPath;
       syncingIconPath = syncPath;
       completedIconPath = completedPath;
-      logTrayAction("Icon paths resolved", { defaultIconPath, syncingIconPath, completedIconPath });
+      logTrayAction("Icon paths resolved", {
+        defaultIconPath,
+        syncingIconPath,
+        completedIconPath,
+      });
 
       const existingTray = await TrayIcon.getById(TRAY_ID);
 
@@ -128,9 +137,7 @@ export function useTrayInit(polkadotAddress: string) {
 
       // Build the initial menu
       const menu = await Menu.new({
-        items: [
-          ...(installUpdateMenuItem ? [installUpdateMenuItem] : []),
-        ],
+        items: [...(installUpdateMenuItem ? [installUpdateMenuItem] : [])],
       });
 
       if (!existingTray) {
@@ -156,18 +163,21 @@ export function useTrayInit(polkadotAddress: string) {
   }, []);
 }
 
-
 // Add these explicit debug logs
 function logTrayAction(action: string, details?: unknown) {
-  console.log(`[Tray] ${action}`, details ? details : '');
+  console.log(`[Tray] ${action}`, details ? details : "");
 }
 
 // helper to toggle tray icon
 // Replace setTrayIconSyncing with a more robust implementation
-async function setTrayIconSyncing(isSyncing: boolean, isCompleted: boolean = false) {
+async function setTrayIconSyncing(
+  isSyncing: boolean,
+  isCompleted: boolean = false
+) {
   try {
     // Force resolve paths every time if they're missing
-    if (!defaultIconPath) defaultIconPath = await resolveResource(DEFAULT_TRAY_ICON);
+    if (!defaultIconPath)
+      defaultIconPath = await resolveResource(DEFAULT_TRAY_ICON);
     if (syncingIconPath === null) {
       try {
         syncingIconPath = await resolveResource(SYNCING_TRAY_ICON);
@@ -283,7 +293,9 @@ async function updateTraySyncPercent(percent: number | null) {
   }
 
   const isCompleted = percent >= 100;
-  const label = isCompleted ? "Sync: Completed" : `Sync: ${Math.round(percent)} %`;
+  const label = isCompleted
+    ? "Sync: Completed"
+    : `Sync: ${Math.round(percent)} %`;
   const update = await getAvailableUpdate();
 
   // If sync item doesn't exist yet, create it and add it to the menu
@@ -322,7 +334,7 @@ function startSyncActivityWatcher(polkadotAddress: string) {
 
       // Pass accountId parameter to the invoke call
       const resp = await invoke<RecentFilesResponse>("get_sync_activity", {
-        accountId: polkadotAddress
+        accountId: polkadotAddress,
       });
 
       // Only show what's returned now; if empty, clear all previous rows
@@ -333,10 +345,18 @@ function startSyncActivityWatcher(polkadotAddress: string) {
       }
 
       // Helper function to process files consistently
-      const processFile = (file: UserProfileFile, action: "uploading" | "uploaded" | "deleted"): BackendActivityItem => {
-        const isErasureCodedFolder = file.fileName?.endsWith(".folder.ec_metadata");
-        const isErasureCoded = !isErasureCodedFolder && file.fileName?.endsWith(".ec_metadata");
-        const isFolder = !isErasureCodedFolder && (file.isFolder || file.fileName?.endsWith(".folder"));
+      const processFile = (
+        file: UserProfileFile,
+        action: "uploading" | "uploaded" | "deleted"
+      ): BackendActivityItem => {
+        const isErasureCodedFolder = file.fileName?.endsWith(
+          ".folder.ec_metadata"
+        );
+        const isErasureCoded =
+          !isErasureCodedFolder && file.fileName?.endsWith(".ec_metadata");
+        const isFolder =
+          !isErasureCodedFolder &&
+          (file.isFolder || file.fileName?.endsWith(".folder"));
 
         let displayName = file.fileName;
         if (isErasureCodedFolder) {
@@ -354,7 +374,8 @@ function startSyncActivityWatcher(polkadotAddress: string) {
           action,
           kind: file.isFolder ? "folder" : "file",
           timestamp: file.createdAt || Date.now(),
-          file_type: file.type || (file.source === "private" ? "Private" : "Public"),
+          file_type:
+            file.type || (file.source === "private" ? "Private" : "Public"),
         };
       };
 
@@ -364,7 +385,8 @@ function startSyncActivityWatcher(polkadotAddress: string) {
       // Process uploading files first (priority)
       if (resp.uploading) {
         for (const file of resp.uploading) {
-          const key = file.fileHash || `${file.fileName}-${file.fileSizeInBytes}`;
+          const key =
+            file.fileHash || `${file.fileName}-${file.fileSizeInBytes}`;
           processedFiles.set(key, processFile(file, "uploading"));
         }
       }
@@ -372,7 +394,8 @@ function startSyncActivityWatcher(polkadotAddress: string) {
       // Process recent files, skipping any duplicates
       if (resp.recent) {
         for (const file of resp.recent) {
-          const key = file.fileHash || `${file.fileName}-${file.fileSizeInBytes}`;
+          const key =
+            file.fileHash || `${file.fileName}-${file.fileSizeInBytes}`;
           if (!processedFiles.has(key)) {
             processedFiles.set(key, processFile(file, "uploaded"));
           }
@@ -417,13 +440,25 @@ async function normalizeActivityToRows(
 ): Promise<SyncActivityRow[]> {
   // Resolve generic icons once
   if (!iconPathCache.file) {
-    try { iconPathCache.file = await resolveResource("icons/generic-file.png"); } catch { iconPathCache.file = null; }
+    try {
+      iconPathCache.file = await resolveResource("icons/generic-file.png");
+    } catch {
+      iconPathCache.file = null;
+    }
   }
   if (!iconPathCache.folder) {
-    try { iconPathCache.folder = await resolveResource("icons/generic-folder.png"); } catch { iconPathCache.folder = null; }
+    try {
+      iconPathCache.folder = await resolveResource("icons/generic-folder.png");
+    } catch {
+      iconPathCache.folder = null;
+    }
   }
   if (!iconPathCache.video) {
-    try { iconPathCache.video = await resolveResource("icons/generic-video.png"); } catch { iconPathCache.video = null; }
+    try {
+      iconPathCache.video = await resolveResource("icons/generic-video.png");
+    } catch {
+      iconPathCache.video = null;
+    }
   }
 
   const rows: SyncActivityRow[] = [];
@@ -431,7 +466,11 @@ async function normalizeActivityToRows(
 
   for (const it of items) {
     const status: "uploading" | "uploaded" | "deleted" =
-      it.action === "uploading" ? "uploading" : it.action === "deleted" ? "deleted" : "uploaded";
+      it.action === "uploading"
+        ? "uploading"
+        : it.action === "deleted"
+        ? "deleted"
+        : "uploaded";
 
     const id = hashId(it);
     if (seen.has(id)) continue;
@@ -455,10 +494,17 @@ async function normalizeActivityToRows(
       } else if (it.kind === "folder") {
         iconPath = iconPathCache.folder ?? iconPathCache.file ?? undefined;
       } else if (isImagePath(it.path)) {
-        try { iconPath = await resolveResource("icons/generic-image.png"); } catch { iconPathCache.image = null; }
-
+        try {
+          iconPath = await resolveResource("icons/generic-image.png");
+        } catch {
+          iconPathCache.image = null;
+        }
       } else if (isVideoPath(it.path)) {
-        try { iconPath = await resolveResource("icons/generic-video.png"); } catch { iconPathCache.video = null; }
+        try {
+          iconPath = await resolveResource("icons/generic-video.png");
+        } catch {
+          iconPathCache.video = null;
+        }
       } else {
         iconPath = iconPathCache.file ?? undefined;
       }
@@ -483,97 +529,6 @@ async function normalizeActivityToRows(
   // Keep the list compact
   return rows;
 }
-
-/* ─ Ensure video thumbnail exists for a local file path ──────── */
-// async function ensureVideoThumbnail(localPath?: string, id?: string): Promise<string | undefined> {
-//   try {
-//     if (!localPath || !id) return undefined;
-
-//     // Build a temp file path for the thumbnail
-//     const tmpDir = await tempDir();
-//     const thumbPath = await join(tmpDir, `hippius-thumb-${safeId(id)}.png`);
-
-//     // Try to render a frame in-memory and write it as PNG
-//     const data = await captureVideoFrameAsPng(localPath);
-//     if (!data) return undefined;
-
-//     await writeFile(thumbPath, data);
-//     return thumbPath;
-//   } catch (e) {
-//     console.warn("ensureVideoThumbnail failed:", e);
-//     return undefined;
-//   }
-// }
-
-// function safeId(id: string) {
-//   return id.replace(/[^a-zA-Z0-9._-]/g, "_");
-// }
-
-// /* ─ Capture a video frame into PNG bytes ─────────────────────── */
-// async function captureVideoFrameAsPng(localPath: string): Promise<Uint8Array | null> {
-//   try {
-//     // Use convertFileSrc so the video element can read local files
-//     const url = convertFileSrc(localPath);
-
-//     // Create video element
-//     const video = document.createElement("video");
-//     video.crossOrigin = "anonymous";
-//     video.src = url;
-//     video.preload = "metadata";
-//     // Needed to be able to seek to time
-//     await new Promise<void>((resolve, reject) => {
-//       const tid = setTimeout(() => reject(new Error("video metadata timeout")), 10000);
-//       video.onloadedmetadata = () => {
-//         clearTimeout(tid);
-//         resolve();
-//       };
-//       video.onerror = () => {
-//         clearTimeout(tid);
-//         reject(new Error("video load error"));
-//       };
-//     });
-
-//     // Seek around 0.25 progress or 0.5s if short
-//     const seekTime = Math.min(1, Math.max(0.5, video.duration * 0.25));
-//     video.currentTime = seekTime;
-
-//     await new Promise<void>((resolve, reject) => {
-//       const tid = setTimeout(() => reject(new Error("video seek timeout")), 10000);
-//       video.onseeked = () => {
-//         clearTimeout(tid);
-//         resolve();
-//       };
-//       video.onerror = () => {
-//         clearTimeout(tid);
-//         reject(new Error("video seek error"));
-//       };
-//     });
-
-//     const canvas = document.createElement("canvas");
-//     canvas.width = Math.max(160, video.videoWidth || 320);
-//     canvas.height = Math.max(90, video.videoHeight || 180);
-//     const ctx = canvas.getContext("2d");
-//     if (!ctx) return null;
-
-//     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-//     // Convert to PNG bytes
-//     const dataUrl = canvas.toDataURL("image/png");
-//     return dataURLtoUint8Array(dataUrl);
-//   } catch (e) {
-//     console.warn("captureVideoFrameAsPng failed:", e);
-//     return null;
-//   }
-// }
-
-// function dataURLtoUint8Array(dataUrl: string): Uint8Array {
-//   const [base64] = dataUrl.split(",");
-//   const binStr = atob(base64);
-//   const len = binStr.length;
-//   const bytes = new Uint8Array(len);
-//   for (let i = 0; i < len; i++) bytes[i] = binStr.charCodeAt(i);
-//   return bytes;
-// }
 
 /* ─ Add rows (deduped) after sync percentage ─────────────────── */
 async function updateSyncRowsDirectly(menu: Menu, rows: SyncActivityRow[]) {
@@ -609,14 +564,18 @@ async function updateSyncRowsDirectly(menu: Menu, rows: SyncActivityRow[]) {
 async function removeAllSyncActivityRows(menu: Menu) {
   try {
     for (const [, item] of [...syncRowItems.entries()]) {
-      try { await menu.remove(item); } catch { }
+      try {
+        await menu.remove(item);
+      } catch {}
     }
     syncRowItems.clear();
 
     const items = await menu.items();
     for (const item of items) {
       if (typeof item.id === "string" && item.id.startsWith(SYNC_ITEM_PREFIX)) {
-        try { await menu.remove(item); } catch { }
+        try {
+          await menu.remove(item);
+        } catch {}
       }
     }
   } catch (error) {
@@ -659,12 +618,29 @@ function formatRowText(r: SyncActivityRow) {
 function isImagePath(p?: string) {
   if (!p) return false;
   const ext = p.split(".").pop()?.toLowerCase();
-  return !!ext && ["png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "tiff", "svg", "heic", "heif"].includes(ext);
+  return (
+    !!ext &&
+    [
+      "png",
+      "jpg",
+      "jpeg",
+      "webp",
+      "gif",
+      "bmp",
+      "ico",
+      "tiff",
+      "svg",
+      "heic",
+      "heif",
+    ].includes(ext)
+  );
 }
 function isVideoPath(p?: string) {
   if (!p) return false;
   const ext = p.split(".").pop()?.toLowerCase();
-  return !!ext && ["mp4", "mov", "m4v", "avi", "mkv", "webm", "flv"].includes(ext);
+  return (
+    !!ext && ["mp4", "mov", "m4v", "avi", "mkv", "webm", "flv"].includes(ext)
+  );
 }
 function hashId(it: BackendActivityItem) {
   return `${it.action}:${it.path || it.name}`;
@@ -681,32 +657,3 @@ function getFileType(path: string, kind?: string): string {
   const ext = path.split(".").pop()?.toLowerCase();
   return ext && ext !== path ? ext : kind || "file";
 }
-// function formatTimeAgo(timestamp: number): string {
-//   const now = Date.now();
-//   const seconds = Math.floor((now - timestamp) / 1000);
-
-//   if (seconds < 60) {
-//     return `${seconds} second${seconds !== 1 ? 's' : ''} ago`;
-//   }
-
-//   const minutes = Math.floor(seconds / 60);
-//   if (minutes < 60) {
-//     return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
-//   }
-
-//   const hours = Math.floor(minutes / 60);
-//   if (hours < 24) {
-//     return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
-//   }
-
-//   const days = Math.floor(hours / 24);
-//   return `${days} day${days !== 1 ? 's' : ''} ago`;
-// }
-//   const hours = Math.floor(minutes / 60);
-//   if (hours < 24) {
-//     return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
-//   }
-
-//   const days = Math.floor(hours / 24);
-//   return `${days} day${days !== 1 ? 's' : ''} ago`;
-// }
