@@ -28,6 +28,7 @@ use sp_core::Pair;
 use sp_core::crypto::Ss58Codec;
 use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 use sqlx::SqlitePool;
+use crate::sync_shared::RecentItem;
 
 async fn handle_fs_events(
     mut rx: mpsc::UnboundedReceiver<FsEvent>,
@@ -69,10 +70,31 @@ async fn handle_fs_events(
                     bucket_name: bucket_name.clone(),
                 };
                 
-                match insert_bucket_item_if_absent(&pool, &owner, "private", &bucket_item).await {
-                    Ok(_) => println!("[PrivateFolderSync] Successfully inserted '{}'", file_name),
-                    Err(e) => error!("[PrivateFolderSync] Failed to insert '{}': {}", file_name, e),
-                }
+            // In handle_fs_events function, after successfully inserting to database:
+            match insert_bucket_item_if_absent(&pool, &owner, "private", &bucket_item).await {
+                Ok(_) => {
+                    println!("[PrivateFolderSync] Successfully inserted '{}'", file_name);
+                    
+                    // Add to sync activity
+                    let recent_item = RecentItem {
+                        name: file_name.clone(),
+                        scope: "private".to_string(),
+                        action: "added".to_string(),  // or "added" or "queued"
+                        kind: if is_dir { "folder" } else { "file" }.to_string(),
+                        path: path.to_string_lossy().to_string(),
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                    };
+                    
+                    let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+                    if !state.recent_items.iter().any(|i| i.path == recent_item.path && i.action == recent_item.action) {
+                        state.recent_items.push_front(recent_item);
+                        if state.recent_items.len() > MAX_RECENT_ITEMS {
+                            state.recent_items.pop_back();
+                        }
+                    }
+                },
+                Err(e) => error!("[PrivateFolderSync] Failed to insert '{}': {}", file_name, e),
+            }
             },
             FsEvent::Remove(path, is_dir) => {
                 let file_name = match path.file_name() {

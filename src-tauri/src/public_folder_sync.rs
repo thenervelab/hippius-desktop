@@ -29,6 +29,7 @@ use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 use crate::utils::fs_watcher::{FsWatcher, FsEvent};
 use tokio::sync::mpsc;
 use sqlx::SqlitePool;
+use crate::sync_shared::RecentItem;
 
 async fn handle_fs_events(
     mut rx: mpsc::UnboundedReceiver<FsEvent>,
@@ -69,8 +70,29 @@ async fn handle_fs_events(
                     bucket_name: bucket_name.clone(),
                 };
                 
+                // In handle_fs_events function, after successfully inserting to database:
                 match insert_bucket_item_if_absent(&pool, &owner, "public", &bucket_item).await {
-                    Ok(_) => println!("[PublicFolderSync] Successfully inserted '{}'", file_name),
+                    Ok(_) => {
+                        println!("[PublicFolderSync] Successfully inserted '{}'", file_name);
+                        
+                        // Add to sync activity
+                        let recent_item = RecentItem {
+                            name: file_name.clone(),
+                            scope: "public".to_string(),
+                            action: "added".to_string(),  // or "added" or "queued"
+                            kind: if is_dir { "folder" } else { "file" }.to_string(),
+                            path: path.to_string_lossy().to_string(),
+                            timestamp: chrono::Utc::now().timestamp_millis(),
+                        };
+                        
+                        let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+                        if !state.recent_items.iter().any(|i| i.path == recent_item.path && i.action == recent_item.action) {
+                            state.recent_items.push_front(recent_item);
+                            if state.recent_items.len() > MAX_RECENT_ITEMS {
+                                state.recent_items.pop_back();
+                            }
+                        }
+                    },
                     Err(e) => error!("[PublicFolderSync] Failed to insert '{}': {}", file_name, e),
                 }
             },
