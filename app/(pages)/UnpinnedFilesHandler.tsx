@@ -3,9 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useAtom } from "jotai";
 
-import FileDetailsDialog, {
-  FileDetail,
-} from "../components/page-sections/files/ipfs/files-table/UnpinFilesDialog";
+import UnpinFilesDialog, { FileDetail } from "./UnpinFilesDialog";
 import useUnpinnedStorageRequests from "../lib/hooks/useUnpinnedStorageRequests";
 import { triggerUnpinnedFilesRefetchAtom } from "../lib/global-atoms/unpinAtoms";
 
@@ -39,7 +37,7 @@ const UnpinnedFilesHandler: React.FC = () => {
   }
 
   return (
-    <FileDetailsDialog
+    <UnpinFilesDialog
       open={!isLoading && isUnpinnedOpen}
       unpinnedFiles={unpinnedFiles as FileDetail[]}
     />
