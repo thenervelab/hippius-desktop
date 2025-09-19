@@ -9,13 +9,16 @@ import SectionHeader from "./SectionHeader";
 import { useSetAtom } from "jotai";
 import { settingsDialogOpenAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { invoke } from "@tauri-apps/api/core";
+import { triggerUnpinnedFilesRefetchAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 const ResetAppData = () => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const { resetHippiusDesktop } = useWalletAuth();
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
-
+  const setTriggerUnpinnedFilesRefetch = useSetAtom(
+    triggerUnpinnedFilesRefetchAtom
+  );
   const openDialog = () => setIsDialogOpen(true);
   const closeDialog = () => setIsDialogOpen(false);
 
@@ -30,6 +33,7 @@ const ResetAppData = () => {
           duration: 4000,
         }
       );
+      setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
       setSettingsDialogOpen(false);
     } catch (error) {
       console.error("Failed to reset local data:", error);
