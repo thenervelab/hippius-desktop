@@ -263,6 +263,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
                 isPreviewable={true}
                 isFolder={info.row.original.isFolder}
                 source={info.row.original.source}
+                mainReqHash={info.row.original.mainReqHash}
               />
             </VideoDialogTrigger>
           );
@@ -280,6 +281,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
                 isPreviewable={true}
                 isFolder={info.row.original.isFolder}
                 source={info.row.original.source}
+                mainReqHash={info.row.original.mainReqHash}
               />
             </ImageDialogTrigger>
           );
@@ -297,6 +299,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
                 isPreviewable={true}
                 isFolder={info.row.original.isFolder}
                 source={info.row.original.source}
+                mainReqHash={info.row.original.mainReqHash}
               />
             </PdfDialogTrigger>
           );
@@ -311,6 +314,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
             fileType={fileType || "document"}
             isFolder={info.row.original.isFolder}
             source={info.row.original.source}
+            mainReqHash={info.row.original.mainReqHash}
           />
         );
       }
