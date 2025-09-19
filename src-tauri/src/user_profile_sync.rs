@@ -33,7 +33,6 @@ pub struct FileSizeBreakdown {
 
 static SYNCING_ACCOUNTS: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
-
 #[derive(Debug, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct UserProfileFile {
@@ -77,6 +76,8 @@ pub struct UserProfileFileWithType {
     pub is_folder: bool,
     #[serde(rename = "type")]
     pub type_: String,
+    #[serde(default)]
+    pub deleted: bool,
 }
 
 fn bounded_vec_to_string(bytes: &[u8]) -> String {
@@ -811,7 +812,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                    file_size_in_bytes, is_assigned, last_charged_at,
                    main_req_hash, selected_validator,
                    total_replicas, block_number, profile_cid, source, miner_ids, created_at,
-                   type, is_folder
+                   type, is_folder, deleted
             FROM user_profiles
             WHERE owner = ?
             "#
@@ -914,6 +915,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                         created_at: row.get("created_at"),
                         is_folder,
                         type_,
+                        deleted: false,
                     });
                 }
                 Ok(files)

@@ -118,6 +118,8 @@ impl RecentItem {
         } else {
             0
         };
+
+        let is_deleted = self.action == "deleted" || self.action == "remove";
         UserProfileFileWithType {
             owner: account_id.to_string(),
             cid: "".to_string(),    // Not available in RecentItem
@@ -136,6 +138,7 @@ impl RecentItem {
             created_at: self.timestamp / 1000, // Convert ms to seconds
             is_folder: self.kind == "folder",
             type_: self.scope.clone(),
+            deleted: is_deleted,
         }
     }
 }

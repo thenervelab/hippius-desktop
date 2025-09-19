@@ -35,47 +35,44 @@ impl FsWatcher {
             }
         })?;
 
-        // Watch the root directory non-recursively to only get root-level changes
-        watcher.watch(&root_dir, RecursiveMode::NonRecursive)?;
+        // Watch the root directory recursively to get all changes
+        watcher.watch(&root_dir, RecursiveMode::Recursive)?;
 
         // Spawn a task to process raw events and send them through the channel
         let event_sender_clone = event_sender.clone();
         let root_dir_clone = root_dir.clone();
         std::thread::spawn(move || {
-            let mut processed_paths = HashSet::new();
-            
-            // Process events in batches to handle rapid changes
-            let mut batch = Vec::new();
-            let mut last_flush = std::time::Instant::now();
+            let mut processed_events = HashSet::new();
             
             for event in rx {
-                let now = std::time::Instant::now();
-                
-                // Filter for create/remove events only at root level
+                // Process events immediately instead of batching
                 if let Some(paths) = Self::process_event(&event, &root_dir_clone) {
                     for (path, is_dir, is_create) in paths {
-                        let key = (path.clone(), is_dir);
+                        let event_key = (path.clone(), is_dir, is_create);
                         
-                        // Only process if we haven't seen this path in this batch
-                        if !processed_paths.contains(&key) {
-                            processed_paths.insert(key);
-                            batch.push((path, is_dir, is_create));
+                        // Deduplicate events to avoid processing the same event multiple times
+                        if !processed_events.contains(&event_key) {
+                            processed_events.insert(event_key.clone());
+                            
+                            let fs_event = if is_create {
+                                FsEvent::Create(path.clone(), is_dir)
+                            } else {
+                                FsEvent::Remove(path.clone(), is_dir)
+                            };
+                            
+                            if let Err(e) = event_sender_clone.send(fs_event) {
+                                error!("Failed to send FS event: {}", e);
+                            } else {
+                                println!("[FsWatcher] Sent event for: {:?}", path.file_name());
+                            }
+                            
+                            // Clear processed events periodically to avoid memory growth
+                            if processed_events.len() > 1000 {
+                                processed_events.clear();
+                            }
                         }
                     }
                 }
-                
-                // Flush batch if enough time has passed or batch is getting large
-                if now.duration_since(last_flush) > Duration::from_millis(100) || batch.len() > 50 {
-                    Self::process_batch(&batch, &event_sender_clone);
-                    batch.clear();
-                    processed_paths.clear();
-                    last_flush = now;
-                }
-            }
-            
-            // Process any remaining events
-            if !batch.is_empty() {
-                Self::process_batch(&batch, &event_sender_clone);
             }
         });
 
@@ -97,27 +94,37 @@ impl FsWatcher {
                 println!("[FsWatcher] Create event detected");
                 for path in &event.paths {
                     println!("[FsWatcher] Checking path: {:?}", path);
-                    if let Some(parent) = path.parent() {
-                        println!("[FsWatcher] Parent: {:?}, Root: {:?}", parent, root_dir);
-                        if parent == root_dir {
-                            let is_dir = path.is_dir();
-                            println!("[FsWatcher] Root-level create: {:?} (is_dir: {})", path.file_name().and_then(|n| n.to_str()), is_dir);
-                            result.push((path.clone(), is_dir, true));
-                        }
+                    // Check if the path is within our root directory
+                    if path.starts_with(root_dir) {
+                        let is_dir = path.is_dir();
+                        println!("[FsWatcher] Create: {:?} (is_dir: {})", path.file_name().and_then(|n| n.to_str()), is_dir);
+                        result.push((path.clone(), is_dir, true));
                     }
                 }
             },
-            EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
-                println!("[FsWatcher] Remove/Rename event detected");
+            EventKind::Remove(_) => {
+                println!("[FsWatcher] Remove event detected");
                 for path in &event.paths {
                     println!("[FsWatcher] Checking path for removal: {:?}", path);
-                    if let Some(parent) = path.parent() {
-                        println!("[FsWatcher] Remove parent: {:?}, Root: {:?}", parent, root_dir);
-                        if parent == root_dir {
-                            let is_dir = path.to_str().map(|s| s.ends_with(std::path::MAIN_SEPARATOR)).unwrap_or(false);
-                            println!("[FsWatcher] Root-level remove: {:?} (is_dir: {})", path.file_name().and_then(|n| n.to_str()), is_dir);
-                            result.push((path.clone(), is_dir, false));
-                        }
+                    // Check if the path was within our root directory
+                    if path.starts_with(root_dir) {
+                        let is_dir = path.to_str().map(|s| s.ends_with(std::path::MAIN_SEPARATOR)).unwrap_or(false);
+                        println!("[FsWatcher] Remove: {:?} (is_dir: {})", path.file_name().and_then(|n| n.to_str()), is_dir);
+                        result.push((path.clone(), is_dir, false));
+                    }
+                }
+            },
+            EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
+                println!("[FsWatcher] Rename event detected");
+                for path in &event.paths {
+                    println!("[FsWatcher] Checking path for rename: {:?}", path);
+                    // For renames, we need to check both old and new paths
+                    if path.starts_with(root_dir) {
+                        let is_dir = path.is_dir();
+                        println!("[FsWatcher] Rename: {:?} (is_dir: {})", path.file_name().and_then(|n| n.to_str()), is_dir);
+                        // We treat renames as remove+create
+                        result.push((path.clone(), is_dir, false)); // Remove old
+                        result.push((path.clone(), is_dir, true));  // Create new (same path)
                     }
                 }
             },
@@ -131,22 +138,6 @@ impl FsWatcher {
             None
         } else {
             Some(result)
-        }
-    }
-    
-    fn process_batch(batch: &[(PathBuf, bool, bool)], sender: &UnboundedSender<FsEvent>) {
-        for (i, (path, is_dir, is_create)) in batch.iter().enumerate() {
-            let event = if *is_create {
-                FsEvent::Create(path.clone(), *is_dir)
-            } else {
-                FsEvent::Remove(path.clone(), *is_dir)
-            };
-            
-            if let Err(e) = sender.send(event) {
-                error!("Failed to send FS event: {}", e);
-            } else {
-                println!("[FsWatcher] Successfully sent event {}/{}", i + 1, batch.len());
-            }
         }
     }
     
