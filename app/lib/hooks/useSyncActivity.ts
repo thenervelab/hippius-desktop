@@ -15,6 +15,7 @@ export type SyncActivityItem = {
   timestamp?: number;
   file_type?: string;
   fileSizeInBytes: number;
+  deleted: boolean;
 };
 
 export type SyncActivityRow = {
@@ -27,6 +28,7 @@ export type SyncActivityRow = {
   timestamp?: number;
   rawPath?: string;
   size: number;
+  deleted: boolean;
 };
 
 // Response from get_sync_activity
@@ -45,6 +47,7 @@ export type SyncActivityResponse = {
     isFolder: boolean;
     type: string;
     mainReqHash: string;
+    deleted: boolean;
   }>;
   uploading?: Array<{
     fileName: string;
@@ -60,6 +63,7 @@ export type SyncActivityResponse = {
     isFolder: boolean;
     type: string;
     mainReqHash: string;
+    deleted: boolean;
   }>;
 };
 
@@ -104,6 +108,7 @@ function processFile(
     kind: file.isFolder ? "folder" : "file",
     timestamp: file.createdAt || Date.now(),
     file_type: file.type || (file.source === "private" ? "Private" : "Public"),
+    deleted: file.deleted || false,
   };
 }
 
@@ -136,6 +141,7 @@ function normalizeActivityToRows(items: SyncActivityItem[]): SyncActivityRow[] {
       size: item.fileSizeInBytes,
       timestamp: item.timestamp,
       rawPath: item.path,
+      deleted: item.deleted || false,
     });
   }
 
