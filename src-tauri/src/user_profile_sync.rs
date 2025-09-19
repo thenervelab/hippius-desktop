@@ -812,7 +812,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                    file_size_in_bytes, is_assigned, last_charged_at,
                    main_req_hash, selected_validator,
                    total_replicas, block_number, profile_cid, source, miner_ids, created_at,
-                   type, is_folder, deleted
+                   type, is_folder
             FROM user_profiles
             WHERE owner = ?
             "#
