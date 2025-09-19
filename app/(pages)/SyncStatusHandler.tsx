@@ -11,6 +11,7 @@ import { toast } from "sonner";
 const SyncStatusHandler: React.FC = () => {
   const { data: syncFiles, isLoading, refetch } = useSyncActivity();
   const [isSyncOpen, setIsSyncOpen] = useState(false);
+  const [isPermanentlyClosed, setIsPermanentlyClosed] = useState(false);
   // Get sync status from atoms
   const syncPercent = useAtomValue(syncPercentAtom);
   const syncStatus = useAtomValue(syncStatusAtom);
@@ -25,24 +26,42 @@ const SyncStatusHandler: React.FC = () => {
     const hasUploadingFiles = syncFiles?.some(
       (file) => file.status === "uploading"
     );
+    const isCompleted = syncPercent !== null && syncPercent >= 100;
 
-    // Show dialog if there's active sync or uploading files
-    if (hasActiveSync || hasSyncFiles || hasUploadingFiles) {
+    // Reset permanently closed state when a new sync starts (not completed)
+    if (!isCompleted && isPermanentlyClosed) {
+      setIsPermanentlyClosed(false);
+    }
+
+    // Show dialog if there's active sync or uploading files, but respect permanent closure
+    if (
+      (hasActiveSync || hasSyncFiles || hasUploadingFiles) &&
+      !isPermanentlyClosed
+    ) {
       refetch();
       setIsSyncOpen(true);
-    } else {
-      setIsSyncOpen(false);
     }
-  }, [syncFiles, syncPercent, syncStatus, refetch]);
+  }, [syncFiles, syncPercent, syncStatus, refetch, isPermanentlyClosed]);
+
+  // Handle manual close
+  const handleClose = () => {
+    setIsSyncOpen(false);
+    setIsPermanentlyClosed(true);
+  };
 
   // Don't render anything if there are no sync files and no active sync
-  if (!syncFiles || (syncFiles.length === 0 && !syncStatus?.in_progress)) {
+  if (
+    !syncFiles ||
+    (syncFiles.length === 0 && !syncStatus?.in_progress) ||
+    isPermanentlyClosed
+  ) {
     return null;
   }
 
   return (
     <SyncStatusDialog
       open={!isLoading && isSyncOpen}
+      onClose={handleClose}
       syncFiles={syncFiles || []}
     />
   );

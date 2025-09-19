@@ -17,6 +17,7 @@ import { syncPercentAtom, syncStatusAtom } from "@/app/lib/store/syncAtoms";
 import { SyncActivityRow } from "@/lib/hooks/useSyncActivity";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
+import { toast } from "sonner";
 
 // UI constants
 const COLLAPSED_HEIGHT = 64;
@@ -26,13 +27,14 @@ const BODY_MAX_HEIGHT = EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
 interface SyncStatusDialogProps {
   open: boolean;
   syncFiles: SyncActivityRow[];
+  onClose?: () => void;
 }
 
 const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   open,
   syncFiles,
+  onClose,
 }) => {
-  const dialogContentRef = useRef<HTMLDivElement>(null);
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -85,12 +87,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     syncFiles.filter((f) => f.status === "uploaded").length;
   const percentage = syncPercent !== null ? Math.round(syncPercent) : 0;
   const isCompleted = percentage >= 100;
-
+  const handleHeaderClick = useCallback(
+    (e: React.MouseEvent) => {
+      const el = e.target as Element;
+      if (el.closest('[data-role="close-button"]')) return;
+      toggleExpanded();
+    },
+    [toggleExpanded]
+  );
   if (!open) return null;
 
   return (
     <div
-      ref={dialogContentRef}
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className={cn(
         " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
@@ -105,7 +113,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             ? "rounded-t-[8px] w-[378px]"
             : "rounded-[8px] w-16 sm:w-[220px]"
         )}
-        onClick={toggleExpanded}
+        onClick={handleHeaderClick}
       >
         <div
           className={cn(
@@ -204,6 +212,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             <span className="text-sm text-grey-40 mr-2">
               {isCompleted ? "Complete" : `${percentage}%`}
             </span>
+
             <div className="transition-transform duration-300 ease-in-out">
               {isExpanded ? (
                 <ChevronDown className="h-5 w-5 text-grey-40" />
@@ -211,6 +220,30 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 <ChevronUp className="h-5 w-5 text-grey-40" />
               )}
             </div>
+
+            {/* Divider to separate actions */}
+
+            {/* Close button - only shown when completed and expanded */}
+            {isCompleted && isExpanded && onClose && (
+              <>
+                <span className="mx-2 h-5 w-px bg-grey-80" role="separator" />
+                <button
+                  type="button"
+                  aria-label="Close sync status"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    (e.nativeEvent as any).stopImmediatePropagation?.();
+
+                    onClose?.();
+                  }}
+                  data-role="close-button"
+                  className="ml-1 inline-flex items-center justify-center w-7 h-7 rounded-full border border-grey-70 hover:border-danger-60 hover:bg-danger-100/20 transition-colors z-10"
+                >
+                  <Icons.Close className="w-4 h-4 text-grey-30 pointer-events-none" />
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>
