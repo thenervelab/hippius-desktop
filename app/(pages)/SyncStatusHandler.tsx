@@ -1,42 +1,87 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useAtomValue } from "jotai";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import useSyncActivity from "../lib/hooks/useSyncActivity";
-import { syncPercentAtom, syncStatusAtom } from "../lib/store/syncAtoms";
 import { toast } from "sonner";
 
 const SyncStatusHandler: React.FC = () => {
   const { data: syncFiles, isLoading, refetch } = useSyncActivity();
   const [isSyncOpen, setIsSyncOpen] = useState(false);
   const [isPermanentlyClosed, setIsPermanentlyClosed] = useState(false);
-  const syncPercent = useAtomValue(syncPercentAtom);
-  const syncStatus = useAtomValue(syncStatusAtom);
   // toast.success(`Files: ${JSON.stringify(syncFiles)}`);
 
-  useEffect(() => {
-    const hasActiveSync =
-      syncStatus?.in_progress || (syncPercent !== null && syncPercent < 100);
-    const hasSyncFiles = syncFiles && syncFiles.length > 0;
-    const hasUploadingFiles = syncFiles?.some(
+  const calculateSyncMetrics = () => {
+    if (!syncFiles || syncFiles.length === 0) {
+      return {
+        syncPercent: null,
+        totalFiles: 0,
+        syncedFiles: 0,
+        uploadingFiles: 0,
+        isInProgress: false,
+        isCompleted: false,
+      };
+    }
+
+    const totalFiles = syncFiles.length;
+    const uploadingFiles = syncFiles.filter(
       (file) => file.status === "uploading"
-    );
-    const isCompleted = syncPercent !== null && syncPercent >= 100;
+    ).length;
+    const syncedFiles = syncFiles.filter(
+      (file) => file.status === "uploaded"
+    ).length;
+    const isInProgress = uploadingFiles > 0;
+
+    let syncPercent: number | null = null;
+    if (totalFiles > 0) {
+      if (uploadingFiles === 0) {
+        // No uploading files means sync is complete
+        syncPercent = 100;
+      } else {
+        // Calculate percentage based on uploaded files
+        syncPercent = Math.round((syncedFiles / totalFiles) * 100);
+      }
+    }
+
+    const isCompleted = syncPercent === 100;
+
+    return {
+      syncPercent,
+      totalFiles,
+      syncedFiles,
+      uploadingFiles,
+      isInProgress,
+      isCompleted,
+    };
+  };
+
+  const syncMetrics = calculateSyncMetrics();
+
+  useEffect(() => {
+    const { isInProgress, isCompleted, uploadingFiles } = syncMetrics;
+    const hasSyncFiles = syncFiles && syncFiles.length > 0;
+    const hasUploadingFiles = uploadingFiles > 0;
 
     if (!isCompleted && isPermanentlyClosed) {
       setIsPermanentlyClosed(false);
     }
 
     if (
-      (hasActiveSync || hasSyncFiles || hasUploadingFiles) &&
+      (isInProgress || hasSyncFiles || hasUploadingFiles) &&
       !isPermanentlyClosed
     ) {
       refetch();
       setIsSyncOpen(true);
     }
-  }, [syncFiles, syncPercent, syncStatus, refetch, isPermanentlyClosed]);
+  }, [
+    syncFiles,
+    syncMetrics.isInProgress,
+    syncMetrics.isCompleted,
+    syncMetrics.uploadingFiles,
+    refetch,
+    isPermanentlyClosed,
+  ]);
 
   // Handle manual close
   const handleClose = () => {
@@ -47,7 +92,7 @@ const SyncStatusHandler: React.FC = () => {
   // Don't render anything if there are no sync files and no active sync
   if (
     !syncFiles ||
-    (syncFiles.length === 0 && !syncStatus?.in_progress) ||
+    (syncFiles.length === 0 && !syncMetrics.isInProgress) ||
     isPermanentlyClosed
   ) {
     return null;
@@ -58,6 +103,10 @@ const SyncStatusHandler: React.FC = () => {
       open={!isLoading && isSyncOpen}
       onClose={handleClose}
       syncFiles={syncFiles || []}
+      syncPercent={syncMetrics.syncPercent}
+      totalFiles={syncMetrics.totalFiles}
+      syncedFiles={syncMetrics.syncedFiles}
+      isInProgress={syncMetrics.isInProgress}
     />
   );
 };

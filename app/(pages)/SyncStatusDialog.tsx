@@ -4,7 +4,6 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { Graphsheet } from "@/components/ui";
 import * as Icons from "@/components/ui/icons";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useAtomValue } from "jotai";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import {
   cn,
@@ -13,7 +12,6 @@ import {
 } from "@/lib/utils";
 import InfoTooltip from "@/components/ui/info-tooltip";
 import FileSyncTypeBadge from "../components/page-sections/files/ipfs/files-table/FileSyncTypeBadge";
-import { syncPercentAtom, syncStatusAtom } from "@/app/lib/store/syncAtoms";
 import { SyncActivityRow } from "@/lib/hooks/useSyncActivity";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
@@ -28,19 +26,39 @@ interface SyncStatusDialogProps {
   open: boolean;
   syncFiles: SyncActivityRow[];
   onClose?: () => void;
+  syncPercent?: number | null;
+  totalFiles?: number;
+  syncedFiles?: number;
+  isInProgress?: boolean;
 }
 
 const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   open,
   syncFiles,
   onClose,
+  syncPercent: propSyncPercent = null,
+  totalFiles: propTotalFiles = 0,
+  syncedFiles: propSyncedFiles = 0,
+  isInProgress = false,
 }) => {
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // Get sync percentage and status from atoms
-  const syncPercent = useAtomValue(syncPercentAtom);
-  const syncStatus = useAtomValue(syncStatusAtom);
+  // Calculate metrics from syncFiles if not provided
+  const calculatedMetrics = {
+    totalFiles: propTotalFiles || syncFiles?.length || 0,
+    syncedFiles:
+      propSyncedFiles ||
+      syncFiles?.filter((f) => f.status === "uploaded").length ||
+      0,
+    percentage: propSyncPercent !== null ? Math.round(propSyncPercent) : 0,
+    isCompleted:
+      (propSyncPercent !== null && propSyncPercent >= 100) ||
+      (!syncFiles?.some((f) => f.status === "uploading") &&
+        syncFiles?.length > 0),
+    hasActiveSync:
+      isInProgress || syncFiles?.some((f) => f.status === "uploading") || false,
+  };
 
   useEffect(() => {
     const fileList = fileListRef.current;
@@ -79,14 +97,10 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     });
   }, []);
 
-  if (!syncFiles?.length && !syncStatus?.in_progress) return null;
+  if (!syncFiles?.length && !calculatedMetrics.hasActiveSync) return null;
 
-  const totalFiles = syncStatus?.total_files || syncFiles.length;
-  const syncedFiles =
-    syncStatus?.synced_files ||
-    syncFiles.filter((f) => f.status === "uploaded").length;
-  const percentage = syncPercent !== null ? Math.round(syncPercent) : 0;
-  const isCompleted = percentage >= 100;
+  const { totalFiles, syncedFiles, percentage, isCompleted } =
+    calculatedMetrics;
   const handleHeaderClick = useCallback(
     (e: React.MouseEvent) => {
       const el = e.target as Element;
@@ -328,18 +342,38 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   <div className="flex items-center">
                     {isFileCompleted ? (
                       <>
-                        <Icons.TickCircle className="w-5 h-5 text-success-50" />
-                        <span className="text-sm ml-1 text-success-50">
-                          Synced
+                        <Icons.TickCircle
+                          className={cn(
+                            "w-5 h-5",
+                            file.deleted ? "text-error-50" : "text-success-50"
+                          )}
+                        />
+                        <span
+                          className={cn(
+                            "text-sm ml-1",
+                            file.deleted ? "text-error-50" : "text-success-50"
+                          )}
+                        >
+                          {file.deleted ? "Deleted" : "Synced"}
                         </span>
                       </>
                     ) : isUploading ? (
                       <>
                         <div className="animate-spin mr-2">
-                          <Icons.Refresh className="w-4 h-4 text-primary-50" />
+                          <Icons.Refresh
+                            className={cn(
+                              "w-4 h-4",
+                              file.deleted ? "text-error-50" : "text-primary-50"
+                            )}
+                          />
                         </div>
-                        <span className="text-sm text-primary-50">
-                          Syncing...
+                        <span
+                          className={cn(
+                            "text-sm",
+                            file.deleted ? "text-error-50" : "text-primary-50"
+                          )}
+                        >
+                          {file.deleted ? "Deleting..." : "Syncing..."}
                         </span>
                       </>
                     ) : (

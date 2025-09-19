@@ -223,6 +223,7 @@ export default function FolderView({
       }
 
       const folderSource = getParam("folderSource");
+      const mainReqHash = getParam("mainReqHash");
 
       // Download folder
       setIsDownloading(true);
@@ -233,6 +234,7 @@ export default function FolderView({
         isPrivate: isPrivateFolder,
         outputDir,
         source: folderSource,
+        mainReqHash: mainReqHash
       });
 
       if (result && !result.success) {
@@ -245,8 +247,7 @@ export default function FolderView({
     } catch (error) {
       console.error("Error downloading folder:", error);
       toast.error(
-        `Failed to download folder: ${
-          error instanceof Error ? error.message : String(error)
+        `Failed to download folder: ${error instanceof Error ? error.message : String(error)
         }`
       );
     } finally {
