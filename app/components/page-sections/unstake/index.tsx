@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { BackButton, Icons } from "@/components/ui";
+import { BackButton } from "@/components/ui";
 import TokenForm from "../wallet/shared/TokenForm";
 import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
 import { toast } from "sonner";
@@ -82,7 +82,6 @@ const Unstake = () => {
                     balanceAmount={stakingInfo.bonded || "0"} // Pass raw planck value
                     inputPlaceholder="Enter Amount to Withdraw"
                     buttonText={isLoading ? "Unstaking..." : "Unstake hAlpha"}
-                    buttonIcon={<Icons.Repeat className="size-4 rotate-180" />}
                     onSubmit={handleUnstakeSubmit}
                     showStakedAmount
                     stakedAmount={`${stakingInfo.bonded || "0.00"} hAlpha`}
