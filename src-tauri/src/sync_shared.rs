@@ -148,7 +148,7 @@ pub struct S3SyncState {
     pub in_progress: bool,
     pub total_files: usize,
     pub processed_files: usize,
-    pub current_item: Option<RecentItem>,
+    pub uploading_items: Vec<RecentItem>,  // Track multiple uploading files
     pub recent_items: VecDeque<RecentItem>, // Stores the last N items
 }
 
@@ -209,11 +209,10 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
     recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     recent.truncate(limit);
 
-    // Get currently uploading items
-    let uploading: Vec<RecentItem> = p_state.current_item.iter()
-        .chain(pub_state.current_item.iter())
-        .cloned()
-        .collect();
+    // Get currently uploading items from both states
+    let mut uploading = Vec::new();
+    uploading.extend(p_state.uploading_items.iter().cloned());
+    uploading.extend(pub_state.uploading_items.iter().cloned());
 
     // Convert to unified format with account_id as owner
     let recent_unified = recent.iter()
@@ -223,7 +222,7 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
     let uploading_unified = uploading.iter()
         .map(|item| item.to_user_profile_file(&account_id))
         .collect();
-        
+    
     SyncActivityResponse { 
         recent: recent_unified,
         uploading: uploading_unified 
@@ -252,6 +251,66 @@ pub fn reset_all_sync_state() {
 
 pub fn prepare_for_new_sync() {
     GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
+}
+
+/// Updates the sync state when a file transitions from uploading to uploaded
+/// Removes any existing "uploading" entry for the same file and adds a new "uploaded" entry
+pub fn update_uploaded_file(scope: &str, file_path: &str) -> Option<RecentItem> {
+    let state = if scope == "public" {
+        S3_PUBLIC_SYNC_STATE.lock().unwrap()
+    } else {
+        S3_PRIVATE_SYNC_STATE.lock().unwrap()
+    };
+
+    // Create a new RecentItem for the uploaded file
+    let file_name = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    
+    if file_name.is_empty() {
+        return None;
+    }
+
+    let uploaded_item = RecentItem {
+        name: file_name.to_string(),
+        scope: scope.to_string(),
+        action: "uploaded".to_string(),
+        kind: "file".to_string(),
+        path: file_path.to_string(),
+        timestamp: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    };
+
+    // We need to drop the lock before calling any other functions that might lock
+    drop(state);
+
+    // Now get a mutable lock to update the state
+    let mut state = if scope == "public" {
+        S3_PUBLIC_SYNC_STATE.lock().unwrap()
+    } else {
+        S3_PRIVATE_SYNC_STATE.lock().unwrap()
+    };
+
+    // Remove any existing "uploading" entry for this file
+    state.recent_items.retain(|item| {
+        !(item.path == file_path && item.action == "uploading")
+    });
+
+    // Add the new "uploaded" entry
+    state.recent_items.push_front(uploaded_item.clone());
+
+    // Trim the list if it gets too long
+    while state.recent_items.len() > MAX_RECENT_ITEMS {
+        state.recent_items.pop_back();
+    }
+
+    // Remove the file from uploading_items if it exists there
+    state.uploading_items.retain(|item| item.path != file_path || item.action != "uploading");
+
+    Some(uploaded_item)
 }
 
 #[tauri::command]

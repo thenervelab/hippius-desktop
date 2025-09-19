@@ -30,7 +30,7 @@ use sp_core::crypto::Ss58Codec;
 use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 use sqlx::SqlitePool;
 use crate::sync_shared::RecentItem;
-
+use crate::sync_shared::update_uploaded_file;
 
 async fn handle_fs_events(
     mut rx: mpsc::UnboundedReceiver<FsEvent>,
@@ -425,8 +425,8 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
             let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
             state.in_progress = true;
             state.processed_files = 0;
+            state.uploading_items.retain(|_| false); // Clear all uploading items
             state.total_files = total_changes;
-            state.current_item = None;
         }
 
         let mut sync_cmd = Command::new(&aws_binary_path);
@@ -471,20 +471,23 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
                 for line in reader.lines() {
                     if let Ok(line) = line {
                         println!("[AWS Sync] {}", line);
-                        if let Some(item) = parse_s3_sync_line(&line, "private") {
-                            let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
-                            state.processed_files += 1;
-                            if state.processed_files > state.total_files {
-                                state.processed_files = state.total_files;
+                        if let Some(mut item) = parse_s3_sync_line(&line, "private") {
+                            // Update processed files count
+                            {
+                                let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+                                state.processed_files = (state.processed_files + 1).min(state.total_files);
+                                // Update or add the item in uploading_items
+                                if let Some(existing_idx) = state.uploading_items.iter().position(|i| i.path == item.path) {
+                                    state.uploading_items[existing_idx] = item.clone();
+                                } else {
+                                    state.uploading_items.push(item.clone());
+                                }
                             }
-                            state.current_item = Some(item.clone());
                             
+                            // If this is an upload completion, update the state
                             if item.scope == "private" && item.action == "uploaded" {
-                                if !state.recent_items.iter().any(|i| i.path == item.path && i.action == item.action) {
-                                    state.recent_items.push_front(item.clone());
-                                    if state.recent_items.len() > MAX_RECENT_ITEMS {
-                                        state.recent_items.pop_back();
-                                    }
+                                if let Some(updated_item) = update_uploaded_file("private", &item.path) {
+                                    item = updated_item;
                                 }
                             }
 
@@ -582,9 +585,10 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
         {
             let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
             state.in_progress = false;
-            state.current_item = None;
             if status.success() {
                 state.processed_files = state.total_files;
+                // Clear all uploading items on successful sync
+                state.uploading_items.retain(|_| false);
             }
         }
 
@@ -657,14 +661,35 @@ async fn process_batch(
                     file_paths.push((file_name.clone(), path.clone()));
                 }
                 
-                recent_items.push(RecentItem {
-                    name: file_name,
-                    scope: "private".to_string(),
-                    action: "detected".to_string(),
-                    kind: if *is_dir { "folder" } else { "file" }.to_string(),
-                    path: path.to_string_lossy().to_string(),
-                    timestamp: chrono::Utc::now().timestamp_millis(),
-                });
+                // For directories, mark as detected
+                if *is_dir {
+                    let recent_item = RecentItem {
+                        name: file_name.clone(),
+                        scope: "private".to_string(),
+                        action: "detected".to_string(),
+                        kind: "folder".to_string(),
+                        path: path.to_string_lossy().to_string(),
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                    };
+                    recent_items.push(recent_item);
+                } else {
+                    // For files, only add to uploading state, not to recent items yet
+                    let upload_item = RecentItem {
+                        name: file_name.clone(),
+                        scope: "private".to_string(),
+                        action: "uploading".to_string(),
+                        kind: "file".to_string(),
+                        path: path.to_string_lossy().to_string(),
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                    };
+                    
+                    // Add to uploading state only, not to recent items yet
+                    let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+                    // Check if this file is already in the uploading list
+                    if !state.uploading_items.iter().any(|item| item.path == upload_item.path) {
+                        state.uploading_items.push(upload_item);
+                    }
+                }
             },
             FsEvent::Remove(path, is_dir) => {
                 if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
