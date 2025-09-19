@@ -4,6 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { hexToCid } from "@/lib/utils/hexToCid";
 import { UserProfileFile } from "./use-user-ipfs-files";
 import { FileDetail } from "@/app/(pages)/UnpinFilesDialog";
+import {
+  getPrivateSyncPath,
+  getPublicSyncPath,
+} from "@/lib/utils/syncPathUtils";
 
 export const useUnpinnedStorageRequests = () => {
   const { polkadotAddress } = useWalletAuth();
@@ -21,6 +25,31 @@ export const useUnpinnedStorageRequests = () => {
         throw new Error("Wallet not connected");
       }
 
+      // Check if sync paths exist
+      let hasPrivatePath = false;
+      let hasPublicPath = false;
+
+      try {
+        const privatePath = await getPrivateSyncPath();
+        hasPrivatePath = !!privatePath;
+      } catch (error) {
+        console.log("No private sync path found");
+        hasPrivatePath = false;
+      }
+
+      try {
+        const publicPath = await getPublicSyncPath();
+        hasPublicPath = !!publicPath;
+      } catch (error) {
+        console.log("No public sync path found");
+        hasPublicPath = false;
+      }
+
+      // If neither sync path exists, return empty array
+      if (!hasPrivatePath && !hasPublicPath) {
+        return [];
+      }
+
       try {
         // Fetch files from local database
         const dbFiles = await invoke<UserProfileFile[]>(
@@ -30,7 +59,16 @@ export const useUnpinnedStorageRequests = () => {
           }
         );
 
-        const unassignedRequests = dbFiles.filter((req) => !req.isAssigned);
+        let filteredFiles = dbFiles;
+        if (hasPrivatePath && !hasPublicPath) {
+          filteredFiles = dbFiles.filter((file) => file.type === "private");
+        } else if (!hasPrivatePath && hasPublicPath) {
+          filteredFiles = dbFiles.filter((file) => file.type === "public");
+        }
+
+        const unassignedRequests = filteredFiles.filter(
+          (req) => !req.isAssigned
+        );
 
         // Format the data to match what the UI expects
         const formattedFiles = unassignedRequests.map(

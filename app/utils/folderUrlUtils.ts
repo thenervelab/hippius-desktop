@@ -14,6 +14,7 @@ type ParamGetter = (name: string, defaultValue?: string) => string;
 export function generateFolderUrl(file: FormattedUserIpfsFile, getParam: ParamGetter) {
     // Get current path information for folder navigation
     const folderActualName = file.isFolder ? file.actualFileName || "" : "";
+    const mainReqHash = file.mainReqHash
     const mainFolderCid = getParam("mainFolderCid", "");
     const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
     const subFolderPath = getParam("subFolderPath", "");
@@ -35,7 +36,8 @@ export function generateFolderUrl(file: FormattedUserIpfsFile, getParam: ParamGe
         folderActualName: file.actualFileName ?? "",
         mainFolderActualName: newMainFolder ?? "",
         subFolderPath: newSubFolderPath ?? "",
-        folderSource: file.source || ""
+        folderSource: file.source || "",
+        mainReqHash: mainReqHash
     };
 
     const query = new URLSearchParams(queryParams).toString();

@@ -10,7 +10,8 @@ export interface DownloadIpfsFolderOptions {
     encryptionKey?: string | null;
     outputDir?: string | null;
     file?: FormattedUserIpfsFile;
-    source?: string | null
+    source?: string | null,
+    mainReqHash?: string | null
 }
 
 export const downloadIpfsFolder = async ({
@@ -21,7 +22,8 @@ export const downloadIpfsFolder = async ({
     encryptionKey,
     outputDir,
     file,
-    source
+    source,
+    mainReqHash
 }: DownloadIpfsFolderOptions) => {
     let selectedOutputDir = outputDir;
     if (!selectedOutputDir) {
@@ -43,7 +45,7 @@ export const downloadIpfsFolder = async ({
         outputDir: selectedOutputDir,
         encryptionKey: encryptionKey,
         source: source ? source : file?.source || "",
-        mainReqHash: file?.mainReqHash || ""
+        mainReqHash: mainReqHash ? mainReqHash : file?.mainReqHash || ""
     })
 
     const toastId = toast.info("Downloading folder...", { duration: Infinity });
@@ -62,7 +64,7 @@ export const downloadIpfsFolder = async ({
                 outputDir: selectedOutputDir,
                 encryptionKey: encryptionKey,
                 source: source ? source : file?.source || "",
-                mainReqHash: file?.mainReqHash || ""
+                mainReqHash: mainReqHash ? mainReqHash : file?.mainReqHash || ""
             });
         } else {
             result = await invoke<{
@@ -75,7 +77,7 @@ export const downloadIpfsFolder = async ({
                 folderName: folderName,
                 outputDir: selectedOutputDir,
                 source: source ? source : file?.source || "",
-                mainReqHash: file?.mainReqHash || ""
+                mainReqHash: mainReqHash ? mainReqHash : file?.mainReqHash || ""
             });
         }
 
