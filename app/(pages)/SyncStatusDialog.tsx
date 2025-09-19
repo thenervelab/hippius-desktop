@@ -27,9 +27,11 @@ const TinyIconBadge: React.FC<{
     title={title}
     aria-label={title}
     className={cn(
-      "inline-flex items-center justify-center w-5 h-5 rounded border",
+      "inline-flex items-center justify-center  rounded border",
       " bg-grey-95",
-      variant === "added" ? "border-success-50" : "border-error-80"
+      variant === "added"
+        ? "border-success-50 w-[16px] h-[16px]"
+        : "border-error-80 w-5 h-5"
     )}
   >
     <span
@@ -348,7 +350,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           </TinyIconBadge>
                         ) : hasDeletedFiles ? (
                           <TinyIconBadge title="Added" variant="added">
-                            <Plus className="w-3.5 h-3.5 pointer-events-none" />
+                            <Plus className="w-3 h-3 pointer-events-none" />
                           </TinyIconBadge>
                         ) : null}
                       </div>
