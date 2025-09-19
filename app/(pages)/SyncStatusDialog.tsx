@@ -6,12 +6,17 @@ import * as Icons from "@/components/ui/icons";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAtomValue } from "jotai";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { cn } from "@/lib/utils";
+import {
+  cn,
+  getFilePartsFromFileName,
+  getFileTypeFromExtension,
+} from "@/lib/utils";
 import InfoTooltip from "@/components/ui/info-tooltip";
 import FileSyncTypeBadge from "../components/page-sections/files/ipfs/files-table/FileSyncTypeBadge";
 import { syncPercentAtom, syncStatusAtom } from "@/app/lib/store/syncAtoms";
 import { SyncActivityRow } from "@/lib/hooks/useSyncActivity";
-import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { formatBytes } from "@/lib/utils/formatBytes";
+import { getFileIcon } from "../lib/utils/fileTypeUtils";
 
 // UI constants
 const COLLAPSED_HEIGHT = 64;
@@ -30,34 +35,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const dialogContentRef = useRef<HTMLDivElement>(null);
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
-  const [privateSyncPath, setPrivateSyncPath] = useState<string>("");
 
   // Get sync percentage and status from atoms
   const syncPercent = useAtomValue(syncPercentAtom);
   const syncStatus = useAtomValue(syncStatusAtom);
 
-  // Load private sync path to determine file types
-  useEffect(() => {
-    const loadPrivateSyncPath = async () => {
-      try {
-        const path = await getPrivateSyncPath();
-        setPrivateSyncPath(path || "");
-      } catch (error) {
-        console.error("Failed to load private sync path:", error);
-        setPrivateSyncPath("");
-      }
-    };
-
-    loadPrivateSyncPath();
-  }, []);
-
-  const getFileType = useCallback(
-    (filePath: string): "private" | "public" | null => {
-      if (!filePath || !privateSyncPath) return null;
-      return filePath.includes(privateSyncPath) ? "private" : "public";
-    },
-    [privateSyncPath]
-  ); // fade on scroll effect
   useEffect(() => {
     const fileList = fileListRef.current;
     if (!fileList || !isExpanded) return;
@@ -268,7 +250,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             {syncFiles.map((file, index) => {
               const isFileCompleted = file.status === "uploaded";
               const isUploading = file.status === "uploading";
-
+              const { fileFormat } = getFilePartsFromFileName(file.fileName);
+              const fileType = getFileTypeFromExtension(fileFormat || null);
+              const { icon: Icon, color } = getFileIcon(
+                fileType ? fileType : undefined,
+                false
+              );
               return (
                 <div
                   key={`${file.id}-${index}`}
@@ -277,11 +264,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 >
                   <div className="flex items-center gap-2">
                     <AbstractIconWrapper className="size-8 flex items-center justify-center">
-                      {file.fileType === "folder" ? (
-                        <Icons.BoxSimple2 className="size-5 relative text-primary-50" />
-                      ) : (
-                        <Icons.Document className="size-5 relative text-primary-50" />
-                      )}
+                      <Icon className={cn("size-5 relative", color)} />
                     </AbstractIconWrapper>
                     <div className="flex flex-col justify-center">
                       <div className="flex items-center gap-1 justify-center">
@@ -295,8 +278,17 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                               : file.fileName}
                           </span>
                         </div>
-                        <FileSyncTypeBadge type={getFileType(file.scope)} />
+                        {file.fileType && (
+                          <FileSyncTypeBadge
+                            type={file.fileType as "public" | "private"}
+                          />
+                        )}
                       </div>
+                      {file.size > 0 && (
+                        <div className="text-xs text-grey-70 mt-1">
+                          {formatBytes(file.size)}
+                        </div>
+                      )}
                     </div>
                   </div>
 

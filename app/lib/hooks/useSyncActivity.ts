@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-// import { toast } from "sonner";
+import { toast } from "sonner";
 
 // Sync Activity types based on useTraySync.ts
 export type SyncActivityItem = {
@@ -14,6 +14,7 @@ export type SyncActivityItem = {
   kind: "file" | "folder" | string;
   timestamp?: number;
   file_type?: string;
+  fileSizeInBytes: number;
 };
 
 export type SyncActivityRow = {
@@ -25,6 +26,7 @@ export type SyncActivityRow = {
   fileType: string;
   timestamp?: number;
   rawPath?: string;
+  size: number;
 };
 
 // Response from get_sync_activity
@@ -74,12 +76,6 @@ function shortenName(name: string): string {
   return `${head}…${tail}`;
 }
 
-function getFileType(path: string, kind?: string): string {
-  if (kind === "folder") return "folder";
-  const ext = path.split(".").pop()?.toLowerCase();
-  return ext && ext !== path ? ext : kind || "file";
-}
-
 function processFile(
   file: any,
   action: "uploading" | "uploaded" | "deleted"
@@ -105,6 +101,7 @@ function processFile(
     path: file.source || "",
     scope: file.source || "",
     action,
+    fileSizeInBytes: file.fileSizeInBytes || 0,
     kind: file.isFolder ? "folder" : "file",
     timestamp: file.createdAt || Date.now(),
     file_type: file.type || (file.source === "private" ? "Private" : "Public"),
@@ -129,10 +126,6 @@ function normalizeActivityToRows(items: SyncActivityItem[]): SyncActivityRow[] {
 
     const rawName = item.name || "Unknown";
     const fileName = shortenName(rawName);
-    const fileType = getFileType(
-      item.file_type || item.path || item.name,
-      item.kind
-    );
 
     rows.push({
       id,
@@ -140,7 +133,8 @@ function normalizeActivityToRows(items: SyncActivityItem[]): SyncActivityRow[] {
       fileName,
       scope: item.scope || "",
       status,
-      fileType,
+      fileType: item.file_type || item.scope,
+      size: item.fileSizeInBytes,
       timestamp: item.timestamp,
       rawPath: item.path,
     });
