@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { Graphsheet } from "@/components/ui";
 import * as Icons from "@/components/ui/icons";
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -18,32 +18,6 @@ import { SyncActivityRow } from "@/lib/hooks/useSyncActivity";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
 import { toast } from "sonner";
-const TinyIconBadge: React.FC<{
-  title: string;
-  variant: "added" | "removed";
-  children: React.ReactNode;
-}> = ({ title, variant, children }) => (
-  <span
-    title={title}
-    aria-label={title}
-    className={cn(
-      "inline-flex items-center justify-center  rounded border",
-      " bg-grey-95",
-      variant === "added"
-        ? "border-success-50 w-[16px] h-[16px]"
-        : "border-error-80 w-5 h-5"
-    )}
-  >
-    <span
-      className={cn(
-        "inline-flex",
-        variant === "added" ? "text-success-50" : "text-error-60"
-      )}
-    >
-      {children}
-    </span>
-  </span>
-);
 
 // UI constants
 const COLLAPSED_HEIGHT = 64;
@@ -315,8 +289,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 fileType ? fileType : undefined,
                 false
               );
-              // Check if there are any deleted files in the entire syncFiles array
-              const hasDeletedFiles = syncFiles.some((f) => f.deleted);
               return (
                 <div
                   key={`${file.id}-${index}`}
@@ -344,15 +316,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                             type={file.fileType as "public" | "private"}
                           />
                         )}
-                        {file.deleted ? (
-                          <TinyIconBadge title="Removed" variant="removed">
-                            <Trash2 className="w-3.5 h-3.5 pointer-events-none" />
-                          </TinyIconBadge>
-                        ) : hasDeletedFiles ? (
-                          <TinyIconBadge title="Added" variant="added">
-                            <Plus className="w-3 h-3 pointer-events-none" />
-                          </TinyIconBadge>
-                        ) : null}
                       </div>
                       {file.size > 0 && (
                         <div className="text-xs text-grey-70 mt-1">
@@ -365,18 +328,38 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   <div className="flex items-center">
                     {isFileCompleted ? (
                       <>
-                        <Icons.TickCircle className="w-5 h-5 text-success-50" />
-                        <span className="text-sm ml-1 text-success-50">
-                          Synced
+                        <Icons.TickCircle
+                          className={cn(
+                            "w-5 h-5",
+                            file.deleted ? "text-error-50" : "text-success-50"
+                          )}
+                        />
+                        <span
+                          className={cn(
+                            "text-sm ml-1",
+                            file.deleted ? "text-error-50" : "text-success-50"
+                          )}
+                        >
+                          {file.deleted ? "Deleted" : "Synced"}
                         </span>
                       </>
                     ) : isUploading ? (
                       <>
                         <div className="animate-spin mr-2">
-                          <Icons.Refresh className="w-4 h-4 text-primary-50" />
+                          <Icons.Refresh
+                            className={cn(
+                              "w-4 h-4",
+                              file.deleted ? "text-error-50" : "text-primary-50"
+                            )}
+                          />
                         </div>
-                        <span className="text-sm text-primary-50">
-                          Syncing...
+                        <span
+                          className={cn(
+                            "text-sm",
+                            file.deleted ? "text-error-50" : "text-primary-50"
+                          )}
+                        >
+                          {file.deleted ? "Deleting..." : "Syncing..."}
                         </span>
                       </>
                     ) : (
