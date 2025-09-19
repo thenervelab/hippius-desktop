@@ -1,13 +1,11 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
-import { useAtom, useAtomValue } from "jotai";
+import React, { useState, useEffect } from "react";
+import { useAtom } from "jotai";
 
 import UnpinFilesDialog, { FileDetail } from "./UnpinFilesDialog";
 import useUnpinnedStorageRequests from "../lib/hooks/useUnpinnedStorageRequests";
 import { triggerUnpinnedFilesRefetchAtom } from "../lib/global-atoms/unpinAtoms";
-import { syncPercentAtom, syncStatusAtom } from "../lib/store/syncAtoms";
-import useSyncActivity from "../lib/hooks/useSyncActivity";
 import SyncStatusHandler from "./SyncStatusHandler";
 import { createPortal } from "react-dom";
 
@@ -39,8 +37,7 @@ const UnpinnedFilesHandler: React.FC = () => {
   return (
     <>
       {createPortal(
-        <div className="fixed z-[999999] right-4 sm:right-12 bottom-20 sm:bottom-7 pointer-events-none">
-          {/* Render unpinned files dialog */}
+        <div className="fixed z-[10] right-4 sm:right-12 bottom-20 sm:bottom-7 pointer-events-none">
           <div className="flex flex-col gap-4 items-end pointer-events-auto">
             {unpinnedFiles && unpinnedFiles.length > 0 && (
               <UnpinFilesDialog
@@ -49,7 +46,6 @@ const UnpinnedFilesHandler: React.FC = () => {
               />
             )}
 
-            {/* Render sync status dialog with unpinned dialog state */}
             <SyncStatusHandler />
           </div>
         </div>,
