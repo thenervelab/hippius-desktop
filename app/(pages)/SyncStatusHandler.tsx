@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useAtom, useAtomValue } from "jotai";
+import { useAtomValue } from "jotai";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import useSyncActivity from "../lib/hooks/useSyncActivity";
@@ -12,13 +12,10 @@ const SyncStatusHandler: React.FC = () => {
   const { data: syncFiles, isLoading, refetch } = useSyncActivity();
   const [isSyncOpen, setIsSyncOpen] = useState(false);
   const [isPermanentlyClosed, setIsPermanentlyClosed] = useState(false);
-  // Get sync status from atoms
   const syncPercent = useAtomValue(syncPercentAtom);
   const syncStatus = useAtomValue(syncStatusAtom);
   // toast.success(`Files: ${JSON.stringify(syncFiles)}`);
-  // Listen for refetch triggers from other components
 
-  // Update dialog state based on sync activity and status
   useEffect(() => {
     const hasActiveSync =
       syncStatus?.in_progress || (syncPercent !== null && syncPercent < 100);
@@ -28,12 +25,10 @@ const SyncStatusHandler: React.FC = () => {
     );
     const isCompleted = syncPercent !== null && syncPercent >= 100;
 
-    // Reset permanently closed state when a new sync starts (not completed)
     if (!isCompleted && isPermanentlyClosed) {
       setIsPermanentlyClosed(false);
     }
 
-    // Show dialog if there's active sync or uploading files, but respect permanent closure
     if (
       (hasActiveSync || hasSyncFiles || hasUploadingFiles) &&
       !isPermanentlyClosed

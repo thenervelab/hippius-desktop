@@ -63,7 +63,6 @@ export type SyncActivityResponse = {
   }>;
 };
 
-// Helper functions (from useTraySync.ts)
 function hashId(item: SyncActivityItem): string {
   return `${item.action}:${item.path || item.name}`;
 }
@@ -198,7 +197,6 @@ const useSyncActivity = () => {
           }
         }
 
-        // Convert Map to array
         const activityItems = Array.from(processedFiles.values());
         const rows = normalizeActivityToRows(activityItems);
 
@@ -209,7 +207,7 @@ const useSyncActivity = () => {
         return [];
       }
     },
-    refetchInterval: 3000, // Match the tray sync interval
+    refetchInterval: 3000,
     refetchOnWindowFocus: true,
     staleTime: 2000,
     enabled: !!polkadotAddress,
