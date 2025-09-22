@@ -294,12 +294,13 @@ pub fn update_uploaded_file(scope: &str, file_path: &str) -> Option<RecentItem> 
     };
 
     // Remove any existing "uploading" entry for this file
-    state.recent_items.retain(|item| {
-        !(item.path == file_path && item.action == "uploading")
-    });
+    state.recent_items.retain(|item| item.path != file_path);
 
-    // Add the new "uploaded" entry
-    state.recent_items.push_front(uploaded_item.clone());
+    // Only push if it doesn't already exist in recent_items
+    let already_exists = state.recent_items.iter().any(|item| item.path == file_path);
+    if !already_exists {
+        state.recent_items.push_front(uploaded_item.clone());
+    }
 
     // Trim the list if it gets too long
     while state.recent_items.len() > MAX_RECENT_ITEMS {
@@ -307,10 +308,11 @@ pub fn update_uploaded_file(scope: &str, file_path: &str) -> Option<RecentItem> 
     }
 
     // Remove the file from uploading_items if it exists there
-    state.uploading_items.retain(|item| item.path != file_path || item.action != "uploading");
+    state.uploading_items.retain(|item| item.path != file_path);
 
     Some(uploaded_item)
 }
+
 
 #[tauri::command]
 pub fn app_close(app: AppHandle<Wry>) {
@@ -700,14 +702,38 @@ pub async fn store_bucket_listing_in_db(
 ) -> Result<usize, sqlx::Error> {
     let file_type = if scope == "public" { "public" } else { "private" };
 
-    // Remove any existing S3-derived records for this owner and scope to avoid duplicates
-    sqlx::query(
-        "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'"
-    )
-    .bind(owner)
-    .bind(file_type)
-    .execute(pool)
-    .await?;
+    // Get recent items from state
+    let recent_items = if scope == "public" {
+        S3_PUBLIC_SYNC_STATE.lock().unwrap().recent_items.clone()
+    } else {
+        S3_PRIVATE_SYNC_STATE.lock().unwrap().recent_items.clone()
+    };
+
+    // Extract file names from recent items
+    let recent_file_names: Vec<&str> = recent_items
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+
+    // Build the delete query to exclude recent items
+    let mut query = "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'".to_string();
+
+    // Add condition to exclude recent items if there are any
+    if !recent_file_names.is_empty() {
+        let placeholders = vec!["?"; recent_file_names.len()].join(",");
+        query.push_str(&format!(" AND file_name NOT IN ({})", placeholders));
+    }
+
+    let mut query = sqlx::query(&query)
+        .bind(owner)
+        .bind(file_type);
+
+    // Bind recent item names to exclude
+    for name in recent_file_names {
+        query = query.bind(name);
+    }
+
+    query.execute(pool).await?;
 
     let mut stored = 0usize;
 
