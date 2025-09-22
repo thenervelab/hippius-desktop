@@ -60,8 +60,6 @@ pub async fn encrypt_and_upload_file(
         .unwrap_or("unknown")
         .to_string();
 
-    println!("Processing file: {:?}", file_name);
-
     // Instead of writing Vec<u8>, we just use the existing file path
     copy_to_sync_and_add_to_db(
         &path,
@@ -75,8 +73,6 @@ pub async fn encrypt_and_upload_file(
     )
     .await;
 
-    println!("[encrypt_and_upload_file] Storage request successful");
-
     Ok(file_name)
 }
 
@@ -89,23 +85,18 @@ pub async fn download_and_decrypt_file(
     source: String,
     main_req_hash: String,
 ) -> Result<(), String> {
-    println!("[download_and_decrypt_file] Downloading file with CID: {} to: {}", metadata_cid, output_file);
     let api_url = "http://127.0.0.1:5001".to_string(); // Convert to owned String
 
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => {
-            println!("[download_and_decrypt_file] Found AWS binary at: {}", path.display());
             path
         }
         Err(e) => {
-            eprintln!("[download_and_decrypt_file] Failed to get AWS binary path: {}, falling back to system PATH", e);
             // Fall back to checking system PATH with which crate
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
-                println!("[download_and_decrypt_file] Found AWS in system PATH at: {}", path.display());
                 path
             } else {
-                eprintln!("[download_and_decrypt_file] AWS CLI not found in system PATH or custom location");
                 return Err("AWS CLI not found".to_string());
             }
         }
@@ -126,10 +117,8 @@ pub async fn download_and_decrypt_file(
         if Path::new(&source).exists() {
             std::fs::copy(&source, &output_file)
                 .map_err(|e| format!("Failed to copy from '{}' to '{}': {}", source, output_file, e))?;
-            println!("[download_and_decrypt_file] Copied locally from '{}' to '{}'", source, output_file);
             return Ok(());
         } else {
-            // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
             let mut command = Command::new(&aws_binary_path);
             command
                 .env("AWS_PAGER", "")
@@ -159,10 +148,6 @@ pub async fn download_and_decrypt_file(
                     source, output_file, status.code()
                 ));
             }
-            println!(
-                "[download_and_decrypt_file] Downloaded from S3 '{}' to '{}' via aws cli",
-                source, output_file
-            );
             return Ok(());
         }
     }
@@ -195,7 +180,6 @@ pub async fn download_and_decrypt_file(
         .map_err(|e| format!("Failed to download metadata: {}", e))?;
     let metadata: Metadata = serde_json::from_slice(&metadata_bytes)
         .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
-    println!("[download_and_decrypt_file] Downloaded metadata");
     reconstruct_and_decrypt_file(metadata, output_file, final_encryption_key, api_url).await
 }
 
@@ -261,7 +245,6 @@ async fn reconstruct_and_decrypt_file(
                     }
                 }
             }
-            println!("Chunk {}: reconstructed size {}, expected {}", orig_idx, chunk_data.len(), chunk_bytes_needed);
             reconstructed_chunks.push(chunk_data);
         }
 
@@ -269,13 +252,11 @@ async fn reconstruct_and_decrypt_file(
         for chunk in reconstructed_chunks {
             encrypted_data.extend_from_slice(&chunk);
         }
-        println!("Combined encrypted data size: {}, expected: {}", encrypted_data.len(), metadata.erasure_coding.encrypted_size);
 
         let decrypted_data = tauri::async_runtime::block_on(decrypt_file(
             &encrypted_data,
             encryption_key,
         ))?;
-        println!("Decrypted data size: {}, expected original size: {}", decrypted_data.len(), metadata.original_file.size);
 
         let mut hasher = Sha256::new();
         hasher.update(&decrypted_data);
@@ -288,7 +269,6 @@ async fn reconstruct_and_decrypt_file(
         }
 
         std::fs::write(&output_path, &decrypted_data).map_err(|e| format!("Failed to write output file: {}", e))?;
-        println!("File written to {} with size {}", output_path, decrypted_data.len());
         Ok(())
     })
     .await
@@ -302,7 +282,6 @@ pub async fn encrypt_and_upload_folder(
     _seed_phrase: String,
     _source: String,
 ) -> Result<String, String> {
-    println!("[+] Starting encrypted upload for folder: {}", folder_path);
     let folder_path = Path::new(&folder_path);
 
     if !folder_path.is_dir() {
@@ -326,7 +305,6 @@ pub async fn encrypt_and_upload_folder(
         true
     ).await;
 
-    println!("[✔] Folder storage request successful");
     Ok(folder_name)
 }
 
@@ -340,26 +318,20 @@ pub async fn download_and_decrypt_folder(
     source: String,
     main_req_hash: String,
 ) -> Result<(), String> {
-    println!("[+] Starting download for folder with manifest CID: {}", folder_metadata_cid);
-
     if main_req_hash == "s3" || folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
-        println!("[+] Handling S3 folder download for source: {}", source);
         let source_path = Path::new(&source);
         let destination_path = Path::new(&output_dir).join(&folder_name);
 
         // Dynamically get the AWS binary path
         let aws_binary_path = match get_aws_binary_path().await {
             Ok(path) => {
-                println!("[download_and_decrypt_folder] Found AWS binary at: {}", path.display());
                 path
             }
             Err(e) => {
                 eprintln!("[download_and_decrypt_folder] Failed to get AWS binary path: {}, falling back to system PATH", e);
                 if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
-                    println!("[download_and_decrypt_folder] Found AWS in system PATH at: {}", path.display());
                     path
                 } else {
-                    eprintln!("[download_and_decrypt_folder] AWS CLI not found in system PATH or custom location");
                     return Err("AWS CLI not found".to_string());
                 }
             }
@@ -376,17 +348,11 @@ pub async fn download_and_decrypt_folder(
 
         // First, check if the source path exists locally
         if source_path.exists() && source_path.is_dir() {
-            println!("[i] Source folder exists locally at '{}'. Copying...", source);
-            
             let options = fs_extra::dir::CopyOptions::new().overwrite(true);
             fs_extra::dir::copy(source_path, &output_dir, &options)
                 .map_err(|e| format!("Failed to copy directory locally: {}", e))?;
-
-            println!("[✔] Successfully copied folder from '{}' to '{}'", source, destination_path.display());
             return Ok(());
         } else {
-            println!("[i] Source is an S3 path. Downloading with AWS CLI...");
-
             if let Some(parent) = destination_path.parent() {
                 tokio::fs::create_dir_all(parent).await
                    .map_err(|e| format!("Failed to create output directory: {}", e))?;
@@ -422,8 +388,6 @@ pub async fn download_and_decrypt_folder(
                     source, status.code()
                 ));
             }
-
-            println!("[✔] Successfully downloaded folder from S3 '{}' to '{}'", source, destination_path.display());
             return Ok(());
         }
     }
@@ -440,7 +404,6 @@ pub async fn download_and_decrypt_folder(
         .map_err(|e| format!("Failed to download folder manifest: {}", e))?;
     let file_entries: Vec<FileEntry> = serde_json::from_slice(&folder_manifest_bytes)
         .map_err(|e| format!("Failed to parse folder manifest (CID: {}): {}", folder_metadata_cid, e))?;
-    println!("[i] Folder manifest contains {} entries.", file_entries.len());
 
     let output_root_path = Path::new(&output_dir).join(&folder_name);
     tokio::fs::create_dir_all(&output_root_path).await.map_err(|e| format!("Failed to create output directory: {}", e))?;
@@ -453,9 +416,6 @@ pub async fn download_and_decrypt_folder(
             let main_req_hash_clone = main_req_hash.clone();
 
             async move {
-                println!("[download_and_decrypt_folder] Processing entry with CID: {} to: {:?}", 
-                    entry.cid, output_root_clone.join(&entry.file_name));
-
                 if entry.file_name.ends_with(".folder.ec_metadata") {
                     let subfolder_name = entry.file_name.trim_end_matches(".s.folder.ec_metadata");
                     let cleaned_name = subfolder_name.trim_end_matches(".folder.ec_metadata");
@@ -508,7 +468,6 @@ pub async fn download_and_decrypt_folder(
             }
         }).await;
 
-    println!("[✔] Folder download process complete.");
     Ok(())
 }
 
@@ -582,7 +541,6 @@ async fn reconstruct_and_decrypt_single_file(
     }
 
     tokio::fs::write(&output_path, &decrypted_data).await.map_err(|e| e.to_string())?;
-    println!("[✔] Successfully downloaded and wrote file to {}", output_path.display());
     Ok(())
 }
 
@@ -603,8 +561,6 @@ pub async fn add_file_to_private_folder(
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
         .to_string();
-
-    println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
 
     let folder_name = sanitize_name(&folder_name);
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
@@ -633,7 +589,6 @@ pub async fn add_file_to_private_folder(
     )
     .await;
 
-    println!("[✔] Successfully added file. New folder manifest CID");
     Ok(folder_name)
 }
 
@@ -646,13 +601,10 @@ pub async fn remove_file_from_private_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    println!("[+] Removing file '{}' from folder '{}'", file_name, folder_name);
     let folder_name = sanitize_name(&folder_name);
    
 
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
-    println!("subfolder_path: {:?} cid: {} normalized_subfolder: {:?}", 
-        subfolder_path, folder_metadata_cid, normalized_subfolder);
 
     let final_file_name = if file_name.ends_with(".ff.ec_metadata") {
         file_name.clone()
@@ -681,7 +633,6 @@ pub async fn remove_file_from_private_folder(
         sync_subfolder_path,
     ).await;
 
-    println!("[✔] Successfully removed file.");
     Ok(folder_name) 
 }
 
@@ -741,8 +692,6 @@ pub async fn upload_file_public(
         .unwrap_or("unknown")
         .to_string();
 
-    println!("[upload_file_public] processing file: {:?}", file_name);
-
     // Use existing file directly instead of writing from Vec<u8>
     copy_to_sync_and_add_to_db(
         &path,
@@ -769,21 +718,16 @@ pub async fn download_file_public(
     let api_url = "http://127.0.0.1:5001";
     
     if main_req_hash == "s3" || file_cid == "s3" || file_cid == "local" {
-        println!("[download_file_public] returned source='{}'", source);
-
         // Dynamically get the AWS binary path
         let aws_binary_path = match get_aws_binary_path().await {
             Ok(path) => {
-                println!("[download_file_public] Found AWS binary at: {}", path.display());
                 path
             }
             Err(e) => {
                 eprintln!("[download_file_public] Failed to get AWS binary path: {}, falling back to system PATH", e);
                 if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
-                    println!("[download_file_public] Found AWS in system PATH at: {}", path.display());
                     path
                 } else {
-                    eprintln!("[download_file_public] AWS CLI not found in system PATH or custom location");
                     return Err("[download_file_public] AWS CLI not found".to_string());
                 }
             }
@@ -800,15 +744,12 @@ pub async fn download_file_public(
 
         // If source exists locally, copy; otherwise pull from S3 using aws cli
         let source_exists = Path::new(&source).exists();
-        println!("[download_file_public] Source exists locally? {}", source_exists);
         if source_exists {
             std::fs::copy(&source, &output_file)
                 .map_err(|e| format!("[download_file_public] Failed to copy from '{}' to '{}': {}", source, output_file, e))?;
-            println!("[download_file_public] Copied locally from '{}' to '{}'. Done.", source, output_file);
             return Ok(());
         } else {
             // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
-            println!("[download_file_public] Invoking 'aws s3 cp' for source='{}' -> '{}'", source, output_file);
             let mut command = Command::new(&aws_binary_path);
             command
                 .env("AWS_PAGER", "")
@@ -839,32 +780,22 @@ pub async fn download_file_public(
                 ));
             }
 
-            println!(
-                "[download_file_public] Downloaded from S3 '{}' to '{}' via aws cli. Done.",
-                source, output_file
-            );
             return Ok(());
         }
     }
     
     // Default IPFS path for non-S3
-    println!("[download_file_public] Proceeding with IPFS download. api_url='{}', cid='{}'", api_url, file_cid);
     let file_cid_cloned = file_cid.clone();
     let api_url_cloned = api_url.to_string();
-    println!("[download_file_public] Spawning blocking task to download from IPFS");
     let file_data = tokio::task::spawn_blocking(move || {
         download_from_ipfs(&api_url_cloned, &file_cid_cloned)
     })
     .await
     .map_err(|e| format!("[download_file_public] Task join error during IPFS download: {}", e))?
     .map_err(|e| format!("[download_file_public] Failed to download file from IPFS (cid='{}'): {}", file_cid, e))?;
-    println!("[download_file_public] IPFS download complete. Bytes received={}", file_data.len());
-    
-    println!("[download_file_public] Writing {} bytes to '{}'", file_data.len(), output_file);
     std::fs::write(&output_file, &file_data)
         .map_err(|e| format!("[download_file_public] Failed to write file to '{}': {}", output_file, e))?;
     
-    println!("[download_file_public] Success: File written to '{}'", output_file);
     Ok(())
 }
 
@@ -900,23 +831,18 @@ pub async fn public_download_folder(
 ) -> Result<(), String> {
 
     if main_req_hash == "s3" || folder_metadata_cid == "s3" || folder_metadata_cid == "local" {
-        println!("[+] Handling S3 folder download for source: {}", source);
         let source_path = Path::new(&source);
         let destination_path = Path::new(&output_dir).join(&folder_name);
 
         // Dynamically get the AWS binary path
         let aws_binary_path = match get_aws_binary_path().await {
             Ok(path) => {
-                println!("[public_download_folder] Found AWS binary at: {}", path.display());
                 path
             }
             Err(e) => {
-                eprintln!("[public_download_folder] Failed to get AWS binary path: {}, falling back to system PATH", e);
                 if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
-                    println!("[public_download_folder] Found AWS in system PATH at: {}", path.display());
                     path
                 } else {
-                    eprintln!("[public_download_folder] AWS CLI not found in system PATH or custom location");
                     return Err("[public_download_folder] AWS CLI not found".to_string());
                 }
             }
@@ -933,17 +859,13 @@ pub async fn public_download_folder(
 
         // First, check if the source path exists locally
         if source_path.exists() && source_path.is_dir() {
-            println!("[i] Source folder exists locally at '{}'. Copying...", source);
             
             let options = fs_extra::dir::CopyOptions::new().overwrite(true);
             fs_extra::dir::copy(source_path, &output_dir, &options)
                 .map_err(|e| format!("Failed to copy directory locally: {}", e))?;
 
-            println!("[✔] Successfully copied folder from '{}' to '{}'", source, destination_path.display());
             return Ok(());
         } else {
-            // If it's not local, download from S3 using AWS CLI
-            println!("[i] Source is an S3 path. Downloading with AWS CLI...");
 
             // Ensure the parent directory for the output exists
             if let Some(parent) = destination_path.parent() {
@@ -981,8 +903,6 @@ pub async fn public_download_folder(
                     source, status.code()
                 ));
             }
-
-            println!("[✔] Successfully downloaded folder from S3 '{}' to '{}'", source, destination_path.display());
             return Ok(());
         }
     }
@@ -1074,9 +994,30 @@ pub async fn list_folder_contents(
     main_folder_name: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
-    println!("[ListFolderContents] Received main_folder_name: {:?}", main_folder_name);
-    println!("[ListFolderContents] Received subfolder_path: {:?}", subfolder_path);
+    let sync_root = if scope == "public" {
+        PathBuf::from(crate::utils::sync::get_public_sync_path().await.map_err(|e| e.to_string())?)
+    } else {
+        PathBuf::from(crate::utils::sync::get_private_sync_path().await.map_err(|e| e.to_string())?)
+    };
     
+    let mut local_path = sync_root.join(&main_folder_name);
+    
+    // Build the full local path
+    if let Some(parts) = &subfolder_path {
+        for part in parts {
+            local_path.push(part);
+        }
+    }
+    
+    // Check if the local path exists and is a directory
+    if local_path.is_dir() {
+        println!("[ListFolderContents] Found local directory at: {}", local_path.display());
+        return list_local_folder_contents(&local_path, &main_folder_name, &subfolder_path).await;
+    }
+    
+    println!("[ListFolderContents] No local directory found at: {}, falling back to S3", local_path.display());
+    
+    // Fall back to S3 if local directory doesn't exist
     // First try to get the bucket name from the database
     let bucket_name = match crate::DB_POOL.get() {
         Some(pool) => {
@@ -1123,7 +1064,7 @@ pub async fn list_folder_contents(
     let s3_prefix = format!("{}/", path_parts.join("/"));
     let full_s3_uri_prefix = format!("s3://{}/{}", bucket_name, s3_prefix);
 
-    println!("[ListFolderContents] Listing contents for: {}", full_s3_uri_prefix);
+    println!("[ListFolderContents] Listing contents from S3: {}", full_s3_uri_prefix);
 
     async fn get_sync_root(scope: &str) -> Result<PathBuf, String> {
         if scope == "public" {
@@ -1164,7 +1105,7 @@ pub async fn list_folder_contents(
         item_name: &str,
         fallback_s3: &str,
     ) -> String {
-        use std::path::PathBuf;
+
         let local_prefix = match subfolder_path {
             Some(paths) if !paths.is_empty() => paths.join("/"),
             _ => main_folder_name.to_string(),
@@ -1364,6 +1305,85 @@ pub async fn list_folder_contents(
     Ok(direct_files)
 }
 
+/// Lists the contents of a local directory and returns them as FileDetail objects
+async fn list_local_folder_contents(
+    local_path: &std::path::Path,
+    main_folder_name: &str,
+    subfolder_path: &Option<Vec<String>>,
+) -> Result<Vec<FileDetail>, String> {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    
+    let mut result = Vec::new();
+    
+    // Helper to convert SystemTime to Unix timestamp string
+    fn system_time_to_timestamp(time: SystemTime) -> String {
+        time.duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string())
+    }
+    
+    // Read the directory entries
+    let entries = fs::read_dir(local_path)
+        .map_err(|e| format!("Failed to read local directory: {}", e))?;
+    
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Error reading directory entry: {}", e))?;
+        let path = entry.path();
+        let file_name = path.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| "Invalid file name".to_string())?
+            .to_string();
+            
+        let metadata = fs::metadata(&path)
+            .map_err(|e| format!("Failed to get metadata for {}: {}", path.display(), e))?;
+            
+        let is_dir = metadata.is_dir();
+        let file_size = metadata.len();
+        let modified_time = metadata.modified()
+            .map(system_time_to_timestamp)
+            .unwrap_or_else(|_| "0".to_string());
+            
+        // Build the source path relative to the main sync folder
+        let mut source_path = main_folder_name.to_string();
+        if let Some(parts) = subfolder_path {
+            if !parts.is_empty() {
+                source_path.push('/');
+                source_path.push_str(&parts.join("/"));
+            }
+        }
+        if !source_path.ends_with('/') {
+            source_path.push('/');
+        }
+        source_path.push_str(&file_name);
+        
+        result.push(FileDetail {
+            file_name: file_name.clone(),
+            cid: "local".to_string(),
+            source: path.to_string_lossy().to_string(),
+            file_hash: "".to_string(),
+            miner_ids: String::new(),
+            file_size,
+            created_at: modified_time.clone(),
+            last_charged_at: modified_time,
+            is_folder: is_dir,
+            main_req_hash: "local".to_string(),
+        });
+    }
+    
+    // Sort the results: directories first, then files, both alphabetically
+    result.sort_by(|a, b| {
+        if a.is_folder == b.is_folder {
+            a.file_name.cmp(&b.file_name)
+        } else if a.is_folder {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    });
+    
+    Ok(result)
+}
 
 #[tauri::command]
 pub async fn add_file_to_public_folder(

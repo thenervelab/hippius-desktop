@@ -17,7 +17,7 @@ use crate::commands::syncing::{cleanup_sync, initialize_sync, AppState, SyncStat
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{app_close, get_sync_status,get_sync_activity};
+use crate::sync_shared::{app_close, get_sync_activity};
 use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::accounts::{
@@ -86,7 +86,7 @@ fn main() {
             start_public_folder_sync_tauri,
             cleanup_sync,
             get_user_synced_files,
-            get_sync_status,
+            // get_sync_status,
             get_ipfs_node_info,
             get_ipfs_bandwidth,
             get_ipfs_peers,

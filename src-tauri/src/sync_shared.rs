@@ -6,14 +6,13 @@ use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path; 
 use std::path::PathBuf;
-// use std::fs;
+use std::fs;
 use std::process::Command;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use hex;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
-// use chrono::{DateTime, Utc};
 use crate::user_profile_sync::UserProfileFileWithType;
 use crate::utils::file_operations::calculate_local_size;
 use crate::commands::node::get_aws_binary_path;
@@ -118,6 +117,8 @@ impl RecentItem {
         } else {
             0
         };
+
+        let is_deleted = self.action == "deleted" || self.action == "remove";
         UserProfileFileWithType {
             owner: account_id.to_string(),
             cid: "".to_string(),    // Not available in RecentItem
@@ -136,6 +137,7 @@ impl RecentItem {
             created_at: self.timestamp / 1000, // Convert ms to seconds
             is_folder: self.kind == "folder",
             type_: self.scope.clone(),
+            deleted: is_deleted,
         }
     }
 }
@@ -145,7 +147,7 @@ pub struct S3SyncState {
     pub in_progress: bool,
     pub total_files: usize,
     pub processed_files: usize,
-    pub current_item: Option<RecentItem>,
+    pub uploading_items: Vec<RecentItem>,  // Track multiple uploading files
     pub recent_items: VecDeque<RecentItem>, // Stores the last N items
 }
 
@@ -206,11 +208,10 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
     recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     recent.truncate(limit);
 
-    // Get currently uploading items
-    let uploading: Vec<RecentItem> = p_state.current_item.iter()
-        .chain(pub_state.current_item.iter())
-        .cloned()
-        .collect();
+    // Get currently uploading items from both states
+    let mut uploading = Vec::new();
+    uploading.extend(p_state.uploading_items.iter().cloned());
+    uploading.extend(pub_state.uploading_items.iter().cloned());
 
     // Convert to unified format with account_id as owner
     let recent_unified = recent.iter()
@@ -220,7 +221,7 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
     let uploading_unified = uploading.iter()
         .map(|item| item.to_user_profile_file(&account_id))
         .collect();
-        
+    
     SyncActivityResponse { 
         recent: recent_unified,
         uploading: uploading_unified 
@@ -250,6 +251,68 @@ pub fn reset_all_sync_state() {
 pub fn prepare_for_new_sync() {
     GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
 }
+
+/// Updates the sync state when a file transitions from uploading to uploaded
+/// Removes any existing "uploading" entry for the same file and adds a new "uploaded" entry
+pub fn update_uploaded_file(scope: &str, file_path: &str) -> Option<RecentItem> {
+    let state = if scope == "public" {
+        S3_PUBLIC_SYNC_STATE.lock().unwrap()
+    } else {
+        S3_PRIVATE_SYNC_STATE.lock().unwrap()
+    };
+
+    // Create a new RecentItem for the uploaded file
+    let file_name = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    
+    if file_name.is_empty() {
+        return None;
+    }
+
+    let uploaded_item = RecentItem {
+        name: file_name.to_string(),
+        scope: scope.to_string(),
+        action: "uploaded".to_string(),
+        kind: "file".to_string(),
+        path: file_path.to_string(),
+        timestamp: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    };
+
+    // We need to drop the lock before calling any other functions that might lock
+    drop(state);
+
+    // Now get a mutable lock to update the state
+    let mut state = if scope == "public" {
+        S3_PUBLIC_SYNC_STATE.lock().unwrap()
+    } else {
+        S3_PRIVATE_SYNC_STATE.lock().unwrap()
+    };
+
+    // Remove any existing "uploading" entry for this file
+    state.recent_items.retain(|item| item.path != file_path);
+
+    // Only push if it doesn't already exist in recent_items
+    let already_exists = state.recent_items.iter().any(|item| item.path == file_path);
+    if !already_exists {
+        state.recent_items.push_front(uploaded_item.clone());
+    }
+
+    // Trim the list if it gets too long
+    while state.recent_items.len() > MAX_RECENT_ITEMS {
+        state.recent_items.pop_back();
+    }
+
+    // Remove the file from uploading_items if it exists there
+    state.uploading_items.retain(|item| item.path != file_path);
+
+    Some(uploaded_item)
+}
+
 
 #[tauri::command]
 pub fn app_close(app: AppHandle<Wry>) {
@@ -639,14 +702,38 @@ pub async fn store_bucket_listing_in_db(
 ) -> Result<usize, sqlx::Error> {
     let file_type = if scope == "public" { "public" } else { "private" };
 
-    // Remove any existing S3-derived records for this owner and scope to avoid duplicates
-    sqlx::query(
-        "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'"
-    )
-    .bind(owner)
-    .bind(file_type)
-    .execute(pool)
-    .await?;
+    // Get recent items from state
+    let recent_items = if scope == "public" {
+        S3_PUBLIC_SYNC_STATE.lock().unwrap().recent_items.clone()
+    } else {
+        S3_PRIVATE_SYNC_STATE.lock().unwrap().recent_items.clone()
+    };
+
+    // Extract file names from recent items
+    let recent_file_names: Vec<&str> = recent_items
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+
+    // Build the delete query to exclude recent items
+    let mut query = "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'".to_string();
+
+    // Add condition to exclude recent items if there are any
+    if !recent_file_names.is_empty() {
+        let placeholders = vec!["?"; recent_file_names.len()].join(",");
+        query.push_str(&format!(" AND file_name NOT IN ({})", placeholders));
+    }
+
+    let mut query = sqlx::query(&query)
+        .bind(owner)
+        .bind(file_type);
+
+    // Bind recent item names to exclude
+    for name in recent_file_names {
+        query = query.bind(name);
+    }
+
+    query.execute(pool).await?;
 
     let mut stored = 0usize;
 
@@ -784,4 +871,23 @@ pub async fn delete_bucket_item_by_name(
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
+}
+
+pub fn folder_size(path: &Path) -> u64 {
+    let mut size = 0;
+
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Ok(metadata) = fs::metadata(&path) {
+                    size += metadata.len();
+                }
+            } else if path.is_dir() {
+                size += folder_size(&path);
+            }
+        }
+    }
+
+    size
 }

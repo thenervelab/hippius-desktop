@@ -13,9 +13,9 @@ export default function ProtectedLayout({
     <OnBoardingGuard>
       <div className="flex min-h-screen w-full">
         <UpdateChecker />
+        <UnpinnedFilesHandler />
         <Sidebar />
         <ResponsiveContent>{children}</ResponsiveContent>
-        <UnpinnedFilesHandler />
       </div>
     </OnBoardingGuard>
   );

@@ -18,7 +18,8 @@ use crate::sync_shared::{insert_bucket_item_if_absent, delete_bucket_item_by_nam
 use serde_json::json;
 use tauri::Emitter;
 use crate::DB_POOL;
-pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE,  BucketItem};
+pub use crate::sync_shared::{SYNCING_ACCOUNTS, GLOBAL_CANCEL_TOKEN, S3_PUBLIC_SYNC_STATE, BucketItem};
+use crate::constants::folder_sync::SyncStatusResponse;
 use std::env;
 use log::error;
 use crate::commands::node::get_aws_binary_path;
@@ -30,101 +31,232 @@ use crate::utils::fs_watcher::{FsWatcher, FsEvent};
 use tokio::sync::mpsc;
 use sqlx::SqlitePool;
 use crate::sync_shared::RecentItem;
+use crate::sync_shared::{update_uploaded_file,folder_size};
 
 async fn handle_fs_events(
     mut rx: mpsc::UnboundedReceiver<FsEvent>,
     pool: SqlitePool,
     owner: String,
     bucket_name: String,
+    app_handle: AppHandle,
 ) {    
-    while let Some(event) = rx.recv().await {
+    // Buffer to collect events and process them in batches
+    let mut batch = Vec::new();
+    let batch_timeout = tokio::time::sleep(Duration::from_millis(100));
+    tokio::pin!(batch_timeout);
+    
+    loop {
+        tokio::select! {
+            // Handle new events
+            Some(event) = rx.recv() => {
+                batch.push(event);
+                println!("[PublicFolderSync] Received FS event, batch size: {}", batch.len());
+                
+                // Process immediately when we get events, don't wait for timeout
+                if !batch.is_empty() {
+                    process_batch(&batch, &pool, &owner, &bucket_name, &app_handle).await;
+                    batch.clear();
+                    batch_timeout.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(100));
+                }
+            }
+            // Process batch after timeout (fallback)
+            _ = &mut batch_timeout => {
+                if !batch.is_empty() {
+                    process_batch(&batch, &pool, &owner, &bucket_name, &app_handle).await;
+                    batch.clear();
+                }
+                batch_timeout.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+async fn process_batch(
+    events: &[FsEvent],
+    pool: &SqlitePool,
+    owner: &str,
+    bucket_name: &str,
+    app_handle: &AppHandle, // Add app_handle parameter
+) {
+    let mut new_files = 0;
+    let mut recent_items = Vec::new();
+    let mut bucket_items = Vec::new();
+    let mut file_paths = Vec::new();
+    
+    // First pass: collect all the data we need
+    for event in events {
         match event {
             FsEvent::Create(path, is_dir) => {
-                let file_name = path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default()
-                    .to_string();
+                let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => continue,
+                };
                 
-                if file_name.is_empty() {
-                    continue;
-                }
-                
-                let size = if is_dir {
-                    0
+                let size = if *is_dir {
+                    folder_size(&path)
                 } else {
-                    std::fs::metadata(&path).ok()
-                        .map(|m| m.len())
-                        .unwrap_or_else(|| {
-                            println!("[PublicFolderSync] Could not get metadata for: {}", file_name);
-                            0
-                        })
+                    std::fs::metadata(path).ok().map(|m| m.len()).unwrap_or(0)
                 };
                 
                 let bucket_item = BucketItem {
                     path: file_name.clone(),
                     size,
                     last_modified: chrono::Utc::now().to_rfc3339(),
-                    is_folder: is_dir,
+                    is_folder: *is_dir,
                     storage_class: "STANDARD".to_string(),
                     ipfs_hash: "".to_string(),
-                    bucket_name: bucket_name.clone(),
+                    bucket_name: bucket_name.to_string(),
                 };
                 
-                // In handle_fs_events function, after successfully inserting to database:
-                match insert_bucket_item_if_absent(&pool, &owner, "public", &bucket_item).await {
-                    Ok(_) => {
-                        println!("[PublicFolderSync] Successfully inserted '{}'", file_name);
-                        
-                        // Add to sync activity
-                        let recent_item = RecentItem {
-                            name: file_name.clone(),
-                            scope: "public".to_string(),
-                            action: "added".to_string(),  // or "added" or "queued"
-                            kind: if is_dir { "folder" } else { "file" }.to_string(),
-                            path: path.to_string_lossy().to_string(),
-                            timestamp: chrono::Utc::now().timestamp_millis(),
-                        };
-                        
-                        let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-                        if !state.recent_items.iter().any(|i| i.path == recent_item.path && i.action == recent_item.action) {
-                            state.recent_items.push_front(recent_item);
-                            if state.recent_items.len() > MAX_RECENT_ITEMS {
-                                state.recent_items.pop_back();
-                            }
-                        }
-                    },
-                    Err(e) => error!("[PublicFolderSync] Failed to insert '{}': {}", file_name, e),
+                bucket_items.push(bucket_item);
+                
+                if !is_dir {
+                    new_files += 1;
+                    file_paths.push((file_name.clone(), path.clone()));
+                }
+                
+                // For directories, mark as detected
+                if *is_dir {
+                    let recent_item = RecentItem {
+                        name: file_name.clone(),
+                        scope: "public".to_string(),
+                        action: "uploading".to_string(),
+                        kind: "folder".to_string(),
+                        path: path.to_string_lossy().to_string(),
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                    };
+                    recent_items.push(recent_item);
+                } else {
+                    // For files, only add to uploading state, not to recent items yet
+                    let upload_item = RecentItem {
+                        name: file_name.clone(),
+                        scope: "public".to_string(),
+                        action: "uploading".to_string(),
+                        kind: "file".to_string(),
+                        path: path.to_string_lossy().to_string(),
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                    };
+                    
+                    // Add to uploading state only, not to recent items yet
+                    let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+                    // Check if this file is already in the uploading list
+                    if !state.uploading_items.iter().any(|item| item.path == upload_item.path) {
+                        state.uploading_items.push(upload_item);
+                    }
                 }
             },
             FsEvent::Remove(path, is_dir) => {
-                
-                let file_name = match path.file_name() {
-                    Some(name) => name.to_string_lossy().into_owned(),
-                    None => {
-                        error!("[PublicFolderSync] Could not get file name from path: {:?}", path);
-                        continue;
+                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                    // For delete events, we'll process them individually
+                    println!("[PublicFolderSync] Successfully deleted '{}' from database", file_name);                        
+                    let recent_item = RecentItem {
+                        name: file_name.to_string(),
+                        scope: "public".to_string(),
+                        action: "deleted".to_string(),
+                        kind: if *is_dir { "folder" } else { "file" }.to_string(),
+                        path: path.to_string_lossy().to_string(),
+                        timestamp: chrono::Utc::now().timestamp_millis(),
+                    };
+
+                    // Add to recent items
+                    recent_items.push(recent_item.clone());
+
+                    // Update uploading items in sync state if this is a file
+                    if !*is_dir {
+                        let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+                        // Remove any existing entry for this path and add the new one
+                        state.uploading_items.retain(|item| item.path != recent_item.path);
+                        state.uploading_items.push(recent_item);
                     }
-                };
-                
-                if file_name.is_empty() {
-                    continue;
-                }
-                
-                match delete_bucket_item_by_name(&pool, &owner, "public", &file_name).await {
-                    Ok(rows_affected) => {
-                        if rows_affected > 0 {
-                            println!("[PublicFolderSync] Successfully deleted '{}' from database ({} rows affected)", 
-                                   file_name, rows_affected);
-                        } else {
-                            println!("[PublicFolderSync] No matching record found for '{}' in database", file_name);
-                        }
-                    },
-                    Err(e) => {
-                        error!("[PublicFolderSync] Failed to delete '{}': {}", file_name, e);
-                    }
+                    
                 }
             }
         }
+    }
+    
+    // Batch insert all new bucket items
+    if !bucket_items.is_empty() {
+        for item in bucket_items {
+            if let Err(e) = insert_bucket_item_if_absent(pool, owner, "public", &item).await {
+                error!("[PublicFolderSync] Failed to insert item: {}", e);
+            } else {
+                println!("[PublicFolderSync] Inserted bucket item: {}", item.path);
+            }
+        }
+    }
+    
+    // Update file paths
+    for (file_name, path) in file_paths {
+        if let Err(e) = sqlx::query(
+            "INSERT OR REPLACE INTO file_paths (file_name, file_hash, timestamp, path) VALUES (?, ?, ?, ?)"
+        )
+        .bind(&file_name)
+        .bind("") // Empty file_hash for now
+        .bind(chrono::Utc::now().timestamp())
+        .bind(path.to_string_lossy().to_string())
+        .execute(pool)
+        .await {
+            error!("[PublicFolderSync] Failed to update file_paths for '{}': {}", file_name, e);
+        } else {
+            println!("[PublicFolderSync] Updated file_paths for: {}", file_name);
+        }
+    }
+    
+    // Update the state in one go
+    let should_emit = {
+        let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+        let mut changed = false;
+        
+        // Update total files count if we have new files
+        if new_files > 0 {
+            state.total_files = state.total_files.saturating_add(new_files);
+            changed = true;
+            println!("[PublicFolderSync] Added {} new files to total", new_files);
+        }
+        
+        // Add recent items
+        for item in recent_items {
+            // Only add if not already in the recent items with the same action
+            if !state.recent_items.iter().any(|i| i.path == item.path && i.action == item.action) {
+                state.recent_items.push_front(item.clone());
+                changed = true;
+                println!("[PublicFolderSync] Added recent item: {}", item.name);
+                
+                // Trim the list if it gets too long
+                while state.recent_items.len() > MAX_RECENT_ITEMS {
+                    state.recent_items.pop_back();
+                }
+            }
+        }
+        
+        changed
+    };
+    
+    // Only emit the event if there were actual changes
+    if should_emit {
+        // Get the current state for the event
+        let status = {
+            let state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+            crate::constants::folder_sync::SyncStatusResponse {
+                synced_files: state.processed_files,
+                total_files: state.total_files,
+                in_progress: state.in_progress,
+                percent: if state.total_files > 0 {
+                    ((state.processed_files as f32 / state.total_files as f32) * 100.0).min(100.0)
+                } else {
+                    0.0
+                },
+            }
+        };
+        
+        // Emit the sync status update
+        let _ = app_handle.emit("sync-status-update", &status);
+        
+        // Also emit an activity update
+        let activity = crate::sync_shared::get_sync_activity(owner.to_string(), Some(50));
+        let _ = app_handle.emit("sync-activity-update", &activity);
+        
+        println!("[PublicFolderSync] Emitted status and activity updates");
     }
 }
 
@@ -457,9 +589,11 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
     let owner_clone = account_id.clone();
     let bucket_name_clone = bucket_name.clone();
     let pool_clone = pool.clone();
+    let app_handle_clone = app_handle.clone();
     
+    // Update the call to handle_fs_events to pass app_handle
     tokio::spawn(async move {
-        handle_fs_events(rx, pool_clone, owner_clone, bucket_name_clone).await
+        handle_fs_events(rx, pool_clone, owner_clone, bucket_name_clone, app_handle_clone).await
     });
     
     loop {
@@ -534,7 +668,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
             let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
             state.in_progress = true;
             state.processed_files = 0;
-            state.current_item = None;
+            state.uploading_items.retain(|_| false); // Clear all uploading items
             state.total_files = total_changes;
         }
 
@@ -582,20 +716,23 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
                 for line in reader.lines() {
                     if let Ok(line) = line {
                         println!("[AWS Public Sync][STDOUT] {}", line);
-                        if let Some(item) = parse_s3_sync_line(&line, "public") {
-                            let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-                            state.processed_files += 1;
-                            if state.processed_files > state.total_files {
-                                state.processed_files = state.total_files;
+                        if let Some(mut item) = parse_s3_sync_line(&line, "public") {
+                            // Update processed files count
+                            {
+                                let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+                                state.processed_files = (state.processed_files + 1).min(state.total_files);
+                                // Update or add the item in uploading_items
+                                if let Some(existing_idx) = state.uploading_items.iter().position(|i| i.path == item.path) {
+                                    state.uploading_items[existing_idx] = item.clone();
+                                } else {
+                                    state.uploading_items.push(item.clone());
+                                }
                             }
-                            state.current_item = Some(item.clone());
                             
+                            // If this is an upload completion, update the state
                             if item.scope == "public" && item.action == "uploaded" {
-                                if !state.recent_items.iter().any(|i| i.path == item.path && i.action == item.action) {
-                                    state.recent_items.push_front(item.clone());
-                                    if state.recent_items.len() > MAX_RECENT_ITEMS {
-                                        state.recent_items.pop_back();
-                                    }
+                                if let Some(updated_item) = update_uploaded_file("public", &item.path) {
+                                    item = updated_item;
                                 }
                             }
 
@@ -704,9 +841,10 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         {
             let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
             state.in_progress = false;
-            state.current_item = None;
             if status.success() {
                 state.processed_files = state.total_files;
+                // Clear all uploading items on successful sync
+                state.uploading_items.retain(|_| false);
             }
         }
 
