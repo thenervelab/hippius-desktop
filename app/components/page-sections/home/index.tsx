@@ -2,7 +2,10 @@ import { useEffect, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { useSetAtom } from "jotai";
-import { activeSubMenuItemAtom, isViewingRecentFilesAtom } from "@/app/components/sidebar/sideBarAtoms";
+import {
+  activeSubMenuItemAtom,
+  isViewingRecentFilesAtom,
+} from "@/app/components/sidebar/sideBarAtoms";
 
 import DetailList from "./DetailList";
 
@@ -142,7 +145,12 @@ const Home: React.FC = () => {
     return () => {
       setIsViewingRecentFiles(false);
     };
-  }, [isCheckingSyncPath, isSyncPathConfigured, setActiveSubMenuItem, setIsViewingRecentFiles]);
+  }, [
+    isCheckingSyncPath,
+    isSyncPathConfigured,
+    setActiveSubMenuItem,
+    setIsViewingRecentFiles,
+  ]);
 
   return (
     <div className="flex flex-col mt-6">
@@ -170,7 +178,11 @@ const Home: React.FC = () => {
           <Icons.Loader className="size-8 animate-spin text-primary-60" />
         </div>
       ) : (
-        isSyncPathConfigured && <Ipfs isRecentFiles />
+        isSyncPathConfigured && (
+          <div id="recent-files">
+            <Ipfs isRecentFiles />{" "}
+          </div>
+        )
       )}
     </div>
   );

@@ -57,6 +57,7 @@ type BackendActivityItem = {
   kind: "file" | "folder" | string;
   timestamp?: number; // when action happened (ms)
   file_type?: string;
+  deleted: boolean;
 };
 
 type SyncActivityRow = {
@@ -70,6 +71,7 @@ type SyncActivityRow = {
   progress?: number;
   path?: string; // thumbnail/icon path for menu item
   rawPath?: string; // actual file path
+  deleted: boolean;
 };
 
 // Cache for resolved generic icons
@@ -376,6 +378,7 @@ function startSyncActivityWatcher(polkadotAddress: string) {
           timestamp: file.createdAt || Date.now(),
           file_type:
             file.type || (file.source === "private" ? "Private" : "Public"),
+          deleted: file.deleted,
         };
       };
 
@@ -523,6 +526,7 @@ async function normalizeActivityToRows(
       timestamp: it.timestamp,
       path: iconPath,
       rawPath: it.path,
+      deleted: it.deleted,
     });
   }
 
@@ -605,9 +609,10 @@ function formatRowText(r: SyncActivityRow) {
   const first = r.fileName;
 
   let statusText = "Synced";
-  if (r.status === "uploading") statusText = "Uploading";
-  else if (r.status === "uploaded") statusText = "Uploaded";
-  else if (r.status === "deleted") statusText = "Deleted";
+  if (r.status === "uploading" && !r.deleted) statusText = "Uploading";
+  if (r.status === "uploading" && r.deleted) statusText = "Deleting";
+  else if (r.status === "uploaded" && !r.deleted) statusText = "Uploaded";
+  else if (r.status === "uploaded" && r.deleted) statusText = "Deleted";
 
   // const third = r.timestamp ? formatTimeAgo(r.timestamp) : "";
 
