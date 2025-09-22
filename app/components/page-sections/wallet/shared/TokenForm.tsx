@@ -1,17 +1,19 @@
 "use client";
 
-import { FC, useState } from "react";
-import { AbstractIconWrapper, Input, CardButton, Icons } from "@/components/ui";
+import { FC, useState, useMemo } from "react";
+import { Input, CardButton, Icons, AbstractIconWrapper } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { useStaking } from "@/app/lib/hooks/useStaking";
+import { formatStakingAmount } from "@/app/lib/utils/staking";
+import { formatPreciseBalance } from "@/app/lib/utils/formatters/formatPreciseBalance";
 
 interface TokenFormProps {
     title: string;
     description: string;
     balanceLabel: string;
-    balanceAmount: string;
+    balanceAmount: string; // Raw planck value as string
     inputPlaceholder: string;
     buttonText: string;
-    buttonIcon: React.ReactNode;
     onSubmit: (amount?: string) => void;
     estimatedTime?: string;
     gasFees?: string;
@@ -19,6 +21,9 @@ interface TokenFormProps {
     showStakedAmount?: boolean;
     stakedAmount?: string;
     className?: string;
+    isStaking?: boolean; // New prop to identify staking forms
+    isUnstaking?: boolean; // New prop to identify unstaking forms
+    loading?: boolean; // New prop for loading state
 }
 
 const TokenForm: FC<TokenFormProps> = ({
@@ -35,16 +40,58 @@ const TokenForm: FC<TokenFormProps> = ({
     gasFees = "0.00 hALPHA",
     showEstimateAndFees = false,
     className,
+    isStaking = false,
+    isUnstaking = false,
+    loading = false,
 }) => {
     const [amount, setAmount] = useState("");
+    const { stakingInfo } = useStaking();
+
+    // Calculate available amounts based on operation type
+    const availableAmount = useMemo(() => {
+        console.log('Calculating available amount:', {
+            isStaking,
+            isUnstaking,
+            balanceAmount,
+            balanceAmountType: typeof balanceAmount,
+            bondedAmount: stakingInfo.bonded,
+            bondedAmountType: typeof stakingInfo.bonded,
+            formattedBonded: formatStakingAmount(stakingInfo.bonded)
+        });
+
+        if (isStaking) {
+            // For staking, work with raw planck values to avoid precision loss
+            const nativeBalancePlanck = BigInt(balanceAmount || '0');
+            const result = Math.max(0, Number(nativeBalancePlanck) / 1e18);
+            return result;
+        } else if (isUnstaking) {
+            // For unstaking, show only the staked amount
+            return Number(stakingInfo.bonded || '0') / 1e18;
+        }
+        // For other operations, assume balanceAmount is already in planck
+        return Number(balanceAmount || '0') / 1e18;
+    }, [balanceAmount, stakingInfo.bonded, isStaking, isUnstaking]);
+
+    // Format the staked amount for display
+    const formattedStakedAmount = useMemo(() => {
+        if (showStakedAmount) {
+            return formatStakingAmount(stakingInfo.bonded);
+        }
+        return stakedAmount || "0.00";
+    }, [showStakedAmount, stakingInfo.bonded, stakedAmount]);
 
     const handleSubmit = () => {
         onSubmit(amount);
     };
 
     const handleMaxClick = () => {
-        setAmount(balanceAmount);
+        setAmount(availableAmount.toString());
     };
+
+    const isAmountValid = useMemo(() => {
+        const numAmount = parseFloat(amount);
+        return numAmount > 0 && numAmount <= availableAmount;
+    }, [amount, availableAmount]);
 
     return (
         <div className={cn("w-[29rem] mx-auto", className)}>
@@ -65,7 +112,9 @@ const TokenForm: FC<TokenFormProps> = ({
                                     <Icons.MoneyTick className="size-4 text-grey-60" />
                                     <span className="text-grey-60">Total hALPHA Staked</span>
                                 </div>
-                                <span className="text-grey-10 font-medium text-sm">{stakedAmount}</span>
+                                <span className="text-grey-10 font-medium text-sm">
+                                    {stakingInfo.isLoading ? "Loading..." : `${formattedStakedAmount} hALPHA`}
+                                </span>
                             </div>
                         </div>
                     </>
@@ -76,8 +125,15 @@ const TokenForm: FC<TokenFormProps> = ({
                     <label className="flex items-center justify-between mb-2">
                         <span className="text-sm font-medium text-grey-70">{inputPlaceholder}</span>
                         <div className="flex items-center text-sm text-grey-20 font-medium">
-                            <span>{balanceLabel}:</span>
-                            <span className="ml-1">{balanceAmount}</span>
+                            <span>
+                                {isUnstaking ? "Staked" : balanceLabel}:
+                            </span>
+                            <span className="ml-1">
+                                {isUnstaking
+                                    ? `${formatStakingAmount(stakingInfo.bonded)} hALPHA`
+                                    : formatPreciseBalance(availableAmount, 8)
+                                }
+                            </span>
                         </div>
                     </label>
                     <div className="relative">
@@ -86,16 +142,29 @@ const TokenForm: FC<TokenFormProps> = ({
                             placeholder="0.00"
                             value={amount}
                             onChange={(e) => setAmount(e.target.value)}
-                            className="w-full pr-16 text-lg"
+                            disabled={loading || stakingInfo.isLoading}
+                            className={cn(
+                                "w-full pr-16 text-lg",
+                                !isAmountValid && amount ? "border-red-500" : ""
+                            )}
                         />
                         <button
                             type="button"
                             onClick={handleMaxClick}
-                            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-primary-50 font-medium text-base hover:text-primary-40"
+                            disabled={loading || stakingInfo.isLoading}
+                            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-primary-50 font-medium text-base hover:text-primary-40 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             MAX
                         </button>
                     </div>
+                    {!isAmountValid && amount && (
+                        <p className="text-red-500 text-xs mt-1">
+                            {isUnstaking
+                                ? "Amount exceeds staked balance"
+                                : "Amount exceeds available balance"
+                            }
+                        </p>
+                    )}
                 </div>
 
                 {/* Receive Amount (for Bridge) */}
@@ -153,10 +222,12 @@ const TokenForm: FC<TokenFormProps> = ({
                 <CardButton
                     className="w-full h-12"
                     onClick={handleSubmit}
-                    disabled={!amount || parseFloat(amount) <= 0}
+                    disabled={!amount || !isAmountValid || stakingInfo.isLoading || loading}
                 >
                     <div className="flex items-center gap-2">
-                        <span className="text-lg font-medium">{buttonText}</span>
+                        <span className="text-lg font-medium">
+                            {loading || stakingInfo.isLoading ? "Loading..." : buttonText}
+                        </span>
                     </div>
                 </CardButton>
             </div>
