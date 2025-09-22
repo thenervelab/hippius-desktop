@@ -33,7 +33,7 @@ export const useUnpinnedStorageRequests = () => {
         const privatePath = await getPrivateSyncPath();
         hasPrivatePath = !!privatePath;
       } catch (error) {
-        console.log("No private sync path found");
+        console.log("No private sync path found", error);
         hasPrivatePath = false;
       }
 
@@ -41,7 +41,7 @@ export const useUnpinnedStorageRequests = () => {
         const publicPath = await getPublicSyncPath();
         hasPublicPath = !!publicPath;
       } catch (error) {
-        console.log("No public sync path found");
+        console.log("No public sync path found", error);
         hasPublicPath = false;
       }
 

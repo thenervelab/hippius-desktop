@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useMemo } from "react";
 
 import WalletBalanceWidget from "./WalletBalanceWidget";
-import StakeWidget from "./StakeWidget";
-import BridgeWidget from "./BridgeWidget";
+// import StakeWidget from "./StakeWidget";
+// import BridgeWidget from "./BridgeWidget";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import TransactionHistoryTable from "./TransactionHistoryTable";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
@@ -78,22 +78,27 @@ export default function Wallet() {
   return (
     <>
       <DashboardTitleWrapper mainText="Wallet">
-        <div className="w-full mt-6 grid grid-cols-3 gap-4">
+        <div className="w-full mt-6 grid grid-cols-[auto_minmax(0,1fr)] gap-4">
           <WalletBalanceWidget
             refetchTransactions={refetch}
             refetchSystemBalance={refetchSystemBalance}
           />
-          <StakeWidget />
-          <BridgeWidget />
-        </div>
-
-        <div className="col-span-3 mt-4">
           <BalanceTrends
             className="min-w-0"
             chartData={chartData}
             isLoading={isChartDataLoading}
           />
+          {/* <StakeWidget />
+          <BridgeWidget /> */}
         </div>
+
+        {/* <div className="col-span-3 mt-4">
+          <BalanceTrends
+            className="min-w-0"
+            chartData={chartData}
+            isLoading={isChartDataLoading}
+          />
+        </div> */}
 
         <div className="mt-6">
           <div className="flex justify-between">
