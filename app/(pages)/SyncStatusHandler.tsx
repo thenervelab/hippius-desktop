@@ -4,13 +4,11 @@ import React, { useState, useEffect } from "react";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import useSyncActivity from "../lib/hooks/useSyncActivity";
-import { toast } from "sonner";
 
 const SyncStatusHandler: React.FC = () => {
   const { data: syncFiles, isLoading, refetch } = useSyncActivity();
   const [isSyncOpen, setIsSyncOpen] = useState(false);
   const [isPermanentlyClosed, setIsPermanentlyClosed] = useState(false);
-  // toast.success(`Files: ${JSON.stringify(syncFiles)}`);
 
   const calculateSyncMetrics = () => {
     if (!syncFiles || syncFiles.length === 0) {

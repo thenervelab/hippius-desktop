@@ -1,9 +1,10 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { toast } from "sonner";
+// import { toast } from "sonner";
 
 // Sync Activity types based on useTraySync.ts
 export type SyncActivityItem = {
@@ -180,10 +181,9 @@ const useSyncActivity = () => {
         //       navigator.clipboard.writeText(JSON.stringify(response, null, 2)),
         //   },
         // });
-        // Track processed files with a Map using fileHash as key to avoid duplicates
+
         const processedFiles = new Map<string, SyncActivityItem>();
 
-        // Process uploading files first (priority)
         if (response.uploading) {
           for (const file of response.uploading) {
             const key =
@@ -192,7 +192,6 @@ const useSyncActivity = () => {
           }
         }
 
-        // Process recent files, skipping any duplicates
         if (response.recent) {
           for (const file of response.recent) {
             const key =

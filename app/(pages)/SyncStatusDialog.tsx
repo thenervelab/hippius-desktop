@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { ChevronDown, ChevronUp } from "lucide-react";
@@ -15,9 +16,7 @@ import FileSyncTypeBadge from "../components/page-sections/files/ipfs/files-tabl
 import { SyncActivityRow } from "@/lib/hooks/useSyncActivity";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
-import { toast } from "sonner";
 
-// UI constants
 const COLLAPSED_HEIGHT = 64;
 const EXPANDED_HEIGHT = 460;
 const BODY_MAX_HEIGHT = EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
@@ -97,10 +96,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     });
   }, []);
 
-  if (!syncFiles?.length && !calculatedMetrics.hasActiveSync) return null;
-
-  const { totalFiles, syncedFiles, percentage, isCompleted } =
-    calculatedMetrics;
   const handleHeaderClick = useCallback(
     (e: React.MouseEvent) => {
       const el = e.target as Element;
@@ -109,6 +104,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     },
     [toggleExpanded]
   );
+
+  if (!syncFiles?.length && !calculatedMetrics.hasActiveSync) return null;
+
+  const { totalFiles, syncedFiles, percentage, isCompleted } =
+    calculatedMetrics;
   if (!open) return null;
 
   return (
