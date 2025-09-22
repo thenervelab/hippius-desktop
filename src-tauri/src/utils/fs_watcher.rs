@@ -63,7 +63,7 @@ impl FsWatcher {
                             if let Err(e) = event_sender_clone.send(fs_event) {
                                 error!("Failed to send FS event: {}", e);
                             } else {
-                                println!("[FsWatcher] Sent event for: {:?}", path.file_name());
+                                info!("[FsWatcher] Sent event for: {:?}", path.file_name());
                             }
                             
                             // Clear processed events periodically to avoid memory growth
@@ -86,50 +86,108 @@ impl FsWatcher {
     fn process_event(event: &Event, root_dir: &Path) -> Option<Vec<(PathBuf, bool, bool)>> {
         let mut result = Vec::new();
         
-        println!("[FsWatcher] Processing event: {:?}", event.kind);
+        info!("[FsWatcher] Processing event: {:?}", event.kind);
 
         // Process create/remove/rename events
         match &event.kind {
             EventKind::Create(_) => {
-                println!("[FsWatcher] Create event detected");
+                info!("[FsWatcher] Create event detected");
                 for path in &event.paths {
-                    println!("[FsWatcher] Checking path: {:?}", path);
                     // Check if the path is within our root directory
                     if path.starts_with(root_dir) {
                         let is_dir = path.is_dir();
-                        println!("[FsWatcher] Create: {:?} (is_dir: {})", path.file_name().and_then(|n| n.to_str()), is_dir);
+                        info!("[FsWatcher] Create: {:?} (is_dir: {})", 
+                            path.file_name().and_then(|n| n.to_str()), 
+                            is_dir
+                        );
                         result.push((path.clone(), is_dir, true));
                     }
                 }
             },
             EventKind::Remove(_) => {
-                println!("[FsWatcher] Remove event detected");
+                info!("[FsWatcher] Remove event detected");
                 for path in &event.paths {
-                    println!("[FsWatcher] Checking path for removal: {:?}", path);
                     // Check if the path was within our root directory
                     if path.starts_with(root_dir) {
-                        let is_dir = path.to_str().map(|s| s.ends_with(std::path::MAIN_SEPARATOR)).unwrap_or(false);
-                        println!("[FsWatcher] Remove: {:?} (is_dir: {})", path.file_name().and_then(|n| n.to_str()), is_dir);
+                        // For remove events, we can't check is_dir() as the file is gone
+                        // So we'll use the best guess based on the path
+                        let is_dir = path.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR) || 
+                                   path.extension().is_none();
+                        
+                        info!("[FsWatcher] Remove: {:?} (is_dir: {})", 
+                            path.file_name().and_then(|n| n.to_str()), 
+                            is_dir
+                        );
                         result.push((path.clone(), is_dir, false));
                     }
                 }
             },
-            EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
-                println!("[FsWatcher] Rename event detected");
-                for path in &event.paths {
-                    println!("[FsWatcher] Checking path for rename: {:?}", path);
-                    // For renames, we need to check both old and new paths
-                    if path.starts_with(root_dir) {
-                        let is_dir = path.is_dir();
-                        println!("[FsWatcher] Rename: {:?} (is_dir: {})", path.file_name().and_then(|n| n.to_str()), is_dir);
-                        // We treat renames as remove+create
-                        result.push((path.clone(), is_dir, false)); // Remove old
-                        result.push((path.clone(), is_dir, true));  // Create new (same path)
+            EventKind::Modify(notify::event::ModifyKind::Name(rename_type)) => {
+                info!("[FsWatcher] Rename event detected: {:?}", rename_type);
+                
+                // For rename events, we get both old and new paths in the event
+                let paths: Vec<_> = event.paths.iter().collect();
+                
+                // A rename should have exactly 2 paths: [from, to]
+                if paths.len() == 2 {
+                    let (from_path, to_path) = (&paths[0], &paths[1]);
+                    
+                    // Check if this is actually a delete (file moved to outside watched directory)
+                    let from_in_watched = from_path.starts_with(root_dir);
+                    let to_in_watched = to_path.starts_with(root_dir);
+                    
+                    if from_in_watched && !to_in_watched {
+                        // This is a delete (file moved outside watched directory)
+                        let is_dir = from_path.is_dir();
+                        info!("[FsWatcher] Delete detected (moved outside): {:?} (is_dir: {})", 
+                            from_path.file_name().and_then(|n| n.to_str()),
+                            is_dir
+                        );
+                        result.push((from_path.to_path_buf(), is_dir, false));
+                    } else if !from_in_watched && to_in_watched {
+                        // This is a create (file moved into watched directory)
+                        let is_dir = to_path.is_dir();
+                        info!("[FsWatcher] Create detected (moved inside): {:?} (is_dir: {})", 
+                            to_path.file_name().and_then(|n| n.to_str()),
+                            is_dir
+                        );
+                        result.push((to_path.to_path_buf(), is_dir, true));
+                    } else if from_in_watched && to_in_watched {
+                        // This is a proper rename within the same directory
+                        let is_dir = to_path.is_dir() || from_path.is_dir();
+                        
+                        info!("[FsWatcher] Rename within directory: {:?} -> {:?} (is_dir: {})", 
+                            from_path.file_name().and_then(|n| n.to_str()),
+                            to_path.file_name().and_then(|n| n.to_str()),
+                            is_dir
+                        );
+                        
+                        // Add remove for old path
+                        result.push((from_path.to_path_buf(), is_dir, false));
+                        // Add create for new path
+                        result.push((to_path.to_path_buf(), is_dir, true));
+                    }
+                } else {
+                    // Fallback for unexpected number of paths - treat as individual events
+                    for path in paths {
+                        if path.starts_with(root_dir) {
+                            let is_dir = path.is_dir();
+                            info!("[FsWatcher] Fallback handling for: {:?} (is_dir: {})", 
+                                path.file_name().and_then(|n| n.to_str()), 
+                                is_dir
+                            );
+                            // We can't determine if this is create or remove, so we'll check if the file exists
+                            if path.exists() {
+                                result.push((path.clone(), is_dir, true));
+                            } else {
+                                result.push((path.clone(), is_dir, false));
+                            }
+                        }
                     }
                 }
             },
             _ => {
-                println!("[FsWatcher] Ignoring event: {:?}", event.kind);
+                info!("[FsWatcher] Ignoring event: {:?}", event.kind);
                 return None;
             }
         }
