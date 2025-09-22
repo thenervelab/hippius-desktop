@@ -1077,6 +1077,32 @@ pub async fn list_folder_contents(
     println!("[ListFolderContents] Received main_folder_name: {:?}", main_folder_name);
     println!("[ListFolderContents] Received subfolder_path: {:?}", subfolder_path);
     
+
+
+    let sync_root = if scope == "public" {
+        PathBuf::from(crate::utils::sync::get_public_sync_path().await.map_err(|e| e.to_string())?)
+    } else {
+        PathBuf::from(crate::utils::sync::get_private_sync_path().await.map_err(|e| e.to_string())?)
+    };
+    
+    let mut local_path = sync_root.join(&main_folder_name);
+    
+    // Build the full local path
+    if let Some(parts) = &subfolder_path {
+        for part in parts {
+            local_path.push(part);
+        }
+    }
+    
+    // Check if the local path exists and is a directory
+    if local_path.is_dir() {
+        println!("[ListFolderContents] Found local directory at: {}", local_path.display());
+        return list_local_folder_contents(&local_path, &main_folder_name, &subfolder_path).await;
+    }
+    
+    println!("[ListFolderContents] No local directory found at: {}, falling back to S3", local_path.display());
+    
+    // Fall back to S3 if local directory doesn't exist
     // First try to get the bucket name from the database
     let bucket_name = match crate::DB_POOL.get() {
         Some(pool) => {
@@ -1123,7 +1149,7 @@ pub async fn list_folder_contents(
     let s3_prefix = format!("{}/", path_parts.join("/"));
     let full_s3_uri_prefix = format!("s3://{}/{}", bucket_name, s3_prefix);
 
-    println!("[ListFolderContents] Listing contents for: {}", full_s3_uri_prefix);
+    println!("[ListFolderContents] Listing contents from S3: {}", full_s3_uri_prefix);
 
     async fn get_sync_root(scope: &str) -> Result<PathBuf, String> {
         if scope == "public" {
@@ -1164,7 +1190,7 @@ pub async fn list_folder_contents(
         item_name: &str,
         fallback_s3: &str,
     ) -> String {
-        use std::path::PathBuf;
+
         let local_prefix = match subfolder_path {
             Some(paths) if !paths.is_empty() => paths.join("/"),
             _ => main_folder_name.to_string(),
@@ -1364,6 +1390,85 @@ pub async fn list_folder_contents(
     Ok(direct_files)
 }
 
+/// Lists the contents of a local directory and returns them as FileDetail objects
+async fn list_local_folder_contents(
+    local_path: &std::path::Path,
+    main_folder_name: &str,
+    subfolder_path: &Option<Vec<String>>,
+) -> Result<Vec<FileDetail>, String> {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    
+    let mut result = Vec::new();
+    
+    // Helper to convert SystemTime to Unix timestamp string
+    fn system_time_to_timestamp(time: SystemTime) -> String {
+        time.duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string())
+    }
+    
+    // Read the directory entries
+    let entries = fs::read_dir(local_path)
+        .map_err(|e| format!("Failed to read local directory: {}", e))?;
+    
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Error reading directory entry: {}", e))?;
+        let path = entry.path();
+        let file_name = path.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| "Invalid file name".to_string())?
+            .to_string();
+            
+        let metadata = fs::metadata(&path)
+            .map_err(|e| format!("Failed to get metadata for {}: {}", path.display(), e))?;
+            
+        let is_dir = metadata.is_dir();
+        let file_size = metadata.len();
+        let modified_time = metadata.modified()
+            .map(system_time_to_timestamp)
+            .unwrap_or_else(|_| "0".to_string());
+            
+        // Build the source path relative to the main sync folder
+        let mut source_path = main_folder_name.to_string();
+        if let Some(parts) = subfolder_path {
+            if !parts.is_empty() {
+                source_path.push('/');
+                source_path.push_str(&parts.join("/"));
+            }
+        }
+        if !source_path.ends_with('/') {
+            source_path.push('/');
+        }
+        source_path.push_str(&file_name);
+        
+        result.push(FileDetail {
+            file_name: file_name.clone(),
+            cid: "local".to_string(),
+            source: path.to_string_lossy().to_string(),
+            file_hash: "".to_string(),
+            miner_ids: String::new(),
+            file_size,
+            created_at: modified_time.clone(),
+            last_charged_at: modified_time,
+            is_folder: is_dir,
+            main_req_hash: "local".to_string(),
+        });
+    }
+    
+    // Sort the results: directories first, then files, both alphabetically
+    result.sort_by(|a, b| {
+        if a.is_folder == b.is_folder {
+            a.file_name.cmp(&b.file_name)
+        } else if a.is_folder {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Greater
+        }
+    });
+    
+    Ok(result)
+}
 
 #[tauri::command]
 pub async fn add_file_to_public_folder(
