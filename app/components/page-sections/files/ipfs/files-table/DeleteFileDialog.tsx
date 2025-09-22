@@ -2,16 +2,20 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Icons, P, Button } from "@/components/ui";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
-import React from "react";
+import React, { useMemo } from "react";
 import { toast } from "sonner";
 
 const DeleteFileDialog: React.FC<{
   fileToDelete: FormattedUserIpfsFile | null;
   setFileToDelete: (v: FormattedUserIpfsFile | null) => void;
 }> = ({ setFileToDelete, fileToDelete }) => {
+  const isPrivateFolder = useMemo(() => {
+    return fileToDelete?.type?.toLowerCase() === 'private';
+  }, [fileToDelete]);
+
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteIpfsFile({
-    cid: fileToDelete?.cid || "",
-    fileToDelete
+    files: fileToDelete ? [fileToDelete] : [],
+    isPrivateFolder
   });
 
   return (

@@ -32,6 +32,7 @@ import { downloadIpfsFile } from "@/lib/utils/downloadIpfsFile";
 import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
+import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 
 interface FilesContentProps {
   isRecentFiles?: boolean;
@@ -89,6 +90,9 @@ const FilesContent: FC<FilesContentProps> = ({
   const [animateCloud, setAnimateCloud] = useState(false);
   const dragCounterRef = useRef(0);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Use selection context for delete functionality
+  const { enterSelectionModeAndSelectFile } = useFileSelection();
 
   // Use shared functionality between FilesTable and CardView
   const sharedState = useFileViewShared({
@@ -309,7 +313,7 @@ const FilesContent: FC<FilesContentProps> = ({
         className={cn(
           "w-full mt-4 relative",
           isDragging &&
-            "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
+          "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
         )}
         onDrop={handleDrop}
         onDragOver={handleDragOver}
@@ -360,8 +364,8 @@ const FilesContent: FC<FilesContentProps> = ({
           const truncatedName = fileToDelete?.name
             ? formatDisplayName(fileToDelete.name)
             : fileToDelete?.isFolder
-            ? "folder"
-            : "file";
+              ? "folder"
+              : "file";
 
           const toastId = toast.loading(`Deleting ${truncatedName}...`);
 
@@ -388,9 +392,8 @@ const FilesContent: FC<FilesContentProps> = ({
             ? "Deleting..."
             : `Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`
         }
-        text={`Are you sure you want to delete\n${
-          fileToDelete?.name ? "\n" + fileToDelete.name : ""
-        }`}
+        text={`Are you sure you want to delete\n${fileToDelete?.name ? "\n" + fileToDelete.name : ""
+          }`}
         heading={`Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`}
         disableButton={isDeleting}
       />
@@ -402,8 +405,8 @@ const FilesContent: FC<FilesContentProps> = ({
           file={contextMenu.file}
           onClose={() => setContextMenu(null)}
           onDelete={(file) => {
-            setFileToDelete(file);
-            setOpenDeleteModal(true);
+            // Use new selection system instead of old modal system
+            enterSelectionModeAndSelectFile(file);
             setContextMenu(null);
           }}
           onFileDownload={handleFileDownload}

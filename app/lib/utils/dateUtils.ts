@@ -1,3 +1,23 @@
+/**
+ * Formats a date to compact format: MM/DD/YY H:MM am/pm
+ * @param date - Date object to format
+ * @returns Formatted date string like "09/22/25 4:59 pm"
+ */
+export function formatCompactDate(date: Date): string {
+  const month = (date.getMonth() + 1).toString().padStart(2, "0"); // MM
+  const day = date.getDate().toString().padStart(2, "0"); // DD
+  const year = date.getFullYear().toString().slice(-2); // YY (last 2 digits)
+
+  let hours = date.getHours(); // Get hours in 24-hour format
+  const minutes = date.getMinutes().toString().padStart(2, "0"); // MM
+  const ampm = hours >= 12 ? "pm" : "am";
+
+  hours = hours % 12;
+  hours = hours ? hours : 12; // Convert hour '0' (midnight) to '12'
+
+  return `${month}/${day}/${year} ${hours}:${minutes} ${ampm}`;
+}
+
 export function formatUploadDate(dateString: string | number): string {
   const date = new Date(dateString);
   const day = date.getDate(); // D

@@ -30,6 +30,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePagination } from "@/lib/hooks";
 import NameCell from "./NameCell";
+import SelectionActionBar from "../SelectionActionBar";
+import { SelectionColumn, SelectionHeaderColumn } from "../SelectionColumn";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { VideoDialogTrigger } from "./VideoDialog";
@@ -45,6 +47,8 @@ import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
+import { useFileSelection } from "@/app/contexts/FileSelectionContext";
+import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
@@ -108,6 +112,17 @@ const FilesTable: FC<FilesTableProps> = memo(({
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
   const router = useRouter();
+  const { isSelectionMode, selectedFiles, enterSelectionModeAndSelectFile, toggleFileSelection, clearSelection } = useFileSelection();
+
+  // Determine if this is a private folder based on the files
+  const isPrivateFolder = useMemo(() => {
+    return selectedFiles.length > 0 && selectedFiles.some(file => file.type?.toLowerCase() === 'private');
+  }, [selectedFiles]);
+
+  const { mutate: deleteFiles, isPending: isDeleting } = useDeleteIpfsFile({
+    files: selectedFiles,
+    isPrivateFolder
+  });
 
 
   const [localFileDetailsFile, setLocalFileDetailsFile] =
@@ -115,8 +130,6 @@ const FilesTable: FC<FilesTableProps> = memo(({
   const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
 
   const {
-    setFileToDelete,
-    setOpenDeleteModal,
     setSelectedFile,
     handleShowFileDetails,
     handleContextMenu
@@ -143,8 +156,11 @@ const FilesTable: FC<FilesTableProps> = memo(({
     [handleContextMenu]
   );
 
+  // Ensure files is always an array to prevent undefined errors
+  const safeFiles = useMemo(() => files || [], [files]);
+
   const showEmptyState =
-    files.length === 0 &&
+    safeFiles.length === 0 &&
     (searchTerm || (activeFilters && activeFilters.length > 0));
 
   const {
@@ -152,7 +168,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
     setCurrentPage,
     currentPage,
     totalPages
-  } = usePagination(files, 10);
+  } = usePagination(safeFiles, 10);
 
   useEffect(() => {
     if (resetPagination) {
@@ -162,6 +178,13 @@ const FilesTable: FC<FilesTableProps> = memo(({
       }
     }
   }, [resetPagination, setCurrentPage, onPaginationReset]);
+
+  // Handle pagination adjustment when current page becomes invalid
+  useEffect(() => {
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(Math.max(1, totalPages));
+    }
+  }, [totalPages, currentPage, setCurrentPage]);
 
   // Memoize handler functions to maintain stable references
   const handleDownload = useCallback((file: FormattedUserIpfsFile) => {
@@ -173,9 +196,24 @@ const FilesTable: FC<FilesTableProps> = memo(({
   }, [setSelectedFile]);
 
   const handleDeleteFile = useCallback((file: FormattedUserIpfsFile) => {
-    setFileToDelete?.(file);
-    setOpenDeleteModal?.(true);
-  }, [setFileToDelete, setOpenDeleteModal]);
+    // Enter selection mode and select this file for deletion
+    enterSelectionModeAndSelectFile(file);
+  }, [enterSelectionModeAndSelectFile]);
+
+  // Handle multiple file deletion
+  const handleDeleteSelectedFiles = useCallback(() => {
+    if (selectedFiles.length === 0) return;
+
+    // Delete files - toast handling is now centralized in the hook
+    deleteFiles(undefined, {
+      onSuccess: () => {
+        // Clear selection and exit selection mode
+        clearSelection();
+        // Reset pagination to first page after deletion to ensure proper pagination state
+        setCurrentPage(1);
+      }
+    });
+  }, [selectedFiles, deleteFiles, clearSelection, setCurrentPage]);
   const createTableItems = useCallback((file: FormattedUserIpfsFile, fileType: string | null, decodedCid: string) => {
     // Compute folderUrl if file is a folder
     let folderUrl: string | undefined = undefined;
@@ -230,193 +268,257 @@ const FilesTable: FC<FilesTableProps> = memo(({
         itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
         onItemClick: () => localHandleShowFileDetails(file)
       },
-      {
+      // Only show delete option for files that can be deleted
+      ...(file.isAssigned ? [{
         icon: <Icons.Trash className="size-4" />,
         itemTitle: "Delete",
         onItemClick: () => handleDeleteFile(file),
         variant: "destructive" as const
-      }
+      }] : [])
     ];
   }, [handleDownload, handleSetSelectedFile, localHandleShowFileDetails, handleDeleteFile, getParam, router]);
 
-  // Create a stable memo of columns that doesn't depend on every prop
-  const columns = useMemo(() => [
-    columnHelper.accessor("name", {
-      header: "NAME",
-      enableSorting: false,
-      id: "name",
-      cell: (info) => {
-        const { fileFormat } = getFilePartsFromFileName(info.getValue());
-        const fileType = getFileTypeFromExtension(fileFormat || null);
+  // Memoize columns with stable dependencies
+  const selectionColumn = useMemo(() => {
+    if (!isSelectionMode) return [];
+    return [
+      columnHelper.display({
+        id: "selection",
+        size: 40,
+        maxSize: 40,
+        header: () => (
+          <div className="flex justify-center items-center h-full">
+            <SelectionHeaderColumn files={safeFiles} />
+          </div>
+        ),
+        cell: ({ row }) => (
+          <div className="flex justify-center items-center h-full px-2">
+            <SelectionColumn row={row} />
+          </div>
+        ),
+      }),
+    ];
+  }, [isSelectionMode, safeFiles]);
 
-        if (fileType === "video") {
-          return (
-            <VideoDialogTrigger
-              onClick={() => handleSetSelectedFile(info.row.original)}
-            >
+  // Create a stable memo of columns that doesn't depend on every prop
+  const columns = useMemo(
+    () => [
+      ...selectionColumn,
+      columnHelper.accessor("name", {
+        header: "NAME",
+        enableSorting: false,
+        id: "name",
+        cell: (info) => {
+          const { fileFormat } = getFilePartsFromFileName(info.getValue());
+          const fileType = getFileTypeFromExtension(fileFormat || null);
+
+          if (fileType === "video") {
+            return isSelectionMode ? (
               <NameCell
+                className="px-4 py-[22px]"
                 rawName={info.getValue()}
                 actualName={info.row.original.actualFileName}
                 cid={info.row.original.cid}
                 isAssigned={info.row.original.isAssigned}
                 fileType={fileType}
-                isPreviewable={true}
+                isPreviewable={false}
                 isFolder={info.row.original.isFolder}
                 source={info.row.original.source}
                 mainReqHash={info.row.original.mainReqHash}
               />
-            </VideoDialogTrigger>
-          );
-        } else if (fileType === "image") {
-          return (
-            <ImageDialogTrigger
-              onClick={() => handleSetSelectedFile(info.row.original)}
-            >
+            ) : (
+              <VideoDialogTrigger
+                onClick={() => handleSetSelectedFile(info.row.original)}
+              >
+                <NameCell
+                  rawName={info.getValue()}
+                  actualName={info.row.original.actualFileName}
+                  cid={info.row.original.cid}
+                  isAssigned={info.row.original.isAssigned}
+                  fileType={fileType}
+                  isPreviewable={true}
+                  isFolder={info.row.original.isFolder}
+                  source={info.row.original.source}
+                  mainReqHash={info.row.original.mainReqHash}
+                />
+              </VideoDialogTrigger>
+            );
+          } else if (fileType === "image") {
+            return isSelectionMode ? (
               <NameCell
+                className="px-4 py-[22px]"
                 rawName={info.getValue()}
                 actualName={info.row.original.actualFileName}
                 cid={info.row.original.cid}
                 isAssigned={info.row.original.isAssigned}
                 fileType={fileType}
-                isPreviewable={true}
+                isPreviewable={false}
                 isFolder={info.row.original.isFolder}
                 source={info.row.original.source}
                 mainReqHash={info.row.original.mainReqHash}
               />
-            </ImageDialogTrigger>
-          );
-        } else if (fileType === "PDF") {
-          return (
-            <PdfDialogTrigger
-              onClick={() => handleSetSelectedFile(info.row.original)}
-            >
+            ) : (
+              <ImageDialogTrigger
+                onClick={() => handleSetSelectedFile(info.row.original)}
+              >
+                <NameCell
+                  rawName={info.getValue()}
+                  actualName={info.row.original.actualFileName}
+                  cid={info.row.original.cid}
+                  isAssigned={info.row.original.isAssigned}
+                  fileType={fileType}
+                  isPreviewable={true}
+                  isFolder={info.row.original.isFolder}
+                  source={info.row.original.source}
+                  mainReqHash={info.row.original.mainReqHash}
+                />
+              </ImageDialogTrigger>
+            );
+          } else if (fileType === "PDF") {
+            return isSelectionMode ? (
               <NameCell
+                className="px-4 py-[22px]"
                 rawName={info.getValue()}
                 actualName={info.row.original.actualFileName}
                 cid={info.row.original.cid}
                 isAssigned={info.row.original.isAssigned}
                 fileType={fileType}
-                isPreviewable={true}
+                isPreviewable={false}
                 isFolder={info.row.original.isFolder}
                 source={info.row.original.source}
                 mainReqHash={info.row.original.mainReqHash}
               />
-            </PdfDialogTrigger>
+            ) : (
+              <PdfDialogTrigger
+                onClick={() => handleSetSelectedFile(info.row.original)}
+              >
+                <NameCell
+                  rawName={info.getValue()}
+                  actualName={info.row.original.actualFileName}
+                  cid={info.row.original.cid}
+                  isAssigned={info.row.original.isAssigned}
+                  fileType={fileType}
+                  isPreviewable={true}
+                  isFolder={info.row.original.isFolder}
+                  source={info.row.original.source}
+                  mainReqHash={info.row.original.mainReqHash}
+                />
+              </PdfDialogTrigger>
+            );
+          }
+          return (
+            <NameCell
+              className="px-4 py-[22px]"
+              rawName={info.getValue()}
+              actualName={info.row.original.actualFileName}
+              cid={info.row.original.cid}
+              isAssigned={info.row.original.isAssigned}
+              fileType={fileType || "document"}
+              isFolder={info.row.original.isFolder}
+              source={info.row.original.source}
+              mainReqHash={info.row.original.mainReqHash}
+            />
           );
         }
-        return (
-          <NameCell
-            className="px-4 py-[22px]"
-            rawName={info.getValue()}
-            actualName={info.row.original.actualFileName}
-            cid={info.row.original.cid}
-            isAssigned={info.row.original.isAssigned}
-            fileType={fileType || "document"}
-            isFolder={info.row.original.isFolder}
-            source={info.row.original.source}
-            mainReqHash={info.row.original.mainReqHash}
-          />
-        );
-      }
-    }),
-    columnHelper.accessor("size", {
-      header: "SIZE",
-      enableSorting: true,
-      id: "size",
-      cell: (cell) => {
-        const value = cell.getValue();
-        if (cell.row.original.tempData) return "...";
-        if (value === undefined || value === 0) return "Unknown";
-        return (
-          <div className="text-grey-20 text-base font-medium">
-            {formatBytesFromBigInt(BigInt(value))}
-          </div>
-        );
-      }
-    }),
-    columnHelper.accessor("createdAt", {
-      header: "DATE UPLOADED",
-      enableSorting: true,
-      id: "date_uploaded",
-      cell: (cell) => {
-        const createdAt = cell.row.original.createdAt;
-        return createdAt === 0 ? "Unknown" : <FormattedTimestamp timestamp={createdAt} />;
-      }
-    }),
-    columnHelper.display({
-      header: "LOCATION",
-      id: "location",
-      enableSorting: false,
-      cell: ({ row: { original } }) => {
-        const getParentDirectory = (path: string): string => {
-          // Return Hippius for S3 paths
-          if (path && path.startsWith("s3://")) {
-            return "Hippius";
-          }
-
-          if (!path) return "Unknown";
-          const parts = path.split(/[/\\]/).filter((p) => p.trim());
-          if (parts.length >= 2) {
-            return parts[parts.length - 2];
-          }
-          return "Hippius";
-        };
-
-        const parentDir = getParentDirectory(original.source ?? "");
-        const isS3Source = original.source && original.source.startsWith("s3://");
-
-        return (
-          <div className="flex flex-col">
+      }),
+      columnHelper.accessor("size", {
+        header: "SIZE",
+        enableSorting: true,
+        id: "size",
+        cell: (cell) => {
+          const value = cell.getValue();
+          if (cell.row.original.tempData) return "...";
+          if (value === undefined || value === 0) return "Unknown";
+          return (
             <div className="text-grey-20 text-base font-medium">
-              {parentDir}
+              {formatBytesFromBigInt(BigInt(value))}
             </div>
-            {original.source !== "Hippius" && !isS3Source && (
-              <div
-                className="text-grey-70 text-xs truncate max-w-[250px] xl:max-w-[100%]"
-                title={original.source}
-              >
-                {original.source && original.source.length > 53
-                  ? original.source.slice(0, 40) + "..." + original.source.slice(-10)
-                  : original.source ?? ""}
+          );
+        }
+      }),
+      columnHelper.accessor("createdAt", {
+        header: "DATE UPLOADED",
+        enableSorting: true,
+        id: "date_uploaded",
+        cell: (cell) => {
+          const createdAt = cell.row.original.createdAt;
+          return createdAt === 0 ? "Unknown" : <FormattedTimestamp timestamp={createdAt} />;
+        }
+      }),
+      columnHelper.display({
+        header: "LOCATION",
+        id: "location",
+        enableSorting: false,
+        cell: ({ row: { original } }) => {
+          const getParentDirectory = (path: string): string => {
+            // Return Hippius for S3 paths
+            if (path && path.startsWith("s3://")) {
+              return "Hippius";
+            }
+
+            if (!path) return "Unknown";
+            const parts = path.split(/[/\\]/).filter((p) => p.trim());
+            if (parts.length >= 2) {
+              return parts[parts.length - 2];
+            }
+            return "Hippius";
+          };
+
+          const parentDir = getParentDirectory(original.source ?? "");
+          const isS3Source = original.source && original.source.startsWith("s3://");
+
+          return (
+            <div className="flex flex-col">
+              <div className="text-grey-20 text-base font-medium">
+                {parentDir}
               </div>
-            )}
-          </div>
-        );
-      }
-    }),
-    columnHelper.display({
-      id: "actions",
-      header: "",
-      size: 40,
-      maxSize: 40,
-      cell: ({ cell }) => {
-        const file = cell.row.original;
-        const { cid, name } = file;
-        const decodedCid = decodeHexCid(cid);
-        const { fileFormat } = getFilePartsFromFileName(name);
-        const fileType = getFileTypeFromExtension(fileFormat || null);
+              {original.source !== "Hippius" && !isS3Source && (
+                <div
+                  className="text-grey-70 text-xs truncate max-w-[250px] xl:max-w-[100%]"
+                  title={original.source}
+                >
+                  {original.source && original.source.length > 53
+                    ? original.source.slice(0, 40) + "..." + original.source.slice(-10)
+                    : original.source ?? ""}
+                </div>
+              )}
+            </div>
+          );
+        }
+      }),
+      columnHelper.display({
+        id: "actions",
+        header: "",
+        size: 40,
+        maxSize: 40,
+        cell: ({ cell }) => {
+          const file = cell.row.original;
+          const { cid, name } = file;
+          const decodedCid = decodeHexCid(cid);
+          const { fileFormat } = getFilePartsFromFileName(name);
+          const fileType = getFileTypeFromExtension(fileFormat || null);
 
-        const menuItems = createTableItems(file, fileType, decodedCid);
+          const menuItems = createTableItems(file, fileType, decodedCid);
 
-        return (
-          <div className="flex justify-center items-center">
-            <TableActionMenu
-              dropdownTitle="IPFS Options"
-              items={menuItems}
-            >
-              <Button
-                variant="ghost"
-                size="md"
-                className="h-8 w-8 p-0 text-grey-70"
+          return (
+            <div className="flex justify-center items-center">
+              <TableActionMenu
+                dropdownTitle="IPFS Options"
+                items={menuItems}
               >
-                <MoreVertical className="size-4" />
-              </Button>
-            </TableActionMenu>
-          </div>
-        );
-      }
-    })
-  ], [handleSetSelectedFile, createTableItems]);
+                <Button
+                  variant="ghost"
+                  size="md"
+                  className="h-8 w-8 p-0 text-grey-70 action-menu-area"
+                >
+                  <MoreVertical className="size-4" />
+                </Button>
+              </TableActionMenu>
+            </div>
+          );
+        }
+      })
+    ], [handleSetSelectedFile, createTableItems, selectionColumn, isSelectionMode]);
 
   const tableConfig = useMemo(() => ({
     columns,
@@ -435,11 +537,11 @@ const FilesTable: FC<FilesTableProps> = memo(({
     table.getHeaderGroups().map((headerGroup) => (
       <TableModule.Tr key={headerGroup.id} draggable={false}>
         {headerGroup.headers.map((header) => (
-          <TableModule.Th key={header.id} header={header} />
+          <TableModule.Th key={header.id} header={header} align={header.id === "selection" ? "center" : "left"} />
         ))}
       </TableModule.Tr>
     ))
-  ), [table]);
+  ), [table, isSelectionMode]);
 
   const tableBody = useMemo(() => (
     table.getRowModel().rows?.map((row) => {
@@ -463,9 +565,38 @@ const FilesTable: FC<FilesTableProps> = memo(({
           transparent
           className={cn(
             rowState === "pending" && "animate-pulse",
-            rowState === "error" && "bg-red-200/20"
+            rowState === "error" && "bg-red-200/20",
+            isSelectionMode && rowData.isAssigned && "cursor-pointer",
+            isSelectionMode &&
+            selectedFiles.some(f => f.cid === rowData.cid) &&
+            rowData.isAssigned &&
+            "bg-primary-60/10",
+            isSelectionMode &&
+            !selectedFiles.some(f => f.cid === rowData.cid) &&
+            rowData.isAssigned &&
+            "hover:bg-primary-60/8",
+            isSelectionMode &&
+            !rowData.isAssigned &&
+            "opacity-50 cursor-not-allowed"
           )}
           onContextMenu={(e) => localHandleContextMenu(e, rowData)}
+          onClick={(e) => {
+            // Don't handle clicks if it's on the action menu area or checkbox area
+            const target = e.target as HTMLElement;
+            if (
+              target.closest(".action-menu-area") ||
+              target.closest('[role="checkbox"]') ||
+              target.closest(".checkbox-container")
+            ) {
+              return;
+            }
+
+            if (isSelectionMode && rowData.isAssigned) {
+              e.preventDefault();
+              e.stopPropagation();
+              toggleFileSelection(rowData);
+            }
+          }}
         >
           {row.getVisibleCells().map((cell) => (
             <TableModule.Td
@@ -481,7 +612,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
         </TableModule.Tr>
       );
     })
-  ), [table, localHandleContextMenu, paginatedData]);
+  ), [table, localHandleContextMenu, isSelectionMode, toggleFileSelection, selectedFiles, currentPage]);
 
   const paginationComponent = useMemo(() => {
     if (totalPages <= 1) return null;
@@ -531,7 +662,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
           isRecentFiles ? "min-h-[350px]" : "min-h-[700px]"
         )}
       >
-        <TableModule.TableWrapper className="duration-300 delay-300">
+        <TableModule.TableWrapper className="duration-300 delay-300" key={`pagination-${currentPage}-${paginatedData?.length}`}>
           <TableModule.Table>
             <TableModule.THead>
               {headerRows}
@@ -541,10 +672,21 @@ const FilesTable: FC<FilesTableProps> = memo(({
             </TableModule.TBody>
           </TableModule.Table>
         </TableModule.TableWrapper>
-        <div className="my-8">
+        <div className={cn(
+          "my-8",
+          isSelectionMode && "pb-20" // Add bottom padding when selection mode is active to prevent overlap
+        )}>
           {paginationComponent}
         </div>
       </div>
+
+      {/* Selection action bar positioned above pagination */}
+      {isSelectionMode && <SelectionActionBar
+        onDelete={handleDeleteSelectedFiles}
+        isDeleting={isDeleting}
+      />
+      }
+
       {dialogComponent}
     </div>
   );
