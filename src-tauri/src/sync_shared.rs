@@ -6,14 +6,13 @@ use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path; 
 use std::path::PathBuf;
-// use std::fs;
+use std::fs;
 use std::process::Command;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use hex;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
-// use chrono::{DateTime, Utc};
 use crate::user_profile_sync::UserProfileFileWithType;
 use crate::utils::file_operations::calculate_local_size;
 use crate::commands::node::get_aws_binary_path;
@@ -846,4 +845,23 @@ pub async fn delete_bucket_item_by_name(
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
+}
+
+pub fn folder_size(path: &Path) -> u64 {
+    let mut size = 0;
+
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Ok(metadata) = fs::metadata(&path) {
+                    size += metadata.len();
+                }
+            } else if path.is_dir() {
+                size += folder_size(&path);
+            }
+        }
+    }
+
+    size
 }

@@ -30,7 +30,7 @@ use sp_core::crypto::Ss58Codec;
 use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 use sqlx::SqlitePool;
 use crate::sync_shared::RecentItem;
-use crate::sync_shared::update_uploaded_file;
+use crate::sync_shared::{update_uploaded_file, folder_size};
 
 async fn handle_fs_events(
     mut rx: mpsc::UnboundedReceiver<FsEvent>,
@@ -639,7 +639,7 @@ async fn process_batch(
                 };
                 
                 let size = if *is_dir {
-                    0
+                    folder_size(&path)
                 } else {
                     std::fs::metadata(path).ok().map(|m| m.len()).unwrap_or(0)
                 };
@@ -696,17 +696,49 @@ async fn process_batch(
                     // For delete events, we'll process them individually
                     if let Err(e) = delete_bucket_item_by_name(pool, owner, "private", file_name).await {
                         error!("[PrivateFolderSync] Failed to delete '{}': {}", file_name, e);
-                    } else {
-                        println!("[PrivateFolderSync] Successfully deleted '{}' from database", file_name);
-                        
-                        recent_items.push(RecentItem {
+                        let recent_item = RecentItem {
                             name: file_name.to_string(),
                             scope: "private".to_string(),
                             action: "deleted".to_string(),
                             kind: if *is_dir { "folder" } else { "file" }.to_string(),
                             path: path.to_string_lossy().to_string(),
                             timestamp: chrono::Utc::now().timestamp_millis(),
-                        });
+                        };
+
+                        // Add to recent items
+                        recent_items.push(recent_item.clone());
+
+                        // Update uploading items in sync state if this is a file
+                        if !*is_dir {
+                            let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+                            // Remove any existing entry for this path and add the new one
+                            state.uploading_items.retain(|item| item.path != recent_item.path);
+                            state.uploading_items.push(recent_item);
+                        }
+
+                    } else {
+                        println!("[PrivateFolderSync] Successfully deleted '{}' from database", file_name);
+                        
+                        let recent_item = RecentItem {
+                            name: file_name.to_string(),
+                            scope: "private".to_string(),
+                            action: "deleted".to_string(),
+                            kind: if *is_dir { "folder" } else { "file" }.to_string(),
+                            path: path.to_string_lossy().to_string(),
+                            timestamp: chrono::Utc::now().timestamp_millis(),
+                        };
+
+                        // Add to recent items
+                        recent_items.push(recent_item.clone());
+
+                        // Update uploading items in sync state if this is a file
+                        if !*is_dir {
+                            let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+                            // Remove any existing entry for this path and add the new one
+                            state.uploading_items.retain(|item| item.path != recent_item.path);
+                            state.uploading_items.push(recent_item);
+                        }
+
                     }
                 }
             }
