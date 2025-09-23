@@ -22,8 +22,7 @@
             "endpoints": [
                 "https://github.com/thenervelab/hippius-desktop/releases/latest/download/latest.json"
             ],
-            "dangerousInsecureTransportProtocol": false,
-            "dialog": false
+            "dangerousInsecureTransportProtocol": false
         }
     },
     "app": {
@@ -73,7 +72,7 @@
             "exceptionDomain": "hippius.com",
             "frameworks": [],
             "providerShortName": "Hippius",
-            "signingIdentity": "-",
+            "signingIdentity": null,
             "hardenedRuntime": true,
             "minimumSystemVersion": "10.13.0"
         },
