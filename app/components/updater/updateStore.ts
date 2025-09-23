@@ -12,6 +12,9 @@ export const updateInfoAtom = atom<{
 } | null>(null);
 export const updateConfirmedAtom = atom<boolean | null>(null);
 
+// Update check completion status
+export const updateCheckCompleteAtom = atom(false);
+
 // Helper functions to interact with the store
 export function openUpdateDialog(updateInfo: { version: string; body: string; size?: number }) {
   updateStore.set(updateInfoAtom, updateInfo);

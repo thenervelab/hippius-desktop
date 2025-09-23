@@ -10,12 +10,24 @@ import ProgressDisplay from "./ProgressDisplay";
 import ProgressBarDisplay from "./ProgressBarDisplay";
 import { useAtomValue } from "jotai";
 import { stepAtom } from "./atoms";
+import { updateCheckCompleteAtom } from "@/app/components/updater/updateStore";
 
 const SplashScreen = () => {
   const step = useAtomValue(stepAtom);
+  const updateCheckComplete = useAtomValue(updateCheckCompleteAtom);
+
   const contentArr = Object.values(PHASE_CONTENT);
   const showProgress = step >= 0 && step < contentArr.length;
-  const progressData = contentArr[step];
+
+  // During update check, show custom content
+  const isUpdateMode = !updateCheckComplete;
+  const progressData = isUpdateMode
+    ? {
+      status: "Checking for Updates",
+      subStatus: "Please wait while we check for new version...",
+      icon: <Icons.CheckingIPFS className="h-[140px] w-[230px]" />
+    }
+    : contentArr[step];
 
   return (
     <div className="flex grow flex-col items-center w-full h-full justify-center bg-primary-10 relative overflow-hidden">

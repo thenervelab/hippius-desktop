@@ -11,8 +11,8 @@ import PreAuthProvider from "@/app/components/auth/PreAuthProvider";
 import { Suspense } from "react";
 import PageLoader from "@/app/components/PageLoader";
 import SplashWrapper from "./components/splash-screen";
-import UpdateDialogWrapper from "./components/updater/UpdateDialogWrapper";
 import { NavigationLoaderProvider } from "./lib/hooks/useNavigationLoader";
+import UpdateChecker from "@/components/updater/UpdateChecker";
 
 
 const digitalFonts = localFont({
@@ -36,24 +36,25 @@ export default function RootLayout({
         className={`${digitalFonts.className} ${geistSans.className} ${geistSans.variable} bg-grey-100 text-grey-10 antialiased font-sans`}
       >
         <Providers>
-          <WalletAuthProvider>
-            <PreAuthProvider>
-              <NextTopLoader color="#3167DD" showSpinner={false} />
-              <NavigationLoaderProvider>
-                <Suspense fallback={<PageLoader />}>
-                  <SplashWrapper skipSplash={false}>
-                    <div className="flex min-h-screen h-screen">{children}</div>
-                  </SplashWrapper>
-                </Suspense>
-                <UpdateDialogWrapper />
-                <Toaster
-                  toastOptions={{
-                    style: { fontFamily: "var(--font-geist-sans)" },
-                  }}
-                />
-              </NavigationLoaderProvider>
-            </PreAuthProvider>
-          </WalletAuthProvider>
+          <UpdateChecker>
+            <WalletAuthProvider>
+              <PreAuthProvider>
+                <NextTopLoader color="#3167DD" showSpinner={false} />
+                <NavigationLoaderProvider>
+                  <Suspense fallback={<PageLoader />}>
+                    <SplashWrapper skipSplash={false}>
+                      <div className="flex min-h-screen h-screen">{children}</div>
+                    </SplashWrapper>
+                  </Suspense>
+                  <Toaster
+                    toastOptions={{
+                      style: { fontFamily: "var(--font-geist-sans)" },
+                    }}
+                  />
+                </NavigationLoaderProvider>
+              </PreAuthProvider>
+            </WalletAuthProvider>
+          </UpdateChecker>
         </Providers>
       </body>
     </html>
