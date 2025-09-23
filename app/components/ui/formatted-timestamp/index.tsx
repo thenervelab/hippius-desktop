@@ -1,5 +1,5 @@
 import React from 'react';
-import { parseDateAndTime } from '@/app/lib/utils/dateUtils';
+import { formatCompactDate } from '@/app/lib/utils/dateUtils';
 
 interface FormattedTimestampProps {
     timestamp: number;
@@ -25,11 +25,11 @@ const FormattedTimestamp: React.FC<FormattedTimestampProps> = ({
         return <span className="text-grey-50">—</span>;
     }
 
-    const { date: formattedDate, time: formattedTime } = parseDateAndTime(date.toISOString());
+    const formattedDate = formatCompactDate(date);
 
     return (
         <div className={`text-left text-base font-medium text-grey-60 self-start ${className || ''}`}>
-            <div>{formattedDate}{" "}{formattedTime}</div>
+            <div>{formattedDate}</div>
         </div>
     );
 };

@@ -2,14 +2,13 @@
 
 import { useState, useCallback } from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
-import { useDeleteIpfsFile } from "@/lib/hooks";
+import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { decodeHexCid } from "@/app/lib/utils/decodeHexCid";
 import { FileDetail } from "@/app/(pages)/UnpinFilesDialog";
-import { useSearchParams } from "next/dist/client/components/navigation";
 import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 
@@ -54,10 +53,10 @@ export function useFileViewShared(
   props: FileViewSharedProps
 ): FileViewSharedState {
   const { files, showUnpinnedDialog } = props;
+  // Ensure files is always an array to prevent undefined errors
+  const safeFiles = files || [];
   const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
 
-  const params = useSearchParams();
-  const folderName = params.get("folderName") || "Folder";
   const isPrivateFolder = activeSubMenuItem === "Private";
 
   const [fileToDelete, setFileToDelete] =
@@ -65,9 +64,7 @@ export function useFileViewShared(
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const { mutateAsync: deleteFileMutation, isPending: isDeleting } =
     useDeleteIpfsFile({
-      cid: fileToDelete?.cid || "",
-      fileToDelete,
-      folderName,
+      files: fileToDelete ? [fileToDelete] : [],
       isPrivateFolder,
     });
 
@@ -86,13 +83,13 @@ export function useFileViewShared(
 
   // Extract unpinned file details from files
   const unpinnedFileDetails = showUnpinnedDialog
-    ? files
-        .filter((file) => !file.isAssigned)
-        .map((file) => ({
-          filename: file.name || "Unnamed File",
-          cid: decodeHexCid(file.cid),
-          createdAt: file.createdAt,
-        }))
+    ? safeFiles
+      .filter((file) => !file.isAssigned)
+      .map((file) => ({
+        filename: file.name || "Unnamed File",
+        cid: decodeHexCid(file.cid),
+        createdAt: file.createdAt,
+      }))
     : [];
 
   // Update unpinned files state when unpinned file details change

@@ -1,4 +1,4 @@
-import React, { FC, useState, useEffect, useCallback, memo } from "react";
+import React, { FC, useState, useEffect, useCallback, memo, useMemo } from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +16,7 @@ import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
+import SelectionActionBar from "../SelectionActionBar";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import * as TableModule from "@/components/ui/alt-table";
 import { useRouter } from "next/navigation";
@@ -27,6 +28,8 @@ import SidebarDialog from "@/app/components/ui/SidebarDialog";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { Folder } from "@/app/components/ui/icons";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
+import { useFileSelection } from "@/app/contexts/FileSelectionContext";
+import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 interface Filter {
@@ -63,6 +66,17 @@ const CardView: FC<CardViewProps> = ({
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
+  const { isSelectionMode, selectedFiles, enterSelectionModeAndSelectFile, clearSelection } = useFileSelection();
+
+  // Determine if this is a private folder based on the files
+  const isPrivateFolder = useMemo(() => {
+    return selectedFiles.length > 0 && selectedFiles.some(file => file.type?.toLowerCase() === 'private');
+  }, [selectedFiles]);
+
+  const { mutate: deleteFiles, isPending: isDeleting } = useDeleteIpfsFile({
+    files: selectedFiles,
+    isPrivateFolder
+  });
 
 
   const [localFileDetailsFile, setLocalFileDetailsFile] =
@@ -70,12 +84,25 @@ const CardView: FC<CardViewProps> = ({
   const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
 
   const {
-    setFileToDelete,
-    setOpenDeleteModal,
     setSelectedFile,
     handleShowFileDetails,
     handleContextMenu
   } = sharedState || {};
+
+  // Handle multiple file deletion
+  const handleDeleteSelectedFiles = useCallback(() => {
+    if (selectedFiles.length === 0) return;
+
+    deleteFiles(undefined, {
+      onSuccess: () => {
+        // Clear selection and exit selection mode
+        clearSelection();
+      },
+      onError: () => {
+        // Keep selection on error, but user can manually clear it
+      }
+    });
+  }, [selectedFiles, deleteFiles, clearSelection]);
 
   const localHandleShowFileDetails = useCallback(
     (file: FormattedUserIpfsFile) => {
@@ -98,8 +125,11 @@ const CardView: FC<CardViewProps> = ({
     [handleContextMenu]
   );
 
+  // Ensure files is always an array to prevent undefined errors
+  const safeFiles = useMemo(() => files || [], [files]);
+
   const showEmptyState =
-    files.length === 0 &&
+    safeFiles.length === 0 &&
     (searchTerm || (activeFilters && activeFilters.length > 0));
 
   const {
@@ -107,7 +137,7 @@ const CardView: FC<CardViewProps> = ({
     setCurrentPage,
     currentPage,
     totalPages
-  } = usePagination(files || [], 12);
+  } = usePagination(safeFiles, 12);
 
   useEffect(() => {
     if (resetPagination) {
@@ -138,6 +168,7 @@ const CardView: FC<CardViewProps> = ({
 
   return (
     <div className="flex flex-col gap-y-8 relative">
+
       <div
         className={cn(
           "w-full relative",
@@ -165,29 +196,30 @@ const CardView: FC<CardViewProps> = ({
                 folderUrl = url;
               }
 
-              const handleCardClick = () => {
-                if (
-                  fileType === "video" ||
-                  fileType === "image" ||
-                  fileType === "PDF"
-                ) {
-                  setSelectedFile?.(file);
-                } else if (file.isFolder) {
-                  router.push(folderUrl);
-                }
-              };
-
               return (
                 <div
                   key={index}
-                  className="card-container"
+                  className="card-container relative"
                   onContextMenu={(e) => localHandleContextMenu(e, file)}
                 >
                   <FileCard
                     key={file.cid}
                     file={file}
                     state={cardState}
-                    onClick={handleCardClick}
+                    onClick={() => {
+                      // Normal mode behavior - only if not in selection mode
+                      if (!isSelectionMode) {
+                        if (
+                          fileType === "video" ||
+                          fileType === "image" ||
+                          fileType === "PDF"
+                        ) {
+                          setSelectedFile?.(file);
+                        } else if (file.isFolder) {
+                          router.push(folderUrl);
+                        }
+                      }
+                    }}
                     actionMenu={
                       <TableActionMenu
                         dropdownTitle="IPFS Options"
@@ -281,15 +313,15 @@ const CardView: FC<CardViewProps> = ({
                               localHandleShowFileDetails(file);
                             }
                           },
-                          {
+                          // Only show delete option for files that can be deleted
+                          ...(file.isAssigned ? [{
                             icon: <Icons.Trash className="size-4" />,
                             itemTitle: "Delete",
                             onItemClick: () => {
-                              setFileToDelete?.(file);
-                              setOpenDeleteModal?.(true);
+                              enterSelectionModeAndSelectFile(file);
                             },
                             variant: "destructive" as const
-                          }
+                          }] : [])
                         ]}
                       >
                         <Button
@@ -307,7 +339,7 @@ const CardView: FC<CardViewProps> = ({
             })}
           </div>
         </div>
-        <div className="my-8">
+        <div className="my-8 pb-20">
           {totalPages > 1 && (
             <TableModule.Pagination
               currentPage={currentPage}
@@ -317,6 +349,13 @@ const CardView: FC<CardViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Selection action bar positioned above pagination */}
+      {isSelectionMode && <SelectionActionBar
+        onDelete={handleDeleteSelectedFiles}
+        isDeleting={isDeleting}
+      />
+      }
 
       {!sharedState && localIsFileDetailsOpen && (
         <SidebarDialog

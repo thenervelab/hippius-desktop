@@ -11,15 +11,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import { getFolderPathArray } from "@/app/utils/folderPathUtils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { toast } from "sonner";
+import { useRef } from "react";
+
+export type FileToDelete = FormattedUserIpfsFile;
 
 export const useDeleteIpfsFile = ({
-    cid,
-    fileToDelete: file,
+    files,
     isPrivateFolder
 }: {
-    cid: string,
-    fileToDelete: FormattedUserIpfsFile | null,
-    folderName?: string,
+    files: FileToDelete[],
     isPrivateFolder?: boolean
 }) => {
     const { data: ipfsFiles } = useUserIpfsFiles();
@@ -31,82 +32,155 @@ export const useDeleteIpfsFile = ({
     const mainFolderActualName = getParam("mainFolderActualName", "");
     const subFolderPath = getParam("subFolderPath");
 
+    // Track toast for proper cleanup
+    const loadingToastRef = useRef<string | number | null>(null);
 
     return useMutation({
-        mutationKey: ["delete-ipfs-file", cid],
+        mutationKey: ["delete-ipfs-files", files.map(f => f.cid).join(',')],
+        onMutate: () => {
+            // Show loading toast when mutation starts
+            const fileCount = files.length;
+            const isMultiple = fileCount > 1;
+            const firstFileName = files[0]?.actualFileName || files[0]?.name || "file";
+
+            const loadingMessage = isMultiple
+                ? `Deleting ${fileCount} files...`
+                : `Deleting "${firstFileName}"...`;
+
+            loadingToastRef.current = toast.loading(loadingMessage);
+        },
+        onSuccess: () => {
+            // Dismiss loading toast and show success
+            if (loadingToastRef.current) {
+                toast.dismiss(loadingToastRef.current);
+                loadingToastRef.current = null;
+            }
+
+            const fileCount = files.length;
+            const isMultiple = fileCount > 1;
+            const firstFileName = files[0]?.actualFileName || files[0]?.name || "file";
+
+            const successMessage = isMultiple
+                ? `Successfully deleted ${fileCount} files`
+                : `Successfully deleted "${firstFileName}"`;
+
+            toast.success(successMessage);
+        },
+        onError: (error: Error) => {
+            // Dismiss loading toast and show error
+            if (loadingToastRef.current) {
+                toast.dismiss(loadingToastRef.current);
+                loadingToastRef.current = null;
+            }
+
+            const fileCount = files.length;
+            const isMultiple = fileCount > 1;
+            const firstFileName = files[0]?.actualFileName || files[0]?.name || "file";
+
+            const errorMessage = isMultiple
+                ? `Failed to delete ${fileCount} files: ${error.message}`
+                : `Failed to delete "${firstFileName}": ${error.message}`;
+
+            toast.error(errorMessage);
+        },
+        onSettled: () => {
+            // Cleanup: ensure loading toast is always dismissed
+            if (loadingToastRef.current) {
+                toast.dismiss(loadingToastRef.current);
+                loadingToastRef.current = null;
+            }
+        },
         mutationFn: async () => {
-            if (!ipfsFiles && !file) throw new Error("No Files Found");
+            if (!ipfsFiles && files.length === 0) throw new Error("No Files Found");
             if (!api) throw new Error("Polkadot API not initialised");
             if (!walletManager) throw new Error("Error getting wallet manager");
 
-            let actualFileToDelete = ipfsFiles?.files.find(f => f.actualFileName === file?.actualFileName);
+            // Process each file for deletion
+            const results = [];
 
-            if (!actualFileToDelete) {
-                actualFileToDelete = file ?? undefined;
-            }
+            console.log("Deleting files:", files);
 
-            if (!actualFileToDelete) throw new Error("Cannot find file");
-            // Handle file in folder deletion
+            for (const file of files) {
+                let actualFileToDelete = ipfsFiles?.files.find(f => f.actualFileName === file.actualFileName);
 
-            if (mainFolderActualName) {
-                if (!mnemonic) {
-                    throw new Error("Seed phrase required to delete files from folder");
+                if (!actualFileToDelete) {
+                    actualFileToDelete = file;
                 }
 
-                const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
-                const mainFolderCid = getParam("mainFolderCid", "");
+                if (!actualFileToDelete) {
+                    throw new Error(`Cannot find file: ${file.name}`);
+                }
 
-                // Optimize the repeated code by creating common params first
                 try {
-                    const isFolder = actualFileToDelete.isFolder;
-                    // Determine the command based on file type and folder privacy
-                    const command = isPrivateFolder
-                        ? (isFolder ? "remove_folder_from_private_folder" : "remove_file_from_private_folder")
-                        : (isFolder ? "remove_folder_from_public_folder" : "remove_file_from_public_folder");
+                    // Handle file in folder deletion
+                    if (mainFolderActualName) {
+                        if (!mnemonic) {
+                            throw new Error("Seed phrase required to delete files from folder");
+                        }
 
-                    // Create the common base parameters
-                    const params = {
-                        accountId: polkadotAddress,
-                        folderMetadataCid: mainFolderCid,
-                        folderName: mainFolderActualName,
-                        seedPhrase: mnemonic,
-                        subfolderPath: folderPath || null
-                    };
+                        const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
+                        const mainFolderCid = getParam("mainFolderCid", "");
 
-                    // Add the specific parameter based on whether it's a folder or file
-                    if (isFolder) {
-                        (params as any).folderToRemove = actualFileToDelete.actualFileName;
+                        const isFolder = actualFileToDelete.isFolder;
+                        // Determine the command based on file type and folder privacy
+                        const command = isPrivateFolder
+                            ? (isFolder ? "remove_folder_from_private_folder" : "remove_file_from_private_folder")
+                            : (isFolder ? "remove_folder_from_public_folder" : "remove_file_from_public_folder");
+
+                        // Create the common base parameters
+                        const params = {
+                            accountId: polkadotAddress,
+                            folderMetadataCid: mainFolderCid,
+                            folderName: mainFolderActualName,
+                            seedPhrase: mnemonic,
+                            subfolderPath: folderPath || null
+                        };
+
+                        // Add the specific parameter based on whether it's a folder or file
+                        if (isFolder) {
+                            (params as any).folderToRemove = actualFileToDelete.actualFileName;
+                        } else {
+                            (params as any).fileName = actualFileToDelete.actualFileName;
+                        }
+
+                        await invoke<string>(command, params);
+                        results.push({ file: actualFileToDelete, success: true });
                     } else {
-                        (params as any).fileName = actualFileToDelete.actualFileName;
+                        if (!mnemonic) {
+                            throw new Error("Seed phrase required to delete local files");
+                        }
+
+                        await invoke("delete_and_unpin_file_by_name", {
+                            fileName: actualFileToDelete.actualFileName,
+                            seedPhrase: mnemonic
+                        });
+                        results.push({ file: actualFileToDelete, success: true });
                     }
-
-                    await invoke<string>(command, params);
-                    return true;
                 } catch (error) {
-                    console.error(`Failed to delete ${actualFileToDelete.isFolder ? 'folder' : 'file'} from folder:`, error);
-                    throw new Error(`Failed to delete ${actualFileToDelete.isFolder ? 'folder' : 'file'} from folder: ${error instanceof Error ? error.message : String(error)}`);
-                }
-
-            } else {
-                try {
-                    if (!mnemonic) {
-                        throw new Error("Seed phrase required to delete local files");
-                    }
-
-                    await invoke("delete_and_unpin_file_by_name", {
-                        fileName: actualFileToDelete.actualFileName,
-                        seedPhrase: mnemonic
+                    console.error(`Failed to delete ${actualFileToDelete.isFolder ? 'folder' : 'file'}:`, error);
+                    results.push({
+                        file: actualFileToDelete,
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error)
                     });
-
-                    await queryClient.refetchQueries({
-                        queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
-                    });
-                    return true;
-                } catch (error) {
-                    console.error("Failed to delete local file:", error);
-                    throw new Error(`Failed to delete local file: ${error instanceof Error ? error.message : String(error)}`);
                 }
             }
+
+            console.log("Deletion results:", results);
+
+            // Check if any deletions failed
+            const failedDeletions = results.filter(r => !r.success);
+            if (failedDeletions.length > 0) {
+                const errorMessages = failedDeletions.map(f => `${f.file.name}: ${f.error}`).join('; ');
+                throw new Error(`Failed to delete some files: ${errorMessages}`);
+            }
+
+            // Refetch user files after successful deletions
+            await queryClient.refetchQueries({
+                queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
+            });
+
+            return results;
         },
     });
 };

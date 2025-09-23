@@ -37,7 +37,8 @@ export function filterFiles(
     files: Array<FormattedUserIpfsFile & { timestamp?: Date | null }>,
     criteria: FilterCriteria
 ): Array<FormattedUserIpfsFile & { timestamp?: Date | null }> {
-    if (!files.length) return [];
+    // Handle undefined or null files
+    if (!files || !files.length) return [];
 
     let result = [...files];
 

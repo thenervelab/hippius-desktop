@@ -18,6 +18,9 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { toBlobUrl } from "@/components/page-sections/files/ipfs/files-table/VideoPlayer";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
+import { useFileSelection } from '@/app/contexts/FileSelectionContext';
+import * as Checkbox from "@radix-ui/react-checkbox";
+import { Check } from "lucide-react";
 
 interface FileCardProps {
   file: FormattedUserIpfsFile;
@@ -33,6 +36,7 @@ const FileCard: React.FC<FileCardProps> = ({
   actionMenu
 }) => {
   const { fileName, fileFormat } = getFilePartsFromFileName(file.name);
+  const { isSelectionMode, isFileSelected, toggleFileSelection } = useFileSelection();
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [thumbnailError, setThumbnailError] = useState(false);
   const [isLoadingThumbnail, setIsLoadingThumbnail] = useState(false);
@@ -231,10 +235,29 @@ const FileCard: React.FC<FileCardProps> = ({
   return (
     <div
       className={cn(
-        "w-full relative border border-grey-80 rounded-lg overflow-hidden aspect-[4/3]",
+        "w-full relative border rounded-lg overflow-hidden aspect-[4/3] transition-all duration-200",
         state === "pending" && "animate-pulse",
-        state === "error" && "bg-red-200/20 border-red-300"
+        state === "error" && "bg-red-200/20 border-red-300",
+        // Selection mode styles
+        isSelectionMode && file.isAssigned && "cursor-pointer hover:scale-[1.02]",
+        isSelectionMode && file.isAssigned && isFileSelected(file) && "border-2 border-primary-50 bg-primary-90/10 shadow-lg",
+        isSelectionMode && file.isAssigned && !isFileSelected(file) && "border-grey-80 hover:border-primary-50",
+        // Disabled file styles
+        isSelectionMode && !file.isAssigned && "opacity-50 cursor-not-allowed bg-grey-95 border-grey-90",
+        // Normal mode styles
+        !isSelectionMode && "border-grey-80 cursor-pointer"
       )}
+      onClick={() => {
+        if (isSelectionMode) {
+          // In selection mode, clicking anywhere should toggle selection only if file can be deleted
+          if (file.isAssigned) {
+            toggleFileSelection(file);
+          }
+        } else {
+          // Normal mode behavior
+          onClick();
+        }
+      }}
     >
       {!file.isFolder && (
         <Image
@@ -247,20 +270,56 @@ const FileCard: React.FC<FileCardProps> = ({
 
       <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-[40px] w-full">
         {file.isFolder ? (
-          <Link href={`/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
-            <div className="flex items-center">
-              <Icon className={cn("size-5 mr-1", color)} />
+          <div className="flex items-center">
+            {/* Selection checkbox - inline with filename */}
+            {isSelectionMode && (
+              <Checkbox.Root
+                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
+                checked={isFileSelected(file)}
+                onCheckedChange={() => toggleFileSelection(file)}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Checkbox.Indicator>
+                  <Check className="h-3 w-3 text-white" />
+                </Checkbox.Indicator>
+              </Checkbox.Root>
+            )}
+            <Icon className={cn("size-5 mr-1", color)} />
+            {isSelectionMode ? (
               <span
                 className={cn(
-                  "text-sm text-grey-20 hover:text-primary-40 transition truncate"
+                  "text-sm text-grey-20 hover:text-primary-40 transition truncate cursor-pointer"
                 )}
               >
                 {displayName}
               </span>
-            </div>
-          </Link>
+            ) : (
+              <Link href={`/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
+                <span
+                  className={cn(
+                    "text-sm text-grey-20 hover:text-primary-40 transition truncate"
+                  )}
+                >
+                  {displayName}
+                </span>
+              </Link>
+            )}
+          </div>
         ) : (
           <div className="flex items-center">
+            {/* Selection checkbox - inline with filename */}
+            {isSelectionMode && (
+              <Checkbox.Root
+                className="h-4 w-4 rounded border border-grey-70 flex items-center justify-center bg-white data-[state=checked]:bg-primary-50 data-[state=checked]:border-primary-50 transition-colors mr-2"
+                checked={isFileSelected(file)}
+                onCheckedChange={() => toggleFileSelection(file)}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Checkbox.Indicator>
+                  <Check className="h-3 w-3 text-white" />
+                </Checkbox.Indicator>
+              </Checkbox.Root>
+            )}
             <Icon className={cn("size-5 mr-1", color)} />
             <span className="text-sm text-grey-20 truncate">{displayName}</span>
           </div>
@@ -269,8 +328,10 @@ const FileCard: React.FC<FileCardProps> = ({
       </div>
 
       <div
-        className="flex items-center justify-center cursor-pointer relative h-[calc(100%-40px)]"
-        onClick={onClick}
+        className={cn(
+          "flex items-center justify-center relative h-[calc(100%-40px)]",
+          isSelectionMode ? "cursor-pointer" : "cursor-pointer"
+        )}
       >
         {shouldLoadThumbnail && thumbnailUrl && !thumbnailError ? (
           <div className="relative w-full h-full">

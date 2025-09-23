@@ -29,6 +29,7 @@ import {
 } from "@/lib/utils/userPreferencesDb";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { triggerUnpinnedFilesRefetchAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, mnemonic } = useWalletAuth();
@@ -350,8 +351,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       } catch (error) {
         console.error("Failed to set sync folder:", error);
         toast.error(
-          `Failed to set sync folder: ${
-            error instanceof Error ? error.message : "Unknown error"
+          `Failed to set sync folder: ${error instanceof Error ? error.message : "Unknown error"
           }`
         );
       }
@@ -470,54 +470,56 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         .length || 0;
 
     content = (
-      <div className="w-full relative mt-6">
-        <FilesHeader
-          isRecentFiles={isRecentFiles}
-          isRefetching={isRefetching}
-          isFetching={isFetching}
-          formattedStorageSize={formattedStorageSize}
-          allFilteredDataLength={displayedFileCount}
-          viewMode={viewMode}
-          setViewMode={handleViewModeChange}
-          searchTerm={searchTerm}
-          handleSearchChange={handleSearchChange}
-          activeFilters={activeFilters}
-          handleRemoveFilter={handleRemoveFilter}
-          setIsFilterOpen={setIsFilterOpen}
-          refetchUserFiles={
-            isRecentFiles
-              ? refreshRecentFilesWithPinningQueue
-              : refreshUserFilesWithPinningQueue
-          }
-          addButtonRef={addButtonRef}
-          syncFolderPath={syncFolderPath}
-          privateFileCount={privateFileCount}
-          publicFileCount={publicFileCount}
-        />
+      <FileSelectionProvider>
+        <div className="w-full relative mt-6">
+          <FilesHeader
+            isRecentFiles={isRecentFiles}
+            isRefetching={isRefetching}
+            isFetching={isFetching}
+            formattedStorageSize={formattedStorageSize}
+            allFilteredDataLength={displayedFileCount}
+            viewMode={viewMode}
+            setViewMode={handleViewModeChange}
+            searchTerm={searchTerm}
+            handleSearchChange={handleSearchChange}
+            activeFilters={activeFilters}
+            handleRemoveFilter={handleRemoveFilter}
+            setIsFilterOpen={setIsFilterOpen}
+            refetchUserFiles={
+              isRecentFiles
+                ? refreshRecentFilesWithPinningQueue
+                : refreshUserFilesWithPinningQueue
+            }
+            addButtonRef={addButtonRef}
+            syncFolderPath={syncFolderPath}
+            privateFileCount={privateFileCount}
+            publicFileCount={publicFileCount}
+          />
 
-        <FilesContent
-          isRecentFiles={isRecentFiles}
-          isLoading={isLoading}
-          isFetching={isFetching}
-          isPrivateView={isPrivateView}
-          filteredData={filteredData}
-          displayedData={filteredData}
-          searchTerm={searchTerm}
-          activeFilters={activeFilters}
-          viewMode={viewMode}
-          shouldResetPagination={shouldResetPagination}
-          handlePaginationReset={handlePaginationReset}
-          isFilterOpen={isFilterOpen}
-          setIsFilterOpen={setIsFilterOpen}
-          selectedFileTypes={selectedFileTypes}
-          selectedDate={selectedDate}
-          selectedFileSize={selectedFileSize}
-          selectedSizeUnit={selectedSizeUnit}
-          handleApplyFilters={handleApplyFilters}
-          handleResetFilters={handleResetFilters}
-          error={error}
-        />
-      </div>
+          <FilesContent
+            isRecentFiles={isRecentFiles}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            isPrivateView={isPrivateView}
+            filteredData={filteredData}
+            displayedData={filteredData}
+            searchTerm={searchTerm}
+            activeFilters={activeFilters}
+            viewMode={viewMode}
+            shouldResetPagination={shouldResetPagination}
+            handlePaginationReset={handlePaginationReset}
+            isFilterOpen={isFilterOpen}
+            setIsFilterOpen={setIsFilterOpen}
+            selectedFileTypes={selectedFileTypes}
+            selectedDate={selectedDate}
+            selectedFileSize={selectedFileSize}
+            selectedSizeUnit={selectedSizeUnit}
+            handleApplyFilters={handleApplyFilters}
+            handleResetFilters={handleResetFilters}
+            error={error}
+          />
+        </div>
+      </FileSelectionProvider>
     );
   }
 

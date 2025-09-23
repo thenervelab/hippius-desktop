@@ -190,7 +190,7 @@ export default function FileContextMenu({
             <span>{file?.isFolder ? "Folder" : "File"} Details</span>
           </button>
 
-          <button
+          {file.isAssigned && (<button
             className="flex items-center gap-2 p-2 text-xs font-medium text-error-70 hover:text-error-80 hover:bg-grey-90"
             onClick={() => {
               if (onDelete) onDelete(file);
@@ -199,7 +199,7 @@ export default function FileContextMenu({
           >
             <Trash2 className="size-4" />
             <span>Delete</span>
-          </button>
+          </button>)}
         </div>
       </div>
     </div>,

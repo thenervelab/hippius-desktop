@@ -69,7 +69,7 @@ export async function checkForUpdates(notifyOnce = false) {
     let totalBytes = 0;
     let downloadedBytes = 0;
 
-    // Download, install, then relaunch
+    // Download, install, then relaunch with enhanced error handling
     await update.downloadAndInstall((e) => {
       switch (e.event) {
         case "Started":
@@ -143,6 +143,20 @@ export async function checkForUpdates(notifyOnce = false) {
     }
 
     console.log(err);
+
+    // Handle signature verification errors specifically
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    if (errorMessage.includes("signature") || errorMessage.includes("verification")) {
+      toast.error("Update signature verification failed", {
+        description: "Please download the latest version manually from our website.",
+        duration: 8000,
+      });
+    } else {
+      toast.error("Update failed", {
+        description: "Please try again later or download manually.",
+        duration: 5000,
+      });
+    }
   }
 }
 
