@@ -14,6 +14,7 @@ import {
   confirmUpdate,
   closeUpdateDialog,
 } from "@/app/components/updater/updateStore";
+import { startUpdateProcess } from "@/app/components/updater/checkForUpdates";
 import RevealTextLine from "@/components/ui/reveal-text-line";
 import { InView } from "react-intersection-observer";
 import BasicMarkdown from "./BasicMarkdown";
@@ -36,15 +37,28 @@ export default function DesktopAppDownloadDialog({ onClose }: Props) {
   const handleClose = () => {
     closeDialog();
     confirmUpdate(false);
+    console.log('Update dialog closed by user');
     onClose?.();
   };
 
-  const handleDownload = (e: React.MouseEvent) => {
+  const handleDownload = async (e: React.MouseEvent) => {
     e.preventDefault();
-    confirmUpdate(true);
-    closeDialog();
-  };
 
+    console.log('User clicked Update Now');
+
+    // Close the dialog first
+    closeDialog();
+    confirmUpdate(true);
+
+    // Start the update process using the stored update object
+    try {
+      await startUpdateProcess();
+    } catch (error) {
+      console.error("Update process failed:", error);
+    }
+
+    onClose?.();
+  };
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && handleClose()}>
       <Dialog.Portal>

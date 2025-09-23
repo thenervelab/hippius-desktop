@@ -5,7 +5,6 @@ use sqlx::sqlite::SqlitePool;
 use dirs;
 use sqlx::Row;
 use crate::{
-    commands::node::start_ipfs_daemon,
     DB_POOL,
     constants::substrate::WSS_ENDPOINT,
 };
@@ -309,10 +308,9 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
                 println!("[Setup] Database initialized successfully");
 
-                // Start IPFS daemon
-                if let Err(e) = start_ipfs_daemon(handle).await {
-                    eprintln!("Failed to start IPFS daemon: {e:?}");
-                }
+                // Don't start IPFS daemon immediately - let frontend control when to start
+                // after update check is complete via start_ipfs_setup_when_ready command
+                println!("[Setup] IPFS daemon startup deferred until after update check");
             });
             
             Ok(())

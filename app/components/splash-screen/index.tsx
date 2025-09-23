@@ -5,8 +5,9 @@ import { AppSetupPhases } from "@/app/lib/types";
 import { listen } from "@tauri-apps/api/event";
 import { APP_SETUP_EVENT } from "@/app/lib/constants";
 import { invoke } from "@tauri-apps/api/core";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useSetAtom, useAtomValue } from "jotai";
 import { phaseAtom, phaseProgressionClockAtom } from "./atoms";
+import { updateCheckCompleteAtom } from "@/app/components/updater/updateStore";
 import { cn } from "@/app/lib/utils";
 
 export default function SplashWrapper({
@@ -19,7 +20,28 @@ export default function SplashWrapper({
   const setPhaseProgressionClock = useSetAtom(phaseProgressionClockAtom);
   const [keepSplashscreenInDom, setKeepSplacescreenInDom] = useState(true);
 
+  // Track update status
+  const updateCheckComplete = useAtomValue(updateCheckCompleteAtom);
+  const canProceedWithSplash = updateCheckComplete;
+
+  // Reset phase progression clock when update check is not complete
   useEffect(() => {
+    if (!updateCheckComplete) {
+      setPhaseProgressionClock(0);
+    }
+  }, [updateCheckComplete, setPhaseProgressionClock]);
+
+  // Start IPFS daemon setup only after update check is complete
+  useEffect(() => {
+    if (!updateCheckComplete) return;
+
+    // Start IPFS setup when update check is done
+    invoke("start_ipfs_setup_when_ready").catch(console.error);
+  }, [updateCheckComplete]);
+
+  useEffect(() => {
+    if (!canProceedWithSplash) return;
+
     if (!phase) {
       invoke("get_current_setup_phase").then((p) => {
         try {
@@ -30,9 +52,11 @@ export default function SplashWrapper({
         } catch { }
       });
     }
-  }, [phase, setPhase]);
+  }, [phase, setPhase, canProceedWithSplash]);
 
   useEffect(() => {
+    if (!canProceedWithSplash) return;
+
     if (phase !== "ready") {
       const unlisten = listen(APP_SETUP_EVENT, (event) => {
         setPhase(event.payload as AppSetupPhases);
@@ -42,9 +66,10 @@ export default function SplashWrapper({
         unlisten.then((fn) => fn());
       };
     }
-  }, [phase, setPhase]);
+  }, [phase, setPhase, canProceedWithSplash]);
 
   useEffect(() => {
+    if (!canProceedWithSplash) return;
     if (!phase || phase === "ready") return;
 
     const duration = 4000;
@@ -57,18 +82,19 @@ export default function SplashWrapper({
       setPhaseProgressionClock(progress);
     };
 
-    // Immediately reset progress
     setPhaseProgressionClock(0);
 
     const interval = setInterval(update, 16);
 
     return () => {
       clearInterval(interval);
-      setPhaseProgressionClock(0); // Reset again on cleanup
+      setPhaseProgressionClock(0);
     };
-  }, [phase, setPhaseProgressionClock]);
+  }, [phase, setPhaseProgressionClock, canProceedWithSplash]);
 
   useEffect(() => {
+    if (!canProceedWithSplash) return;
+
     if (phase === "ready") {
       const timeout = setTimeout(() => {
         setKeepSplacescreenInDom(false);
@@ -78,7 +104,7 @@ export default function SplashWrapper({
         clearTimeout(timeout);
       };
     }
-  }, [phase]);
+  }, [phase, canProceedWithSplash]);
 
   const isReady = phase === "ready";
 

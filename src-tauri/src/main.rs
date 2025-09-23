@@ -32,7 +32,7 @@ use commands::ipfs_commands::{
     remove_folder_from_public_folder, add_folder_to_private_folder, remove_folder_from_private_folder
 };
 use utils::file_operations::delete_and_unpin_file_by_name;
-use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon};
+use commands::node::{get_current_setup_phase, start_ipfs_daemon, stop_ipfs_daemon, start_ipfs_setup_when_ready};
 use commands::substrate_tx::{
     get_sync_path, get_wss_endpoint, set_sync_path, test_wss_endpoint_command,
     transfer_balance_tauri, update_wss_endpoint_command,
@@ -71,6 +71,7 @@ fn main() {
         }))
         .invoke_handler(tauri::generate_handler![
             start_ipfs_daemon,
+            start_ipfs_setup_when_ready,
             stop_ipfs_daemon,
             get_current_setup_phase,
             encrypt_and_upload_file,

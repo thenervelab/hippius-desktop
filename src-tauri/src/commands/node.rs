@@ -43,6 +43,13 @@ pub async fn get_current_setup_phase() -> Option<String> {
     serde_json::to_string(&*phase).ok()
 }
 
+#[tauri::command]
+pub async fn start_ipfs_setup_when_ready(app: AppHandle) -> Result<(), String> {
+    // This command should be called only after update check is complete
+    println!("[IPFS] Starting IPFS setup after update check completion");
+    start_ipfs_daemon(app).await
+}
+
 const SMALL_SLEEP: u64 = 4;
 const LARGE_SLEEP: u64 = 15;
 
@@ -94,6 +101,7 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         }
     }
 
+    // Original delay for IPFS daemon startup
     sleep(Duration::from_secs(LARGE_SLEEP)).await;
     let app = emit_and_update_phase(app.clone(), AppSetupPhase::CheckingBinary).await;
     sleep(Duration::from_secs(SMALL_SLEEP)).await;
