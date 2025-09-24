@@ -27,6 +27,7 @@ import {
   getViewModePreference,
   saveViewModePreference,
 } from "@/lib/utils/userPreferencesDb";
+import { usePagination } from "@/lib/hooks";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { triggerUnpinnedFilesRefetchAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
@@ -141,6 +142,14 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     selectedFileSize,
   ]);
 
+  // Shared pagination state between list and card views
+  const {
+    paginatedData,
+    setCurrentPage,
+    currentPage,
+    totalPages
+  } = usePagination(filteredData, 12);
+
   // Update active filters when filter settings change
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
@@ -155,6 +164,13 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   useEffect(() => {
     setShouldResetPagination(true);
   }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+
+  // Handle pagination reset
+  useEffect(() => {
+    if (shouldResetPagination) {
+      setCurrentPage(1);
+    }
+  }, [shouldResetPagination, setCurrentPage]);
 
   const handlePaginationReset = useCallback(() => {
     setShouldResetPagination(false);
@@ -502,7 +518,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             isFetching={isFetching}
             isPrivateView={isPrivateView}
             filteredData={filteredData}
-            displayedData={filteredData}
+            displayedData={paginatedData}
             searchTerm={searchTerm}
             activeFilters={activeFilters}
             viewMode={viewMode}
@@ -517,6 +533,9 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             handleApplyFilters={handleApplyFilters}
             handleResetFilters={handleResetFilters}
             error={error}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setCurrentPage={setCurrentPage}
           />
         </div>
       </FileSelectionProvider>

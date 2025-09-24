@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import usePagination from "@/lib/hooks/use-pagination";
+
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
@@ -51,6 +51,9 @@ interface CardViewProps {
     file: FormattedUserIpfsFile,
     polkadotAddress: string
   ) => void;
+  currentPage: number;
+  totalPages: number;
+  setCurrentPage: (page: number) => void;
 }
 
 const CardView: FC<CardViewProps> = ({
@@ -61,7 +64,10 @@ const CardView: FC<CardViewProps> = ({
   searchTerm = "",
   activeFilters = [],
   sharedState,
-  handleFileDownload
+  handleFileDownload,
+  currentPage,
+  totalPages,
+  setCurrentPage
 }) => {
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
@@ -132,16 +138,8 @@ const CardView: FC<CardViewProps> = ({
     safeFiles.length === 0 &&
     (searchTerm || (activeFilters && activeFilters.length > 0));
 
-  const {
-    paginatedData: data,
-    setCurrentPage,
-    currentPage,
-    totalPages
-  } = usePagination(safeFiles, 12);
-
   useEffect(() => {
     if (resetPagination) {
-      setCurrentPage(1);
       if (onPaginationReset) {
         onPaginationReset();
       }
@@ -177,7 +175,7 @@ const CardView: FC<CardViewProps> = ({
       >
         <div className="duration-300 delay-300">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {data.map((file, index) => {
+            {files.map((file, index) => {
               const { fileFormat } = getFilePartsFromFileName(file.name);
               const fileType = getFileTypeFromExtension(fileFormat || null);
 
