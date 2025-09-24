@@ -61,6 +61,9 @@ interface FilesContentProps {
   error?: unknown;
   isPrivateView: boolean;
   addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void }>;
+  currentPage: number;
+  totalPages: number;
+  setCurrentPage: (page: number) => void;
 }
 
 const FilesContent: FC<FilesContentProps> = ({
@@ -85,6 +88,9 @@ const FilesContent: FC<FilesContentProps> = ({
   error,
   isPrivateView,
   addButtonRef,
+  currentPage,
+  totalPages,
+  setCurrentPage,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
@@ -282,12 +288,16 @@ const FilesContent: FC<FilesContentProps> = ({
           isRecentFiles={isRecentFiles}
           showUnpinnedDialog={false}
           files={displayedData}
+          allFiles={filteredData}
           resetPagination={shouldResetPagination}
           onPaginationReset={handlePaginationReset}
           searchTerm={searchTerm}
           handleFileDownload={handleFileDownload}
           activeFilters={activeFilters}
           sharedState={sharedState}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
         />
       );
     } else {
@@ -302,6 +312,9 @@ const FilesContent: FC<FilesContentProps> = ({
           searchTerm={searchTerm}
           activeFilters={activeFilters}
           sharedState={sharedState}
+          currentPage={currentPage}
+          totalPages={totalPages}
+          setCurrentPage={setCurrentPage}
         />
       );
     }

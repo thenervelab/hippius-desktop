@@ -28,18 +28,13 @@ export const fromPlancks = (amount: string): number => {
     return planckValue / 1e18;
 };
 
-export const getExplorerUrl = (address: string, type: 'account' | 'extrinsic' = 'account'): string => {
+export const getExplorerUrl = (address: string): string => {
     // Replace with your actual explorer URL
     const baseUrl = 'https://hipstats.com';
-
-    if (type === 'account') {
-        return `${baseUrl}/account/${address}`;
-    } else {
-        return `${baseUrl}/extrinsic/${address}`;
-    }
+    return `${baseUrl}/accounts/${address}`;
 };
 
-export const openInExplorer = (address: string, type: 'account' | 'extrinsic' = 'account'): void => {
-    const url = getExplorerUrl(address, type);
+export const openInExplorer = (address: string): void => {
+    const url = getExplorerUrl(address);
     window.open(url, '_blank', 'noopener,noreferrer');
 };

@@ -28,7 +28,6 @@ import {
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { usePagination } from "@/lib/hooks";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
 import { SelectionColumn, SelectionHeaderColumn } from "../SelectionColumn";
@@ -62,6 +61,7 @@ interface Filter {
 interface FilesTableProps {
   showUnpinnedDialog?: boolean;
   files: FormattedUserIpfsFile[];
+  allFiles: FormattedUserIpfsFile[]; // Full list of files for header checkbox selection
   resetPagination?: boolean;
   onPaginationReset?: () => void;
   isRecentFiles?: boolean;
@@ -72,6 +72,9 @@ interface FilesTableProps {
     file: FormattedUserIpfsFile,
     polkadotAddress: string
   ) => void;
+  currentPage: number;
+  totalPages: number;
+  setCurrentPage: (page: number) => void;
 }
 
 // Create stable action functions outside component to prevent recreation
@@ -101,13 +104,17 @@ const copyToClipboard = (decodedCid: string) => {
 
 const FilesTable: FC<FilesTableProps> = memo(({
   files,
+  allFiles,
   resetPagination,
   onPaginationReset,
   isRecentFiles = false,
   searchTerm = "",
   activeFilters = [],
   sharedState,
-  handleFileDownload
+  handleFileDownload,
+  currentPage,
+  totalPages,
+  setCurrentPage
 }) => {
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
@@ -163,16 +170,8 @@ const FilesTable: FC<FilesTableProps> = memo(({
     safeFiles.length === 0 &&
     (searchTerm || (activeFilters && activeFilters.length > 0));
 
-  const {
-    paginatedData,
-    setCurrentPage,
-    currentPage,
-    totalPages
-  } = usePagination(safeFiles, 10);
-
   useEffect(() => {
     if (resetPagination) {
-      setCurrentPage(1);
       if (onPaginationReset) {
         onPaginationReset();
       }
@@ -209,11 +208,10 @@ const FilesTable: FC<FilesTableProps> = memo(({
       onSuccess: () => {
         // Clear selection and exit selection mode
         clearSelection();
-        // Reset pagination to first page after deletion to ensure proper pagination state
-        setCurrentPage(1);
+        setCurrentPage(Math.max(1, totalPages));
       }
     });
-  }, [selectedFiles, deleteFiles, clearSelection, setCurrentPage]);
+  }, [selectedFiles, deleteFiles, clearSelection, setCurrentPage, totalPages]);
   const createTableItems = useCallback((file: FormattedUserIpfsFile, fileType: string | null, decodedCid: string) => {
     // Compute folderUrl if file is a folder
     let folderUrl: string | undefined = undefined;
@@ -288,7 +286,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
         maxSize: 40,
         header: () => (
           <div className="flex justify-center items-center h-full">
-            <SelectionHeaderColumn files={safeFiles} />
+            <SelectionHeaderColumn files={allFiles} />
           </div>
         ),
         cell: ({ row }) => (
@@ -298,7 +296,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
         ),
       }),
     ];
-  }, [isSelectionMode, safeFiles]);
+  }, [isSelectionMode, allFiles]);
 
   // Create a stable memo of columns that doesn't depend on every prop
   const columns = useMemo(
@@ -522,14 +520,14 @@ const FilesTable: FC<FilesTableProps> = memo(({
 
   const tableConfig = useMemo(() => ({
     columns,
-    data: paginatedData || [],
+    data: files || [],
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     defaultColumn: {
       minSize: 40,
       size: undefined
     }
-  }), [columns, paginatedData]);
+  }), [columns, files]);
 
   const table = useReactTable(tableConfig);
 
@@ -662,7 +660,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
           isRecentFiles ? "min-h-[350px]" : "min-h-[700px]"
         )}
       >
-        <TableModule.TableWrapper className="duration-300 delay-300" key={`pagination-${currentPage}-${paginatedData?.length}`}>
+        <TableModule.TableWrapper className="duration-300 delay-300" key={`pagination-${currentPage}-${files?.length}`}>
           <TableModule.Table>
             <TableModule.THead>
               {headerRows}
