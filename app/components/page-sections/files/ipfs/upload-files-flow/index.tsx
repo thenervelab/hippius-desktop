@@ -189,7 +189,26 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
 
   return (
     <div className="w-full">
-      <FileDropzone setFiles={handleFiles} />
+      <FileDropzone setFiles={handleFiles} isPrivateView={isPrivateView} />
+
+      {/* Privacy Notice */}
+      {isPrivateView && (
+        <div className="mt-4 p-3 bg-primary-95 border border-primary-80 rounded-lg">
+          <div className="flex items-start gap-2">
+            <div className="flex-shrink-0 mt-0.5">
+              <Icons.ShieldSecurity className="size-4 text-primary-50" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-primary-40 mb-1">
+                Private Storage
+              </p>
+              <p className="text-xs text-primary-60">
+                Files uploaded here will be added to your private sync folder and encrypted for security.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {files.length > 0 && (
         <div className="bg-grey-90 max-h-[200px] overflow-y-auto custom-scrollbar-thin pr-2 rounded-[8px] mt-4">

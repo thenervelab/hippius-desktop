@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle, FolderAdd } from "@/components/ui/icons";
-import { AbstractIconWrapper, RevealTextLine } from "@/app/components/ui";
+import { AbstractIconWrapper, RevealTextLine, Icons } from "@/app/components/ui";
 import { Input } from "@/components/ui";
 import { Label } from "@/components/ui/label";
 import { AlertCircle, FolderIcon } from "lucide-react";
@@ -143,6 +143,25 @@ export default function FolderUploadDialog({
                                     : "Upload a folder to public IPFS storage."}
                             </RevealTextLine>
                         </div>
+
+                        {/* Privacy Notice */}
+                        {useEncryption && (
+                            <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg">
+                                <div className="flex items-start gap-2">
+                                    <div className="flex-shrink-0 mt-0.5">
+                                        <Icons.ShieldSecurity className="size-4 text-primary-50" />
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="text-sm font-medium text-primary-40 mb-1">
+                                            Private Storage
+                                        </p>
+                                        <p className="text-xs text-primary-60">
+                                            This folder will be added to your private sync folder and encrypted for security.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="space-y-2">
                             <Label htmlFor="folderPath" className="text-sm font-medium text-grey-70">
