@@ -38,6 +38,7 @@ import { getFolderPathArray } from "@/app/utils/folderPathUtils";
 import AddFolderToFolderButton from "@/components/page-sections/files/ipfs/AddFolderToFolderButton";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
+import { usePagination } from "@/lib/hooks";
 
 interface FileEntry {
   file_name: string;
@@ -63,7 +64,6 @@ interface FolderViewProps {
 export default function FolderView({
   folderCid,
   folderName = "Folder",
-  folderActualName = "Folder",
   mainFolderActualName,
   subFolderPath,
 }: FolderViewProps) {
@@ -97,6 +97,14 @@ export default function FolderView({
     });
   }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
 
+  // Shared pagination state between list and card views
+  const {
+    paginatedData,
+    setCurrentPage,
+    currentPage,
+    totalPages
+  } = usePagination(filteredData, 12);
+
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
       selectedFileTypes,
@@ -108,7 +116,14 @@ export default function FolderView({
 
   useEffect(() => {
     setShouldResetPagination(true);
-  }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+  }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize, viewMode]);
+
+  // Handle pagination reset
+  useEffect(() => {
+    if (shouldResetPagination) {
+      setCurrentPage(1);
+    }
+  }, [shouldResetPagination, setCurrentPage]);
 
   const loadFolderContents = useCallback(
     async (showLoading = true) => {
@@ -193,7 +208,6 @@ export default function FolderView({
     [
       folderCid,
       folderName,
-      folderActualName,
       mainFolderActualName,
       subFolderPath,
       isPrivateFolder,
@@ -474,7 +488,7 @@ export default function FolderView({
                 isLoading={false}
                 isFetching={false}
                 filteredData={filteredData}
-                displayedData={filteredData}
+                displayedData={paginatedData}
                 searchTerm={searchTerm}
                 activeFilters={activeFilters}
                 viewMode={viewMode}
@@ -489,6 +503,9 @@ export default function FolderView({
                 handleApplyFilters={handleApplyFilters}
                 handleResetFilters={handleResetFilters}
                 isPrivateView={isPrivateFolder}
+                currentPage={currentPage}
+                totalPages={totalPages}
+                setCurrentPage={setCurrentPage}
               />
             )}
           </>
