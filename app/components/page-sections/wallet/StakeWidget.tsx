@@ -4,14 +4,14 @@ import { FC, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useStaking } from "@/app/lib/hooks/useStaking";
-import { formatStakingAmount, openInExplorer } from "@/app/lib/utils/staking";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { formatStakingAmount } from "@/app/lib/utils/staking";
+// import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
 
 const StakeWidget: FC = () => {
     const router = useRouter();
     const { stakingInfo, operations } = useStaking();
-    const { polkadotAddress } = useWalletAuth();
+    // const { polkadotAddress } = useWalletAuth();
     const [isWithdrawing, setIsWithdrawing] = useState(false);
 
     const handleStakeNow = () => {
@@ -22,11 +22,11 @@ const StakeWidget: FC = () => {
         router.push("/unstake");
     };
 
-    const handleViewRewards = () => {
-        if (polkadotAddress) {
-            openInExplorer(polkadotAddress, 'account');
-        }
-    };
+    // const handleViewRewards = () => {
+    //     if (polkadotAddress) {
+    //         openInExplorer(polkadotAddress, 'account');
+    //     }
+    // };
 
     const handleWithdrawUnbonded = async () => {
         if (!operations.withdrawUnbonded) return;
@@ -116,13 +116,13 @@ const StakeWidget: FC = () => {
                                         Pending Rewards
                                     </div>
                                 </div>
-                                <button
+                                {/* <button
                                     onClick={handleViewRewards}
                                     className="ml-2 text-primary-50 hover:text-primary-40 transition-colors"
                                     title="View on Explorer"
                                 >
                                     <Icons.SendSquare2 className="size-3" />
-                                </button>
+                                </button> */}
                             </div>
                         )}
                     </div>
