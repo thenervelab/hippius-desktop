@@ -119,15 +119,19 @@ const FilesTable: FC<FilesTableProps> = memo(({
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
   const router = useRouter();
-  const { isSelectionMode, selectedFiles, enterSelectionModeAndSelectFile, toggleFileSelection, clearSelection } = useFileSelection();
+  const { isSelectionMode, selectedFiles, enterSelectionModeAndSelectFile, toggleFileSelection } = useFileSelection();
 
   // Determine if this is a private folder based on the files
   const isPrivateFolder = useMemo(() => {
     return selectedFiles.length > 0 && selectedFiles.some(file => file.type?.toLowerCase() === 'private');
   }, [selectedFiles]);
 
+  // State for captured files to delete (to handle timing issue with clearSelection)
+  const [filesToDelete, setFilesToDelete] = useState<FormattedUserIpfsFile[]>([]);
+
+
   const { mutate: deleteFiles, isPending: isDeleting } = useDeleteIpfsFile({
-    files: selectedFiles,
+    files: filesToDelete,
     isPrivateFolder
   });
 
@@ -199,19 +203,37 @@ const FilesTable: FC<FilesTableProps> = memo(({
     enterSelectionModeAndSelectFile(file);
   }, [enterSelectionModeAndSelectFile]);
 
-  // Handle multiple file deletion
-  const handleDeleteSelectedFiles = useCallback(() => {
-    if (selectedFiles.length === 0) return;
+  // Handle file deletion with captured files from confirmation dialog
+  const handleDeleteSelectedFiles = useCallback((capturedFiles: FormattedUserIpfsFile[]) => {
+    console.log("FilesTable - handleDeleteSelectedFiles called with captured files:", capturedFiles.map(f => ({
+      name: f.name,
+      actualFileName: f.actualFileName,
+      isFolder: f.isFolder
+    })));
 
-    // Delete files - toast handling is now centralized in the hook
-    deleteFiles(undefined, {
-      onSuccess: () => {
-        // Clear selection and exit selection mode
-        clearSelection();
-        setCurrentPage(Math.max(1, totalPages));
-      }
-    });
-  }, [selectedFiles, deleteFiles, clearSelection, setCurrentPage, totalPages]);
+    if (capturedFiles.length === 0) {
+      console.log("No files to delete, aborting");
+      return;
+    }
+
+    // Set the files to delete and trigger the delete operation
+    setFilesToDelete(capturedFiles);
+
+    // Use setTimeout to ensure the delete hook reinitializes with new files
+    setTimeout(() => {
+      deleteFiles(undefined, {
+        onSuccess: () => {
+          console.log("Delete successful, clearing filesToDelete state");
+          setFilesToDelete([]);
+          setCurrentPage(Math.max(1, totalPages));
+        },
+        onError: (error) => {
+          console.error("Delete failed:", error);
+          setFilesToDelete([]);
+        }
+      });
+    }, 100);
+  }, [deleteFiles, setCurrentPage, totalPages]);
   const createTableItems = useCallback((file: FormattedUserIpfsFile, fileType: string | null, decodedCid: string) => {
     // Compute folderUrl if file is a folder
     let folderUrl: string | undefined = undefined;
@@ -566,11 +588,11 @@ const FilesTable: FC<FilesTableProps> = memo(({
             rowState === "error" && "bg-red-200/20",
             isSelectionMode && rowData.isAssigned && "cursor-pointer",
             isSelectionMode &&
-            selectedFiles.some(f => f.cid === rowData.cid) &&
+            selectedFiles.some(f => f.actualFileName === rowData.actualFileName) &&
             rowData.isAssigned &&
             "bg-primary-60/10",
             isSelectionMode &&
-            !selectedFiles.some(f => f.cid === rowData.cid) &&
+            !selectedFiles.some(f => f.actualFileName === rowData.actualFileName) &&
             rowData.isAssigned &&
             "hover:bg-primary-60/8",
             isSelectionMode &&
@@ -588,6 +610,8 @@ const FilesTable: FC<FilesTableProps> = memo(({
             ) {
               return;
             }
+
+            console.log("here is again")
 
             if (isSelectionMode && rowData.isAssigned) {
               e.preventDefault();
@@ -610,7 +634,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
         </TableModule.Tr>
       );
     })
-  ), [table, localHandleContextMenu, isSelectionMode, toggleFileSelection, selectedFiles, currentPage]);
+  ), [table, localHandleContextMenu, isSelectionMode, toggleFileSelection, selectedFiles, currentPage, searchTerm, files]);
 
   const paginationComponent = useMemo(() => {
     if (totalPages <= 1) return null;
