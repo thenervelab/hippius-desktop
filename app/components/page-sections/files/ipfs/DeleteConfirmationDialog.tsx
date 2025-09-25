@@ -1,13 +1,14 @@
 import React from 'react';
 import { Button } from '@/components/ui/button/NewButton';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
+import { FormattedUserIpfsFile } from '@/lib/hooks/use-user-ipfs-files';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X, AlertTriangle } from 'lucide-react';
 
 interface DeleteConfirmationDialogProps {
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    onConfirm: () => void;
+    onConfirm: (filesToDelete: FormattedUserIpfsFile[]) => void;
     isLoading?: boolean;
 }
 
@@ -25,12 +26,17 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
     };
 
     const handleConfirm = () => {
-        onConfirm();
-        setTimeout(() => {
-            clearSelection();
-        }, 2000);
+        console.log("Delete confirmation - files being deleted:", selectedFiles.map(f => ({ name: f.name, actualFileName: f.actualFileName })));
+
+        // Capture the files before clearing selection
+        const filesToDelete = [...selectedFiles];
+
+        // Clear selection immediately for good UX
+        clearSelection();
         onOpenChange(false);
-        // Don't clear selection here - let the onSuccess callback in CardView handle it
+
+        // Pass the captured files to the delete operation
+        onConfirm(filesToDelete);
     };
 
     const fileCount = selectedFiles.length;

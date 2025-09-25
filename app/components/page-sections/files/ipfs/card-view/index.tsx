@@ -72,16 +72,19 @@ const CardView: FC<CardViewProps> = ({
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
-  const { isSelectionMode, selectedFiles, enterSelectionModeAndSelectFile, clearSelection } = useFileSelection();
+  const { isSelectionMode, selectedFiles, enterSelectionModeAndSelectFile, } = useFileSelection();
 
-  // Determine if this is a private folder based on the files
   const isPrivateFolder = useMemo(() => {
     return selectedFiles.length > 0 && selectedFiles.some(file => file.type?.toLowerCase() === 'private');
   }, [selectedFiles]);
 
-  // Initialize delete hook with current selectedFiles - this will update when selectedFiles changes
+  // State for captured files to delete (to handle timing issue with clearSelection)
+  const [filesToDelete, setFilesToDelete] = useState<FormattedUserIpfsFile[]>([]);
+
+
+  // Initialize delete hook with filesToDelete instead of selectedFiles
   const { mutate: deleteFiles, isPending: isDeleting } = useDeleteIpfsFile({
-    files: selectedFiles,
+    files: filesToDelete,
     isPrivateFolder
   });
 
@@ -97,23 +100,36 @@ const CardView: FC<CardViewProps> = ({
     handleContextMenu
   } = sharedState || {};
 
-  // Handle multiple file deletion
-  const handleDeleteSelectedFiles = useCallback(() => {
-    if (selectedFiles.length === 0) {
+  // Handle file deletion with captured files from confirmation dialog
+  const handleDeleteSelectedFiles = useCallback((capturedFiles: FormattedUserIpfsFile[]) => {
+    console.log("handleDeleteSelectedFiles called with captured files:", capturedFiles.map(f => ({
+      name: f.name,
+      actualFileName: f.actualFileName,
+      isFolder: f.isFolder
+    })));
+
+    if (capturedFiles.length === 0) {
+      console.log("No files to delete, aborting");
       return;
     }
 
-    deleteFiles(undefined, {
-      onSuccess: () => {
-        // Clear selection and exit selection mode
-        clearSelection();
-      },
-      onError: (error) => {
-        console.error("Delete failed:", error);
-        // Keep selection on error, but user can manually clear it
-      }
-    });
-  }, [selectedFiles, deleteFiles, clearSelection]);
+    // Set the files to delete and trigger the delete operation
+    setFilesToDelete(capturedFiles);
+
+    // Use setTimeout to ensure the delete hook reinitializes with new files
+    setTimeout(() => {
+      deleteFiles(undefined, {
+        onSuccess: () => {
+          console.log("Delete successful, clearing filesToDelete state");
+          setFilesToDelete([]);
+        },
+        onError: (error) => {
+          console.error("Delete failed:", error);
+          setFilesToDelete([]);
+        }
+      });
+    }, 100);
+  }, [deleteFiles]);
 
   const localHandleShowFileDetails = useCallback(
     (file: FormattedUserIpfsFile) => {
