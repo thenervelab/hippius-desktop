@@ -1649,22 +1649,53 @@ pub async fn wipe_s3_objects(
     account_id: String,
     scope: String,
 ) -> Result<(), String> {
-    let bucket_name = format!("{}-{}", account_id, scope);
-    let s3_uri = format!("s3://{}", bucket_name);
+    // Validate scope
+    if scope != "public" && scope != "private" {
+        return Err("Invalid scope. Must be 'public' or 'private'.".to_string());
+    }
+
+    // First, clean up local sync directory if it exists
+    match get_sync_path(&scope).await {
+        Ok(sync_path) => {
+            println!("[wipe_s3_objects] Cleaning up local sync directory: {}", sync_path.display());
+            if let Err(e) = delete_directory_contents(&sync_path) {
+                eprintln!("[wipe_s3_objects] Warning: Failed to clean up local sync directory: {}", e);
+                // Continue with other cleanup operations even if local cleanup fails
+            } else {
+                println!("[wipe_s3_objects] Successfully cleaned up local sync directory");
+            }
+        }
+        Err(e) => {
+            eprintln!("[wipe_s3_objects] Warning: Failed to get sync path: {}", e);
+            // Continue with other cleanup operations
+        }
+    }
     
+    // Clean up the database entries
+    match delete_user_profiles_by_scope(&account_id, &scope).await {
+        Ok(count) => {
+            println!("[wipe_s3_objects] Deleted {} {} records from user_profiles", count, scope);
+        }
+        Err(e) => {
+            eprintln!("[wipe_s3_objects] Failed to clean up database: {}", e);
+            return Err(format!("Failed to clean up database: {}", e));
+        }
+    }
+    
+    // Then clean up S3 buckets
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => {
-            println!("[remove_s3_objects] Found AWS binary at: {}", path.display());
+            println!("[wipe_s3_objects] Found AWS binary at: {}", path.display());
             path
         }
         Err(e) => {
-            eprintln!("[remove_s3_objects] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            eprintln!("[wipe_s3_objects] Failed to get AWS binary path: {}, falling back to system PATH", e);
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
-                println!("[remove_s3_objects] Found AWS in system PATH at: {}", path.display());
+                println!("[wipe_s3_objects] Found AWS in system PATH at: {}", path.display());
                 path
             } else {
-                eprintln!("[remove_s3_objects] AWS CLI not found in system PATH or custom location");
+                eprintln!("[wipe_s3_objects] AWS CLI not found in system PATH or custom location");
                 return Err("AWS CLI not found".to_string());
             }
         }
@@ -1679,38 +1710,128 @@ pub async fn wipe_s3_objects(
         std::env::var("PATH").unwrap_or_default()
     );
 
-    println!("[remove_s3_objects] Removing all objects from bucket: {}", bucket_name);
+    // List all buckets
+    let mut bucket_names = match crate::sync_shared::list_all_buckets(&aws_binary_path, &dynamic_path).await {
+        Ok(names) => names,
+        Err(e) => {
+            eprintln!("[wipe_s3_objects] Failed to list buckets: {}", e);
+            // Continue with database cleanup even if bucket listing fails
+            return Ok(());
+        }
+    };
     
-    let mut command = Command::new(&aws_binary_path);
-    command
-        .env("AWS_PAGER", "")
-        .env("PATH", &dynamic_path)
-        .arg("s3")
-        .arg("rm")
-        .arg(&s3_uri)
-        .arg("--recursive")
-        .arg("--endpoint-url")
-        .arg("https://s3.hippius.com");
+    // Filter buckets based on scope
+    if scope == "private" {
+        bucket_names.retain(|name| name.ends_with("-private"));
+    } else {
+        bucket_names.retain(|name| !name.ends_with("-private"));
+    }
+
+    if bucket_names.is_empty() {
+        println!("[wipe_s3_objects] No {} buckets found to clean up", scope);
+        return Ok(());
+    }
+
+    println!("[wipe_s3_objects] Found {} {} buckets to clean up", bucket_names.len(), scope);
     
-    // Add Windows-specific flags to suppress terminal window
-    #[cfg(target_os = "windows")]
+    // Process each matching bucket
+    for bucket_name in bucket_names {
+        let s3_uri = format!("s3://{}", bucket_name);
+        println!("[wipe_s3_objects] Removing all objects from bucket: {}", bucket_name);
+        
+        let mut command = Command::new(&aws_binary_path);
+        command
+            .env("AWS_PAGER", "")
+            .env("PATH", &dynamic_path)
+            .arg("s3")
+            .arg("rm")
+            .arg(&s3_uri)
+            .arg("--recursive")
+            .arg("--endpoint-url")
+            .arg("https://s3.hippius.com");
+        
+        // Add Windows-specific flags to suppress terminal window
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        
+        let status = command
+            .status()
+            .await
+            .map_err(|e| format!("Failed to spawn 'aws s3 rm --recursive' for bucket '{}': {}", bucket_name, e))?;
+        
+        if !status.success() {
+            eprintln!(
+                "[wipe_s3_objects] aws s3 rm --recursive failed for bucket '{}' with status {:?}",
+                bucket_name, status.code()
+            );
+            // Continue with next bucket instead of failing
+            continue;
+        }
+        
+        println!("[wipe_s3_objects] Successfully removed all objects from bucket: {}", bucket_name);
+    }
+    
+    println!("[wipe_s3_objects] Completed cleaning up {} buckets and database entries", scope);
+    Ok(())
+}
+
+/// Deletes all user_profiles entries for a given account_id and scope
+async fn delete_user_profiles_by_scope(account_id: &str, scope: &str) -> Result<u64, String> {
+    let pool = DB_POOL.get().ok_or("Database pool not available")?;
+    
+    let result = sqlx::query(
+        "DELETE FROM user_profiles WHERE owner = ?1 AND type = ?2"
+    )
+    .bind(account_id)
+    .bind(scope)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to delete user_profiles: {}", e))?;
+    
+    Ok(result.rows_affected())
+}
+
+/// Gets the sync path based on scope (public/private)
+async fn get_sync_path(scope: &str) -> Result<std::path::PathBuf, String> {
+    let path_str = if scope == "public" {
+        crate::utils::sync::get_public_sync_path().await
+    } else if scope == "private" {
+        crate::utils::sync::get_private_sync_path().await
+    } else {
+        return Err("Invalid scope. Must be 'public' or 'private'.".to_string());
+    }?; // This will return early if there's an error
+
+    Ok(std::path::PathBuf::from(path_str))
+}
+
+/// Deletes all files and directories in the given path
+fn delete_directory_contents(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    if path.is_file() {
+        return fs::remove_file(path)
+            .map_err(|e| format!("Failed to delete file {}: {}", path.display(), e));
+    }
+
+    for entry in fs::read_dir(path)
+        .map_err(|e| format!("Failed to read directory {}: {}", path.display(), e))? 
     {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+        
+        if path.is_dir() {
+            fs::remove_dir_all(&path)
+                .map_err(|e| format!("Failed to remove directory {}: {}", path.display(), e))?;
+        } else {
+            fs::remove_file(&path)
+                .map_err(|e| format!("Failed to remove file {}: {}", path.display(), e))?;
+        }
     }
-    
-    let status = command
-        .status()
-        .await
-        .map_err(|e| format!("Failed to spawn 'aws s3 rm --recursive': {}", e))?;
-    
-    if !status.success() {
-        return Err(format!(
-            "aws s3 rm --recursive failed for bucket '{}' with status {:?}",
-            bucket_name, status.code()
-        ));
-    }
-    
-    println!("[remove_s3_objects] Successfully removed all objects from bucket: {}", bucket_name);
+
     Ok(())
 }

@@ -397,7 +397,7 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
 }
 
 /// Helper function to list all S3 buckets
-async fn list_all_buckets(aws_binary_path: &std::path::Path, dynamic_path: &str) -> Result<Vec<String>, String> {
+pub async fn list_all_buckets(aws_binary_path: &std::path::Path, dynamic_path: &str) -> Result<Vec<String>, String> {
     let endpoint_url = "https://s3.hippius.com";
         
     let mut command = Command::new(aws_binary_path);
