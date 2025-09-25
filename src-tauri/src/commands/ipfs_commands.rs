@@ -1775,6 +1775,55 @@ pub async fn wipe_s3_objects(
     }
     
     println!("[wipe_s3_objects] Completed cleaning up {} buckets and database entries", scope);
+    
+    // Move any remaining uploading items to recent items with "deleted" status
+    {
+        let state = if scope == "public" {
+            crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap()
+        } else {
+            crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap()
+        };
+        
+        // Create a copy of uploading_items to avoid borrowing issues
+        let uploading_items = state.uploading_items.clone();
+        
+        // Release the lock before modifying the state
+        drop(state);
+        
+        // For each uploading item, create a deleted entry in recent_items
+        for item in uploading_items {
+            if item.scope == scope {
+                // Clone the path before moving item into deleted_item
+                let item_path = item.path.clone();
+                let deleted_item = crate::sync_shared::RecentItem {
+                    name: item.name,
+                    scope: scope.clone(),
+                    action: "deleted".to_string(),
+                    kind: item.kind,
+                    path: item_path.clone(),
+                    timestamp: chrono::Utc::now().timestamp_millis(),
+                };
+                
+                let mut state = if scope == "public" {
+                    crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap()
+                } else {
+                    crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap()
+                };
+                
+                // Add to recent items
+                state.recent_items.push_front(deleted_item);
+                
+                // Trim the list if it gets too long
+                while state.recent_items.len() > crate::sync_shared::MAX_RECENT_ITEMS {
+                    state.recent_items.pop_back();
+                }
+                
+                // Remove from uploading items using the cloned path
+                state.uploading_items.retain(|i| i.path != item_path);
+            }
+        }
+    }
+    
     Ok(())
 }
 

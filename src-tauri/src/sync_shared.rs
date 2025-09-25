@@ -679,7 +679,7 @@ async fn list_single_bucket_contents(
     // Combine root files and folders
     root_files.append(&mut root_folders);
     
-    println!("[ListBucket] Found {} items in bucket {}", root_files.len(), bucket_name);
+    println!("[ListBucket] Found {} items in bucket {}, root_files {:?}", root_files.len(), bucket_name, root_files);
     Ok(root_files)
 }
 
