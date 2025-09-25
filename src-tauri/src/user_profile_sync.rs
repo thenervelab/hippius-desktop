@@ -858,27 +858,96 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                         source = "Hippius".to_string();
                     }
 
+                    // Check if the file/folder exists in sync paths
                     if type_ == "public" && public_sync_path.is_some() {
-                        let full_path = if is_folder {
-                            // For folders, use the base_name directly as the folder name
-                            format!("{}/{}", public_sync_path.as_ref().unwrap(), base_name)
+                        let sync_path = public_sync_path.as_ref().unwrap();
+                        
+                        if is_folder {
+                            // For folders, check if the folder exists directly in the sync path
+                            let full_path = format!("{}/{}", sync_path, base_name);
+                            if Path::new(&full_path).exists() && Path::new(&full_path).is_dir() {
+                                source = full_path;
+                            } else {
+                                // Also check if folder exists without any modifications
+                                let direct_path = format!("{}/{}", sync_path, file_name);
+                                if Path::new(&direct_path).exists() && Path::new(&direct_path).is_dir() {
+                                    source = direct_path;
+                                } else {
+                                    // Check for folder with common suffixes
+                                    let variations = [
+                                        format!("{}/{}", sync_path, base_name),
+                                        format!("{}/{}", sync_path, file_name),
+                                        format!("{}/{}.folder", sync_path, base_name),
+                                        format!("{}/{}-folder", sync_path, base_name),
+                                        format!("{}/{}.folder.ec_metadata", sync_path, base_name),
+                                        format!("{}/{}-folder.ec_metadata", sync_path, base_name),
+                                    ];
+                                    
+                                    for variation in variations {
+                                        if Path::new(&variation).exists() && Path::new(&variation).is_dir() {
+                                            source = variation;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         } else {
-                            // For files, use the base_name as the file name
-                            format!("{}/{}", public_sync_path.as_ref().unwrap(), base_name)
-                        };
-                        if Path::new(&full_path).exists() {
-                            source = full_path;
+                            // For files
+                            let full_path = format!("{}/{}", sync_path, base_name);
+                            if Path::new(&full_path).exists() {
+                                source = full_path;
+                            } else {
+                                // Check original file_name as well
+                                let direct_path = format!("{}/{}", sync_path, file_name);
+                                if Path::new(&direct_path).exists() {
+                                    source = direct_path;
+                                }
+                            }
                         }
                     } else if type_ == "private" && private_sync_path.is_some() {
-                        let full_path = if is_folder {
-                            // For folders, use the base_name directly as the folder name
-                            format!("{}/{}", private_sync_path.as_ref().unwrap(), base_name)
+                        let sync_path = private_sync_path.as_ref().unwrap();
+                        
+                        if is_folder {
+                            // For folders, check if the folder exists directly in the sync path
+                            let full_path = format!("{}/{}", sync_path, base_name);
+                            if Path::new(&full_path).exists() && Path::new(&full_path).is_dir() {
+                                source = full_path;
+                            } else {
+                                // Also check if folder exists without any modifications
+                                let direct_path = format!("{}/{}", sync_path, file_name);
+                                if Path::new(&direct_path).exists() && Path::new(&direct_path).is_dir() {
+                                    source = direct_path;
+                                } else {
+                                    // Check for folder with common suffixes
+                                    let variations = [
+                                        format!("{}/{}", sync_path, base_name),
+                                        format!("{}/{}", sync_path, file_name),
+                                        format!("{}/{}.folder", sync_path, base_name),
+                                        format!("{}/{}-folder", sync_path, base_name),
+                                        format!("{}/{}.folder.ec_metadata", sync_path, base_name),
+                                        format!("{}/{}-folder.ec_metadata", sync_path, base_name),
+                                    ];
+                                    
+                                    for variation in variations {
+                                        if Path::new(&variation).exists() && Path::new(&variation).is_dir() {
+                                            source = variation;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         } else {
-                            // For files, use the base_name as the file name
-                            format!("{}/{}", private_sync_path.as_ref().unwrap(), base_name)
-                        };
-                        if Path::new(&full_path).exists() {
-                            source = full_path;
+                            // For files
+                            let full_path = format!("{}/{}", sync_path, base_name);
+                            if Path::new(&full_path).exists() {
+                                source = full_path;
+                            } else {
+                                // Check original file_name as well
+                                let direct_path = format!("{}/{}", sync_path, file_name);
+                                if Path::new(&direct_path).exists() {
+                                    source = direct_path;
+                                }
+                            }
                         }
                     }
 
