@@ -358,11 +358,12 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     let file_type = if is_public { "public" } else { "private" };
 
     let exists: Option<(String,)> = sqlx::query_as(
-        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?"
+        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ? AND is_folder = ?"
     )
     .bind(&file_name)
     .bind(owner)
     .bind(file_type)
+    .bind(is_folder)  // Add this condition
     .fetch_optional(pool)
     .await
     .unwrap();

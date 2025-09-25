@@ -588,10 +588,12 @@ pub async fn copy_to_sync_folder(
 
         // Check if folder record already exists
         let exists: Option<(String,)> = sqlx::query_as(
-            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
+            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? AND type = ? AND is_folder = ? LIMIT 1"
         )
         .bind(account_id)
-        .bind(folder_name)
+        .bind(meta_folder_name)  // Use the actual folder name being inserted
+        .bind(if is_public { "public" } else { "private" })
+        .bind(is_folder)  // Also check if it's a folder
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
@@ -648,8 +650,14 @@ pub async fn copy_to_sync_folder(
             .await;
         }
 
-        let folder_relative_path = PathBuf::from(folder_name).join(&file_name);
-        insert_file_if_not_exists(pool, &folder_relative_path, account_id, is_public, is_folder).await;
+        if is_folder {
+            // Only insert the main folder itself, not its contents
+            insert_file_if_not_exists(pool, &PathBuf::from(meta_folder_name), account_id, is_public, true).await;
+        } else {
+            // For individual files, insert normally
+            let file_relative_path = PathBuf::from(folder_name).join(&file_name);
+            insert_file_if_not_exists(pool, &file_relative_path, account_id, is_public, false).await;
+        }
     }
     if is_folder {
         if !dest_path.exists() {

@@ -746,42 +746,42 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                     }
 
                     for record in records_to_insert {
-                        let insert_result = sqlx::query(
-                            "INSERT INTO user_profiles (
-                                owner, cid, file_hash, file_name, file_size_in_bytes,
-                                is_assigned, last_charged_at, main_req_hash,
-                                selected_validator, total_replicas, block_number, profile_cid, source,
-                                miner_ids, created_at, type, is_folder
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                        )
-                        .bind(&record.owner)
-                        .bind(&record.cid)
-                        .bind(&record.file_hash)
-                        .bind(&record.file_name)
-                        .bind(record.file_size_in_bytes)
-                        .bind(record.is_assigned)
-                        .bind(record.last_charged_at)
-                        .bind(&record.main_req_hash)
-                        .bind(&record.selected_validator)
-                        .bind(record.total_replicas)
-                        .bind(record.block_number)
-                        .bind(&record.profile_cid)
-                        .bind(&record.source)
-                        .bind(&record.miner_ids)
-                        .bind(record.created_at)
-                        .bind(&record.file_type)
-                        .bind(record.is_folder)
-                        .execute(pool)
-                        .await;
+                        // let insert_result = sqlx::query(
+                        //     "INSERT INTO user_profiles (
+                        //         owner, cid, file_hash, file_name, file_size_in_bytes,
+                        //         is_assigned, last_charged_at, main_req_hash,
+                        //         selected_validator, total_replicas, block_number, profile_cid, source,
+                        //         miner_ids, created_at, type, is_folder
+                        //     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        // )
+                        // .bind(&record.owner)
+                        // .bind(&record.cid)
+                        // .bind(&record.file_hash)
+                        // .bind(&record.file_name)
+                        // .bind(record.file_size_in_bytes)
+                        // .bind(record.is_assigned)
+                        // .bind(record.last_charged_at)
+                        // .bind(&record.main_req_hash)
+                        // .bind(&record.selected_validator)
+                        // .bind(record.total_replicas)
+                        // .bind(record.block_number)
+                        // .bind(&record.profile_cid)
+                        // .bind(&record.source)
+                        // .bind(&record.miner_ids)
+                        // .bind(record.created_at)
+                        // .bind(&record.file_type)
+                        // .bind(record.is_folder)
+                        // .execute(pool)
+                        // .await;
 
-                        if let Err(e) = insert_result {
-                            eprintln!("[UserSync] Failed to insert record for file '{}': {e}", record.file_name);
-                            let _ = app_handle_clone.emit("app-event", AppEvent {
-                                event_type: "error".to_string(),
-                                message: "Failed to insert record into user profiles table".to_string(),
-                                details: Some(format!("File: {}, Error: {}", record.file_name, e)),
-                            });
-                        }
+                        // if let Err(e) = insert_result {
+                        //     eprintln!("[UserSync] Failed to insert record for file '{}': {e}", record.file_name);
+                        //     let _ = app_handle_clone.emit("app-event", AppEvent {
+                        //         event_type: "error".to_string(),
+                        //         message: "Failed to insert record into user profiles table".to_string(),
+                        //         details: Some(format!("File: {}, Error: {}", record.file_name, e)),
+                        //     });
+                        // }
                     }
                 } else {
                     println!("[UserSync] Skipping user_profiles table clear: profile_parsed_successfully={}, records_to_insert.len()={}",
