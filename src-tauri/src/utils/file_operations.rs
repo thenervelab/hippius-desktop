@@ -414,7 +414,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                         // Try S3 removal as fallback
                         if let Some(file_str) = file.to_str() {
                             if let Some(source) = get_source_from_user_profiles(file_str).await {
-                                if let Err(e) = execute_aws_s3_rm(&source) {
+                                if let Err(e) = execute_aws_s3_rm(&source,is_folder) {
                                     eprintln!("Failed to remove file from S3: {}", e);
                                 }
                             }
@@ -444,7 +444,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
             }else{
                 // Try S3 removal as fallback
                 if let Some(source) = get_source_from_user_profiles(file_name).await {
-                    if let Err(e) = execute_aws_s3_rm(&source) {
+                    if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                         eprintln!("Failed to remove folder from S3: {}", e);
                     }
                 }
@@ -459,7 +459,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
         }else{
             // Try S3 removal as fallback
             if let Some(source) = get_source_from_user_profiles(file_name).await {
-                if let Err(e) = execute_aws_s3_rm(&source) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                     eprintln!("Failed to remove file from S3: {}", e);
                 }
             }
@@ -751,7 +751,7 @@ pub async fn remove_from_sync_folder(
                     // Try S3 removal as fallback
                     if let Some(file_str) = file.to_str() {
                         if let Some(source) = get_source_from_user_profiles(file_str).await {
-                            if let Err(e) = execute_aws_s3_rm(&source) {
+                            if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                                 eprintln!("Failed to remove file from S3: {}", e);
                             }
                         }    
@@ -781,7 +781,7 @@ pub async fn remove_from_sync_folder(
         else{
             // Try S3 removal as fallback
             if let Some(source) = get_source_from_user_profiles(meta_folder_name).await {
-                if let Err(e) = execute_aws_s3_rm(&source) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                     eprintln!("Failed to remove folder from S3: {}", e);
                 }
             }
@@ -795,7 +795,7 @@ pub async fn remove_from_sync_folder(
         }else{
             // Try S3 removal as fallback
             if let Some(source) = get_source_from_user_profiles(meta_folder_name).await {
-                if let Err(e) = execute_aws_s3_rm(&source) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                     eprintln!("Failed to remove file from S3: {}", e);
                 }
             }
@@ -818,13 +818,18 @@ pub async fn remove_from_sync_folder(
     }
 }
 
-fn execute_aws_s3_rm(path: &str) -> Result<(), String> {
+fn execute_aws_s3_rm(path: &str, is_folder: bool) -> Result<(), String> {
     use std::process::Command;
     
     let endpoint_url = "https://s3.hippius.com";
     let mut cmd = Command::new("aws");
-    println!("[AWS CLI] Removing path: {}", path);
-    cmd.args(["s3", "rm", "--recursive", "--endpoint-url", endpoint_url, path]);
+    println!("[AWS CLI] Removing path: {} (is_folder: {})", path, is_folder);
+    
+    if is_folder {
+        cmd.args(["s3", "rm", "--recursive", "--endpoint-url", endpoint_url, path]);
+    } else {
+        cmd.args(["s3", "rm", "--endpoint-url", endpoint_url, path]);
+    }
     
     // Add Windows-specific flags to suppress terminal window
     #[cfg(target_os = "windows")]
@@ -837,11 +842,22 @@ fn execute_aws_s3_rm(path: &str) -> Result<(), String> {
         .output()
         .map_err(|e| e.to_string())?;
 
+    // Print the full output for debugging
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    println!("[AWS CLI] Command status: {}", output.status);
+    if !stdout.is_empty() {
+        println!("[AWS CLI] Output: {}", stdout);
+    }
+    if !stderr.is_empty() {
+        println!("[AWS CLI] Error: {}", stderr);
+    }
+
     if output.status.success() {
         Ok(())
     } else {
-        let error_msg = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Failed to delete from S3: {}", error_msg))
+        Err(format!("Failed to delete from S3: {}", stderr))
     }
 }
 
