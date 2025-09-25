@@ -745,13 +745,17 @@ pub async fn store_bucket_listing_in_db(
 
         let is_assigned = it.ipfs_hash != "pending";
 
-        // Insert new record with bucket_name
-        sqlx::query(
-            "INSERT INTO user_profiles (
+        // Only insert if file with same name and type doesn't exist
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO user_profiles (
                 file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, 
                 main_req_hash, selected_validator, total_replicas, block_number, profile_cid, 
                 source, miner_ids, type, is_folder, created_at, bucket_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM user_profiles 
+                WHERE file_name = ? AND type = ? AND owner = ?
+            )"
         )
         .bind(&file_name)
         .bind(owner)
@@ -773,8 +777,16 @@ pub async fn store_bucket_listing_in_db(
             .unwrap_or_else(|_| chrono::Utc::now().into())
             .timestamp() as i64)
         .bind(&it.bucket_name)
+        // WHERE NOT EXISTS conditions
+        .bind(&file_name)
+        .bind(file_type)
+        .bind(owner)
         .execute(pool)
         .await?;
+
+        if result.rows_affected() > 0 {
+            stored += 1;
+        }
         stored += 1;
     }
 
@@ -794,7 +806,7 @@ pub async fn insert_bucket_items_if_absent(
     for it in items {
         let file_name = it.path.clone();
         let exists: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3' AND file_name = ? LIMIT 1"
+            "SELECT 1 FROM user_profiles WHERE owner = ? AND type = ? AND file_name = ? LIMIT 1"
         )
         .bind(owner)
         .bind(file_type)
