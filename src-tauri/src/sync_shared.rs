@@ -709,18 +709,25 @@ pub async fn store_bucket_listing_in_db(
         S3_PRIVATE_SYNC_STATE.lock().unwrap().recent_items.clone()
     };
 
-    // Extract file names from recent items
-    let recent_file_names: Vec<&str> = recent_items
+    // Extract file names of items that are currently being uploaded (exclude these from deletion)
+    let uploading_file_names: Vec<&str> = recent_items
         .iter()
+        .filter(|item| item.action != "deleted") 
         .map(|item| item.name.as_str())
         .collect();
 
-    // Build the delete query to exclude recent items
+    let deleted_file_names: Vec<&str> = recent_items
+        .iter()
+        .filter(|item| item.action == "deleted")  
+        .map(|item| item.name.as_str())
+        .collect();
+
+    // Build the delete query
     let mut query = "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'".to_string();
 
-    // Add condition to exclude recent items if there are any
-    if !recent_file_names.is_empty() {
-        let placeholders = vec!["?"; recent_file_names.len()].join(",");
+    // Add condition to exclude only uploading files (not all recent items)
+    if !uploading_file_names.is_empty() {
+        let placeholders = vec!["?"; uploading_file_names.len()].join(",");
         query.push_str(&format!(" AND file_name NOT IN ({})", placeholders));
     }
 
@@ -728,16 +735,27 @@ pub async fn store_bucket_listing_in_db(
         .bind(owner)
         .bind(file_type);
 
-    // Bind recent item names to exclude
-    for name in recent_file_names {
+    // Bind uploading file names to exclude from deletion
+    for name in uploading_file_names {
         query = query.bind(name);
     }
 
     query.execute(pool).await?;
 
     let mut stored = 0usize;
+    
+    // Get the list of deleted file names from recent items
+    let deleted_files: HashSet<&str> = recent_items
+        .iter()
+        .filter(|item| item.action == "deleted")
+        .map(|item| item.name.as_str())
+        .collect();
 
     for it in items {
+        // Skip files that are marked for deletion
+        if deleted_files.contains(it.path.as_str()) {
+            continue;
+        }
         let file_name = it.path.clone();
         let source = format!("s3://{}/{}", it.bucket_name, it.path);
         let cid_hex = hex::encode(it.ipfs_hash.as_bytes());
