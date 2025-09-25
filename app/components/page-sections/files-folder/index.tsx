@@ -39,6 +39,7 @@ import AddFolderToFolderButton from "@/components/page-sections/files/ipfs/AddFo
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { usePagination } from "@/lib/hooks";
+import { List } from "lucide-react";
 
 interface FileEntry {
   file_name: string;
@@ -98,12 +99,8 @@ export default function FolderView({
   }, [files, searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
 
   // Shared pagination state between list and card views
-  const {
-    paginatedData,
-    setCurrentPage,
-    currentPage,
-    totalPages
-  } = usePagination(filteredData, 12);
+  const { paginatedData, setCurrentPage, currentPage, totalPages } =
+    usePagination(filteredData, 12);
 
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
@@ -251,7 +248,7 @@ export default function FolderView({
         isPrivate: isPrivateFolder,
         outputDir,
         source: folderSource,
-        mainReqHash: mainReqHash
+        mainReqHash: mainReqHash,
       });
 
       if (result && !result.success) {
@@ -264,7 +261,8 @@ export default function FolderView({
     } catch (error) {
       console.error("Error downloading folder:", error);
       toast.error(
-        `Failed to download folder: ${error instanceof Error ? error.message : String(error)
+        `Failed to download folder: ${
+          error instanceof Error ? error.message : String(error)
         }`
       );
     } finally {
@@ -385,7 +383,7 @@ export default function FolderView({
                 onClick={() => handleViewModeChange("list")}
                 aria-label="List View"
               >
-                <Icons.Grid className="size-5" />
+                <List className="size-5" />
               </button>
               <button
                 className={cn(

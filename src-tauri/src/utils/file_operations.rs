@@ -114,7 +114,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         .await
         .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
         .unwrap_or(false);
-        
+        println!("is_folder : {}, should_delete_folder : {}, is_public : {}, sanitized_file_name : {}", is_folder, should_delete_folder, is_public, sanitized_file_name);
         // Remove from sync folder
         remove_file_from_sync_and_db(&sanitized_file_name, is_public, is_folder, should_delete_folder).await;
 
@@ -129,6 +129,7 @@ pub async fn delete_and_unpin_file_by_name(
     file_name: String,
     seed_phrase: String,
 ) -> Result<u64, String> {
+    println!("[-] Deleting file by name '{}'", file_name);
     println!("file_name : {}", file_name);
     let mut is_public = false;
     if let Some(pool) = DB_POOL.get() {
@@ -413,7 +414,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                         // Try S3 removal as fallback
                         if let Some(file_str) = file.to_str() {
                             if let Some(source) = get_source_from_user_profiles(file_str).await {
-                                if let Err(e) = execute_aws_s3_rm(&source) {
+                                if let Err(e) = execute_aws_s3_rm(&source,is_folder) {
                                     eprintln!("Failed to remove file from S3: {}", e);
                                 }
                             }
@@ -424,14 +425,14 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
 
             // Remove the folder record
             if let Err(e) = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?"
+                "DELETE FROM user_profiles WHERE file_name = ? AND type = ?"
             )
             .bind(file_name)
             .bind(if is_public { "public" } else { "private" })
             .execute(pool)
             .await
             {
-                eprintln!("Failed to remove folder from sync_folder_files DB: {}", e);
+                eprintln!("Failed to remove folder from user_profiles DB: {}", e);
             }
         }
 
@@ -443,7 +444,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
             }else{
                 // Try S3 removal as fallback
                 if let Some(source) = get_source_from_user_profiles(file_name).await {
-                    if let Err(e) = execute_aws_s3_rm(&source) {
+                    if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                         eprintln!("Failed to remove folder from S3: {}", e);
                     }
                 }
@@ -458,7 +459,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
         }else{
             // Try S3 removal as fallback
             if let Some(source) = get_source_from_user_profiles(file_name).await {
-                if let Err(e) = execute_aws_s3_rm(&source) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                     eprintln!("Failed to remove file from S3: {}", e);
                 }
             }
@@ -466,14 +467,14 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
 
         if let Some(pool) = DB_POOL.get() {
             if let Err(e) = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?"
+                "DELETE FROM user_profiles WHERE file_name = ? AND type = ?"
             )
             .bind(file_name)
             .bind(if is_public { "public" } else { "private" })
             .execute(pool)
             .await
             {
-                eprintln!("Failed to remove file from sync_folder_files DB: {}", e);
+                eprintln!("Failed to remove file from user_profiles DB: {}", e);
             }
         }
     }
@@ -750,7 +751,7 @@ pub async fn remove_from_sync_folder(
                     // Try S3 removal as fallback
                     if let Some(file_str) = file.to_str() {
                         if let Some(source) = get_source_from_user_profiles(file_str).await {
-                            if let Err(e) = execute_aws_s3_rm(&source) {
+                            if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                                 eprintln!("Failed to remove file from S3: {}", e);
                             }
                         }    
@@ -761,14 +762,14 @@ pub async fn remove_from_sync_folder(
             let folder_relative_path = PathBuf::from(folder_name).join(file_name);
             let folder_relative_path_str = folder_relative_path.to_string_lossy().to_string();
             if let Err(e) = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?"
+                "DELETE FROM user_profiles WHERE file_name = ? AND type = ?"
             )
             .bind(&folder_relative_path_str)
             .bind(if is_public { "public" } else { "private" })
             .execute(pool)
             .await
             {
-                eprintln!("Failed to remove folder from sync_folder_files DB: {}", e);
+                eprintln!("Failed to remove folder from user_profiles DB: {}", e);
             }
         }
 
@@ -780,7 +781,7 @@ pub async fn remove_from_sync_folder(
         else{
             // Try S3 removal as fallback
             if let Some(source) = get_source_from_user_profiles(meta_folder_name).await {
-                if let Err(e) = execute_aws_s3_rm(&source) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                     eprintln!("Failed to remove folder from S3: {}", e);
                 }
             }
@@ -794,7 +795,7 @@ pub async fn remove_from_sync_folder(
         }else{
             // Try S3 removal as fallback
             if let Some(source) = get_source_from_user_profiles(meta_folder_name).await {
-                if let Err(e) = execute_aws_s3_rm(&source) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                     eprintln!("Failed to remove file from S3: {}", e);
                 }
             }
@@ -804,119 +805,31 @@ pub async fn remove_from_sync_folder(
             let file_relative_path = PathBuf::from(folder_name).join(file_name);
             let file_relative_path_str = file_relative_path.to_string_lossy().to_string();
             if let Err(e) = sqlx::query(
-                "DELETE FROM sync_folder_files WHERE file_name = ? AND type = ?"
+                "DELETE FROM user_profiles WHERE file_name = ? AND type = ?"
             )
             .bind(&file_relative_path_str)
             .bind(if is_public { "public" } else { "private" })
             .execute(pool)
             .await
             {
-                eprintln!("Failed to remove file from sync_folder_files DB: {}", e);
+                eprintln!("Failed to remove file from user_profiles DB: {}", e);
             }
-        }
-    }
-
-    let cid_vec = folder_manifest_cid.as_bytes().to_vec();
-    let file_hash = hex::encode(cid_vec);
-    if let Some(pool) = DB_POOL.get() {
-        // Get sub-account to construct bucket_name
-        let bucket_name = match sqlx::query_as::<_, (String,)>(
-            "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1"
-        )
-        .bind(account_id)
-        .fetch_optional(pool)
-        .await {
-            Ok(Some((sub_account_seed_phrase,))) => {
-                // Try to decrypt if we have a key, otherwise use as-is
-                let maybe_key = load_encryption_key(pool).await;
-                let phrase = if let Some(key) = &maybe_key {
-                    decrypt_phrase(&sub_account_seed_phrase, key)
-                        .unwrap_or_else(|| sub_account_seed_phrase.clone())
-                } else {
-                    sub_account_seed_phrase
-                };
-                // Convert seed phrase to SS58 address
-                if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
-                    let ss58 = pair.public().to_ss58check();
-                    format!("{}-{}", ss58, if is_public { "public" } else { "private" })
-                } else {
-                    eprintln!("Failed to convert seed phrase to SS58 address");
-                    String::new()
-                }
-            },
-            _ => String::new(),
-        };
-
-        // Check if folder record already exists
-        let exists: Option<(String,)> = sqlx::query_as(
-            "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1"
-        )
-        .bind(account_id)
-        .bind(meta_folder_name)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
-
-        if let Some(_) = exists {
-            // Update existing record
-            let _ = sqlx::query(
-                "UPDATE user_profiles SET 
-                    cid = ?, 
-                    file_hash = ?, 
-                    file_size_in_bytes = ?, 
-                    main_req_hash = ?,
-                    type = ?,
-                    is_folder = ?,
-                    bucket_name = ?,
-                    processed_timestamp = CURRENT_TIMESTAMP
-                WHERE owner = ? AND file_name = ?"
-            )
-            .bind(folder_manifest_cid)
-            .bind(&file_hash)
-            .bind(0)
-            .bind("s3")
-            .bind(if is_public { "public" } else { "private" })
-            .bind(true)
-            .bind(bucket_name)
-            .bind(account_id)
-            .bind(meta_folder_name)
-            .execute(pool)
-            .await;
-        } else {
-            let mut source = "Hippius".to_string();
-            if Path::new(&target_folder).exists() {
-                source =  target_folder.to_string_lossy().to_string()
-            }
-            // Insert new record
-            let _ = sqlx::query(
-                "INSERT INTO user_profiles (
-                    owner, cid, file_hash, file_name, file_size_in_bytes, is_assigned, last_charged_at, 
-                    main_req_hash, selected_validator, total_replicas, block_number, processed_timestamp, profile_cid, 
-                    source, miner_ids, created_at, type, is_folder, bucket_name
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, '', 5, 0, CURRENT_TIMESTAMP, '', ?, '[]', strftime('%s', 'now'), ?, ?, ?)"
-            )
-            .bind(account_id)
-            .bind(folder_manifest_cid)
-            .bind(&file_hash)
-            .bind(meta_folder_name)
-            .bind(0)
-            .bind(false)
-            .bind("s3")
-            .bind(source)
-            .bind(if is_public { "public" } else { "private" })
-            .bind(true)
-            .bind(bucket_name)
-            .execute(pool)
-            .await;
         }
     }
 }
 
-fn execute_aws_s3_rm(path: &str) -> Result<(), String> {
+fn execute_aws_s3_rm(path: &str, is_folder: bool) -> Result<(), String> {
     use std::process::Command;
     
+    let endpoint_url = "https://s3.hippius.com";
     let mut cmd = Command::new("aws");
-    cmd.args(["s3", "rm", path]);
+    println!("[AWS CLI] Removing path: {} (is_folder: {})", path, is_folder);
+    
+    if is_folder {
+        cmd.args(["s3", "rm", "--recursive", "--endpoint-url", endpoint_url, path]);
+    } else {
+        cmd.args(["s3", "rm", "--endpoint-url", endpoint_url, path]);
+    }
     
     // Add Windows-specific flags to suppress terminal window
     #[cfg(target_os = "windows")]
@@ -929,11 +842,22 @@ fn execute_aws_s3_rm(path: &str) -> Result<(), String> {
         .output()
         .map_err(|e| e.to_string())?;
 
+    // Print the full output for debugging
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    
+    println!("[AWS CLI] Command status: {}", output.status);
+    if !stdout.is_empty() {
+        println!("[AWS CLI] Output: {}", stdout);
+    }
+    if !stderr.is_empty() {
+        println!("[AWS CLI] Error: {}", stderr);
+    }
+
     if output.status.success() {
         Ok(())
     } else {
-        let error_msg = String::from_utf8_lossy(&output.stderr);
-        Err(format!("Failed to delete from S3: {}", error_msg))
+        Err(format!("Failed to delete from S3: {}", stderr))
     }
 }
 
