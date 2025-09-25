@@ -26,8 +26,11 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
 
     const handleConfirm = () => {
         onConfirm();
-        clearSelection();
+        setTimeout(() => {
+            clearSelection();
+        }, 2000);
         onOpenChange(false);
+        // Don't clear selection here - let the onSuccess callback in CardView handle it
     };
 
     const fileCount = selectedFiles.length;

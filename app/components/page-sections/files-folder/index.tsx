@@ -175,7 +175,7 @@ export default function FolderView({
               name: displayName || "Unnamed File",
               actualFileName: entry.file_name,
               size: entry.file_size,
-              type: entry.file_name.split(".").pop() || "unknown",
+              type: isPrivateFolder ? "private" : "public",
               fileHash: entry.file_hash,
               isAssigned: true,
               source: entry.source || "Unknown",

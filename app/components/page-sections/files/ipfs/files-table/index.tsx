@@ -566,11 +566,11 @@ const FilesTable: FC<FilesTableProps> = memo(({
             rowState === "error" && "bg-red-200/20",
             isSelectionMode && rowData.isAssigned && "cursor-pointer",
             isSelectionMode &&
-            selectedFiles.some(f => f.cid === rowData.cid) &&
+            selectedFiles.some(f => f.actualFileName === rowData.actualFileName) &&
             rowData.isAssigned &&
             "bg-primary-60/10",
             isSelectionMode &&
-            !selectedFiles.some(f => f.cid === rowData.cid) &&
+            !selectedFiles.some(f => f.actualFileName === rowData.actualFileName) &&
             rowData.isAssigned &&
             "hover:bg-primary-60/8",
             isSelectionMode &&
@@ -588,6 +588,8 @@ const FilesTable: FC<FilesTableProps> = memo(({
             ) {
               return;
             }
+
+            console.log("here is again")
 
             if (isSelectionMode && rowData.isAssigned) {
               e.preventDefault();
@@ -610,7 +612,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
         </TableModule.Tr>
       );
     })
-  ), [table, localHandleContextMenu, isSelectionMode, toggleFileSelection, selectedFiles, currentPage]);
+  ), [table, localHandleContextMenu, isSelectionMode, toggleFileSelection, selectedFiles, currentPage, searchTerm]);
 
   const paginationComponent = useMemo(() => {
     if (totalPages <= 1) return null;

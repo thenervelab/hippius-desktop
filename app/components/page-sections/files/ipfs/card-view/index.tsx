@@ -79,6 +79,7 @@ const CardView: FC<CardViewProps> = ({
     return selectedFiles.length > 0 && selectedFiles.some(file => file.type?.toLowerCase() === 'private');
   }, [selectedFiles]);
 
+  // Initialize delete hook with current selectedFiles - this will update when selectedFiles changes
   const { mutate: deleteFiles, isPending: isDeleting } = useDeleteIpfsFile({
     files: selectedFiles,
     isPrivateFolder
@@ -88,6 +89,7 @@ const CardView: FC<CardViewProps> = ({
   const [localFileDetailsFile, setLocalFileDetailsFile] =
     useState<FormattedUserIpfsFile | null>(null);
   const [localIsFileDetailsOpen, setLocalIsFileDetailsOpen] = useState(false);
+  const [openMenuIndex, setOpenMenuIndex] = useState<number | null>(null);
 
   const {
     setSelectedFile,
@@ -97,14 +99,17 @@ const CardView: FC<CardViewProps> = ({
 
   // Handle multiple file deletion
   const handleDeleteSelectedFiles = useCallback(() => {
-    if (selectedFiles.length === 0) return;
+    if (selectedFiles.length === 0) {
+      return;
+    }
 
     deleteFiles(undefined, {
       onSuccess: () => {
         // Clear selection and exit selection mode
         clearSelection();
       },
-      onError: () => {
+      onError: (error) => {
+        console.error("Delete failed:", error);
         // Keep selection on error, but user can manually clear it
       }
     });
@@ -222,6 +227,8 @@ const CardView: FC<CardViewProps> = ({
                       <TableActionMenu
                         dropdownTitle="IPFS Options"
                         dropDownMenuTriggerClass="size-5 text-grey-60 flex items-center"
+                        open={openMenuIndex === index}
+                        onOpenChange={(open) => setOpenMenuIndex(open ? index : null)}
                         items={[
                           ...(file.isFolder && folderUrl
                             ? [
@@ -229,6 +236,7 @@ const CardView: FC<CardViewProps> = ({
                                 icon: <Folder className="size-4" />,
                                 itemTitle: "Open",
                                 onItemClick: () => {
+                                  setOpenMenuIndex(null);
                                   router.push(folderUrl);
                                 }
                               }
@@ -237,7 +245,13 @@ const CardView: FC<CardViewProps> = ({
                           {
                             icon: <Download className="size-4" />,
                             itemTitle: "Download",
-                            onItemClick: async () => {
+                            onItemClick: async (e?: React.MouseEvent) => {
+                              // Prevent event bubbling to avoid triggering card's onClick
+                              if (e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }
+                              setOpenMenuIndex(null);
                               handleFileDownload(file, polkadotAddress ?? "");
                             }
                           },
@@ -249,6 +263,7 @@ const CardView: FC<CardViewProps> = ({
                                 icon: <Icons.Eye className="size-4" />,
                                 itemTitle: "View",
                                 onItemClick: () => {
+                                  setOpenMenuIndex(null);
                                   setSelectedFile?.(file);
                                 }
                               }
@@ -257,7 +272,13 @@ const CardView: FC<CardViewProps> = ({
                           {
                             icon: <Share className="size-4" />,
                             itemTitle: "Go To Explorer",
-                            onItemClick: async () => {
+                            onItemClick: async (e?: React.MouseEvent) => {
+                              // Prevent event bubbling to avoid triggering card's onClick
+                              if (e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }
+                              setOpenMenuIndex(null);
                               try {
                                 await openUrl(
                                   `http://hipstats.com/cid-tracker/${decodeHexCid(
@@ -275,7 +296,13 @@ const CardView: FC<CardViewProps> = ({
                           {
                             icon: <LinkIcon className="size-4" />,
                             itemTitle: "View on IPFS",
-                            onItemClick: async () => {
+                            onItemClick: async (e?: React.MouseEvent) => {
+                              // Prevent event bubbling to avoid triggering card's onClick
+                              if (e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }
+                              setOpenMenuIndex(null);
                               try {
                                 await openUrl(
                                   `https://get.hippius.network/ipfs/${decodeHexCid(
@@ -290,7 +317,13 @@ const CardView: FC<CardViewProps> = ({
                           {
                             icon: <Copy className="size-4" />,
                             itemTitle: "Copy Link",
-                            onItemClick: () => {
+                            onItemClick: (e?: React.MouseEvent) => {
+                              // Prevent event bubbling to avoid triggering card's onClick
+                              if (e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }
+                              setOpenMenuIndex(null);
                               navigator.clipboard
                                 .writeText(
                                   `https://get.hippius.network/ipfs/${decodeHexCid(
@@ -307,7 +340,13 @@ const CardView: FC<CardViewProps> = ({
                           {
                             icon: <Icons.InfoCircle className="size-4" />,
                             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
-                            onItemClick: () => {
+                            onItemClick: (e?: React.MouseEvent) => {
+                              // Prevent event bubbling to avoid triggering card's onClick
+                              if (e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }
+                              setOpenMenuIndex(null);
                               localHandleShowFileDetails(file);
                             }
                           },
@@ -315,7 +354,15 @@ const CardView: FC<CardViewProps> = ({
                           ...(file.isAssigned ? [{
                             icon: <Icons.Trash className="size-4" />,
                             itemTitle: "Delete",
-                            onItemClick: () => {
+                            onItemClick: (e?: React.MouseEvent) => {
+                              // Prevent event bubbling to avoid triggering card's onClick
+                              if (e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }
+                              // Close the menu
+                              setOpenMenuIndex(null);
+                              // Enter selection mode and select file
                               enterSelectionModeAndSelectFile(file);
                             },
                             variant: "destructive" as const

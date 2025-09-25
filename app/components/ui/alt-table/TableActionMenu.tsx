@@ -11,7 +11,7 @@ import {
 export interface ActionItem {
     icon: React.ReactNode;
     itemTitle: React.ReactNode;
-    onItemClick?: () => void;
+    onItemClick?: (e?: React.MouseEvent) => void;
     isLink?: boolean;
     href?: string;
     isVisible?: boolean;
@@ -25,6 +25,8 @@ interface TableActionMenuProps {
     items: ActionItem[];
     children: React.ReactNode;
     dropDownMenuTriggerClass?: string;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
 }
 
 // Use memo to prevent unnecessary re-renders
@@ -33,6 +35,8 @@ const TableActionMenu = memo(function TableActionMenu({
     items,
     children,
     dropDownMenuTriggerClass,
+    open,
+    onOpenChange,
 }: TableActionMenuProps) {
     // Memoize the filtered items to prevent recreating the array on each render
     const filteredItems = useMemo(
@@ -41,7 +45,7 @@ const TableActionMenu = memo(function TableActionMenu({
     );
 
     return (
-        <DropdownMenu>
+        <DropdownMenu open={open} onOpenChange={onOpenChange}>
             <DropdownMenuTrigger className={dropDownMenuTriggerClass} asChild>{children}</DropdownMenuTrigger>
             <DropdownMenuContent
                 align="end"
@@ -87,7 +91,7 @@ const TableActionMenu = memo(function TableActionMenu({
                     return (
                         <DropdownMenuItem
                             key={index}
-                            onClick={item.onItemClick}
+                            onClick={(e) => item.onItemClick?.(e)}
                             className={cn(defaultClassName, item.className)}
                             disabled={item.disabled}
                         >
