@@ -113,6 +113,8 @@ const FilesHeader: FC<FilesHeaderProps> = ({
     }
 
     setIsDeleting(true);
+    setIsDeleteDialogOpen(false);
+
     // Create a loading toast that will be updated later
     const toastId = toast.loading(
       `Deleting all ${currentScope.toLowerCase()} files...`
@@ -134,14 +136,12 @@ const FilesHeader: FC<FilesHeaderProps> = ({
       console.error("Failed to delete files:", error);
       // Update the toast to error
       toast.error(
-        `Failed to delete files: ${
-          error instanceof Error ? error.message : String(error)
+        `Failed to delete files: ${error instanceof Error ? error.message : String(error)
         }`,
         { id: toastId }
       );
     } finally {
       setIsDeleting(false);
-      setIsDeleteDialogOpen(false);
     }
   };
 

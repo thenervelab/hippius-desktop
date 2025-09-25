@@ -634,7 +634,7 @@ const FilesTable: FC<FilesTableProps> = memo(({
         </TableModule.Tr>
       );
     })
-  ), [table, localHandleContextMenu, isSelectionMode, toggleFileSelection, selectedFiles, currentPage, searchTerm]);
+  ), [table, localHandleContextMenu, isSelectionMode, toggleFileSelection, selectedFiles, currentPage, searchTerm, files]);
 
   const paginationComponent = useMemo(() => {
     if (totalPages <= 1) return null;
