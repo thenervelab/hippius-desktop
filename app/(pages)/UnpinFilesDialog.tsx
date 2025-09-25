@@ -389,16 +389,16 @@ const UnpinFilesDialog: React.FC<FileDetailsDialogProps> = ({
                           <span>
                             {detail.filename.length > 14
                               ? `${detail.filename.slice(
-                                  0,
-                                  5
-                                )}...${detail.filename.slice(-7)}`
+                                0,
+                                5
+                              )}...${detail.filename.slice(-7)}`
                               : detail.filename}
                           </span>
                         </div>
                         <FileSyncTypeBadge
                           type={
                             detail.type === "public" ||
-                            detail.type === "private"
+                              detail.type === "private"
                               ? detail.type
                               : null
                           }
@@ -409,8 +409,7 @@ const UnpinFilesDialog: React.FC<FileDetailsDialogProps> = ({
                           <div className="flex items-center gap-1">
                             <span>CID: </span>
                             <span className="text-grey-70 font-medium truncate">
-                              {detail.cid.slice(0, 5)}...
-                              {detail.cid.slice(-5)}
+                              {detail.cid.length > 10 ? detail.cid.slice(0, 5) + "..." + detail.cid.slice(-5) : detail.cid}
                             </span>
                           </div>
                         </div>

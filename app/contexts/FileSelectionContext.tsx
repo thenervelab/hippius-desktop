@@ -96,8 +96,18 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
             return;
         }
 
+        console.log("Entering selection mode with file:", {
+            name: file.name,
+            actualFileName: file.actualFileName,
+            isFolder: file.isFolder,
+            isAssigned: file.isAssigned
+        });
+
+        // Set selection mode and select the file in one atomic operation
         setIsSelectionMode(true);
         setSelectedFiles([file]);
+
+        console.log("Selection mode activated with file:", file.actualFileName);
     }, []);
 
     // Memoize the context value to prevent unnecessary re-renders

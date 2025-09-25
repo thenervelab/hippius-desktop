@@ -746,42 +746,42 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                     }
 
                     for record in records_to_insert {
-                        let insert_result = sqlx::query(
-                            "INSERT INTO user_profiles (
-                                owner, cid, file_hash, file_name, file_size_in_bytes,
-                                is_assigned, last_charged_at, main_req_hash,
-                                selected_validator, total_replicas, block_number, profile_cid, source,
-                                miner_ids, created_at, type, is_folder
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                        )
-                        .bind(&record.owner)
-                        .bind(&record.cid)
-                        .bind(&record.file_hash)
-                        .bind(&record.file_name)
-                        .bind(record.file_size_in_bytes)
-                        .bind(record.is_assigned)
-                        .bind(record.last_charged_at)
-                        .bind(&record.main_req_hash)
-                        .bind(&record.selected_validator)
-                        .bind(record.total_replicas)
-                        .bind(record.block_number)
-                        .bind(&record.profile_cid)
-                        .bind(&record.source)
-                        .bind(&record.miner_ids)
-                        .bind(record.created_at)
-                        .bind(&record.file_type)
-                        .bind(record.is_folder)
-                        .execute(pool)
-                        .await;
+                        // let insert_result = sqlx::query(
+                        //     "INSERT INTO user_profiles (
+                        //         owner, cid, file_hash, file_name, file_size_in_bytes,
+                        //         is_assigned, last_charged_at, main_req_hash,
+                        //         selected_validator, total_replicas, block_number, profile_cid, source,
+                        //         miner_ids, created_at, type, is_folder
+                        //     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        // )
+                        // .bind(&record.owner)
+                        // .bind(&record.cid)
+                        // .bind(&record.file_hash)
+                        // .bind(&record.file_name)
+                        // .bind(record.file_size_in_bytes)
+                        // .bind(record.is_assigned)
+                        // .bind(record.last_charged_at)
+                        // .bind(&record.main_req_hash)
+                        // .bind(&record.selected_validator)
+                        // .bind(record.total_replicas)
+                        // .bind(record.block_number)
+                        // .bind(&record.profile_cid)
+                        // .bind(&record.source)
+                        // .bind(&record.miner_ids)
+                        // .bind(record.created_at)
+                        // .bind(&record.file_type)
+                        // .bind(record.is_folder)
+                        // .execute(pool)
+                        // .await;
 
-                        if let Err(e) = insert_result {
-                            eprintln!("[UserSync] Failed to insert record for file '{}': {e}", record.file_name);
-                            let _ = app_handle_clone.emit("app-event", AppEvent {
-                                event_type: "error".to_string(),
-                                message: "Failed to insert record into user profiles table".to_string(),
-                                details: Some(format!("File: {}, Error: {}", record.file_name, e)),
-                            });
-                        }
+                        // if let Err(e) = insert_result {
+                        //     eprintln!("[UserSync] Failed to insert record for file '{}': {e}", record.file_name);
+                        //     let _ = app_handle_clone.emit("app-event", AppEvent {
+                        //         event_type: "error".to_string(),
+                        //         message: "Failed to insert record into user profiles table".to_string(),
+                        //         details: Some(format!("File: {}, Error: {}", record.file_name, e)),
+                        //     });
+                        // }
                     }
                 } else {
                     println!("[UserSync] Skipping user_profiles table clear: profile_parsed_successfully={}, records_to_insert.len()={}",
@@ -858,27 +858,96 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                         source = "Hippius".to_string();
                     }
 
+                    // Check if the file/folder exists in sync paths
                     if type_ == "public" && public_sync_path.is_some() {
-                        let full_path = if is_folder {
-                            // For folders, use the base_name directly as the folder name
-                            format!("{}/{}", public_sync_path.as_ref().unwrap(), base_name)
+                        let sync_path = public_sync_path.as_ref().unwrap();
+                        
+                        if is_folder {
+                            // For folders, check if the folder exists directly in the sync path
+                            let full_path = format!("{}/{}", sync_path, base_name);
+                            if Path::new(&full_path).exists() && Path::new(&full_path).is_dir() {
+                                source = full_path;
+                            } else {
+                                // Also check if folder exists without any modifications
+                                let direct_path = format!("{}/{}", sync_path, file_name);
+                                if Path::new(&direct_path).exists() && Path::new(&direct_path).is_dir() {
+                                    source = direct_path;
+                                } else {
+                                    // Check for folder with common suffixes
+                                    let variations = [
+                                        format!("{}/{}", sync_path, base_name),
+                                        format!("{}/{}", sync_path, file_name),
+                                        format!("{}/{}.folder", sync_path, base_name),
+                                        format!("{}/{}-folder", sync_path, base_name),
+                                        format!("{}/{}.folder.ec_metadata", sync_path, base_name),
+                                        format!("{}/{}-folder.ec_metadata", sync_path, base_name),
+                                    ];
+                                    
+                                    for variation in variations {
+                                        if Path::new(&variation).exists() && Path::new(&variation).is_dir() {
+                                            source = variation;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         } else {
-                            // For files, use the base_name as the file name
-                            format!("{}/{}", public_sync_path.as_ref().unwrap(), base_name)
-                        };
-                        if Path::new(&full_path).exists() {
-                            source = full_path;
+                            // For files
+                            let full_path = format!("{}/{}", sync_path, base_name);
+                            if Path::new(&full_path).exists() {
+                                source = full_path;
+                            } else {
+                                // Check original file_name as well
+                                let direct_path = format!("{}/{}", sync_path, file_name);
+                                if Path::new(&direct_path).exists() {
+                                    source = direct_path;
+                                }
+                            }
                         }
                     } else if type_ == "private" && private_sync_path.is_some() {
-                        let full_path = if is_folder {
-                            // For folders, use the base_name directly as the folder name
-                            format!("{}/{}", private_sync_path.as_ref().unwrap(), base_name)
+                        let sync_path = private_sync_path.as_ref().unwrap();
+                        
+                        if is_folder {
+                            // For folders, check if the folder exists directly in the sync path
+                            let full_path = format!("{}/{}", sync_path, base_name);
+                            if Path::new(&full_path).exists() && Path::new(&full_path).is_dir() {
+                                source = full_path;
+                            } else {
+                                // Also check if folder exists without any modifications
+                                let direct_path = format!("{}/{}", sync_path, file_name);
+                                if Path::new(&direct_path).exists() && Path::new(&direct_path).is_dir() {
+                                    source = direct_path;
+                                } else {
+                                    // Check for folder with common suffixes
+                                    let variations = [
+                                        format!("{}/{}", sync_path, base_name),
+                                        format!("{}/{}", sync_path, file_name),
+                                        format!("{}/{}.folder", sync_path, base_name),
+                                        format!("{}/{}-folder", sync_path, base_name),
+                                        format!("{}/{}.folder.ec_metadata", sync_path, base_name),
+                                        format!("{}/{}-folder.ec_metadata", sync_path, base_name),
+                                    ];
+                                    
+                                    for variation in variations {
+                                        if Path::new(&variation).exists() && Path::new(&variation).is_dir() {
+                                            source = variation;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         } else {
-                            // For files, use the base_name as the file name
-                            format!("{}/{}", private_sync_path.as_ref().unwrap(), base_name)
-                        };
-                        if Path::new(&full_path).exists() {
-                            source = full_path;
+                            // For files
+                            let full_path = format!("{}/{}", sync_path, base_name);
+                            if Path::new(&full_path).exists() {
+                                source = full_path;
+                            } else {
+                                // Check original file_name as well
+                                let direct_path = format!("{}/{}", sync_path, file_name);
+                                if Path::new(&direct_path).exists() {
+                                    source = direct_path;
+                                }
+                            }
                         }
                     }
 

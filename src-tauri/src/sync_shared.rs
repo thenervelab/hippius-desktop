@@ -358,11 +358,12 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
     let file_type = if is_public { "public" } else { "private" };
 
     let exists: Option<(String,)> = sqlx::query_as(
-        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ?"
+        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ? AND is_folder = ?"
     )
     .bind(&file_name)
     .bind(owner)
     .bind(file_type)
+    .bind(is_folder)  // Add this condition
     .fetch_optional(pool)
     .await
     .unwrap();
@@ -397,7 +398,7 @@ pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path
 }
 
 /// Helper function to list all S3 buckets
-async fn list_all_buckets(aws_binary_path: &std::path::Path, dynamic_path: &str) -> Result<Vec<String>, String> {
+pub async fn list_all_buckets(aws_binary_path: &std::path::Path, dynamic_path: &str) -> Result<Vec<String>, String> {
     let endpoint_url = "https://s3.hippius.com";
         
     let mut command = Command::new(aws_binary_path);
@@ -679,7 +680,7 @@ async fn list_single_bucket_contents(
     // Combine root files and folders
     root_files.append(&mut root_folders);
     
-    println!("[ListBucket] Found {} items in bucket {}", root_files.len(), bucket_name);
+    println!("[ListBucket] Found {} items in bucket {}, root_files {:?}", root_files.len(), bucket_name, root_files);
     Ok(root_files)
 }
 
@@ -709,18 +710,25 @@ pub async fn store_bucket_listing_in_db(
         S3_PRIVATE_SYNC_STATE.lock().unwrap().recent_items.clone()
     };
 
-    // Extract file names from recent items
-    let recent_file_names: Vec<&str> = recent_items
+    // Extract file names of items that are currently being uploaded (exclude these from deletion)
+    let uploading_file_names: Vec<&str> = recent_items
         .iter()
+        .filter(|item| item.action != "deleted") 
         .map(|item| item.name.as_str())
         .collect();
 
-    // Build the delete query to exclude recent items
+    let deleted_file_names: Vec<&str> = recent_items
+        .iter()
+        .filter(|item| item.action == "deleted")  
+        .map(|item| item.name.as_str())
+        .collect();
+
+    // Build the delete query
     let mut query = "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'".to_string();
 
-    // Add condition to exclude recent items if there are any
-    if !recent_file_names.is_empty() {
-        let placeholders = vec!["?"; recent_file_names.len()].join(",");
+    // Add condition to exclude only uploading files (not all recent items)
+    if !uploading_file_names.is_empty() {
+        let placeholders = vec!["?"; uploading_file_names.len()].join(",");
         query.push_str(&format!(" AND file_name NOT IN ({})", placeholders));
     }
 
@@ -728,16 +736,27 @@ pub async fn store_bucket_listing_in_db(
         .bind(owner)
         .bind(file_type);
 
-    // Bind recent item names to exclude
-    for name in recent_file_names {
+    // Bind uploading file names to exclude from deletion
+    for name in uploading_file_names {
         query = query.bind(name);
     }
 
     query.execute(pool).await?;
 
     let mut stored = 0usize;
+    
+    // Get the list of deleted file names from recent items
+    let deleted_files: HashSet<&str> = recent_items
+        .iter()
+        .filter(|item| item.action == "deleted")
+        .map(|item| item.name.as_str())
+        .collect();
 
     for it in items {
+        // Skip files that are marked for deletion
+        if deleted_files.contains(it.path.as_str()) {
+            continue;
+        }
         let file_name = it.path.clone();
         let source = format!("s3://{}/{}", it.bucket_name, it.path);
         let cid_hex = hex::encode(it.ipfs_hash.as_bytes());
@@ -745,13 +764,17 @@ pub async fn store_bucket_listing_in_db(
 
         let is_assigned = it.ipfs_hash != "pending";
 
-        // Insert new record with bucket_name
-        sqlx::query(
-            "INSERT INTO user_profiles (
+        // Only insert if file with same name and type doesn't exist
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO user_profiles (
                 file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, 
                 main_req_hash, selected_validator, total_replicas, block_number, profile_cid, 
                 source, miner_ids, type, is_folder, created_at, bucket_name
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (
+                SELECT 1 FROM user_profiles 
+                WHERE file_name = ? AND type = ? AND owner = ?
+            )"
         )
         .bind(&file_name)
         .bind(owner)
@@ -773,8 +796,16 @@ pub async fn store_bucket_listing_in_db(
             .unwrap_or_else(|_| chrono::Utc::now().into())
             .timestamp() as i64)
         .bind(&it.bucket_name)
+        // WHERE NOT EXISTS conditions
+        .bind(&file_name)
+        .bind(file_type)
+        .bind(owner)
         .execute(pool)
         .await?;
+
+        if result.rows_affected() > 0 {
+            stored += 1;
+        }
         stored += 1;
     }
 
@@ -794,7 +825,7 @@ pub async fn insert_bucket_items_if_absent(
     for it in items {
         let file_name = it.path.clone();
         let exists: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3' AND file_name = ? LIMIT 1"
+            "SELECT 1 FROM user_profiles WHERE owner = ? AND type = ? AND file_name = ? LIMIT 1"
         )
         .bind(owner)
         .bind(file_type)

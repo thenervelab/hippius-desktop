@@ -99,17 +99,41 @@ export const useDeleteIpfsFile = ({
             const results = [];
 
             console.log("Deleting files:", files);
+            console.log("Files to delete count:", files.length);
+            console.log("Is single folder?", files.length === 1 && files[0]?.isFolder);
 
             for (const file of files) {
+                console.log("Processing file for deletion:", {
+                    name: file.name,
+                    actualFileName: file.actualFileName,
+                    isFolder: file.isFolder,
+                    cid: file.cid
+                });
+
                 let actualFileToDelete = ipfsFiles?.files.find(f => f.actualFileName === file.actualFileName);
+                console.log("Found matching file in ipfsFiles:", actualFileToDelete ? {
+                    name: actualFileToDelete.name,
+                    actualFileName: actualFileToDelete.actualFileName,
+                    isFolder: actualFileToDelete.isFolder
+                } : "NOT FOUND");
 
                 if (!actualFileToDelete) {
+                    console.log("File not found in ipfsFiles, using provided file directly");
                     actualFileToDelete = file;
                 }
 
                 if (!actualFileToDelete) {
+                    console.error("No file to delete - this should not happen");
                     throw new Error(`Cannot find file: ${file.name}`);
                 }
+
+                console.log("Final file to delete:", {
+                    name: actualFileToDelete.name,
+                    actualFileName: actualFileToDelete.actualFileName,
+                    isFolder: actualFileToDelete.isFolder,
+                    cid: actualFileToDelete.cid,
+                    file: actualFileToDelete
+                });
 
                 try {
                     // Handle file in folder deletion
@@ -123,7 +147,7 @@ export const useDeleteIpfsFile = ({
 
                         const isFolder = actualFileToDelete.isFolder;
                         // Determine the command based on file type and folder privacy
-                        const command = isPrivateFolder
+                        const command = actualFileToDelete.type === "private"
                             ? (isFolder ? "remove_folder_from_private_folder" : "remove_file_from_private_folder")
                             : (isFolder ? "remove_folder_from_public_folder" : "remove_file_from_public_folder");
 
@@ -143,12 +167,20 @@ export const useDeleteIpfsFile = ({
                             (params as any).fileName = actualFileToDelete.actualFileName;
                         }
 
+                        console.log("command", command)
+                        console.log("params", params)
+
                         await invoke<string>(command, params);
                         results.push({ file: actualFileToDelete, success: true });
                     } else {
                         if (!mnemonic) {
                             throw new Error("Seed phrase required to delete local files");
                         }
+
+                        console.log("command", "delete_and_unpin_file_by_name")
+                        console.log("params", {
+                            fileName: actualFileToDelete.actualFileName
+                        });
 
                         await invoke("delete_and_unpin_file_by_name", {
                             fileName: actualFileToDelete.actualFileName,

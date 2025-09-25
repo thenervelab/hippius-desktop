@@ -174,13 +174,37 @@ async fn process_batch(
         }
     }
     
-    // Batch insert all new bucket items
+    // Batch insert all new bucket items that are in the root directory
     if !bucket_items.is_empty() {
+        // Get the sync path to determine the root directory
+        let sync_path = match get_public_sync_path().await {
+            Ok(path) => path,
+            Err(e) => {
+                error!("[publicFolderSync] Failed to get public sync path: {}", e);
+                return;
+            }
+        };
+        
         for item in bucket_items {
-            if let Err(e) = insert_bucket_item_if_absent(pool, owner, "public", &item).await {
-                error!("[PublicFolderSync] Failed to insert item: {}", e);
+            // Get the full path of the item
+            let item_path = std::path::Path::new(&item.path);
+            
+            // Check if the item is directly in the root directory
+            let parent = match item_path.parent() {
+                Some(parent) => parent,
+                None => continue, // Skip if no parent (shouldn't happen)
+            };
+            
+            // Only process items that are directly in the root directory
+            let sync_path_buf = std::path::Path::new(&sync_path);
+            if parent == sync_path_buf {
+                if let Err(e) = insert_bucket_item_if_absent(pool, owner, "public", &item).await {
+                    error!("[publicFolderSync] Failed to insert item: {}", e);
+                } else {
+                    println!("[publicFolderSync] Inserted root bucket item: {}", item.path);
+                }
             } else {
-                println!("[PublicFolderSync] Inserted bucket item: {}", item.path);
+                println!("[publicFolderSync] Skipping non-root item: {}", item.path);
             }
         }
     }

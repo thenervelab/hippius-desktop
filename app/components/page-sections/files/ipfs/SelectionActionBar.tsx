@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button/NewButton';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
+import { FormattedUserIpfsFile } from '@/lib/hooks/use-user-ipfs-files';
 import { Trash2 } from 'lucide-react';
 import DeleteConfirmationDialog from './DeleteConfirmationDialog';
 
 interface SelectionActionBarProps {
-    onDelete: () => void;
+    onDelete: (files: FormattedUserIpfsFile[]) => void;
     isDeleting?: boolean;
 }
 
@@ -34,8 +35,8 @@ const SelectionActionBar: React.FC<SelectionActionBarProps> = ({ onDelete, isDel
         }
     };
 
-    const handleConfirmDelete = () => {
-        onDelete();
+    const handleConfirmDelete = (filesToDelete: FormattedUserIpfsFile[]) => {
+        onDelete(filesToDelete);
         // Don't close dialog here - it will close automatically when selection is cleared after successful deletion
     };
 
