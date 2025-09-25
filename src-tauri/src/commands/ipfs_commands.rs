@@ -602,7 +602,7 @@ pub async fn remove_file_from_private_folder(
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let folder_name = sanitize_name(&folder_name);
-   
+    println!("[remove_file_from_private_folder] Removing file: {}", file_name);
 
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
@@ -645,7 +645,7 @@ pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
 #[tauri::command]
 pub fn delete_file(path: String) -> Result<(), String> {
     use std::process::Command;
-    
+    println!("[delete_file] Deleting file: {}", path);
     if std::path::Path::new(&path).exists() {
         // If file exists locally, remove it
         std::fs::remove_file(&path).map_err(|e| e.to_string())
@@ -1450,7 +1450,7 @@ pub async fn remove_file_from_public_folder(
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let folder_name = sanitize_name(&folder_name);
-    
+    println!("[-] Removing file '{}' from folder '{}'", file_name, folder_name);    
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
     // Remove from sync folder
@@ -1535,7 +1535,7 @@ pub async fn remove_folder_from_public_folder(
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     let folder_name = sanitize_name(&folder_name);
-
+    println!("[-] Removing folder '{}' from folder '{}'", folder_to_remove, folder_name);
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
     // Remove from sync folder
@@ -1615,7 +1615,7 @@ pub async fn remove_folder_from_private_folder(
 ) -> Result<String, String> {
     let folder_name = sanitize_name(&folder_name);
     let folder_to_remove = sanitize_name(&folder_to_remove);
-
+    println!("[-] Removing folder '{}' from folder '{}'", folder_to_remove, folder_name);
     // Main logic
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
