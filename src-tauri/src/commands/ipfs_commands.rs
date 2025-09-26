@@ -1302,7 +1302,53 @@ pub async fn list_folder_contents(
         println!("[ListFolderContents] No Contents found in response");
     }
     
-    Ok(direct_files)
+    // Get recent items from state to filter out uploading/deleted files
+    let recent_items = if scope == "public" {
+        crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().recent_items.clone()
+    } else {
+        crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().recent_items.clone()
+    };
+
+    let uploading_items = if scope == "public" {
+        crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().uploading_items.clone()
+    } else {
+        crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().uploading_items.clone()
+    };
+
+    // Create sets of file names to exclude
+    let mut uploading_or_deleted = std::collections::HashSet::new();
+    for item in recent_items {
+        if item.action == "uploading" || item.action == "deleted" {
+            // Get just the file name from the path
+            if let Some(file_name) = std::path::Path::new(&item.name).file_name() {
+                if let Some(name_str) = file_name.to_str() {
+                    uploading_or_deleted.insert(name_str.to_string());
+                }
+            }
+        }
+    }
+
+    for item in uploading_items {
+        if item.action == "uploading" || item.action == "deleted" {
+            // Get just the file name from the path
+            if let Some(file_name) = std::path::Path::new(&item.name).file_name() {
+                if let Some(name_str) = file_name.to_str() {
+                    uploading_or_deleted.insert(name_str.to_string());
+                }
+            }
+        }
+    }
+
+    // Filter out files that are in the uploading or deleted state
+    let filtered_files: Vec<FileDetail> = direct_files
+        .into_iter()
+        .filter(|file| {
+            // Keep the file if its name is not in the exclusion set
+            !uploading_or_deleted.contains(file.file_name.as_str())
+        })
+        .collect();
+
+    Ok(filtered_files)
 }
 
 /// Lists the contents of a local directory and returns them as FileDetail objects

@@ -279,7 +279,7 @@ pub async fn copy_to_sync_and_add_to_db(
             .bind(&requested_file_name)
             .bind(file_size_in_bytes)
             .bind(false)
-            .bind("s3")  // main_req_hash
+            .bind("s3")  
             .bind(source)   // source
             .bind(if is_public { "public" } else { "private" })  // type
             .bind(is_folder)
