@@ -7,7 +7,7 @@ import cn from "@/app/lib/utils/cn";
 interface SectionHeaderProps {
   Icon: IconComponent;
   title: string;
-  subtitle: string;
+  subtitle: React.ReactNode;
   iconSize?: "small" | "large";
   info?: string;
 }
