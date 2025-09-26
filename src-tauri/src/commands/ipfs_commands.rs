@@ -1001,18 +1001,18 @@ pub async fn list_folder_contents(
     };
     
     let mut local_path = sync_root.join(&main_folder_name);
-    
+    let normalized_subfolder_path = normalize_subfolder_path(subfolder_path.clone());
     // Build the full local path
-    if let Some(parts) = &subfolder_path {
+    if let Some(parts) = &normalized_subfolder_path {
         for part in parts {
             local_path.push(part);
         }
     }
-    
+
     // Check if the local path exists and is a directory
     if local_path.is_dir() {
         println!("[ListFolderContents] Found local directory at: {}", local_path.display());
-        return list_local_folder_contents(&local_path, &main_folder_name, &subfolder_path).await;
+        return list_local_folder_contents(&local_path, &main_folder_name, &subfolder_path, scope).await;
     }
     
     println!("[ListFolderContents] No local directory found at: {}, falling back to S3", local_path.display());
@@ -1302,6 +1302,8 @@ pub async fn list_folder_contents(
         println!("[ListFolderContents] No Contents found in response");
     }
     
+    // Create sets of relative paths to exclude
+    let mut uploading_or_deleted_paths = std::collections::HashSet::new();
     // Get recent items from state to filter out uploading/deleted files
     let recent_items = if scope == "public" {
         crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().recent_items.clone()
@@ -1309,44 +1311,63 @@ pub async fn list_folder_contents(
         crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().recent_items.clone()
     };
 
+    // Process recent items
+    for item in recent_items {
+        if item.action == "uploading" || item.action == "deleted" {
+            if let Some(relative_path) = extract_relative_path(&item.path, &sync_root) {
+                println!("[ListFolderContents] Excluding path from recent items: {}", relative_path);
+                uploading_or_deleted_paths.insert(relative_path);
+            }
+        }
+    }
+
     let uploading_items = if scope == "public" {
         crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().uploading_items.clone()
     } else {
         crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().uploading_items.clone()
     };
 
-    // Create sets of file names to exclude
-    let mut uploading_or_deleted = std::collections::HashSet::new();
-    for item in recent_items {
+    // Process uploading items
+    for item in uploading_items {
         if item.action == "uploading" || item.action == "deleted" {
-            // Get just the file name from the path
-            if let Some(file_name) = std::path::Path::new(&item.name).file_name() {
-                if let Some(name_str) = file_name.to_str() {
-                    uploading_or_deleted.insert(name_str.to_string());
-                }
+            if let Some(relative_path) = extract_relative_path(&item.path, &sync_root) {
+                println!("[ListFolderContents] Excluding path from uploading items: {}", relative_path);
+                uploading_or_deleted_paths.insert(relative_path);
             }
         }
     }
 
-    for item in uploading_items {
-        if item.action == "uploading" || item.action == "deleted" {
-            // Get just the file name from the path
-            if let Some(file_name) = std::path::Path::new(&item.name).file_name() {
-                if let Some(name_str) = file_name.to_str() {
-                    uploading_or_deleted.insert(name_str.to_string());
-                }
-            }
-        }
-    }
+    // Build the expected relative path for the current folder we're listing
+    let current_relative_path = match &subfolder_path {
+        Some(parts) if !parts.is_empty() => {
+            format!("{}/{}", main_folder_name, parts.join("/"))
+        },
+        _ => main_folder_name.clone()
+    };
 
     // Filter out files that are in the uploading or deleted state
     let filtered_files: Vec<FileDetail> = direct_files
         .into_iter()
         .filter(|file| {
-            // Keep the file if its name is not in the exclusion set
-            !uploading_or_deleted.contains(file.file_name.as_str())
+            let file_relative_path = format!("{}/{}", current_relative_path, file.file_name);
+            
+            let should_exclude = uploading_or_deleted_paths.iter().any(|excluded_path| {
+                if file.is_folder {
+                    excluded_path.starts_with(&file_relative_path)
+                } else {
+                    excluded_path == &file_relative_path
+                }
+            });
+            
+            if should_exclude {
+                println!("[ListFolderContents] Excluding: {}", file_relative_path);
+                false
+            } else {
+                true
+            }
         })
         .collect();
+
 
     Ok(filtered_files)
 }
@@ -1356,6 +1377,7 @@ async fn list_local_folder_contents(
     local_path: &std::path::Path,
     main_folder_name: &str,
     subfolder_path: &Option<Vec<String>>,
+    scope: String,
 ) -> Result<Vec<FileDetail>, String> {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1416,9 +1438,44 @@ async fn list_local_folder_contents(
             main_req_hash: "local".to_string(),
         });
     }
+
+    // Get recent items from state to filter out uploading/deleted files
+    let recent_items = if scope == "public" {
+        crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().recent_items.clone()
+    } else {
+        crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().recent_items.clone()
+    };
     
+    let uploading_items = if scope == "public" {
+        crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().uploading_items.clone()
+    } else {
+        crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().uploading_items.clone()
+    };
+    
+    // Create sets of file names to exclude
+    let mut uploading_or_deleted = std::collections::HashSet::new();
+    for item in recent_items {
+        if item.action == "uploading" || item.action == "deleted" {
+            uploading_or_deleted.insert(item.path);
+        }
+    }
+    
+    for item in uploading_items {
+        if item.action == "uploading" || item.action == "deleted" {
+            uploading_or_deleted.insert(item.path);
+        }
+    }
+    
+    // Filter out files that are in the uploading or deleted state
+    let mut filtered_files: Vec<FileDetail> = result
+        .into_iter()
+        .filter(|file| {
+            !uploading_or_deleted.contains(&format!("{}{}", local_path.display(), file.file_name))
+        })
+        .collect();
+
     // Sort the results: directories first, then files, both alphabetically
-    result.sort_by(|a, b| {
+    filtered_files.sort_by(|a, b| {
         if a.is_folder == b.is_folder {
             a.file_name.cmp(&b.file_name)
         } else if a.is_folder {
@@ -1426,9 +1483,9 @@ async fn list_local_folder_contents(
         } else {
             std::cmp::Ordering::Greater
         }
-    });
+    });   
     
-    Ok(result)
+    Ok(filtered_files)
 }
 
 #[tauri::command]
@@ -1508,14 +1565,8 @@ pub async fn remove_file_from_public_folder(
         full_path.to_string_lossy().to_string()
     });
 
-    let final_file_name = if file_name.ends_with(".ff") {
-        file_name.clone()
-    } else {
-        format!("{}.ff", file_name)
-    };
-
     remove_from_sync_folder(
-        &final_file_name,
+        &file_name,
         &folder_name,
         true,
         false,
@@ -1929,4 +1980,17 @@ fn delete_directory_contents(path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn extract_relative_path(full_path: &str, sync_root: &Path) -> Option<String> {
+    let full_path = Path::new(full_path);
+    
+    if let Ok(relative) = full_path.strip_prefix(sync_root) {
+        let relative_str = relative.to_string_lossy().replace('\\', "/");
+        if !relative_str.is_empty() {
+            return Some(relative_str);
+        }
+    }
+    
+    None
 }
