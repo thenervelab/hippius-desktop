@@ -25,6 +25,7 @@ export const useDeleteIpfsFile = ({
 }) => {
     const { data: ipfsFiles } = useUserIpfsFiles();
     const { getParam } = useUrlParams();
+    console.log("isPrivateFolder", isPrivateFolder)
 
     const { api } = usePolkadotApi();
     const { walletManager, polkadotAddress, mnemonic } = useWalletAuth();

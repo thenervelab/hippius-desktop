@@ -12,7 +12,7 @@ import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-
+import StopSyncDialog, { type SyncType } from "./StopSyncDialog";
 
 const UpdateSyncFolder: React.FC = () => {
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] =
@@ -24,6 +24,8 @@ const UpdateSyncFolder: React.FC = () => {
   const [isPublicFolderSelection, setIsPublicFolderSelection] = useState(false);
   const { polkadotAddress, mnemonic } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
+  const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
+  const [isStoppingSync, setIsStoppingSync] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -115,6 +117,35 @@ const UpdateSyncFolder: React.FC = () => {
     setShowSelector(false);
   };
 
+  const handleStopSyncConfirm = async () => {
+    if (!stopSyncTarget) return;
+    if (!polkadotAddress || !mnemonic) {
+      toast.error("Wallet authentication is required");
+      return;
+    }
+
+    setIsStoppingSync(true);
+
+    try {
+      if (stopSyncTarget === "private") {
+        await setPrivateSyncPath("", polkadotAddress, mnemonic);
+        setSelectedPrivateFolderPath("");
+        setSelectedPrivateFolderName("");
+        toast.success("Private folder syncing stopped");
+      } else {
+        await setPublicSyncPath("", polkadotAddress, mnemonic);
+        setSelectedPublicFolderPath("");
+        setSelectedPublicFolderName("");
+        toast.success("Public folder syncing stopped");
+      }
+      setStopSyncTarget(null);
+    } catch {
+      toast.error("Failed to stop syncing for this folder");
+    } finally {
+      setIsStoppingSync(false);
+    }
+  };
+
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
@@ -168,7 +199,15 @@ const UpdateSyncFolder: React.FC = () => {
                         folder to sync your files securely.
                       </div>
                     )}
-                    <div className="flex self-start">
+                    <div className="flex self-start gap-3">
+                      {selectedPrivateFolderPath && (
+                        <button
+                          onClick={() => setStopSyncTarget("private")}
+                          className="h-[40px] border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
+                        >
+                          Stop Syncing
+                        </button>
+                      )}
                       <CardButton
                         className="max-w-[160px] h-[40px]"
                         variant="primary"
@@ -205,14 +244,23 @@ const UpdateSyncFolder: React.FC = () => {
                         folder to share files with others.
                       </div>
                     )}
-                    <div className="flex self-start">
+                    <div className="flex self-start gap-3">
+                      {selectedPublicFolderPath && (
+                        <button
+                          onClick={() => setStopSyncTarget("public")}
+                          className="h-[40px] border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
+                        >
+                          Stop Syncing
+                        </button>
+
+                      )}
                       <CardButton
                         className="max-w-[160px] h-[40px]"
                         variant="primary"
                         onClick={() => openFolderSelection(true)}
                       >
                         <span className="text-base leading-4 font-medium">
-                          {selectedPrivateFolderName
+                          {selectedPublicFolderName
                             ? "Change Folder"
                             : "Select Folder"}
                         </span>
@@ -255,6 +303,16 @@ const UpdateSyncFolder: React.FC = () => {
               </RevealTextLine>
             </div>
           </div>
+
+          <StopSyncDialog
+            open={stopSyncTarget !== null}
+            onClose={() => setStopSyncTarget(null)}
+            onConfirm={handleStopSyncConfirm}
+            folderType={stopSyncTarget ?? "private"}
+            folderName={stopSyncTarget === "private" ? selectedPrivateFolderName : selectedPublicFolderName}
+            folderPath={stopSyncTarget === "private" ? selectedPrivateFolderPath : selectedPublicFolderPath}
+            loading={isStoppingSync}
+          />
         </div>
       )}
     </InView>
