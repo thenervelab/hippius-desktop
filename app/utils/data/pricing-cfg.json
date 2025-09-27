@@ -1,0 +1,15 @@
+{
+  "per_block_time_s": 6,
+  "storage": {
+    "s3": {
+      "per_block_charge": 6.7878e-9,
+      "first_hour_charge": 0.0000315,
+      "type": "s3"
+    },
+    "ipfs": {
+      "per_block_charge": 6.7878e-9,
+      "first_hour_charge": 0.0000315,
+      "type": "ipfs"
+    }
+  }
+}
