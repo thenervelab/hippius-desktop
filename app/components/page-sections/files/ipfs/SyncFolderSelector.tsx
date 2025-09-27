@@ -11,6 +11,7 @@ import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 
 interface SyncFolderSelectorProps {
   onFolderSelected: (path: string) => void;
+  onSkip?: () => void;
   initialPath?: string;
   isFromSettingsPage?: boolean;
   handleBackClick?: () => void;
@@ -19,6 +20,7 @@ interface SyncFolderSelectorProps {
 
 const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   onFolderSelected,
+  onSkip,
   initialPath,
   isFromSettingsPage = false,
   handleBackClick,
@@ -124,6 +126,19 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
       toast.error("Failed to set sync folder");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSkip = async () => {
+    if (onSkip) {
+      setLoading(true);
+      try {
+        await onSkip();
+      } catch {
+        toast.error("Failed to skip sync folder setup");
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -255,7 +270,21 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
           </div>
         </div>
       </div>
-      <div className="flex justify-end p-5">
+      <div className="flex justify-end gap-3 p-5">
+        {/* Skip button - only show when not from settings page and onSkip is provided */}
+        {!isFromSettingsPage && onSkip && (
+          <CardButton
+            className="max-w-[100px] h-[48px]"
+            variant="ghost"
+            disabled={loading}
+            onClick={handleSkip}
+          >
+            <span className="text-base leading-6 font-medium text-primary-50">
+              Skip
+            </span>
+          </CardButton>
+        )}
+
         <CardButton
           className="max-w-[160px] h-[48px]"
           variant="dialog"
