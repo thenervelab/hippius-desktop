@@ -15,6 +15,7 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import {
   Folder
 } from "@/components/ui/icons";
+import cn from "@/app/lib/utils/cn";
 
 interface ContextMenuProps {
   x: number;
@@ -190,16 +191,23 @@ export default function FileContextMenu({
             <span>{file?.isFolder ? "Folder" : "File"} Details</span>
           </button>
 
-          {file.isAssigned && (<button
-            className="flex items-center gap-2 p-2 text-xs font-medium text-error-70 hover:text-error-80 hover:bg-grey-90"
+          <button
+            className={cn("flex items-center gap-2 p-2 text-xs font-medium", {
+              "text-error-70 hover:text-error-80 hover:bg-grey-90 cursor-pointer": file.isAssigned,
+              "text-grey-60 cursor-not-allowed opacity-60": !file.isAssigned
+            })}
+            disabled={!file.isAssigned}
+            title={!file.isAssigned ? "This file is currently being pinned and cannot be deleted yet. Please wait for the pinning process to complete." : "Delete this file"}
             onClick={() => {
-              if (onDelete) onDelete(file);
-              onClose();
+              if (file.isAssigned && onDelete) {
+                onDelete(file);
+                onClose();
+              }
             }}
           >
             <Trash2 className="size-4" />
-            <span>Delete</span>
-          </button>)}
+            <span>{!file.isAssigned ? "Delete (Pinning in progress...)" : "Delete"}</span>
+          </button>
         </div>
       </div>
     </div>,

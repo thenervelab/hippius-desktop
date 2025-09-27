@@ -18,6 +18,7 @@ export interface ActionItem {
     className?: string;
     variant?: "default" | "destructive";
     disabled?: boolean;
+    tooltip?: string;
 }
 
 interface TableActionMenuProps {
@@ -61,12 +62,16 @@ const TableActionMenu = memo(function TableActionMenu({
                 {filteredItems.map((item, index) => {
                     const isLast = index === filteredItems.length - 1;
                     const defaultClassName = cn(
-                        "flex items-center gap-2 p-2 text-xs font-medium cursor-pointer",
+                        "flex items-center gap-2 p-2 text-xs font-medium",
                         !isLast && "border-b border-grey-80",
-                        item.variant === "destructive"
-                            ? "hover:!text-error-70 !text-error-60"
-                            : "hover:!text-grey-40 !text-grey-30",
-                        item.disabled && "opacity-60 pointer-events-none"
+                        item.disabled
+                            ? "opacity-60 cursor-not-allowed pointer-events-none"
+                            : cn(
+                                "cursor-pointer",
+                                item.variant === "destructive"
+                                    ? "hover:!text-error-70 !text-error-60"
+                                    : "hover:!text-grey-40 !text-grey-30"
+                            )
                     );
 
                     const itemContent = (
@@ -91,9 +96,26 @@ const TableActionMenu = memo(function TableActionMenu({
                     return (
                         <DropdownMenuItem
                             key={index}
-                            onClick={(e) => item.onItemClick?.(e)}
+                            onClick={(e) => {
+                                if (item.disabled) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    // Force close the menu for disabled items
+                                    onOpenChange?.(false);
+                                    return false;
+                                }
+                                item.onItemClick?.(e);
+                            }}
+                            onMouseDown={(e) => {
+                                if (item.disabled) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    return false;
+                                }
+                            }}
                             className={cn(defaultClassName, item.className)}
                             disabled={item.disabled}
+                            title={item.tooltip}
                         >
                             {itemContent}
                         </DropdownMenuItem>
