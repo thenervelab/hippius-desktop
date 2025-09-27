@@ -226,6 +226,11 @@ const CardView: FC<CardViewProps> = ({
                     file={file}
                     state={cardState}
                     onClick={() => {
+                      // Don't handle card clicks if dropdown menu is open
+                      if (openMenuIndex === index) {
+                        return;
+                      }
+
                       // Normal mode behavior - only if not in selection mode
                       if (!isSelectionMode) {
                         if (
@@ -366,29 +371,40 @@ const CardView: FC<CardViewProps> = ({
                               localHandleShowFileDetails(file);
                             }
                           },
-                          // Only show delete option for files that can be deleted
-                          ...(file.isAssigned ? [{
+                          // Always show delete option, but disabled for unpinned files
+                          {
                             icon: <Icons.Trash className="size-4" />,
-                            itemTitle: "Delete",
+                            itemTitle: !file.isAssigned ? "Delete (Pinning in progress...)" : "Delete",
+                            disabled: !file.isAssigned,
+                            className: !file.isAssigned ? "cursor-not-allowed opacity-60" : "",
+                            tooltip: !file.isAssigned ? "This file is currently being pinned and cannot be deleted yet. Please wait for the pinning process to complete." : undefined,
                             onItemClick: (e?: React.MouseEvent) => {
-                              // Prevent event bubbling to avoid triggering card's onClick
+                              // Always prevent event bubbling to avoid triggering card's onClick
                               if (e) {
                                 e.preventDefault();
                                 e.stopPropagation();
                               }
+
+                              // Don't proceed if file is not assigned (disabled state)
+                              if (!file.isAssigned) {
+                                // Close the menu even for disabled items
+                                setOpenMenuIndex(null);
+                                return;
+                              }
+
                               // Close the menu
                               setOpenMenuIndex(null);
                               // Enter selection mode and select file
                               enterSelectionModeAndSelectFile(file);
                             },
                             variant: "destructive" as const
-                          }] : [])
+                          }
                         ]}
                       >
                         <Button
                           variant="ghost"
                           size="md"
-                          className="text-grey-70"
+                          className="text-grey-70 focus:outline-none focus:ring-0 focus:ring-transparent active:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
                         >
                           <MoreVertical className="size-4" />
                         </Button>

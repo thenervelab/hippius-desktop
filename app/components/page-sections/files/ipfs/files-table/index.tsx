@@ -288,13 +288,19 @@ const FilesTable: FC<FilesTableProps> = memo(({
         itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
         onItemClick: () => localHandleShowFileDetails(file)
       },
-      // Only show delete option for files that can be deleted
-      ...(file.isAssigned ? [{
+      // Always show delete option, but disabled for unpinned files
+      {
         icon: <Icons.Trash className="size-4" />,
-        itemTitle: "Delete",
-        onItemClick: () => handleDeleteFile(file),
+        itemTitle: !file.isAssigned ? "Delete (Pinning in progress...)" : "Delete",
+        disabled: !file.isAssigned,
+        tooltip: !file.isAssigned ? "This file is currently being pinned and cannot be deleted yet. Please wait for the pinning process to complete." : undefined,
+        onItemClick: () => {
+          if (file.isAssigned) {
+            handleDeleteFile(file);
+          }
+        },
         variant: "destructive" as const
-      }] : [])
+      }
     ];
   }, [handleDownload, handleSetSelectedFile, localHandleShowFileDetails, handleDeleteFile, getParam, router]);
 

@@ -13,6 +13,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import StopSyncDialog, { type SyncType } from "./StopSyncDialog";
+import { useSetAtom } from "jotai";
+import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 const UpdateSyncFolder: React.FC = () => {
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] =
@@ -26,6 +28,7 @@ const UpdateSyncFolder: React.FC = () => {
   const [showSelector, setShowSelector] = useState(false);
   const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
   const [isStoppingSync, setIsStoppingSync] = useState(false);
+  const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
 
   useEffect(() => {
     (async () => {
@@ -76,6 +79,8 @@ const UpdateSyncFolder: React.FC = () => {
       setSelectedPrivateFolderName(p.split(/[\\/]/).pop() || "");
       toast.success("Private sync folder updated");
       setShowSelector(false);
+      // Trigger files page refresh
+      triggerSyncPathRefresh((prev) => prev + 1);
     } catch {
       toast.error("Failed to update private sync folder");
     }
@@ -103,6 +108,8 @@ const UpdateSyncFolder: React.FC = () => {
       setSelectedPublicFolderName(p.split(/[\\/]/).pop() || "");
       toast.success("Public sync folder updated");
       setShowSelector(false);
+      // Trigger files page refresh
+      triggerSyncPathRefresh((prev) => prev + 1);
     } catch {
       toast.error("Failed to update public sync folder");
     }
@@ -139,6 +146,8 @@ const UpdateSyncFolder: React.FC = () => {
         toast.success("Public folder syncing stopped");
       }
       setStopSyncTarget(null);
+      // Trigger files page refresh
+      triggerSyncPathRefresh((prev) => prev + 1);
     } catch {
       toast.error("Failed to stop syncing for this folder");
     } finally {

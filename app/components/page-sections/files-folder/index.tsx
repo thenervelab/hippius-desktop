@@ -40,6 +40,12 @@ import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { usePagination } from "@/lib/hooks";
 import { List } from "lucide-react";
+import {
+  getPrivateSyncPath,
+  getPublicSyncPath,
+} from "@/lib/utils/syncPathUtils";
+import { useAtomValue } from "jotai";
+import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 interface FileEntry {
   file_name: string;
@@ -88,6 +94,9 @@ export default function FolderView({
   const [selectedFileSize, setSelectedFileSize] = useState(0);
   const [selectedSizeUnit, setSelectedSizeUnit] = useState("GB");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [syncFolderPath, setSyncFolderPath] = useState<string>("");
+  const [isLoadingSyncPath, setIsLoadingSyncPath] = useState(true);
+  const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
 
   const filteredData = useMemo(() => {
     return filterFiles(files, {
@@ -216,7 +225,43 @@ export default function FolderView({
     loadFolderContents();
   }, [loadFolderContents]);
 
-  const handleRefresh = () => {
+  // Load sync path based on current view (private/public)
+  useEffect(() => {
+    (async () => {
+      try {
+        setIsLoadingSyncPath(true);
+        const path = isPrivateFolder
+          ? await getPrivateSyncPath()
+          : await getPublicSyncPath();
+        setSyncFolderPath(path || "");
+      } catch (error) {
+        console.error("Failed to load sync path:", error);
+        setSyncFolderPath("");
+      } finally {
+        setIsLoadingSyncPath(false);
+      }
+    })();
+  }, [isPrivateFolder]);
+
+  // Reload sync path when settings are updated
+  useEffect(() => {
+    if (syncPathRefreshTrigger > 0) {
+      (async () => {
+        try {
+          setIsLoadingSyncPath(true);
+          const path = isPrivateFolder
+            ? await getPrivateSyncPath()
+            : await getPublicSyncPath();
+          setSyncFolderPath(path || "");
+        } catch (error) {
+          console.error("Failed to reload sync path:", error);
+          setSyncFolderPath("");
+        } finally {
+          setIsLoadingSyncPath(false);
+        }
+      })();
+    }
+  }, [syncPathRefreshTrigger, isPrivateFolder]); const handleRefresh = () => {
     loadFolderContents(false);
   };
 
@@ -261,8 +306,7 @@ export default function FolderView({
     } catch (error) {
       console.error("Error downloading folder:", error);
       toast.error(
-        `Failed to download folder: ${
-          error instanceof Error ? error.message : String(error)
+        `Failed to download folder: ${error instanceof Error ? error.message : String(error)
         }`
       );
     } finally {
@@ -346,6 +390,9 @@ export default function FolderView({
     saveViewModePreference(mode);
   }, []);
 
+  // Check if sync path is empty (user skipped setup)
+  const isSyncPathEmpty = syncFolderPath === "";
+
   return (
     <FileSelectionProvider>
       <div className="w-full relative mt-6">
@@ -414,25 +461,30 @@ export default function FolderView({
               </button>
             </div>
 
-            <AddFolderToFolderButton
-              ref={addFolderButtonRef}
-              className="h-9"
-              folderCid={folderCid}
-              folderName={folderName}
-              isPrivateFolder={isPrivateFolder}
-              mainFolderActualName={mainFolderActualName}
-              subFolderPath={subFolderPath}
-              onFolderAdded={handleRefresh}
-            />
+            {/* Only show upload buttons if sync path is configured */}
+            {!isSyncPathEmpty && !isLoadingSyncPath && (
+              <>
+                <AddFolderToFolderButton
+                  ref={addFolderButtonRef}
+                  className="h-9"
+                  folderCid={folderCid}
+                  folderName={folderName}
+                  isPrivateFolder={isPrivateFolder}
+                  mainFolderActualName={mainFolderActualName}
+                  subFolderPath={subFolderPath}
+                  onFolderAdded={handleRefresh}
+                />
 
-            <AddFileToFolderButton
-              ref={addButtonRef}
-              className="h-9"
-              folderCid={folderCid}
-              folderName={folderName}
-              isPrivateFolder={isPrivateFolder}
-              onFileAdded={handleRefresh}
-            />
+                <AddFileToFolderButton
+                  ref={addButtonRef}
+                  className="h-9"
+                  folderCid={folderCid}
+                  folderName={folderName}
+                  isPrivateFolder={isPrivateFolder}
+                  onFileAdded={handleRefresh}
+                />
+              </>
+            )}
 
             <button
               onClick={initiateDownloadFolder}
@@ -504,6 +556,7 @@ export default function FolderView({
                 currentPage={currentPage}
                 totalPages={totalPages}
                 setCurrentPage={setCurrentPage}
+                isSyncPathEmpty={isSyncPathEmpty}
               />
             )}
           </>

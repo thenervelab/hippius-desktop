@@ -19,6 +19,7 @@ import { useAtomValue } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
 import { List } from "lucide-react";
+import StartSyncingButton from "@/app/components/StartSyncingButton";
 
 interface FilesHeaderProps {
   isRecentFiles?: boolean;
@@ -40,6 +41,8 @@ interface FilesHeaderProps {
   privateFileCount?: number;
   publicFileCount?: number;
   syncFolderPath?: string;
+  isSyncPathEmpty?: boolean;
+  onStartSyncing?: () => void;
 }
 
 const FilesHeader: FC<FilesHeaderProps> = ({
@@ -58,6 +61,8 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   refetchUserFiles,
   addButtonRef,
   syncFolderPath,
+  isSyncPathEmpty = false,
+  onStartSyncing,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
   const [syncFolderPermissionGranted, setSyncFolderPermissionGranted] =
@@ -228,38 +233,48 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             </div>
           )}
 
-          {/* Folder Upload button */}
-          <button
-            onClick={() => setIsFolderUploadOpen(true)}
-            className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
-          >
-            <Icons.FolderAdd className="size-4" />
-            <span className="ml-1">Add Folder</span>
-          </button>
+          <>
 
-          {/* Open Sync Folder button */}
-          <button
-            onClick={handleOpenSyncFolder}
-            disabled={!syncFolderPath}
-            className="flex items-center justify-between gap-1 h-9 px-2 py-2 bg-grey-100 text-sm font-meidum text-grey-10 border border-grey-80 rounded disabled:opacity-50 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
-            title={syncFolderPath || "Sync folder not configured"}
-          >
-            <Icons.Folder className="size-4" />
-            <span className="ml-1">Open Sync Folder</span>
-          </button>
+            {/* Folder Upload button */}
+            {!isSyncPathEmpty && (
+              <button
+                onClick={() => setIsFolderUploadOpen(true)}
+                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+              >
+                <Icons.FolderAdd className="size-4" />
+                <span className="ml-1">Add Folder</span>
+              </button>
+            )}
 
-          {/* Delete All Files button - not showing in Recent Files view */}
-          {!isRecentFiles && (
+            {/* Open Sync Folder button */}
             <button
-              onClick={() => setIsDeleteDialogOpen(true)}
-              className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-error-50 border border-error-60 text-white hover:bg-error-60 active:bg-error-70 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
+              onClick={handleOpenSyncFolder}
+              disabled={!syncFolderPath || isSyncPathEmpty}
+              className="flex items-center justify-between gap-1 h-9 px-2 py-2 bg-grey-100 text-sm font-meidum text-grey-10 border border-grey-80 rounded disabled:opacity-50 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50 disabled:hover:bg-grey-100 disabled:hover:text-grey-10"
+              title={syncFolderPath || "Sync folder not configured"}
             >
-              <Icons.Trash className="size-4" />
-              <span className="ml-1">Delete All Files</span>
+              <Icons.Folder className="size-4" />
+              <span className="ml-1">Open Sync Folder</span>
             </button>
-          )}
 
-          <AddButton ref={addButtonRef} className="h-9" />
+            {/* Delete All Files button - not showing in Recent Files view */}
+            {!isRecentFiles && (
+              <button
+                onClick={() => setIsDeleteDialogOpen(true)}
+                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-error-50 border border-error-60 text-white hover:bg-error-60 active:bg-error-70 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
+              >
+                <Icons.Trash className="size-4" />
+                <span className="ml-1">Delete All Files</span>
+              </button>
+            )}
+
+            {!isSyncPathEmpty && <AddButton ref={addButtonRef} className="h-9" />}
+            {isSyncPathEmpty && (
+              // Show Start Syncing button when sync path is empty (user skipped)
+              <StartSyncingButton className="h-9" onClick={onStartSyncing} />
+            )}
+          </>
+
         </div>
       </div>
 

@@ -64,6 +64,7 @@ interface FilesContentProps {
   currentPage: number;
   totalPages: number;
   setCurrentPage: (page: number) => void;
+  isSyncPathEmpty?: boolean;
 }
 
 const FilesContent: FC<FilesContentProps> = ({
@@ -91,6 +92,7 @@ const FilesContent: FC<FilesContentProps> = ({
   currentPage,
   totalPages,
   setCurrentPage,
+  isSyncPathEmpty = false,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
@@ -134,6 +136,11 @@ const FilesContent: FC<FilesContentProps> = ({
     e.preventDefault();
     e.stopPropagation();
 
+    // Prevent drag and drop when sync path is empty (user skipped setup)
+    if (isSyncPathEmpty && !isRecentFiles) {
+      return;
+    }
+
     if (
       e.dataTransfer.items &&
       Array.from(e.dataTransfer.items).some((item) => item.kind === "file")
@@ -149,7 +156,7 @@ const FilesContent: FC<FilesContentProps> = ({
         setAnimateCloud(true);
       }, 200);
     }
-  }, []);
+  }, [isSyncPathEmpty, isRecentFiles]);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -188,6 +195,12 @@ const FilesContent: FC<FilesContentProps> = ({
         dragTimeoutRef.current = null;
       }
 
+      // Prevent file drop when sync path is empty (user skipped setup) 
+      if (isSyncPathEmpty && !isRecentFiles) {
+        toast.info("Please set up sync folder first to upload files.");
+        return;
+      }
+
       if (addButtonRef?.current && e.dataTransfer.files.length > 0) {
         addButtonRef.current.openWithFiles(e.dataTransfer.files);
       } else if (e.dataTransfer.files.length > 0) {
@@ -197,7 +210,7 @@ const FilesContent: FC<FilesContentProps> = ({
         window.dispatchEvent(customEvent);
       }
     },
-    [addButtonRef]
+    [addButtonRef, isSyncPathEmpty, isRecentFiles]
   );
 
   // Add global event listeners to clean up dragging state when dragging ends outside
