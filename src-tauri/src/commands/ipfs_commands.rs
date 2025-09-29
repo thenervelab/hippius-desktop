@@ -16,6 +16,7 @@ use fs_extra;
 use std::fs;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use sha2::{Digest, Sha256};
+use futures::TryFutureExt;
 use crate::commands::types::*;
 use std::path::{Path, PathBuf};
 use base64::{Engine as _, engine::general_purpose};
@@ -529,16 +530,45 @@ pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
 
 
 #[tauri::command]
-pub fn delete_file(path: String) -> Result<(), String> {
+pub async fn delete_file(path: String) -> Result<(), String> {    
+    use tokio::fs;
     use std::process::Command;
-    println!("[delete_file] Deleting file: {}", path);
-    if std::path::Path::new(&path).exists() {
-        // If file exists locally, remove it
-        std::fs::remove_file(&path).map_err(|e| e.to_string())
+    use std::path::Path;
+    
+    println!("[delete_file] Deleting path: {}", path);
+    
+    let path_obj = Path::new(&path);
+    let is_dir = path_obj.is_dir();
+    
+    if path_obj.exists() {
+        // If path exists locally, remove it
+        if is_dir {
+            fs::remove_dir_all(&path).await
+                .map_err(|e| e.to_string())
+        } else {
+            fs::remove_file(&path).await
+                .map_err(|e| e.to_string())
+        }
     } else {
-        // If file doesn't exist locally, try to remove from S3
+        // If path doesn't exist locally, try to remove from Hippius S3
         let mut cmd = Command::new("aws");
-        cmd.args(["s3", "rm", &path]);
+        
+        // Build the command with appropriate arguments
+        let mut args = vec!["s3", "rm"];
+        
+        // Add recursive flag if it's a directory
+        if is_dir {
+            args.push("--recursive");
+        }
+        
+        // Add the path
+        args.push(&path);
+        
+        // Add Hippius S3 endpoint
+        args.extend(["--endpoint", "https://s3.hippius.com"]);
+        
+        // Set the command arguments
+        cmd.args(&args);
         
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
@@ -546,16 +576,15 @@ pub fn delete_file(path: String) -> Result<(), String> {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-
-        let output = cmd
-            .output()
-            .map_err(|e| e.to_string())?;
-
-        if output.status.success() {
-            Ok(())
-        } else {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            Err(format!("Failed to delete from S3: {}", error_msg))
+        
+        // Execute the command and handle the output
+        match cmd.output() {
+            Ok(output) if output.status.success() => Ok(()),
+            Ok(output) => {
+                let error_msg = String::from_utf8_lossy(&output.stderr);
+                Err(format!("Failed to delete from S3: {}", error_msg))
+            },
+            Err(e) => Err(format!("Failed to execute AWS CLI command: {}", e))
         }
     }
 }

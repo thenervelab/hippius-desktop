@@ -342,60 +342,6 @@ pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::i
     Ok(())
 }
 
-pub async fn insert_file_if_not_exists(pool: &sqlx::SqlitePool, file_path: &Path, owner: &str, is_public: bool, is_folder: bool) {
-    let file_path = if file_path.is_relative() {
-        match std::env::current_dir() {
-            Ok(cwd) => cwd.join(file_path),
-            Err(e) => {
-                eprintln!("Failed to get current directory: {}", e);
-                return;
-            }
-        }
-    } else {
-        file_path.to_path_buf()
-    };
-    let file_name = file_path.file_name().unwrap().to_string_lossy();
-    let file_type = if is_public { "public" } else { "private" };
-
-    let exists: Option<(String,)> = sqlx::query_as(
-        "SELECT file_name FROM sync_folder_files WHERE file_name = ? AND owner = ? AND type = ? AND is_folder = ?"
-    )
-    .bind(&file_name)
-    .bind(owner)
-    .bind(file_type)
-    .bind(is_folder)  // Add this condition
-    .fetch_optional(pool)
-    .await
-    .unwrap();
-    println!("[insert_file_if_not_exists] Inserting record for '{}', owner: {}, type: {}", file_name, owner, file_type);
-    if exists.is_none() {
-        println!("[insert_file_if_not_exists] Inserting record for '{}', owner: {}, type: {}", file_name, owner, file_type);
-        sqlx::query(
-            "INSERT INTO sync_folder_files (
-                file_name, owner, cid, file_hash, file_size_in_bytes, is_assigned, last_charged_at, main_req_hash, selected_validator, total_replicas, block_number, profile_cid, source, miner_ids, type, is_folder
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&file_name)
-        .bind(owner)
-        .bind("")
-        .bind("")
-        .bind(0)
-        .bind(false)
-        .bind(0)
-        .bind("")
-        .bind("")
-        .bind(0)
-        .bind(0)
-        .bind("")
-        .bind("")
-        .bind("")
-        .bind(file_type)
-        .bind(is_folder)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-}
 
 /// Helper function to list all S3 buckets
 pub async fn list_all_buckets(aws_binary_path: &std::path::Path, dynamic_path: &str) -> Result<Vec<String>, String> {
@@ -812,7 +758,6 @@ pub async fn store_bucket_listing_in_db(
     Ok(stored)
 }
 
-// New: Non-destructive insert that only adds missing items for this owner/scope
 pub async fn insert_bucket_items_if_absent(
     pool: &SqlitePool,
     owner: &str,
