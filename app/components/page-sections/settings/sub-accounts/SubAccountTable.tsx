@@ -142,11 +142,15 @@ const SubAccountTable: React.FC<Props> = ({
 
       columnHelper.accessor("role", {
         header: "Role",
-        cell: (info) => (
-          <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
-            {info.getValue()}
-          </span>
-        )
+        cell: (info) => {
+          const role = info.getValue();
+          const displayRole = role === "UploadDelete" ? "Upload/Delete" : role;
+          return (
+            <span className="inline-block px-2 py-1 bg-grey-90 border border-grey-80 text-grey-40 rounded text-xs">
+              {displayRole}
+            </span>
+          );
+        }
       }),
 
       columnHelper.accessor("seed", {

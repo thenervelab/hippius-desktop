@@ -2,7 +2,7 @@ import {
   createColumnHelper,
   getCoreRowModel,
   useReactTable,
-  getSortedRowModel
+  getSortedRowModel,
 } from "@tanstack/react-table";
 import { useMemo, useState } from "react";
 import {
@@ -14,14 +14,19 @@ import {
   THead,
   TBody,
   Pagination,
-  CopyableCell
+  CopyableCell,
 } from "@/components/ui/alt-table";
 import { Loader2 } from "lucide-react";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { Dollar, TaoLogo } from "@/components/ui/icons";
 import TransactionTypeBadge from "./TransactionTypeBadge";
-import useBillingTransactions, { TransactionObject } from "@/app/lib/hooks/api/useBillingTransactions";
+import useBillingTransactions, {
+  TransactionObject,
+} from "@/app/lib/hooks/api/useBillingTransactions";
 import StatusTypeBadge from "./StatusTypeBadge";
+import { useAtomValue } from "jotai";
+import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { cn } from "@/app/lib/utils";
 
 export const formatDate = (
   date: Date,
@@ -35,7 +40,7 @@ export const formatDate = (
         year: "numeric",
         hour: "2-digit",
         minute: "2-digit",
-        hour12: true
+        hour12: true,
       })
       .replace("AM", "am")
       .replace("PM", "pm");
@@ -46,7 +51,7 @@ export const formatDate = (
     year: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    hour12: true
+    hour12: true,
   })
     .format(date)
     .replace(",", "")
@@ -58,6 +63,7 @@ const ITEMS_PER_PAGE = 10;
 
 const BillingHistoryTable: React.FC = () => {
   const { data: transactions, isPending, error } = useBillingTransactions();
+  const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
 
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -85,16 +91,22 @@ const BillingHistoryTable: React.FC = () => {
             isTable={true}
           />
         ),
-        enableSorting: true
+        enableSorting: true,
       }),
       columnHelper.accessor("amount", {
         id: "amount",
         header: "AMOUNT",
         cell: (d) => {
-          return <div className="flex items-center gap-x-1">
-            {(d.row.original.transaction_type === "tao" ? <TaoLogo className="size-2.5" /> : "$")}
-            <span>{d.getValue().toLocaleString()}</span>
-          </div>;
+          return (
+            <div className="flex items-center gap-x-1">
+              {d.row.original.transaction_type === "tao" ? (
+                <TaoLogo className="size-2.5" />
+              ) : (
+                "$"
+              )}
+              <span>{d.getValue().toLocaleString()}</span>
+            </div>
+          );
         },
         enableSorting: true,
       }),
@@ -112,7 +124,13 @@ const BillingHistoryTable: React.FC = () => {
         header: "STATUS",
         cell: (d) => {
           const status = d.getValue();
-          const validStatus = (status === "failed" || status === "success" || status === "completed" || status === "pending") ? status : null;
+          const validStatus =
+            status === "failed" ||
+            status === "success" ||
+            status === "completed" ||
+            status === "pending"
+              ? status
+              : null;
           return <StatusTypeBadge type={validStatus} />;
         },
       }),
@@ -120,8 +138,8 @@ const BillingHistoryTable: React.FC = () => {
         id: "date",
         header: "TRANSACTION DATE",
         cell: (d) => formatDate(new Date(d.getValue())),
-        enableSorting: true
-      })
+        enableSorting: true,
+      }),
     ],
     []
   );
@@ -132,12 +150,19 @@ const BillingHistoryTable: React.FC = () => {
     columns,
     data: paginatedData,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel()
+    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
     <>
-      <TableWrapper>
+      <TableWrapper
+        className={cn(
+          isUnpinnedOpen && transactions && transactions.length > 0
+            ? "mb-[90px]"
+            : "",
+          "mt-5"
+        )}
+      >
         <Table>
           <THead>
             {table.getHeaderGroups().map((hg) => (
@@ -159,24 +184,28 @@ const BillingHistoryTable: React.FC = () => {
           </TBody>
         </Table>
 
-        {((isPending) && !error) && (
+        {isPending && !error && (
           <div className="w-full h-[350px] flex items-center justify-center p-6 animate-fade-in-0.3">
             <Loader2 className="size-6 animate-spin text-grey-50" />
           </div>
         )}
 
-        {((transactions && !transactions.length) || error) && !isPending && transactions !== null && (
-          <div className="w-full h-[350px] flex items-center justify-center p-6">
-            <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
-              <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
-                <Dollar className="absolute size-6" />
-              </AbstractIconWrapper>
-              <span className="text-grey-60 text-sm font-medium max-w-[260px] text-center">
-                {error ? `Unable to load billing history: ${error}` : "You do not have any billing history yet"}
-              </span>
+        {((transactions && !transactions.length) || error) &&
+          !isPending &&
+          transactions !== null && (
+            <div className="w-full h-[350px] flex items-center justify-center p-6">
+              <div className="flex flex-col items-center opacity-0 animate-fade-in-0.5">
+                <AbstractIconWrapper className="size-10 rounded-2xl bg-grey-40/20 mb-2">
+                  <Dollar className="absolute size-6" />
+                </AbstractIconWrapper>
+                <span className="text-grey-60 text-sm font-medium max-w-[260px] text-center">
+                  {error
+                    ? `Unable to load billing history: ${error}`
+                    : "You do not have any billing history yet"}
+                </span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
       </TableWrapper>
 
       {totalPages > 1 && (

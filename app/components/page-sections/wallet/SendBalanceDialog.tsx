@@ -228,8 +228,15 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                     id="amount"
                     placeholder="Enter Amount"
                     type="text"
+                    inputMode="decimal"
                     value={amount}
-                    onChange={handleAmountChange}
+                    onChange={(e) => {
+                      // Only allow digits and one decimal point
+                      const value = e.target.value;
+                      if (value === '' || /^\d*\.?\d*$/.test(value)) {
+                        handleAmountChange(e);
+                      }
+                    }}
                     className={`pr-24 border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${errors.amount ? "border-error-50" : ""
                       }`}
                     disabled={loading}

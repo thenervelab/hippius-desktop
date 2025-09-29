@@ -34,6 +34,11 @@ type Props = {
 
 const roles = ["Upload", "UploadDelete"] as const;
 
+// Helper function to format role display text
+const formatRoleDisplay = (role: string): string => {
+  return role === "UploadDelete" ? "Upload/Delete" : role;
+};
+
 export default function SubAccountModal({
   open,
   address,
@@ -126,7 +131,9 @@ export default function SubAccountModal({
                             h-[56px] focus:outline-none focus:border-grey-80
                         "
                   >
-                    <SelectValue placeholder="Select role" />
+                    <SelectValue placeholder="Select role">
+                      {formatRoleDisplay(role)}
+                    </SelectValue>
                     <ChevronDown className="absolute size-5 right-4 top-1/2 -translate-y-1/2 text-grey-60 pointer-events-none" />
                   </SelectTrigger>
 
@@ -144,17 +151,17 @@ export default function SubAccountModal({
                             key={r}
                             value={r}
                             className="
-                                            relative flex items-center
-                                            px-4 py-3
-                                            text-base font-medium text-grey-60
-                                            cursor-pointer
-                                            rounded-none
-                                            data-[highlighted]:bg-grey-90 data-[highlighted]:rounded data-[highlighted]:border-grey-90
-                                            data-[selected]:bg-grey-90 data-[selected]:rounded data-[selected]:border-grey-90
-                                        "
+                              relative flex items-center
+                              px-4 py-3
+                              text-base font-medium text-grey-60
+                              cursor-pointer
+                              rounded-none
+                              data-[highlighted]:bg-grey-90 data-[highlighted]:rounded data-[highlighted]:border-grey-90
+                              data-[selected]:bg-grey-90 data-[selected]:rounded data-[selected]:border-grey-90
+                            "
                           >
                             <SelectPrimitive.ItemText>
-                              {r}
+                              {formatRoleDisplay(r)}
                             </SelectPrimitive.ItemText>
                           </SelectPrimitive.Item>
                         ))}

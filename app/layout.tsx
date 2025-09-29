@@ -14,7 +14,6 @@ import SplashWrapper from "./components/splash-screen";
 import { NavigationLoaderProvider } from "./lib/hooks/useNavigationLoader";
 import UpdateChecker from "@/components/updater/UpdateChecker";
 
-
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
   display: "swap",
@@ -43,10 +42,15 @@ export default function RootLayout({
                 <NavigationLoaderProvider>
                   <Suspense fallback={<PageLoader />}>
                     <SplashWrapper skipSplash={false}>
-                      <div className="flex min-h-screen h-screen">{children}</div>
+                      <div className="flex min-h-screen h-screen">
+                        {children}
+                      </div>
                     </SplashWrapper>
                   </Suspense>
+
                   <Toaster
+                    position="bottom-right"
+                    className="toaster-auth-aware"
                     toastOptions={{
                       style: { fontFamily: "var(--font-geist-sans)" },
                     }}

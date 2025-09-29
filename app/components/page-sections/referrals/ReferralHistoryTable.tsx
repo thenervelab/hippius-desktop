@@ -8,53 +8,64 @@ import {
   Td,
   Th,
   THead,
-  TBody
+  TBody,
 } from "@/components/ui/alt-table";
 import {
   createColumnHelper,
   getCoreRowModel,
   useReactTable,
-  getSortedRowModel
+  getSortedRowModel,
 } from "@tanstack/react-table";
 import {
   ReferralEvent,
-  useUserReferrals
+  useUserReferrals,
 } from "@/app/lib/hooks/api/useUserReferrals";
+import { useAtomValue } from "jotai";
+import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { cn } from "@/app/lib/utils";
 
 const columnHelper = createColumnHelper<ReferralEvent>();
 
 const ReferralHistoryTable: React.FC = () => {
   const { data, isPending, isError } = useUserReferrals();
-
+  const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
   const columns = [
     columnHelper.accessor("address", {
       header: "ADDRESS",
       cell: (d) => `$ ${d.getValue().toLocaleString()}`,
-      enableSorting: false
+      enableSorting: false,
     }),
     columnHelper.accessor("reward", {
       header: "REWARD",
-      enableSorting: true
+      enableSorting: true,
     }),
     columnHelper.accessor("date", {
       header: "DATE",
-      enableSorting: true
+      enableSorting: true,
     }),
     columnHelper.accessor("status", {
       header: "STATUS",
-      enableSorting: true
-    })
+      enableSorting: true,
+    }),
   ];
 
   const table = useReactTable({
     columns,
     data: data?.referralHistory || [],
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel()
+    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
-    <div>
+    <div
+      className={cn(
+        isUnpinnedOpen &&
+          data &&
+          data.referralHistory &&
+          data.referralHistory.length > 0 &&
+          "mb-[90px]"
+      )}
+    >
       <div className="flex items-center gap-x-2 mb-4">
         <AbstractIconWrapper className="size-10">
           <Hourglass className="absolute size-6 text-primary-50" />

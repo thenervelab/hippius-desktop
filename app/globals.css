@@ -256,3 +256,11 @@ input[type="password"]::-ms-reveal,
 input[type="password"]::-ms-clear {
   display: none;
 }
+/* globals.css */
+.toaster-auth-aware {
+  position: fixed !important;
+  right: 24px !important;
+  /* default = 24px; auth layer can raise this dynamically */
+  bottom: var(--toast-bottom-offset, 24px) !important;
+  z-index: 100000; /* above page chrome */
+}

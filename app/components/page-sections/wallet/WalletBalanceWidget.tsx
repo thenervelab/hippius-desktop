@@ -61,6 +61,7 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
   return (
     <>
       <div className={cn("w-full", className)}>
+        {/* <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[310px]"> */}
         <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[310px] min-w-[400px]">
           <div className="flex flex-col w-full items-start">
             <div className="flex gap-4 items-center">

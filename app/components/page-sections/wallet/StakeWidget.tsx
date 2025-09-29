@@ -158,8 +158,21 @@ const StakeWidget: FC = () => {
                     </CardButton>
                 )}
 
+                {/* Only show unstake button if user has staked tokens */}
+                {hasStakedTokens && (
+                    <CardButton
+                        className="w-full mt-4 h-[50px]"
+                        variant="secondary"
+                        onClick={handleUnstakeAlpha}
+                    >
+                        <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
+                            <Icons.MoneySend className="size-4" />
+                            Unstake hAlpha
+                        </div>
+                    </CardButton>
+                )}
                 <CardButton
-                    className="w-full mt-4 h-[50px]"
+                    className="w-full mt-3 h-[50px]"
                     onClick={handleStakeNow}
                 >
                     <div className="flex items-center gap-2">
@@ -170,19 +183,6 @@ const StakeWidget: FC = () => {
                     </div>
                 </CardButton>
 
-                {/* Only show unstake button if user has staked tokens */}
-                {hasStakedTokens && (
-                    <CardButton
-                        className="w-full mt-3 h-[50px]"
-                        variant="secondary"
-                        onClick={handleUnstakeAlpha}
-                    >
-                        <div className="flex items-center gap-2 text-lg font-medium text-grey-10">
-                            <Icons.MoneySend className="size-4" />
-                            Unstake hAlpha
-                        </div>
-                    </CardButton>
-                )}
             </div>
         </div>
     );

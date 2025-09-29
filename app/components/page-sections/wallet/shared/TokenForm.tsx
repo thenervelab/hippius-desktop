@@ -138,10 +138,17 @@ const TokenForm: FC<TokenFormProps> = ({
                     </label>
                     <div className="relative">
                         <Input
-                            type="number"
+                            type="text"
+                            inputMode="decimal"
                             placeholder="0.00"
                             value={amount}
-                            onChange={(e) => setAmount(e.target.value)}
+                            onChange={(e) => {
+                                // Only allow digits and one decimal point
+                                const value = e.target.value;
+                                if (value === '' || /^\d*\.?\d*$/.test(value)) {
+                                    setAmount(e.target.value);
+                                }
+                            }}
                             disabled={loading || stakingInfo.isLoading}
                             className={cn(
                                 "w-full pr-16 text-lg",
