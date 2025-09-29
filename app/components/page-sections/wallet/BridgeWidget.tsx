@@ -37,7 +37,6 @@ const BridgeWidget: FC = () => {
                 <CardButton
                     className="w-full mt-4 h-[50px]"
                     onClick={handleBridgeTokens}
-                    variant="secondary"
                 >
                     <div className="flex items-center gap-2">
                         <Icons.Money className="size-4" />
