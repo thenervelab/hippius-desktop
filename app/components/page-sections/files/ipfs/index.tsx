@@ -29,7 +29,10 @@ import {
 } from "@/lib/utils/userPreferencesDb";
 import { usePagination } from "@/lib/hooks";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { triggerUnpinnedFilesRefetchAtom, triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import {
+  triggerUnpinnedFilesRefetchAtom,
+  triggerSyncPathRefreshAtom,
+} from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
@@ -67,9 +70,12 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [shouldResetPagination, setShouldResetPagination] = useState(false);
-  const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] =
-    useState(undefined as string | null | undefined);
-  const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState(undefined as string | null | undefined);
+  const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
+    undefined as string | null | undefined
+  );
+  const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState(
+    undefined as string | null | undefined
+  );
 
   // Loading states for sync paths
   const [isLoadingPrivatePath, setIsLoadingPrivatePath] = useState(true);
@@ -92,8 +98,10 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     boolean | null
   >(null);
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
-  const [showPrivateStartSyncingSelector, setShowPrivateStartSyncingSelector] = useState(false);
-  const [showPublicStartSyncingSelector, setShowPublicStartSyncingSelector] = useState(false);
+  const [showPrivateStartSyncingSelector, setShowPrivateStartSyncingSelector] =
+    useState(false);
+  const [showPublicStartSyncingSelector, setShowPublicStartSyncingSelector] =
+    useState(false);
   const setTriggerUnpinnedFilesRefetch = useSetAtom(
     triggerUnpinnedFilesRefetchAtom
   );
@@ -146,12 +154,8 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   ]);
 
   // Shared pagination state between list and card views
-  const {
-    paginatedData,
-    setCurrentPage,
-    currentPage,
-    totalPages
-  } = usePagination(filteredData, 12);
+  const { paginatedData, setCurrentPage, currentPage, totalPages } =
+    usePagination(filteredData, 12);
 
   // Update active filters when filter settings change
   useEffect(() => {
@@ -372,7 +376,8 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       } catch (error) {
         console.error("Failed to set sync folder:", error);
         toast.error(
-          `Failed to set sync folder: ${error instanceof Error ? error.message : "Unknown error"
+          `Failed to set sync folder: ${
+            error instanceof Error ? error.message : "Unknown error"
           }`
         );
       }
@@ -388,48 +393,43 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   );
 
   // Handle skip sync folder setup
-  const handleSkipSyncFolder = useCallback(
-    async () => {
-      try {
-        if (!polkadotAddress || !mnemonic) {
-          toast.error("Wallet authentication is required");
-          return;
-        }
-
-        // Set sync path to empty string to indicate user has skipped
-        const emptyPath = "";
-
-        if (isPrivateView) {
-          await setPrivateSyncPath(emptyPath, polkadotAddress, mnemonic);
-          setSelectedPrivateFolderPath(emptyPath);
-        } else {
-          await setPublicSyncPath(emptyPath, polkadotAddress, mnemonic);
-          setSelectedPublicFolderPath(emptyPath);
-        }
-
-        // Set sync path as configured (with empty string) so selector doesn't show again
-        setIsSyncPathConfigured(true);
-        // Hide the start syncing selector for the current view
-        if (isPrivateView) {
-          setShowPrivateStartSyncingSelector(false);
-        } else {
-          setShowPublicStartSyncingSelector(false);
-        }
-
-        toast.success("Sync folder setup skipped. You can set it up later.");
-      } catch (error) {
-        console.error("Failed to skip sync folder setup:", error);
-        toast.error(
-          `Failed to skip sync folder setup: ${error instanceof Error ? error.message : "Unknown error"}`
-        );
+  const handleSkipSyncFolder = useCallback(async () => {
+    try {
+      if (!polkadotAddress || !mnemonic) {
+        toast.error("Wallet authentication is required");
+        return;
       }
-    },
-    [
-      isPrivateView,
-      polkadotAddress,
-      mnemonic,
-    ]
-  );
+
+      // Set sync path to empty string to indicate user has skipped
+      const emptyPath = "";
+
+      if (isPrivateView) {
+        await setPrivateSyncPath(emptyPath, polkadotAddress, mnemonic);
+        setSelectedPrivateFolderPath(emptyPath);
+      } else {
+        await setPublicSyncPath(emptyPath, polkadotAddress, mnemonic);
+        setSelectedPublicFolderPath(emptyPath);
+      }
+
+      // Set sync path as configured (with empty string) so selector doesn't show again
+      setIsSyncPathConfigured(true);
+      // Hide the start syncing selector for the current view
+      if (isPrivateView) {
+        setShowPrivateStartSyncingSelector(false);
+      } else {
+        setShowPublicStartSyncingSelector(false);
+      }
+
+      toast.success("Sync folder setup skipped. You can set it up later.");
+    } catch (error) {
+      console.error("Failed to skip sync folder setup:", error);
+      toast.error(
+        `Failed to skip sync folder setup: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
+    }
+  }, [isPrivateView, polkadotAddress, mnemonic]);
 
   // Handle start syncing button click
   const handleStartSyncing = useCallback(() => {
@@ -602,12 +602,14 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
 
     if (isRecentFiles) {
       // For recent files, prioritize private path, then fall back to public
-      syncFolderPath = selectedPrivateFolderPath || selectedPublicFolderPath || "";
+      syncFolderPath =
+        selectedPrivateFolderPath || selectedPublicFolderPath || "";
     } else {
       // For regular files view, use the path matching the current view
-      syncFolderPath = (isPrivateView
-        ? selectedPrivateFolderPath
-        : selectedPublicFolderPath) || "";
+      syncFolderPath =
+        (isPrivateView
+          ? selectedPrivateFolderPath
+          : selectedPublicFolderPath) || "";
     }
 
     // Get file counts for view all button

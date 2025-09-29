@@ -135,7 +135,7 @@ const useRecentFiles = () => {
         // Remove duplicates based on fileHash (unique identifier)
         const uniqueFiles = formattedFiles.filter(
           (file, index, self) =>
-            index === self.findIndex((f) => f.fileHash === file.fileHash)
+            index === self.findIndex((f) => f.name === file.name)
         );
 
         // Sort by timestamp (newest first) - same as useUserIpfsFiles

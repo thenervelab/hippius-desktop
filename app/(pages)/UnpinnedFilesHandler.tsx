@@ -1,13 +1,17 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect } from "react";
 import { useAtom } from "jotai";
 
 import UnpinFilesDialog, { FileDetail } from "./UnpinFilesDialog";
 import useUnpinnedStorageRequests from "../lib/hooks/useUnpinnedStorageRequests";
-import { triggerUnpinnedFilesRefetchAtom } from "../lib/global-atoms/unpinAtoms";
 import SyncStatusHandler from "./SyncStatusHandler";
 import { createPortal } from "react-dom";
+import {
+  isUnpinnedDialogOpenAtom,
+  triggerUnpinnedFilesRefetchAtom,
+} from "../lib/global-atoms/unpinAtoms";
+import { useBreakpoint } from "../lib/hooks";
 
 const UnpinnedFilesHandler: React.FC = () => {
   const {
@@ -15,7 +19,9 @@ const UnpinnedFilesHandler: React.FC = () => {
     isLoading,
     refetch,
   } = useUnpinnedStorageRequests();
-  const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
+  const { isMobile } = useBreakpoint();
+
+  const [isUnpinnedOpen, setIsUnpinnedOpen] = useAtom(isUnpinnedDialogOpenAtom);
   const [triggerCount] = useAtom(triggerUnpinnedFilesRefetchAtom);
 
   // Listen for refetch triggers from other components
@@ -27,7 +33,7 @@ const UnpinnedFilesHandler: React.FC = () => {
 
   // Update dialog state based on unpinned files
   useEffect(() => {
-    if (unpinnedFiles && unpinnedFiles.length > 0) {
+    if (unpinnedFiles && unpinnedFiles.length > 0 && !isMobile) {
       setIsUnpinnedOpen(true);
     } else {
       setIsUnpinnedOpen(false);
