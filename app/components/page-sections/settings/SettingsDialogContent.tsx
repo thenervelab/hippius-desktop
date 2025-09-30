@@ -38,7 +38,7 @@ const SettingsDialogContent: React.FC = () => {
       icon: <Icons.WalletAdd className="size-4" />,
     },
     {
-      tabName: "Sub Accounts",
+      tabName: "API Keys",
       icon: <Icons.KeySquare className="size-4" />,
     },
     // {
@@ -99,7 +99,7 @@ const SettingsDialogContent: React.FC = () => {
               </>
             )}
 
-            {activeTab === "Sub Accounts" && (
+            {activeTab === "API Keys" && (
               <RevealTextLine
                 rotate
                 reveal={inView}

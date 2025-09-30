@@ -118,7 +118,7 @@ export default function ConfirmModal({
                   <Loader2 className="mx-auto w-5 h-5 animate-spin" />
                 ) : (
                   confirmText ||
-                  (isDelete ? "Delete Sub Account" : "Confirm Transaction")
+                  (isDelete ? "Delete API Key" : "Confirm Transaction")
                 )}
               </div>
             </button>

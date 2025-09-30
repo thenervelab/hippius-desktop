@@ -10,7 +10,7 @@ import {
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Graphsheet, ImportantWarnings } from "@/app/components/ui";
+import { Graphsheet, APIKeyImportantWarnings } from "@/app/components/ui";
 
 type Props = {
   open: boolean;
@@ -18,7 +18,7 @@ type Props = {
   copyToClipboard: () => void;
   generatedMnemonic: string;
   copied: boolean;
-  onAddAsSubAccount: () => void; // Add this new prop
+  onAddAsApiKey: () => void; // Add this new prop
 };
 
 export default function GenerateNewAccountModal({
@@ -27,7 +27,7 @@ export default function GenerateNewAccountModal({
   copyToClipboard,
   generatedMnemonic,
   copied,
-  onAddAsSubAccount,
+  onAddAsApiKey,
 }: Props) {
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
@@ -76,13 +76,13 @@ export default function GenerateNewAccountModal({
           </div>
 
           <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center py-[16px]">
-            Generate a New Account
+            Generate New API Key
           </Dialog.Title>
 
           <div>
             <div className="flex flex-col gap-[8px]">
               <label className="font-medium text-grey-70 text-sm">
-                Your account access Key
+                Your API Key Seed
               </label>
               <div
                 className="p-[16px] shadow-[0_0_0_4px_rgba(10,10,10,0.05)] rounded-[8px]
@@ -114,20 +114,20 @@ export default function GenerateNewAccountModal({
             </div>
 
             <div className="flex flex-col gap-[8px]">
-              <ImportantWarnings />
+              <APIKeyImportantWarnings />
             </div>
           </div>
 
           <div className="mt-[16px] flex flex-col gap-[16px] text-lg font-medium">
             <button
-              onClick={onAddAsSubAccount}
+              onClick={onAddAsApiKey}
               className="
                 w-full p-1 bg-primary-50 text-grey-100 rounded shadow border border-primary-40
                 hover:bg-primary-40 transition
               "
             >
               <div className="py-2.5 rounded border border-primary-40 text-lg">
-                Add as Sub Account
+                Add API Key
               </div>
             </button>
             <Dialog.Close asChild>

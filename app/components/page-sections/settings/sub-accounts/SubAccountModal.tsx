@@ -98,13 +98,13 @@ export default function SubAccountModal({
           </div>
 
           <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center mb-4">
-            Create a New Sub Account
+            Add API Key
           </Dialog.Title>
 
           <div className="space-y-4">
             <div>
               <label className="text-sm font-medium text-grey-70">
-                Sub Account Address
+                Address
               </label>
               <input
                 type="text"
@@ -120,7 +120,7 @@ export default function SubAccountModal({
             </div>
 
             <div>
-              <label className="text-sm font-medium text-grey-70">Role</label>
+              <label className="text-sm font-medium text-grey-70">Permission</label>
               <div className="mt-2">
                 <Select value={role} onValueChange={onRoleChange}>
                   <SelectTrigger
@@ -183,7 +183,7 @@ export default function SubAccountModal({
               "
             >
               <div className="py-2.5 rounded border border-primary-40 text-lg">
-                Create Sub Account
+                Add API Key
               </div>
             </button>
             <Dialog.Close asChild>

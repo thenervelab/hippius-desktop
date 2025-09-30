@@ -121,7 +121,7 @@ export default function ViewSeedModal({
                     </div>
 
                     <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center py-[16px]">
-                        {seed ? 'Sub Account Seed' : 'View Sub Account Seed'}
+                        {seed ? 'API Key Seed' : 'View API Key Seed'}
                     </Dialog.Title>
 
                     {!seed ? (
@@ -163,7 +163,7 @@ export default function ViewSeedModal({
                             <div className="text-grey-70 text-sm text-center mb-4">
                                 <RevealTextLine rotate reveal={true} className="delay-300">
                                     <div className="flex">
-                                        Seed phrase for sub account:
+                                        Seed phrase for api key:
                                         <span className="font-medium text-grey-10">{addressShort}</span>
                                     </div>
                                 </RevealTextLine>

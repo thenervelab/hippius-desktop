@@ -125,7 +125,7 @@ const SubAccountTable: React.FC<Props> = ({
                   <CustomTooltip
                     tooltip={
                       <div className="max-w-[220px]">
-                        This sub-account is being used to store and sync files to S3 from our backend.
+                        This API key is being used to store and sync files to S3 from our backend.
                         It cannot be deleted to ensure secure synchronization of your files.
                       </div>
                     }
@@ -141,7 +141,7 @@ const SubAccountTable: React.FC<Props> = ({
       }),
 
       columnHelper.accessor("role", {
-        header: "Role",
+        header: "Permission",
         cell: (info) => {
           const role = info.getValue();
           const displayRole = role === "UploadDelete" ? "Upload/Delete" : role;
@@ -230,8 +230,8 @@ const SubAccountTable: React.FC<Props> = ({
         ) : table.getRowModel().rows.length === 0 ? (
           <div className="p-6 flex justify-center text-gray-500">
             {subs.length === 0
-              ? "No sub accounts yet"
-              : "No sub accounts on this page"}
+              ? "No API keys yet"
+              : "No API keys on this page"}
           </div>
         ) : (
           <>
@@ -283,8 +283,8 @@ const SubAccountTable: React.FC<Props> = ({
       <SeedPasscodeModal
         open={isSetSeedModalOpen}
         onClose={() => setIsSetSeedModalOpen(false)}
-        title="Set Sub Account Seed"
-        description="Enter seed phrase for sub account"
+        title="Set API Key Seed"
+        description="Enter seed phrase for API key"
         address={selectedAddress}
         seedInputRequired={true}
         onSubmit={handleSetSeedSubmit}

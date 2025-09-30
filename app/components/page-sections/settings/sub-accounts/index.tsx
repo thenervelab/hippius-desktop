@@ -75,12 +75,12 @@ const SubAccounts: React.FC = () => {
   } | null>(null);
   const [txLoading, setTxLoading] = useState(false);
 
-  // Fetch backend sub account details
-  const fetchBackendSubAccounts = useCallback(async () => {
+  // Fetch backend api key details
+  const fetchBackendApiKeys = useCallback(async () => {
     setFetchingBackendData(true);
     try {
       const response = await invoke<BackendSubAccountTuple[]>('get_all_subaccount_addresses');
-      console.log("Backend sub account details:", response);
+      console.log("Backend api key details:", response);
 
       if (Array.isArray(response)) {
 
@@ -99,8 +99,8 @@ const SubAccounts: React.FC = () => {
         setDisabledAccounts(new Set<string>());
       }
     } catch (error) {
-      console.error("Error fetching backend sub account details:", error);
-      toast.error("Failed to fetch sub account details from backend");
+      console.error("Error fetching backend api key details:", error);
+      toast.error("Failed to fetch api key details from backend");
       setDisabledAccounts(new Set<string>());
     } finally {
       setFetchingBackendData(false);
@@ -131,8 +131,8 @@ const SubAccounts: React.FC = () => {
 
   // Fetch backend data when the component mounts
   useEffect(() => {
-    fetchBackendSubAccounts();
-  }, [fetchBackendSubAccounts]);
+    fetchBackendApiKeys();
+  }, [fetchBackendApiKeys]);
 
   // Check if an account is disabled
   const isAccountDisabled = useCallback((address: string) => {
@@ -170,7 +170,7 @@ const SubAccounts: React.FC = () => {
             setTxLoading(false);
             setConfirmOpen(false);
 
-            if (pending.title === "Create Sub Account") {
+            if (pending.title === "Add API Key") {
               if (generatedMnemonic && !isFromDirectCreation) {
                 // For generated accounts - just ask for passcode
                 setSeedToSave(generatedMnemonic);
@@ -267,7 +267,7 @@ const SubAccounts: React.FC = () => {
       draftRole.toLowerCase()
     );
 
-    queueTx(tx, "Sub account added", "Create Sub Account", draftAddress);
+    queueTx(tx, "API key added", "Add API Key", draftAddress);
   }, [api, main, draftAddress, draftRole, queueTx]);
 
   const onDelete = useCallback(
@@ -288,9 +288,9 @@ const SubAccounts: React.FC = () => {
       const tx = api?.tx.subAccount.removeSubAccount(main!, addr);
       queueTx(
         tx,
-        "Sub account removed",
-        "Delete Sub Account",
-        "Are you sure you want to delete this sub account? This action is permanent"
+        "API key removed",
+        "Delete API Key",
+        "Are you sure you want to delete this API key? This action is permanent"
       );
     },
     [api, main, queueTx, accountsWithSeeds]
@@ -334,7 +334,7 @@ const SubAccounts: React.FC = () => {
     }
   };
 
-  const handleAddAsSubAccount = useCallback(async () => {
+  const handleAddAsApiKey = useCallback(async () => {
     try {
       const keyring = new Keyring({ type: "sr25519" });
       const polkadotPair = keyring.addFromMnemonic(generatedMnemonic);
@@ -351,7 +351,7 @@ const SubAccounts: React.FC = () => {
     }
   }, [generatedMnemonic]);
 
-  const handleOpenEmptySubAccountForm = useCallback(() => {
+  const handleOpenEmptyApiKeyForm = useCallback(() => {
     setDraftAddress("");
     setDraftRole("Upload");
     setSeedToSave("");
@@ -377,9 +377,9 @@ const SubAccounts: React.FC = () => {
               >
                 <SectionHeader
                   Icon={Icons.KeySquare}
-                  title="Sub Accounts"
-                  info="Sub-accounts let you assign upload and delete rights while using their own seed. All files still belong to your main account, providing secure collaboration without compromising control."
-                  subtitle="Manage your sub accounts for delegated access and permissions."
+                  title="API Keys"
+                  info="API Keys allow you to generate secure credentials for file operations (upload/delete) without sharing your main account access. Each key operates with its own seed while files remain owned by your main account."
+                  subtitle="Manage your API keys for secure file operations and delegated access."
                 />
               </RevealTextLine>
               <RevealTextLine
@@ -416,19 +416,18 @@ const SubAccounts: React.FC = () => {
                   disabled={generatingKey}
                   className="border border-grey-80 p-2.5 sm:px-3 sm:py-2.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
                 >
-                  Generate New Account
+                  Generate New API Key
                 </button>
               </RevealTextLine>
               <RevealTextLine rotate reveal={inView} className="delay-300">
                 <button
-                  onClick={handleOpenEmptySubAccountForm}
+                  onClick={handleOpenEmptyApiKeyForm}
                   className="p-1 bg-primary-50 text-white border border-primary-40 rounded hover:bg-primary-40 transition text-base font-medium"
                 >
                   <div className="flex items-center gap-2 px-1 sm:px-2 py-1 border rounded border-primary-40">
                     <PlusCircle className="size-4" />
                     <span>
-                      <span className="hidden sm:inline-block">New</span> Sub
-                      Account
+                      <span className="hidden sm:inline-block">Add</span> API Key
                     </span>
                   </div>
                 </button>
@@ -460,10 +459,10 @@ const SubAccounts: React.FC = () => {
               open={confirmOpen}
               title={pending.title}
               description={
-                pending.title === "Create Sub Account" ? (
+                pending.title === "Add API Key" ? (
                   <div className="space-y-1">
                     <p className="font-medium">
-                      You are about to create a sub account with the address:
+                      You are about to create an API key with the address:
                     </p>
                     <p className="tracking-wide break-all font-bold">
                       {pending.description}
@@ -491,15 +490,15 @@ const SubAccounts: React.FC = () => {
             copyToClipboard={copyToClipboard}
             generatedMnemonic={generatedMnemonic}
             copied={copied}
-            onAddAsSubAccount={handleAddAsSubAccount}
+            onAddAsApiKey={handleAddAsApiKey}
           />
 
           <SeedPasscodeModal
             open={isPasscodeModalOpen}
             onClose={() => setIsPasscodeModalOpen(false)}
             onSubmit={handlePasscodeSubmit}
-            title="Save Sub Account Seed"
-            description="Enter your passcode to encrypt and save the seed for the newly created sub account"
+            title="Save API Key Seed"
+            description="Enter your passcode to encrypt and save the seed for the newly created API key"
             address={addressForSeed}
             seedInputRequired={false}
             cancelLabel="Skip"
@@ -510,8 +509,8 @@ const SubAccounts: React.FC = () => {
             open={isSeedEntryModalOpen}
             onClose={() => setIsSeedEntryModalOpen(false)}
             onSubmit={handleSeedAndPasscodeSubmit}
-            title="Save Sub Account Seed"
-            description="Enter the seed phrase for your sub account and your passcode to encrypt it"
+            title="Save API Key Seed"
+            description="Enter the seed phrase for your API key and your passcode to encrypt it"
             address={addressForSeed}
             seedInputRequired={true}
             cancelLabel="Skip"

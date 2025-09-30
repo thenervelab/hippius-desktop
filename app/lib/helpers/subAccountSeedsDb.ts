@@ -18,7 +18,7 @@ async function ensureSubAccountSeedsTable() {
 }
 
 /**
- * Save a sub account's seed phrase, encrypted with the user's passcode
+ * Save a api key's seed phrase, encrypted with the user's passcode
  */
 export async function saveSubAccountSeed(address: string, seed: string, passcode: string) {
     // Validate that the passcode matches the user's stored passcode
@@ -51,7 +51,7 @@ export async function saveSubAccountSeed(address: string, seed: string, passcode
 }
 
 /**
- * Retrieve and decrypt a sub account's seed phrase
+ * Retrieve and decrypt a api key's seed phrase
  */
 export async function getSubAccountSeed(address: string, passcode: string): Promise<string> {
     const walletRecord = await getWalletRecord();
@@ -68,7 +68,7 @@ export async function getSubAccountSeed(address: string, passcode: string): Prom
     const result = db.exec(`SELECT encrypted_seed FROM sub_account_seeds WHERE address = '${address}'`);
 
     if (!result.length || !result[0]?.values.length) {
-        throw new Error("No seed found for this sub account");
+        throw new Error("No seed found for this api key");
     }
 
     try {
@@ -81,7 +81,7 @@ export async function getSubAccountSeed(address: string, passcode: string): Prom
 }
 
 /**
- * Check if a seed exists for the given sub account address
+ * Check if a seed exists for the given api key address
  */
 export async function hasSubAccountSeed(address: string): Promise<boolean> {
     const db = await ensureSubAccountSeedsTable();
@@ -92,7 +92,7 @@ export async function hasSubAccountSeed(address: string): Promise<boolean> {
 }
 
 /**
- * Delete a sub account's seed
+ * Delete a api key's seed
  */
 export async function deleteSubAccountSeed(address: string): Promise<void> {
     const db = await ensureSubAccountSeedsTable();
@@ -103,7 +103,7 @@ export async function deleteSubAccountSeed(address: string): Promise<void> {
 }
 
 /**
- * List all sub account addresses that have seeds
+ * List all api key addresses that have seeds
  */
 export async function listSubAccountsWithSeeds(): Promise<string[]> {
     const db = await ensureSubAccountSeedsTable();
