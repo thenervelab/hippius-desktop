@@ -228,12 +228,20 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
     }
 }
 
-pub fn reset_all_sync_state() {    
+/// Stops all running sync processes and resets sync state
+pub fn stop_all_sync_processes() {
+    println!("[Sync] Stopping all sync processes...");
+    
+    // Signal all sync processes to stop
     GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
     
+    // Clear all syncing accounts
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-        syncing_accounts.clear();
+        if !syncing_accounts.is_empty() {
+            println!("[Sync] Clearing {} syncing accounts", syncing_accounts.len());
+            syncing_accounts.clear();
+        }
     }
     
     // Reset S3 sync states
@@ -245,6 +253,15 @@ pub fn reset_all_sync_state() {
         let mut public_status = S3_PUBLIC_SYNC_STATE.lock().unwrap();
         *public_status = S3SyncState::default();
     }
+    
+    // Reset cancellation token to allow new syncs
+    GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
+    println!("[Sync] All sync processes stopped and states reset");
+}
+
+/// Resets all sync state (kept for backward compatibility)
+pub fn reset_all_sync_state() {    
+    stop_all_sync_processes();
 }
 
 pub fn prepare_for_new_sync() {

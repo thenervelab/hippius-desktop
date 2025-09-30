@@ -220,23 +220,26 @@ pub async fn initialize_sync(
 
 #[tauri::command]
 pub async fn cleanup_sync(app: tauri::AppHandle) -> Result<(), String> {
-    println!("Cleaning up sync processes...");
+    println!("[Cleanup] Starting sync cleanup...");
     
-    // Signal global cancellation first
-    reset_all_sync_state();
+    // Stop all sync processes and reset state
+    crate::sync_shared::stop_all_sync_processes();
 
+    // Abort any running tasks
     let state = app.state::<Arc<AppState>>();
     let mut sync_state = state.sync.lock().await;
     
-    // Abort all tasks
-    for task in sync_state.tasks.drain(..) {
-        task.abort();
+    if !sync_state.tasks.is_empty() {
+        println!("[Cleanup] Aborting {} running tasks...", sync_state.tasks.len());
+        for task in sync_state.tasks.drain(..) {
+            task.abort();
+        }
+        
+        // Give tasks a moment to handle the abort
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
     
-    // Wait for cleanup to complete
-    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-    
-    println!("Sync cleanup completed");
+    println!("[Cleanup] Sync cleanup completed");
     Ok(())
 }
 

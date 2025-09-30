@@ -50,10 +50,17 @@ fn main() {
     sodiumoxide::init().unwrap();
     println!("[Main] Application starting...");
 
+    // Stop any running sync processes from previous instances
+    println!("[Main] Stopping any running sync processes...");
+    crate::sync_shared::stop_all_sync_processes();
+
+    // Create app state
+    let app_state = Arc::new(AppState {
+        sync: Mutex::new(SyncState::default()),
+    });
+
     let builder = Builder::default()
-        .manage(Arc::new(AppState {
-            sync: Mutex::new(SyncState::default()),
-        }))
+        .manage(app_state)
         // Remove tauri_plugin_process unless you specifically need it
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
