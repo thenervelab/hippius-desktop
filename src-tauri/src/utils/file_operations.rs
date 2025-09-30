@@ -317,12 +317,8 @@ pub fn calculate_local_size(path: &Path) -> std::io::Result<u64> {
 pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_folder: bool, should_delete_folder: bool) {
     let source = get_source_from_user_profiles(file_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
     let bucket_name = get_bucket_from_user_profiles(file_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
-
-    println!("source: {}", source);
-    println!("bucket_name: {}", bucket_name);
-    println!("is_folder: {}", is_folder);
-    if source == "Hippius" || source.starts_with("s3://") {
-        execute_aws_s3_rm(&source.to_string(), is_folder);
+  if source == "Hippius" || source.starts_with("s3://") {
+        execute_aws_s3_rm(&source.to_string(), is_folder).await;
     }
     else {
         // Choose sync folder path
@@ -372,7 +368,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                             }
                         }else{
                             // Try S3 removal as fallback
-                            if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
+                            if let Err(e) = execute_aws_s3_rm(&source, is_folder).await {
                                 eprintln!("Failed to remove file from S3: {}", e);
                             }
                         }
@@ -398,7 +394,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                         eprintln!("Failed to remove folder from sync folder: {}", e);
                     }
                 }else{
-                    if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
+                    if let Err(e) = execute_aws_s3_rm(&source, is_folder).await {
                         eprintln!("Failed to remove folder from S3: {}", e);
                     }                    
                 }
@@ -411,7 +407,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                 }
             }else{
                 // Try S3 removal as fallback
-                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder).await {
                     eprintln!("Failed to remove file from S3: {}", e);
                 }
             }
@@ -456,23 +452,18 @@ pub async fn copy_to_sync_folder(
     } else {
         String::new()
     };
-    println!("s3_path: {}", s3_path);        
-    println!("source: {}", source);
-    println!("bucket_name: {}", bucket_name);
-    println!("subfolder_path: {:?}", subfolder_path);
-    println!("is_folder: {}", is_folder);
     if source == "Hippius" || source.starts_with("s3://") {
         let target_source = if !s3_path.is_empty() {
             format!("{}/{}", source.trim_end_matches('/'), s3_path)
         } else {
             source.clone()
         };
-        
+        println!("[copy_to_sync_folder] Copying to S3: {}", target_source);
         execute_aws_s3_cp(
             &target_source,
             &original_path.to_string_lossy().to_string(),
             is_folder,
-        );
+        ).await;
     }
     else {
         // Choose sync folder path
@@ -676,11 +667,8 @@ pub async fn remove_from_sync_folder(
     
     let source = get_source_from_user_profiles(folder_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
     let bucket_name = get_bucket_from_user_profiles(folder_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
-    println!("source: {}", source);
-    println!("bucket_name: {}", bucket_name);
+    println!("s3_path : {}", s3_path);
     println!("subfolder_path: {:?}", subfolder_path);
-    println!("is_folder: {}", is_folder);
-    println!("s3_path: {}", s3_path);
     if source == "Hippius" || source.starts_with("s3://") {
         let target_source = if !s3_path.is_empty() {
             format!("{}/{}", source.trim_end_matches('/'), s3_path)
@@ -688,7 +676,7 @@ pub async fn remove_from_sync_folder(
             format!("{}/{}",source,file_name)
         };        
         println!("target_source : {}", target_source);
-        if let Err(e) = execute_aws_s3_rm(&target_source, is_folder) {
+        if let Err(e) = execute_aws_s3_rm(&target_source, is_folder).await {
             eprintln!("Failed to remove file from S3: {}", e);
         }
     }
@@ -742,7 +730,7 @@ pub async fn remove_from_sync_folder(
                             eprintln!("Failed to remove file from sync folder: {}", e);
                         }
                     }else{                        
-                        if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
+                        if let Err(e) = execute_aws_s3_rm(&source, is_folder).await {
                             eprintln!("Failed to remove file from S3: {}", e);
                         }
                     }
@@ -768,7 +756,7 @@ pub async fn remove_from_sync_folder(
                 }
             }
             else{
-                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder).await {
                     eprintln!("Failed to remove folder from S3: {}", e);
                 }
             }
@@ -779,7 +767,7 @@ pub async fn remove_from_sync_folder(
                     eprintln!("Failed to remove file from sync folder: {}", e);
                 }
             }else{
-                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder).await {
                     eprintln!("Failed to remove file from S3: {}", e);
                 }
             }
@@ -802,12 +790,29 @@ pub async fn remove_from_sync_folder(
     }
 }
 
-fn execute_aws_s3_rm(path: &str, is_folder: bool) -> Result<(), String> {
-    use std::process::Command;
+async fn execute_aws_s3_rm(path: &str, is_folder: bool) -> Result<(), String> {
+    // Get AWS binary path
+    let aws_binary_path = match crate::commands::node::get_aws_binary_path().await {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("[execute_aws_s3_rm] Failed to get AWS binary path: {}", e);
+            return Err("Failed to locate AWS CLI".to_string());
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        std::env::var("PATH").unwrap_or_default()
+    );
 
     let endpoint_url = "https://s3.hippius.com";
   
-    let mut cmd = Command::new("aws");
+    let mut cmd = Command::new(&aws_binary_path);
+    cmd.env("PATH", &dynamic_path);
 
     if is_folder {
         cmd.args(["s3", "rm", "--recursive", "--endpoint-url", endpoint_url, path]);
@@ -841,7 +846,25 @@ fn execute_aws_s3_rm(path: &str, is_folder: bool) -> Result<(), String> {
     }
 }
 
-fn execute_aws_s3_cp(source: &str, local_path: &str, is_folder: bool) -> Result<(), String> {
+async fn execute_aws_s3_cp(source: &str, local_path: &str, is_folder: bool) -> Result<(), String> {
+    // Get AWS binary path
+    let aws_binary_path = match crate::commands::node::get_aws_binary_path().await {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("[execute_aws_s3_cp] Failed to get AWS binary path: {}", e);
+            return Err("Failed to locate AWS CLI".to_string());
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        std::env::var("PATH").unwrap_or_default()
+    );
+    println!("[execute_aws_s3_cp] Dynamic PATH: {}", dynamic_path);
     let endpoint_url = "https://s3.hippius.com";
 
     let destination = if is_folder {
@@ -879,7 +902,9 @@ fn execute_aws_s3_cp(source: &str, local_path: &str, is_folder: bool) -> Result<
         dest
     };
 
-    let mut cmd = Command::new("aws");
+    let mut cmd = Command::new(&aws_binary_path);
+    cmd.env("PATH", &dynamic_path);
+    
     println!(
         "[AWS CLI] Uploading {} to {} (is_folder: {})",
         local_path, destination, is_folder

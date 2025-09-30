@@ -527,6 +527,10 @@ pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn delete_file(path: String) -> Result<(), String> {
+    use std::env;
+    use which::which;
+    use crate::commands::node::get_aws_binary_path;
+
     println!("[delete_file] Deleting file: {}", path);
     let path_obj = Path::new(&path);
     let is_dir = path_obj.is_dir();
@@ -542,7 +546,32 @@ pub async fn delete_file(path: String) -> Result<(), String> {
         }
     } else {
         // If path doesn't exist locally, try to remove from Hippius S3
-        let mut cmd = Command::new("aws");
+        // Dynamically get the AWS binary path
+        let aws_binary_path = match get_aws_binary_path().await {
+            Ok(path) => {
+                println!("[delete_file] Found AWS binary at: {}", path.display());
+                path
+            }
+            Err(e) => {
+                eprintln!("[delete_file] Failed to get AWS binary path: {}, falling back to system PATH", e);
+                // Fall back to checking system PATH with which crate
+                if let Ok(path) = which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                    println!("[delete_file] Found AWS in system PATH at: {}", path.display());
+                    path
+                } else {
+                    return Err("AWS CLI not found in system PATH or custom location".to_string());
+                }
+            }
+        };
+
+        // Construct dynamic PATH with OS-appropriate separator
+        let path_separator = if cfg!(windows) { ";" } else { ":" };
+        let dynamic_path = format!(
+            "{}{}{}",
+            aws_binary_path.parent().unwrap().to_string_lossy(),
+            path_separator,
+            env::var("PATH").unwrap_or_default()
+        );
 
         // Build the command with appropriate arguments
         let mut args = vec!["s3", "rm"];
@@ -552,13 +581,14 @@ pub async fn delete_file(path: String) -> Result<(), String> {
             args.push("--recursive");
         }
 
-        // Add the path
+        // Add the path and Hippius S3 endpoint
         args.push(&path);
-
-        // Add Hippius S3 endpoint
         args.extend(["--endpoint", "https://s3.hippius.com"]);
 
-        cmd.args(&args);
+        let mut cmd = Command::new(&aws_binary_path);
+        cmd.env("AWS_PAGER", "")
+           .env("PATH", &dynamic_path)
+           .args(&args);
 
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
@@ -578,6 +608,7 @@ pub async fn delete_file(path: String) -> Result<(), String> {
         }
     }
 }
+
 #[tauri::command]
 pub fn read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| e.to_string())

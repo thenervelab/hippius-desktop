@@ -33,12 +33,31 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
     std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
     std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
     
+    // Get AWS binary path
+    let aws_binary_path = match crate::commands::node::get_aws_binary_path().await {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("[ensure_aws_env] Failed to get AWS binary path: {}", e);
+            return;
+        }
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        std::env::var("PATH").unwrap_or_default()
+    );
+    
     // Helper function to run aws configure commands
-    fn run_aws_configure(args: &[&str]) {
+    fn run_aws_configure(aws_binary_path: &std::path::Path, dynamic_path: &str, args: &[&str]) {
         use std::process::Command;
         
-        let mut cmd = Command::new("aws");
-        cmd.args(args);
+        let mut cmd = Command::new(aws_binary_path);
+        cmd.env("PATH", dynamic_path)
+           .args(args);
         
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
@@ -51,8 +70,8 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
     }
     
     // Configure AWS S3 multipart upload settings
-    run_aws_configure(&["configure", "set", "default.s3.multipart_chunksize", "134217728"]);
-    run_aws_configure(&["configure", "set", "default.s3.multipart_threshold", "134217728"]);
+    run_aws_configure(&aws_binary_path, &dynamic_path, &["configure", "set", "default.s3.multipart_chunksize", "134217728"]);
+    run_aws_configure(&aws_binary_path, &dynamic_path, &["configure", "set", "default.s3.multipart_threshold", "134217728"]);
 }
 
 #[tauri::command]

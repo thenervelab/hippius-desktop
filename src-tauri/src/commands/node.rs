@@ -847,13 +847,24 @@ pub async fn get_aws_binary_path() -> Result<PathBuf, String> {
 
 async fn is_aws_cli_installed() -> bool {
     // Try our managed local binary first.
-    if let Ok(p) = get_aws_binary_path().await {
-        if p.exists() {
-            let mut cmd = Command::new(&p);
-            cmd.arg("--version");
+    if let Ok(aws_binary_path) = get_aws_binary_path().await {
+        if aws_binary_path.exists() {
+            // Construct dynamic PATH with OS-appropriate separator
+            let path_separator = if cfg!(windows) { ";" } else { ":" };
+            let dynamic_path = format!(
+                "{}{}{}",
+                aws_binary_path.parent().unwrap().to_string_lossy(),
+                path_separator,
+                std::env::var("PATH").unwrap_or_default()
+            );
+
+            let mut cmd = Command::new(&aws_binary_path);
+            cmd.arg("--version")
+               .env("PATH", &dynamic_path);
+
             // On Unix, ensure we run from the binary's parent so its relative resources are found
             #[cfg(unix)]
-            if let Some(parent) = p.parent() {
+            if let Some(parent) = aws_binary_path.parent() {
                 cmd.current_dir(parent);
             }
             #[cfg(target_os = "windows")]
@@ -873,6 +884,19 @@ async fn is_aws_cli_installed() -> bool {
     cmd.arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    
+    // Still set the dynamic PATH in case the binary is found in the system PATH
+    if let Ok(aws_binary_path) = get_aws_binary_path().await {
+        let path_separator = if cfg!(windows) { ";" } else { ":" };
+        let dynamic_path = format!(
+            "{}{}{}",
+            aws_binary_path.parent().unwrap().to_string_lossy(),
+            path_separator,
+            std::env::var("PATH").unwrap_or_default()
+        );
+        cmd.env("PATH", dynamic_path);
+    }
+    
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
