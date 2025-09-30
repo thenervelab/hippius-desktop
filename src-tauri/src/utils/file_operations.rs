@@ -459,7 +459,7 @@ pub async fn copy_to_sync_folder(
             source.clone()
         };
         println!("[copy_to_sync_folder] Copying to S3: {}", target_source);
-        execute_aws_s3_cp(
+        let _ = execute_aws_s3_cp(
             &target_source,
             &original_path.to_string_lossy().to_string(),
             is_folder,
@@ -671,7 +671,11 @@ pub async fn remove_from_sync_folder(
     println!("subfolder_path: {:?}", subfolder_path);
     if source == "Hippius" || source.starts_with("s3://") {
         let target_source = if !s3_path.is_empty() {
-            format!("{}/{}", source.trim_end_matches('/'), s3_path)
+            if is_folder {
+                format!("{}/{}", source.trim_end_matches('/'), s3_path)
+            }else {
+                format!("{}/{}/{}", source.trim_end_matches('/'), s3_path, file_name)
+            }
         } else {
             format!("{}/{}",source,file_name)
         };        
