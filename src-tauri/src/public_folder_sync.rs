@@ -342,7 +342,25 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
         }
     };
 
-    let bucket_name = format!("{}-public", sub_account);
+    let sync_path = match get_public_sync_path().await { 
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("[PublicFolderSync] Failed to get public sync path: {}", e);
+            sleep(Duration::from_secs(60)).await;
+            return;
+        }
+    };
+
+    // Create a unique identifier from the sync path
+    let path_hash = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        sync_path.hash(&mut hasher);
+        format!("{:x}", hasher.finish())[..8].to_string() // First 8 chars of hash
+    };
+
+    let bucket_name = format!("{}-public-{}", sub_account, path_hash);
     
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
@@ -619,7 +637,7 @@ pub async fn start_public_folder_sync(app_handle: AppHandle, account_id: String,
     tokio::spawn(async move {
         handle_fs_events(rx, pool_clone, owner_clone, bucket_name_clone, app_handle_clone).await
     });
-    
+
     loop {
         if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
             println!("[PublicFolderSync] Global cancellation detected, stopping sync for account {}", account_id);

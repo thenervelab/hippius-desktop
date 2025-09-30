@@ -458,7 +458,6 @@ pub async fn copy_to_sync_folder(
         } else {
             source.clone()
         };
-        println!("[copy_to_sync_folder] Copying to S3: {}", target_source);
         let _ = execute_aws_s3_cp(
             &target_source,
             &original_path.to_string_lossy().to_string(),

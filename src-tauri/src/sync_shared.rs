@@ -228,8 +228,7 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
     }
 }
 
-pub fn reset_all_sync_state() {
-    
+pub fn reset_all_sync_state() {    
     GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
     
     {
@@ -415,15 +414,17 @@ pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<
     // Get all bucket names and filter based on scope
     let mut bucket_names = list_all_buckets(&aws_binary_path, &dynamic_path).await?;
     
-    // Filter buckets based on scope
-    if scope == "private" {
-        bucket_names.retain(|name| name.ends_with("-private"));
-    } else if scope == "public" {
-        bucket_names.retain(|name| !name.ends_with("-private"));
-    } else {
+    // Filter buckets based on scope and format
+    if scope != "private" && scope != "public" {
         return Err("Invalid scope. Must be 'public' or 'private'.".to_string());
     }
-    
+
+    // Look for either -{scope}- in the middle or -{scope} at the end
+    let scope_pattern = format!("-{scope}-");
+    let scope_suffix = format!("-{scope}");
+    bucket_names.retain(|name| 
+        name.contains(&scope_pattern) || name.ends_with(&scope_suffix)
+    );
 
     let mut all_items = Vec::new();
     let mut errors = Vec::new();

@@ -128,7 +128,26 @@ pub async fn start_private_folder_sync(app_handle: AppHandle, account_id: String
         }
     };
 
-    let bucket_name = format!("{}-private", sub_account);
+    let sync_path = match get_private_sync_path().await {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("[PrivateFolderSync] Failed to get private sync path: {}", e);
+            sleep(Duration::from_secs(60)).await;
+            return;
+        }
+    };
+    
+    // Create a unique identifier from the sync path
+    let path_hash = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        sync_path.hash(&mut hasher);
+        format!("{:x}", hasher.finish())[..8].to_string() // First 8 chars of hash
+    };
+    
+    let bucket_name = format!("{}-private-{}", sub_account, path_hash);
+
     let endpoint_url = "https://s3.hippius.com";
    
     // Dynamically get the AWS binary path
