@@ -13,7 +13,7 @@ mod sync_shared;
 mod user_profile_sync;
 mod utils;
 
-use crate::commands::syncing::{cleanup_sync, initialize_sync, AppState, SyncState};
+use crate::commands::syncing::{cleanup_sync, initialize_sync, stop_sync_for_scope_command, AppState, SyncState};
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::public_folder_sync::start_public_folder_sync_tauri;
@@ -127,7 +127,8 @@ fn main() {
             remove_folder_from_public_folder,
             add_folder_to_private_folder,
             remove_folder_from_private_folder,
-            get_sync_activity
+            get_sync_activity,
+            stop_sync_for_scope_command
         ]);
 
     let builder = setup(builder);

@@ -1,6 +1,6 @@
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync};
+use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync, stop_sync_for_scope, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, SyncState};
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use tauri::Manager;
 use tokio::sync::Mutex;
@@ -11,6 +11,23 @@ use sp_core::Pair;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
 use base64 as b64;
+
+/// Stops sync processes for a specific scope ("public" or "private")
+#[tauri::command]
+pub async fn stop_sync_for_scope_command(scope: String) -> Result<(), String> {
+    println!("[StopSync] Stopping sync for scope: {}", scope);
+    
+    // Validate scope
+    if scope != "public" && scope != "private" {
+        return Err(format!("Invalid scope: {}. Must be 'public' or 'private'", scope));
+    }
+    
+    // Call the shared function to stop sync for the specified scope
+    stop_sync_for_scope(&scope);
+    
+    println!("[StopSync] Successfully stopped sync for scope: {}", scope);
+    Ok(())
+}
 
 #[derive(Default)]
 pub struct SyncState {

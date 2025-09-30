@@ -259,6 +259,50 @@ pub fn stop_all_sync_processes() {
     println!("[Sync] All sync processes stopped and states reset");
 }
 
+/// Stops sync processes and resets state for a specific scope
+/// 
+/// # Arguments
+/// * `scope` - The scope to stop syncing for ("public" or "private")
+pub fn stop_sync_for_scope(scope: &str) {
+    println!("[Sync] Stopping sync processes for scope: {}", scope);
+    
+    // Signal sync processes to stop
+    GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
+    
+    // Clear syncing accounts for the specified scope
+    {
+        let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+        let before_count = syncing_accounts.len();
+        syncing_accounts.retain(|(_, sync_type)| *sync_type != scope);
+        let after_count = syncing_accounts.len();
+        if before_count != after_count {
+            println!("[Sync] Cleared {} syncing accounts for scope: {}", before_count - after_count, scope);
+        }
+    }
+    
+    // Reset the appropriate sync state
+    match scope {
+        "private" => {
+            let mut private_status = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+            *private_status = S3SyncState::default();
+            println!("[Sync] Reset private sync state");
+        },
+        "public" => {
+            let mut public_status = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+            *public_status = S3SyncState::default();
+            println!("[Sync] Reset public sync state");
+        },
+        _ => {
+            println!("[Sync] Warning: Unknown scope '{}', no state reset", scope);
+            return;
+        }
+    }
+    
+    // Reset cancellation token to allow new syncs
+    GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
+    println!("[Sync] Sync processes stopped for scope: {}", scope);
+}
+
 /// Resets all sync state (kept for backward compatibility)
 pub fn reset_all_sync_state() {    
     stop_all_sync_processes();
