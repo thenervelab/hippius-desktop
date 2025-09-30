@@ -78,18 +78,14 @@ export default function UpdateChecker({ children }: UpdateCheckerProps) {
     return <>{children}</>;
   }
 
-  // Show update dialog if available (without app content)
-  if (updateDialogOpen) {
+  // Show app (splash screen) with update dialog on top if available
+  if (showApp || updateDialogOpen) {
     return (
-      <div className="min-h-screen bg-grey-100">
-        <UpdateDialogWrapper />
-      </div>
+      <>
+        {children}
+        {updateDialogOpen && <UpdateDialogWrapper />}
+      </>
     );
-  }
-
-  // Show app only after check is complete and no dialog is open
-  if (showApp) {
-    return <>{children}</>;
   }
 
   // Fallback loading state

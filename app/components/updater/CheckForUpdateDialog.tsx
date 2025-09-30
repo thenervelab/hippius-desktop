@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import Image from "next/image";
@@ -25,9 +25,35 @@ type Props = {
 function formatBytes(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(2);
 }
-function formatPercentage(current: number, total: number): string {
-  if (!total) return "0.0";
-  return ((current / total) * 100).toFixed(1);
+
+/* ---------- Progress Bar Component ---------- */
+interface ProgressBarProps {
+  progress: number;
+  className?: string;
+}
+
+function ProgressBar({ progress, className = "" }: ProgressBarProps) {
+  // Divide progress into 5 segments
+  const segments = 5;
+
+  return (
+    <div className={`flex gap-1 ${className}`}>
+      {Array.from({ length: segments }, (_, i) => {
+        const segmentFill = Math.max(0, Math.min(100, (progress - i * 20) * 5));
+        return (
+          <div
+            key={i}
+            className="h-3 bg-grey-90 rounded-sm flex-1 overflow-hidden"
+          >
+            <div
+              className="h-full bg-primary-50 transition-all duration-300 ease-out"
+              style={{ width: `${segmentFill}%` }}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function CheckForUpdateDialog({
@@ -36,10 +62,18 @@ export default function CheckForUpdateDialog({
   onClose,
 }: Props) {
   const [status, setStatus] = useState<
-    "idle" | "checking" | "available" | "none" | "error"
+    "idle" | "checking" | "available" | "none" | "error" | "downloading" | "installing" | "complete" | "restarting"
   >("idle");
   const [update, setUpdate] = useState<Update | null>(null);
   const [currentVersion, setCurrentVersion] = useState<string>("");
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
+  const [installProgress, setInstallProgress] = useState<number>(0);
+  const [downloadedBytes, setDownloadedBytes] = useState<number>(0);
+  const [totalBytes, setTotalBytes] = useState<number>(0);
+
+  // Use refs to avoid closure issues in async callbacks
+  const downloadedBytesRef = useRef<number>(0);
+  const totalBytesRef = useRef<number>(0);
 
   // run check() whenever the dialog opens
   useEffect(() => {
@@ -76,71 +110,80 @@ export default function CheckForUpdateDialog({
     if (!o) onClose?.();
   };
 
-  // download/install flow (same logic as your function, without notifications)
+  // Simulate installation progress in 5 phases
+  const simulateInstallation = async () => {
+    const phases = [20, 40, 60, 80, 100];
+    for (let i = 0; i < phases.length; i++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      setInstallProgress(phases[i]);
+    }
+  };
+
+  // download/install flow with progress tracking in UI
   const handleUpdateNow = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (!update) return;
 
-    let downloadToastId: string | number | undefined;
     try {
-      let totalBytes = 0;
-      let downloadedBytes = 0;
+      setStatus("downloading");
+      setDownloadProgress(0);
+      setDownloadedBytes(0);
+      setTotalBytes(0);
+
+      // Reset refs
+      downloadedBytesRef.current = 0;
+      totalBytesRef.current = 0;
 
       await update.downloadAndInstall((ev) => {
         switch (ev.event) {
           case "Started": {
-            totalBytes = ev.data.contentLength ?? 0;
-            downloadToastId = toast.loading(
-              `Starting download... (${formatBytes(totalBytes)} MB)`,
-              {
-                description:
-                  "0% complete • 0 MB / " + formatBytes(totalBytes) + " MB",
-                duration: Infinity,
-              }
-            );
+            const total = ev.data.contentLength ?? 0;
+            totalBytesRef.current = total;
+            setTotalBytes(total);
+            downloadedBytesRef.current = 0;
+            setDownloadedBytes(0);
+            setDownloadProgress(0);
+            console.log("Download started, total bytes:", total);
             break;
           }
           case "Progress": {
-            downloadedBytes += ev.data.chunkLength;
-            const pct = formatPercentage(downloadedBytes, totalBytes);
-            const downloadedMB = formatBytes(downloadedBytes);
-            const totalMB = formatBytes(totalBytes);
-            const remainingMB = formatBytes(totalBytes - downloadedBytes);
-            if (downloadToastId) {
-              toast.loading(`Downloading update... ${pct}%`, {
-                id: downloadToastId,
-                description: `${downloadedMB} MB / ${totalMB} MB • ${remainingMB} MB remaining`,
-                duration: Infinity,
-              });
-            }
+            downloadedBytesRef.current += ev.data.chunkLength;
+            setDownloadedBytes(downloadedBytesRef.current);
+
+            const progress = totalBytesRef.current > 0
+              ? (downloadedBytesRef.current / totalBytesRef.current) * 100
+              : 0;
+
+            const roundedProgress = Math.min(Math.round(progress), 100);
+            setDownloadProgress(roundedProgress);
+
+            console.log(`Download progress: ${roundedProgress}% (${downloadedBytesRef.current}/${totalBytesRef.current})`);
             break;
           }
           case "Finished": {
-            if (downloadToastId) toast.dismiss(downloadToastId);
-            toast.success("Download completed!", {
-              description: `${formatBytes(
-                totalBytes
-              )} MB downloaded successfully`,
-              duration: 3000,
-            });
-            toast.loading("Installing update...", {
-              description: "Please wait while the update is being installed",
-              duration: Infinity,
-            });
+            setDownloadProgress(100);
+            console.log("Download finished, starting installation");
+            setStatus("installing");
+            simulateInstallation();
             break;
           }
         }
-      });
+      }); setStatus("complete");
 
-      toast.dismiss();
-      toast.success("Update installed successfully!", {
-        description: "Application will restart now...",
-        duration: 3000,
-      });
-      await relaunch();
+      // Wait 2 seconds then attempt relaunch
+      setTimeout(async () => {
+        setStatus("restarting");
+        try {
+          await relaunch();
+        } catch (restartErr) {
+          console.error("Failed to restart automatically:", restartErr);
+          // App will show manual restart option after 2 minutes
+        }
+      }, 2000);
+
     } catch (err) {
-      if (downloadToastId) toast.dismiss(downloadToastId);
-      console.error(err);
+      console.error("Update failed:", err);
+      setStatus("error");
       toast.error("Update failed", { description: "Please try again later." });
     }
   };
@@ -155,7 +198,7 @@ export default function CheckForUpdateDialog({
         <Dialog.Content
           className="
             fixed left-1/2 top-1/2 z-50 
-            w-full max-w-[1100px] h-[calc(100vh-100px)] md:h-[567px]
+            w-full max-w-[1100px] h-[calc(100vh-100px)] md:h-[667px]
             -translate-x-1/2 -translate-y-1/2
           "
         >
@@ -280,6 +323,101 @@ export default function CheckForUpdateDialog({
                         </>
                       )}
 
+                      {status === "downloading" && (
+                        <>
+                          <div className="mt-24 flex items-center gap-2">
+                            <Icons.Refresh className="size-5 text-warning-50 animate-spin" />
+                            <span className="text-warning-50 font-geist text-lg">
+                              Update In Progress
+                            </span>
+                          </div>
+
+                          <h1 className="text-[40px] leading-[48px] text-grey-10 mt-4">
+                            Please wait while your update is downloaded
+                          </h1>
+
+                          <div className="mt-6">
+                            <p className="text-grey-50 font-medium text-lg mb-2">
+                              Downloading... <span className="text-primary-50">{Math.round(downloadProgress)}%</span>
+                            </p>
+                            <ProgressBar progress={downloadProgress} />
+
+                            {/* Show download details if available */}
+                            {totalBytes > 0 && (
+                              <p className="text-grey-50 text-sm mt-2">
+                                {formatBytes(downloadedBytes)} MB / {formatBytes(totalBytes)} MB
+                              </p>
+                            )}
+                          </div>
+                        </>
+                      )}
+
+                      {status === "installing" && (
+                        <>
+                          <div className="mt-24 flex items-center gap-2">
+                            <Icons.Refresh className="size-5 text-warning-50 animate-spin" />
+                            <span className="text-warning-50 font-geist text-lg">
+                              Update In Progress
+                            </span>
+                          </div>
+
+                          <h1 className="text-[40px] leading-[48px] text-grey-40 mt-2">
+                            Please wait while your update is installed
+                          </h1>
+
+                          <div className="mt-6">
+                            <p className="text-grey-60 font-medium text-lg mb-2">
+                              Installing... <span className="text-primary-50">{installProgress}%</span>
+                            </p>
+                            <ProgressBar progress={installProgress} />
+                          </div>
+                        </>
+                      )}
+
+                      {status === "complete" && (
+                        <>
+                          <div className="mt-24 flex items-center gap-2">
+                            <Icons.TickCircle className="size-5 text-success-50" />
+                            <span className="text-success-50 font-geist text-lg">
+                              Update Complete
+                            </span>
+                          </div>
+
+                          <h1 className="text-[40px] leading-[48px] text-grey-40 mt-2">
+                            Update is now complete. Restart to complete the process
+                          </h1>
+
+                          <div className="mt-6">
+                            <p className="text-grey-50 font-medium text-lg mb-2">
+                              Installing... <span className="text-primary-50">100%</span>
+                            </p>
+                            <ProgressBar progress={100} />
+                          </div>
+                        </>
+                      )}
+
+                      {status === "restarting" && (
+                        <>
+                          <div className="mt-24 flex items-center gap-2">
+                            <Icons.TickCircle className="size-5 text-success-50" />
+                            <span className="text-success-50 font-geist text-lg">
+                              Update Complete
+                            </span>
+                          </div>
+
+                          <h1 className="text-[28px] lg:text-[40px] leading-[48px] text-grey-40 mt-2">
+                            Update is now complete. Restarting application...
+                          </h1>
+
+                          <div className="mt-6">
+                            <p className="text-grey-60 font-medium text-lg mb-2">
+                              Installing... <span className="text-primary-50">100%</span>
+                            </p>
+                            <ProgressBar progress={100} />
+                          </div>
+                        </>
+                      )}
+
                       {status === "checking" && (
                         <div
                           className="mt-40"
@@ -303,7 +441,7 @@ export default function CheckForUpdateDialog({
                         <>
                           <div className="mt-24">
                             <span className="text-success-50 font-geist text-base lg:text-[18px]">
-                              You’re on the latest version
+                              You&apos;re on the latest version
                             </span>
                           </div>
 
@@ -338,7 +476,7 @@ export default function CheckForUpdateDialog({
                     )}
 
                     {/* CTA */}
-                    {isAvailable && (
+                    {isAvailable && status === "available" && (
                       <div className="shrink-0 flex flex-col gap-4 mt-10">
                         <CardButton
                           variant="dialog"
@@ -347,6 +485,28 @@ export default function CheckForUpdateDialog({
                         >
                           Update Now
                         </CardButton>
+                      </div>
+                    )}
+
+                    {(status === "complete" || status === "restarting") && (
+                      <div className="shrink-0 flex flex-col gap-4 mt-10">
+                        <CardButton
+                          variant="dialog"
+                          className="w-[208px] h-[48px] py-4 text-base"
+                          onClick={() => {
+                            try {
+                              relaunch();
+                            } catch (err) {
+                              console.error("Manual restart failed:", err);
+                              toast.error("Unable to restart automatically. Please restart the app manually.");
+                            }
+                          }}
+                        >
+                          Restart Now
+                        </CardButton>
+                        <p className="text-grey-60 text-sm text-center">
+                          If the app doesn&apos;t restart automatically, click the button above
+                        </p>
                       </div>
                     )}
                   </div>

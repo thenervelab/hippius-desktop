@@ -27,7 +27,7 @@ export const stepAtom = atom((get) => {
 export const progressAtom = atom((get) => {
   const updateCheckComplete = get(updateCheckCompleteAtom);
 
-  // Force 0% progress during update check - don't calculate step/clock
+  // Force 0% progress during update check only
   if (!updateCheckComplete) {
     return 0;
   }
