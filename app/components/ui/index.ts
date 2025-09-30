@@ -32,6 +32,7 @@ export { default as CardButton } from "./button/CardButton";
 export { default as AreaLineChart } from "./area-line-chart";
 export { default as ConfirmModal } from "./ConfirmModal";
 export { default as ImportantWarnings } from "./ImportantWarnings";
+export { default as APIKeyImportantWarnings } from "./APIKeyImportantWarnings";
 export { default as RefreshButton } from "./refresh-button";
 export { default as InfoTooltip } from "./info-tooltip";
 export { default as FileTypeIcon } from "./file-type-icon";

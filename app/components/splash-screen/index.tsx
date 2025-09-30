@@ -7,7 +7,7 @@ import { APP_SETUP_EVENT } from "@/app/lib/constants";
 import { invoke } from "@tauri-apps/api/core";
 import { useAtom, useSetAtom, useAtomValue } from "jotai";
 import { phaseAtom, phaseProgressionClockAtom } from "./atoms";
-import { updateCheckCompleteAtom } from "@/app/components/updater/updateStore";
+import { updateCheckCompleteAtom, updateDialogOpenAtom, updateStore } from "@/app/components/updater/updateStore";
 import { cn } from "@/app/lib/utils";
 
 export default function SplashWrapper({
@@ -22,22 +22,27 @@ export default function SplashWrapper({
 
   // Track update status
   const updateCheckComplete = useAtomValue(updateCheckCompleteAtom);
-  const canProceedWithSplash = updateCheckComplete;
+  const updateDialogOpen = useAtomValue(updateDialogOpenAtom, { store: updateStore });
+  const canProceedWithSplash = updateCheckComplete && !updateDialogOpen;
 
-  // Reset phase progression clock when update check is not complete
+  // Reset phase progression clock and phase when update check is not complete or dialog is open
   useEffect(() => {
-    if (!updateCheckComplete) {
+    if (!updateCheckComplete || updateDialogOpen) {
       setPhaseProgressionClock(0);
+      // Reset phase to prevent any content changes
+      if (updateDialogOpen && phase) {
+        setPhase(null);
+      }
     }
-  }, [updateCheckComplete, setPhaseProgressionClock]);
+  }, [updateCheckComplete, updateDialogOpen, setPhaseProgressionClock, phase, setPhase]);
 
-  // Start IPFS daemon setup only after update check is complete
+  // Start IPFS daemon setup only after update check is complete and dialog is closed
   useEffect(() => {
-    if (!updateCheckComplete) return;
+    if (!updateCheckComplete || updateDialogOpen) return;
 
-    // Start IPFS setup when update check is done
+    // Start IPFS setup when update check is done and dialog is closed
     invoke("start_ipfs_setup_when_ready").catch(console.error);
-  }, [updateCheckComplete]);
+  }, [updateCheckComplete, updateDialogOpen]);
 
   useEffect(() => {
     if (!canProceedWithSplash) return;
@@ -113,7 +118,7 @@ export default function SplashWrapper({
       {keepSplashscreenInDom && (
         <div
           className={cn(
-            "fixed inset-0 z-[9999] flex flex-col items-center justify-center w-full h-full duration-300",
+            "fixed inset-0 z-40 flex flex-col items-center justify-center w-full h-full duration-300",
             isReady && "pointer-events-none opacity-0 scale-90"
           )}
         >
