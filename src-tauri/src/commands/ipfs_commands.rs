@@ -16,12 +16,12 @@ use fs_extra;
 use std::fs;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use sha2::{Digest, Sha256};
+use futures::TryFutureExt;
 use crate::commands::types::*;
 use std::path::{Path, PathBuf};
 use base64::{Engine as _, engine::general_purpose};
 use futures::stream::{self, StreamExt};
 use std::sync::Arc;
-use crate::utils::file_operations::sanitize_name;
 use std::collections::HashMap;
 use tauri::Manager;
 use tokio::process::Command;
@@ -38,7 +38,7 @@ fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<V
         // Sanitize the remaining segments
         let cleaned: Vec<String> = path
             .into_iter()
-            .map(|segment| sanitize_name(&segment))
+            .map(|segment| segment)
             .filter(|s| !s.is_empty())
             .collect();
         if cleaned.is_empty() { None } else { Some(cleaned) }
@@ -441,6 +441,7 @@ pub async fn add_file_to_private_folder(
     _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>, 
 ) -> Result<String, String> {
+    println!("[add_file_to_private_folder] Adding file: {}", file_path);
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
         .file_name()
@@ -448,13 +449,11 @@ pub async fn add_file_to_private_folder(
         .unwrap_or("unknown")
         .to_string();
 
-    let folder_name = sanitize_name(&folder_name);
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
-    let sanitized_folder_name = sanitize_name(&folder_name);
 
     // Build sync subfolder path (if any)
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
-        let mut full_path = std::path::PathBuf::from(&sanitized_folder_name);
+        let mut full_path = std::path::PathBuf::from(&folder_name);
         for segment in path_vec {
             full_path.push(segment);
         }
@@ -464,7 +463,7 @@ pub async fn add_file_to_private_folder(
     // Use the original file path instead of writing file_data
     copy_to_sync_folder(
         &path,
-        &sanitized_folder_name,
+        &folder_name,
         &account_id,
         "",
         "",
@@ -487,7 +486,6 @@ pub async fn remove_file_from_private_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let folder_name = sanitize_name(&folder_name);
     println!("[remove_file_from_private_folder] Removing file: {}", file_name);
 
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
@@ -497,7 +495,6 @@ pub async fn remove_file_from_private_folder(
     } else {
         format!("{}.ff.ec_metadata", file_name)
     };
-    let sanitized_file_name = sanitize_name(&final_file_name);
 
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
         let mut full_path = std::path::PathBuf::from(&folder_name);
@@ -508,7 +505,7 @@ pub async fn remove_file_from_private_folder(
     });
 
     remove_from_sync_folder(
-        &sanitized_file_name,
+        &final_file_name,
         &folder_name,
         false,
         false,
@@ -524,22 +521,45 @@ pub async fn remove_file_from_private_folder(
 
 #[tauri::command]
 pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    println!("[write_file] Writing file: {}", path);
     std::fs::write(path, data).map_err(|e| e.to_string())
 }
 
-
 #[tauri::command]
-pub fn delete_file(path: String) -> Result<(), String> {
-    use std::process::Command;
+pub async fn delete_file(path: String) -> Result<(), String> {
     println!("[delete_file] Deleting file: {}", path);
-    if std::path::Path::new(&path).exists() {
-        // If file exists locally, remove it
-        std::fs::remove_file(&path).map_err(|e| e.to_string())
+    let path_obj = Path::new(&path);
+    let is_dir = path_obj.is_dir();
+
+    if path_obj.exists() {
+        // If path exists locally, remove it
+        if is_dir {
+            fs::remove_dir_all(&path)
+                .map_err(|e| e.to_string())
+        } else {
+            // If file exists locally, remove it
+            std::fs::remove_file(&path).map_err(|e| e.to_string())
+        }
     } else {
-        // If file doesn't exist locally, try to remove from S3
+        // If path doesn't exist locally, try to remove from Hippius S3
         let mut cmd = Command::new("aws");
-        cmd.args(["s3", "rm", &path]);
-        
+
+        // Build the command with appropriate arguments
+        let mut args = vec!["s3", "rm"];
+
+        // Add recursive flag if it's a directory
+        if is_dir {
+            args.push("--recursive");
+        }
+
+        // Add the path
+        args.push(&path);
+
+        // Add Hippius S3 endpoint
+        args.extend(["--endpoint", "https://s3.hippius.com"]);
+
+        cmd.args(&args);
+
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
         {
@@ -547,19 +567,17 @@ pub fn delete_file(path: String) -> Result<(), String> {
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        let output = cmd
-            .output()
-            .map_err(|e| e.to_string())?;
-
-        if output.status.success() {
-            Ok(())
-        } else {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            Err(format!("Failed to delete from S3: {}", error_msg))
+        // Execute the command asynchronously
+        match cmd.output().await {
+            Ok(output) if output.status.success() => Ok(()),
+            Ok(output) => {
+                let error_msg = String::from_utf8_lossy(&output.stderr);
+                Err(format!("Failed to delete from S3: {}", error_msg))
+            }
+            Err(e) => Err(format!("Failed to execute AWS CLI command: {}", e)),
         }
     }
 }
-
 #[tauri::command]
 pub fn read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| e.to_string())
@@ -688,7 +706,7 @@ pub async fn public_upload_folder(
         .ok_or_else(|| "Invalid folder path, cannot extract folder name".to_string())?;
     
     copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id, "", "", true, true, &folder_name.clone(), true).await;
-
+    println!("[public_upload_folder] Folder uploaded successfully");
     Ok(folder_name)
 }
 
@@ -802,12 +820,9 @@ pub async fn list_folder_contents(
 
     // Check if the local path exists and is a directory
     if local_path.is_dir() {
-        println!("[ListFolderContents] Found local directory at: {}", local_path.display());
         return list_local_folder_contents(&local_path, &main_folder_name, &subfolder_path, scope).await;
     }
-    
-    println!("[ListFolderContents] No local directory found at: {}, falling back to S3", local_path.display());
-    
+     
     // Fall back to S3 if local directory doesn't exist
     // First try to get the bucket name from the database
     let bucket_name = match crate::DB_POOL.get() {
@@ -826,21 +841,17 @@ pub async fn list_folder_contents(
             .await
             {
                 Ok(Some(bucket)) => {
-                    println!("[ListFolderContents] Found bucket name in database: {}", bucket);
                     bucket
                 },
                 Ok(None) => {
-                    println!("[ListFolderContents] No bucket name found in database, falling back to default format");
                     format!("{}-{}", account_id, scope)
                 },
                 Err(e) => {
-                    eprintln!("[ListFolderContents] Error querying database for bucket name: {}", e);
                     format!("{}-{}", account_id, scope)
                 }
             }
         },
         None => {
-            eprintln!("[ListFolderContents] Database pool not initialized, using default bucket name format");
             format!("{}-{}", account_id, scope)
         }
     };
@@ -854,8 +865,6 @@ pub async fn list_folder_contents(
         .unwrap_or_else(|| vec![main_folder_name.clone()]);
     let s3_prefix = format!("{}/", path_parts.join("/"));
     let full_s3_uri_prefix = format!("s3://{}/{}", bucket_name, s3_prefix);
-
-    println!("[ListFolderContents] Listing contents from S3: {}", full_s3_uri_prefix);
 
     async fn get_sync_root(scope: &str) -> Result<PathBuf, String> {
         if scope == "public" {
@@ -918,16 +927,12 @@ pub async fn list_folder_contents(
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => {
-            println!("[ListFolderContents] Found AWS binary at: {}", path.display());
             path
         }
         Err(e) => {
-            eprintln!("[ListFolderContents] Failed to get AWS binary path: {}, falling back to system PATH", e);
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
-                println!("[ListFolderContents] Found AWS in system PATH at: {}", path.display());
                 path
             } else {
-                eprintln!("[ListFolderContents] AWS CLI not found in system PATH or custom location");
                 return Err("[ListFolderContents] AWS CLI not found".to_string());
             }
         }
@@ -977,13 +982,10 @@ pub async fn list_folder_contents(
     let output_str = String::from_utf8_lossy(&output.stdout);
     let result: serde_json::Value = serde_json::from_str(&output_str)
         .map_err(|e| format!("Failed to parse AWS CLI output: {}", e))?;
-    println!("[ListFolderContents] AWS CLI output: {}", result);
     
     let mut direct_files: Vec<FileDetail> = Vec::new();
     // Process Contents (files) and extract subfolders
-    if let Some(contents) = result["Contents"].as_array() {
-        println!("[ListFolderContents] Found {} content items", contents.len());
-        
+    if let Some(contents) = result["Contents"].as_array() {        
         // First pass: collect all items and calculate folder sizes
         let mut folder_sizes: HashMap<String, u64> = HashMap::new();
         let mut folder_ipfs_hashes: HashMap<String, String> = HashMap::new();
@@ -1089,8 +1091,6 @@ pub async fn list_folder_contents(
                 main_req_hash: "s3".to_string(),
             });
         }
-    } else {
-        println!("[ListFolderContents] No Contents found in response");
     }
     
     // Create sets of relative paths to exclude
@@ -1106,7 +1106,6 @@ pub async fn list_folder_contents(
     for item in recent_items {
         if item.action == "uploading" || item.action == "deleted" {
             if let Some(relative_path) = extract_relative_path(&item.path, &sync_root) {
-                println!("[ListFolderContents] Excluding path from recent items: {}", relative_path);
                 uploading_or_deleted_paths.insert(relative_path);
             }
         }
@@ -1122,7 +1121,6 @@ pub async fn list_folder_contents(
     for item in uploading_items {
         if item.action == "uploading" || item.action == "deleted" {
             if let Some(relative_path) = extract_relative_path(&item.path, &sync_root) {
-                println!("[ListFolderContents] Excluding path from uploading items: {}", relative_path);
                 uploading_or_deleted_paths.insert(relative_path);
             }
         }
@@ -1151,7 +1149,6 @@ pub async fn list_folder_contents(
             });
             
             if should_exclude {
-                println!("[ListFolderContents] Excluding: {}", file_relative_path);
                 false
             } else {
                 true
@@ -1288,7 +1285,7 @@ pub async fn add_file_to_public_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    
+    println!("[add_file_to_public_folder] Adding file: {}", file_path);
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
         .file_name()
@@ -1297,8 +1294,6 @@ pub async fn add_file_to_public_folder(
         .to_string();
 
     println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
-
-    let folder_name = sanitize_name(&folder_name);
     
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
     println!(
@@ -1343,7 +1338,6 @@ pub async fn remove_file_from_public_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let folder_name = sanitize_name(&folder_name);
     println!("[-] Removing file '{}' from folder '{}'", file_name, folder_name);    
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
@@ -1380,26 +1374,23 @@ pub async fn add_folder_to_public_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let folder_name = sanitize_name(&folder_name);
+    println!("[add_folder_to_public_folder] Adding folder: {}", folder_path);
     let folder_path_obj = Path::new(&folder_path);
-
-
     // Main logic
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
-
    
-    let sanitized_folder_name = sanitize_name(&folder_name);
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
-        let mut full_path = std::path::PathBuf::from(&sanitized_folder_name);
+        let mut full_path = std::path::PathBuf::from(&folder_name);
         for segment in path_vec {
             full_path.push(segment);
         }
         full_path.to_string_lossy().to_string()
     });
-
+    println!("subfolder_path: {:?}", subfolder_path);
+    println!("sync_subfolder_path: {:?}", sync_subfolder_path);
     copy_to_sync_folder(
         folder_path_obj,
-        &sanitized_folder_name,
+        &folder_name,
         &account_id,
         "",
         "",
@@ -1422,7 +1413,6 @@ pub async fn remove_folder_from_public_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let folder_name = sanitize_name(&folder_name);
     println!("[-] Removing folder '{}' from folder '{}'", folder_to_remove, folder_name);
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
@@ -1460,16 +1450,14 @@ pub async fn add_folder_to_private_folder(
     _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    println!("calling private folder add function");
-    let folder_name = sanitize_name(&folder_name);
+    println!("[add_folder_to_private_folder] Adding folder: {}", folder_path);
     let folder_path_obj = Path::new(&folder_path);
 
     // --- Main logic ---
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
-    let sanitized_folder_name = sanitize_name(&folder_name);
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
-        let mut full_path = std::path::PathBuf::from(&sanitized_folder_name);
+        let mut full_path = std::path::PathBuf::from(&folder_name);
         for segment in path_vec {
             full_path.push(segment);
         }
@@ -1478,7 +1466,7 @@ pub async fn add_folder_to_private_folder(
 
     copy_to_sync_folder(
         folder_path_obj,
-        &sanitized_folder_name,
+        &folder_name,
         &account_id,
         "",
         "",
@@ -1501,15 +1489,12 @@ pub async fn remove_folder_from_private_folder(
     _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let folder_name = sanitize_name(&folder_name);
-    let folder_to_remove = sanitize_name(&folder_to_remove);
-    println!("[-] Removing folder '{}' from folder '{}'", folder_to_remove, folder_name);
+    println!("[-] Removing private folder '{}' from folder '{}'", folder_to_remove, folder_name);
     // Main logic
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
-    let sanitized_folder_name = sanitize_name(&folder_name);
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
-        let mut full_path = std::path::PathBuf::from(&sanitized_folder_name);
+        let mut full_path = std::path::PathBuf::from(&folder_name);
         for segment in path_vec {
             full_path.push(segment);
         }
@@ -1518,7 +1503,7 @@ pub async fn remove_folder_from_private_folder(
 
     remove_from_sync_folder(
         &folder_to_remove,
-        &sanitized_folder_name,
+        &folder_name,
         false,
         true,
         &folder_name,
