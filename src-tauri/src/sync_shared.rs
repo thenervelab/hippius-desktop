@@ -393,7 +393,7 @@ pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => {
-            println!("[ListAllBuckets] Found AWS binary at: {}", path.display());
+
             path
         }
         Err(e) => {
@@ -414,7 +414,6 @@ pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<
 
     // Get all bucket names and filter based on scope
     let mut bucket_names = list_all_buckets(&aws_binary_path, &dynamic_path).await?;
-    println!("[ListAllBuckets] Found {} buckets before filtering", bucket_names.len());
     
     // Filter buckets based on scope
     if scope == "private" {
@@ -425,7 +424,6 @@ pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<
         return Err("Invalid scope. Must be 'public' or 'private'.".to_string());
     }
     
-    println!("[ListAllBuckets] Found {} buckets after filtering for scope '{}'", bucket_names.len(), scope);
 
     let mut all_items = Vec::new();
     let mut errors = Vec::new();
@@ -474,8 +472,6 @@ pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<
         }
         is_new
     });
-
-    println!("[ListAllBuckets] Found {} unique items across all buckets (after removing duplicates)", all_items.len());
     
     Ok(all_items)
 }
@@ -490,8 +486,6 @@ async fn list_single_bucket_contents(
     let mut all_objects = Vec::new();
     let mut continuation_token: Option<String> = None;
     let mut is_truncated = true;
-
-    println!("[ListBucket] Listing contents for bucket: s3://{}", bucket_name);
 
     // Handle pagination
     while is_truncated {
@@ -626,7 +620,6 @@ async fn list_single_bucket_contents(
     // Combine root files and folders
     root_files.append(&mut root_folders);
     
-    println!("[ListBucket] Found {} items in bucket {}, root_files {:?}", root_files.len(), bucket_name, root_files);
     Ok(root_files)
 }
 

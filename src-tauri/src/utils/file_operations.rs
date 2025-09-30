@@ -8,33 +8,7 @@ use crate::commands::syncing::{load_encryption_key, decrypt_phrase};
 use sp_core::sr25519;
 use sp_core::crypto::Ss58Codec;
 use sp_core::Pair;
-
-// Helper to sanitize file/folder names for DB and filesystem operations
-pub fn sanitize_name(name: &str) -> String {
-    if name.ends_with(".s.folder.ec_metadata") {
-        name.trim_end_matches(".s.folder.ec_metadata").to_string()
-    } else if name.ends_with("-folder.ec_metadata") {
-        name.trim_end_matches("-folder.ec_metadata").to_string()
-    } else if name.ends_with(".folder.ec_metadata") {
-        name.trim_end_matches(".folder.ec_metadata").to_string()
-    } else if name.ends_with(".ff.ec_metadata") {
-        name.trim_end_matches(".ff.ec_metadata").to_string()
-    } else if name.ends_with(".s.folder") {
-        name.trim_end_matches(".s.folder").to_string()
-    } else if name.ends_with(".ec_metadata") {
-        name.trim_end_matches(".ec_metadata").to_string()
-    } else if name.ends_with(".ff") {
-        name.trim_end_matches(".ff").to_string()
-    } else if name.ends_with(".ec") {
-        name.trim_end_matches(".ec").to_string()
-    } else if name.ends_with("-folder") {
-        name.trim_end_matches("-folder").to_string()
-    } else if name.ends_with(".folder") {
-        name.trim_end_matches(".folder").to_string()
-    } else {
-        name.to_string()
-    }
-}
+use std::process::Command;
 
 // Helper to generate all possible file name variations
 pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
@@ -103,7 +77,6 @@ pub async fn delete_and_unpin_user_file_records_by_name(
     should_delete_folder: bool,
 ) -> Result<u64, String> {
     if let Some(pool) = DB_POOL.get() {
-        let sanitized_file_name = sanitize_name(file_name);
 
         let is_folder = sqlx::query_scalar::<_, bool>(
             "SELECT is_folder FROM user_profiles WHERE file_name = ? LIMIT 1",
@@ -113,9 +86,8 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         .await
         .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
         .unwrap_or(false);
-        println!("is_folder : {}, should_delete_folder : {}, is_public : {}, sanitized_file_name : {}", is_folder, should_delete_folder, is_public, sanitized_file_name);
         // Remove from sync folder
-        remove_file_from_sync_and_db(&sanitized_file_name, is_public, is_folder, should_delete_folder).await;
+        remove_file_from_sync_and_db(&file_name, is_public, is_folder, should_delete_folder).await;
 
         Ok(1)
     } else {
@@ -343,11 +315,14 @@ pub fn calculate_local_size(path: &Path) -> std::io::Result<u64> {
 }
 
 pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_folder: bool, should_delete_folder: bool) {
-    let source = get_source_from_user_profiles(file_name).await.unwrap_or_else(|| "hippius".to_string());
-    let bucket_name = get_bucket_from_user_profiles(file_name).await.unwrap_or_else(|| "hippius".to_string());
-    
-    if source == "hippius" {
-        execute_aws_s3_rm(&bucket_name, &file_name.to_string(), is_folder, true);
+    let source = get_source_from_user_profiles(file_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
+    let bucket_name = get_bucket_from_user_profiles(file_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
+
+    println!("source: {}", source);
+    println!("bucket_name: {}", bucket_name);
+    println!("is_folder: {}", is_folder);
+    if source == "Hippius" || source.starts_with("s3://") {
+        execute_aws_s3_rm(&source.to_string(), is_folder);
     }
     else {
         // Choose sync folder path
@@ -397,7 +372,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                             }
                         }else{
                             // Try S3 removal as fallback
-                            if let Err(e) = execute_aws_s3_rm(&bucket_name, &source, is_folder, false) {
+                            if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                                 eprintln!("Failed to remove file from S3: {}", e);
                             }
                         }
@@ -423,7 +398,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                         eprintln!("Failed to remove folder from sync folder: {}", e);
                     }
                 }else{
-                    if let Err(e) = execute_aws_s3_rm(&bucket_name, &source, is_folder, false) {
+                    if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                         eprintln!("Failed to remove folder from S3: {}", e);
                     }                    
                 }
@@ -436,7 +411,7 @@ pub async fn remove_file_from_sync_and_db(file_name: &str, is_public: bool, is_f
                 }
             }else{
                 // Try S3 removal as fallback
-                if let Err(e) = execute_aws_s3_rm(&bucket_name, &source, is_folder, false) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                     eprintln!("Failed to remove file from S3: {}", e);
                 }
             }
@@ -469,11 +444,35 @@ pub async fn copy_to_sync_folder(
     subfolder_path: Option<String>,
 ) {
 
-    let source = get_source_from_user_profiles(meta_folder_name).await.unwrap_or_else(|| "hippius".to_string());
-    let bucket_name = get_bucket_from_user_profiles(meta_folder_name).await.unwrap_or_else(|| "hippius".to_string());
-  
-    if source == "hippius" {
-        execute_aws_s3_cp(&bucket_name, &original_path.to_string_lossy().to_string(), &subfolder_path.unwrap_or_else(|| folder_name.to_string()), is_folder);
+    let source = get_source_from_user_profiles(meta_folder_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
+    let bucket_name = get_bucket_from_user_profiles(meta_folder_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
+    // Try S3 removal as fallback
+    let s3_path = if let Some(sub_path) = &subfolder_path {
+        if let Some(stripped) = sub_path.strip_prefix(&format!("{}/", folder_name)) {
+            stripped.to_string()
+        } else {
+            sub_path.clone()
+        }
+    } else {
+        String::new()
+    };
+    println!("s3_path: {}", s3_path);        
+    println!("source: {}", source);
+    println!("bucket_name: {}", bucket_name);
+    println!("subfolder_path: {:?}", subfolder_path);
+    println!("is_folder: {}", is_folder);
+    if source == "Hippius" || source.starts_with("s3://") {
+        let target_source = if !s3_path.is_empty() {
+            format!("{}/{}", source.trim_end_matches('/'), s3_path)
+        } else {
+            source.clone()
+        };
+        
+        execute_aws_s3_cp(
+            &target_source,
+            &original_path.to_string_lossy().to_string(),
+            is_folder,
+        );
     }
     else {
         // Choose sync folder path
@@ -664,8 +663,6 @@ pub async fn remove_from_sync_folder(
     _requested_cid: &str,
     subfolder_path: Option<String>,
 ) {
-    let source = get_source_from_user_profiles(file_name).await.unwrap_or_else(|| "hippius".to_string());
-    let bucket_name = get_bucket_from_user_profiles(file_name).await.unwrap_or_else(|| "hippius".to_string());
     // Try S3 removal as fallback
     let s3_path = if let Some(sub_path) = &subfolder_path {
         if let Some(stripped) = sub_path.strip_prefix(&format!("{}/", folder_name)) {
@@ -677,8 +674,23 @@ pub async fn remove_from_sync_folder(
         String::new()
     };
     
-    if source == "hippius" {
-        execute_aws_s3_rm(&bucket_name, &subfolder_path.unwrap_or_else(|| meta_folder_name.to_string()), is_folder, true);
+    let source = get_source_from_user_profiles(folder_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
+    let bucket_name = get_bucket_from_user_profiles(folder_name, is_public).await.unwrap_or_else(|| "Hippius".to_string());
+    println!("source: {}", source);
+    println!("bucket_name: {}", bucket_name);
+    println!("subfolder_path: {:?}", subfolder_path);
+    println!("is_folder: {}", is_folder);
+    println!("s3_path: {}", s3_path);
+    if source == "Hippius" || source.starts_with("s3://") {
+        let target_source = if !s3_path.is_empty() {
+            format!("{}/{}", source.trim_end_matches('/'), s3_path)
+        } else {
+            format!("{}/{}",source,file_name)
+        };        
+        println!("target_source : {}", target_source);
+        if let Err(e) = execute_aws_s3_rm(&target_source, is_folder) {
+            eprintln!("Failed to remove file from S3: {}", e);
+        }
     }
     else {
         let sync_folder = if is_public {
@@ -730,8 +742,7 @@ pub async fn remove_from_sync_folder(
                             eprintln!("Failed to remove file from sync folder: {}", e);
                         }
                     }else{                        
-                        let full_path = format!("{}/{}", source, s3_path);
-                        if let Err(e) = execute_aws_s3_rm(&bucket_name, &full_path, is_folder, false) {
+                        if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                             eprintln!("Failed to remove file from S3: {}", e);
                         }
                     }
@@ -757,8 +768,7 @@ pub async fn remove_from_sync_folder(
                 }
             }
             else{
-                let full_path = format!("{}/{}", source, s3_path);
-                if let Err(e) = execute_aws_s3_rm(&bucket_name, &full_path, is_folder, false) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                     eprintln!("Failed to remove folder from S3: {}", e);
                 }
             }
@@ -769,8 +779,7 @@ pub async fn remove_from_sync_folder(
                     eprintln!("Failed to remove file from sync folder: {}", e);
                 }
             }else{
-                let full_path = format!("{}/{}", source, s3_path);
-                if let Err(e) = execute_aws_s3_rm(&bucket_name, &full_path, is_folder, false) {
+                if let Err(e) = execute_aws_s3_rm(&source, is_folder) {
                     eprintln!("Failed to remove file from S3: {}", e);
                 }
             }
@@ -793,24 +802,17 @@ pub async fn remove_from_sync_folder(
     }
 }
 
-
-fn execute_aws_s3_rm(bucket: &str, path: &str, is_folder: bool, should_use_bucket_name: bool) -> Result<(), String> {
+fn execute_aws_s3_rm(path: &str, is_folder: bool) -> Result<(), String> {
     use std::process::Command;
 
     let endpoint_url = "https://s3.hippius.com";
-    let s3_path = if should_use_bucket_name {
-        format!("s3://{}/{}", bucket, path)
-    } else {
-        format!("s3://{}", path)
-    };
-
+  
     let mut cmd = Command::new("aws");
-    println!("[AWS CLI] Removing path: {} (is_folder: {})", s3_path, is_folder);
 
     if is_folder {
-        cmd.args(["s3", "rm", "--recursive", "--endpoint-url", endpoint_url, &s3_path]);
+        cmd.args(["s3", "rm", "--recursive", "--endpoint-url", endpoint_url, path]);
     } else {
-        cmd.args(["s3", "rm", "--endpoint-url", endpoint_url, &s3_path]);
+        cmd.args(["s3", "rm", "--endpoint-url", endpoint_url, path]);
     }
 
     #[cfg(target_os = "windows")]
@@ -839,16 +841,48 @@ fn execute_aws_s3_rm(bucket: &str, path: &str, is_folder: bool, should_use_bucke
     }
 }
 
-fn execute_aws_s3_cp(bucket: &str, local_path: &str, dest_path: &str, is_folder: bool) -> Result<(), String> {
-    use std::process::Command;
-
+fn execute_aws_s3_cp(source: &str, local_path: &str, is_folder: bool) -> Result<(), String> {
     let endpoint_url = "https://s3.hippius.com";
-    let s3_path = format!("s3://{}/{}", bucket, dest_path);
+
+    let destination = if is_folder {
+        // For folders: source + folder_name + /
+        let mut dest = source.to_string();
+        
+        // Remove trailing slashes from source
+        while dest.ends_with('/') {
+            dest.pop();
+        }
+        
+        // Get the folder name from the local path
+        let local_trimmed = local_path.trim_end_matches(|c| c == '/' || c == '\\');
+        if let Some(folder_name_os) = Path::new(local_trimmed).file_name() {
+            let folder_name = folder_name_os.to_string_lossy();
+            dest.push('/');
+            dest.push_str(&folder_name);
+            dest.push('/');
+        } else {
+            // Fallback: just ensure it ends with /
+            if !dest.ends_with('/') {
+                dest.push('/');
+            }
+        }
+        dest
+    } else {
+        // For files: source + filename
+        let mut dest = source.to_string();
+        if !dest.ends_with('/') {
+            dest.push('/');
+        }
+        if let Some(filename) = Path::new(local_path).file_name() {
+            dest.push_str(&filename.to_string_lossy());
+        }
+        dest
+    };
 
     let mut cmd = Command::new("aws");
     println!(
         "[AWS CLI] Uploading {} to {} (is_folder: {})",
-        local_path, s3_path, is_folder
+        local_path, destination, is_folder
     );
 
     if is_folder {
@@ -856,7 +890,7 @@ fn execute_aws_s3_cp(bucket: &str, local_path: &str, dest_path: &str, is_folder:
             "s3",
             "cp",
             local_path,
-            &s3_path,
+            &destination,
             "--recursive",
             "--endpoint-url",
             endpoint_url,
@@ -866,7 +900,7 @@ fn execute_aws_s3_cp(bucket: &str, local_path: &str, dest_path: &str, is_folder:
             "s3",
             "cp",
             local_path,
-            &s3_path,
+            &destination,
             "--endpoint-url",
             endpoint_url,
         ]);
@@ -898,12 +932,14 @@ fn execute_aws_s3_cp(bucket: &str, local_path: &str, dest_path: &str, is_folder:
     }
 }
 
-async fn get_source_from_user_profiles(file_name: &str) -> Option<String> {
+async fn get_source_from_user_profiles(file_name: &str, is_public: bool) -> Option<String> {
     if let Some(pool) = DB_POOL.get() {
+        let file_type = if is_public { "public" } else { "private" };
         if let Ok(Some((source,))) = sqlx::query_as::<_, (String,)>(
-            "SELECT source FROM user_profiles WHERE file_name = ?"
+            "SELECT source FROM user_profiles WHERE file_name = ? AND type = ?"
         )
         .bind(file_name)
+        .bind(file_type)
         .fetch_optional(pool)
         .await {
             return Some(source);
@@ -913,12 +949,14 @@ async fn get_source_from_user_profiles(file_name: &str) -> Option<String> {
 }
 
 // Helper function to get bucket_name from user_profiles
-async fn get_bucket_from_user_profiles(file_name: &str) -> Option<String> {
+async fn get_bucket_from_user_profiles(file_name: &str, is_public: bool) -> Option<String> {
     if let Some(pool) = DB_POOL.get() {
+        let file_type = if is_public { "public" } else { "private" };
         if let Ok(Some((bucket_name,))) = sqlx::query_as::<_, (String,)>(
-            "SELECT bucket_name FROM user_profiles WHERE file_name = ?"
+            "SELECT bucket_name FROM user_profiles WHERE file_name = ? AND type = ?"
         )
         .bind(file_name)
+        .bind(file_type)
         .fetch_optional(pool)
         .await {
             return Some(bucket_name);
