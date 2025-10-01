@@ -1,6 +1,6 @@
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync, stop_sync_for_scope, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, SyncState};
+use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync, stop_sync_for_scope, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE};
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use tauri::Manager;
 use tokio::sync::Mutex;
