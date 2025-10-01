@@ -1,26 +1,30 @@
-use subxt::tx::PairSigner;
-use sp_core::{Pair, sr25519};
-use crate::substrate_client::{get_substrate_client, get_current_wss_endpoint, update_wss_endpoint, test_wss_endpoint};
-use crate::sync_shared::{GLOBAL_CANCEL_TOKEN, SYNCING_ACCOUNTS, S3_PUBLIC_SYNC_STATE, S3_PRIVATE_SYNC_STATE, S3SyncState};
-use serde::Deserialize;
+use crate::commands::syncing::ensure_aws_env;
+use crate::substrate_client::{
+    get_current_wss_endpoint, get_substrate_client, test_wss_endpoint, update_wss_endpoint,
+};
+use crate::sync_shared::{
+    S3SyncState, GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, SYNCING_ACCOUNTS,
+};
+use crate::DB_POOL;
+use crate::{start_private_folder_sync_tauri, start_public_folder_sync_tauri};
+use chrono::Utc;
 use once_cell::sync::Lazy;
-use tokio::sync::Mutex;
+use serde::Deserialize;
+use serde::Serialize;
+use sp_core::{sr25519, Pair};
+use sqlx::Row;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use subxt::tx::PairSigner;
 use tauri::AppHandle;
 use tauri::Manager;
-use chrono::Utc;
-use serde::Serialize;
-use sqlx::Row;
-use crate::{start_public_folder_sync_tauri, start_private_folder_sync_tauri};
-use crate::commands::syncing::ensure_aws_env;
-use crate::DB_POOL;
+use tokio::sync::Mutex;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
-use custom_runtime::runtime_types::ipfs_pallet::types::FileInput;
 use custom_runtime::marketplace::calls::types::storage_unpin_request::FileHash;
 use custom_runtime::runtime_types::bounded_collections::bounded_vec::BoundedVec;
+use custom_runtime::runtime_types::ipfs_pallet::types::FileInput;
 
 #[derive(Deserialize, Debug)]
 pub struct FileInputWrapper {
@@ -78,37 +82,50 @@ pub static SUBSTRATE_TX_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 #[tauri::command]
 pub async fn set_sync_path(
     app_handle: tauri::AppHandle,
-    params: SetSyncPathParams
+    params: SetSyncPathParams,
 ) -> Result<String, String> {
-    let path_type = if params.is_public { "public" } else { "private" };
+    let path_type = if params.is_public {
+        "public"
+    } else {
+        "private"
+    };
     let timestamp = Utc::now().timestamp();
 
     if let Some(pool) = DB_POOL.get() {
         // Get the current sync path (if any) to detect changes
-        let current_path: Option<String> = sqlx::query_scalar(
-            "SELECT path FROM sync_paths WHERE type = ?"
-        )
-        .bind(path_type)
-        .fetch_optional(pool)
-        .await
-        .unwrap_or(None);
+        let current_path: Option<String> =
+            sqlx::query_scalar("SELECT path FROM sync_paths WHERE type = ?")
+                .bind(path_type)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
 
-        let is_path_changed = current_path.as_ref().map(|p| p != &params.path).unwrap_or(true);
+        let is_path_changed = current_path
+            .as_ref()
+            .map(|p| p != &params.path)
+            .unwrap_or(true);
 
         // Always stop any ongoing sync and clear state when setting a new path
         {
-            println!("[set_sync_path] Preparing to update sync path for '{}'", path_type);
-            
+            println!(
+                "[set_sync_path] Preparing to update sync path for '{}'",
+                path_type
+            );
+
             // 1. Signal global cancellation to stop any ongoing sync operations
             GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
-            
+
             // 2. Clear the account from SYNCING_ACCOUNTS
             {
                 let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-                syncing_accounts.retain(|(acc, typ)| !(acc == &params.account_id && typ == &path_type));
-                println!("[set_sync_path] Cleared sync account for {} {}", path_type, params.account_id);
+                syncing_accounts
+                    .retain(|(acc, typ)| !(acc == &params.account_id && typ == &path_type));
+                println!(
+                    "[set_sync_path] Cleared sync account for {} {}",
+                    path_type, params.account_id
+                );
             }
-            
+
             // 3. Reset the appropriate sync state
             if params.is_public {
                 let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
@@ -119,22 +136,25 @@ pub async fn set_sync_path(
                 *state = S3SyncState::default();
                 println!("[set_sync_path] Reset private sync state");
             }
-            
+
             // 4. Reset the cancellation token for the new sync
             GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
-            
+
             // Small delay to ensure all operations are cleaned up
             tokio::time::sleep(Duration::from_millis(500)).await;
-            
+
             if is_path_changed && current_path.is_some() {
-                println!("[set_sync_path] Sync path changed from {:?} to {}", current_path, params.path);
+                println!(
+                    "[set_sync_path] Sync path changed from {:?} to {}",
+                    current_path, params.path
+                );
             }
         }
 
         // Rest of your existing code for database update and sync start...
         let res = sqlx::query(
             "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
-             ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp"
+             ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
         )
         .bind(&params.path)
         .bind(path_type)
@@ -144,7 +164,10 @@ pub async fn set_sync_path(
 
         match res {
             Ok(_) => {
-                println!("[set_sync_path] Sync path for '{}' set successfully in DB.", path_type);
+                println!(
+                    "[set_sync_path] Sync path for '{}' set successfully in DB.",
+                    path_type
+                );
 
                 // Now spawn the appropriate sync task depending on type
                 if params.is_public {
@@ -155,7 +178,12 @@ pub async fn set_sync_path(
                     // Always start sync when path is set/changed
                     let handle = tokio::spawn(async move {
                         println!("[set_sync_path] Starting PUBLIC sync task...");
-                        start_public_folder_sync_tauri(app_handle_public, account.clone(), mnemonic).await;
+                        start_public_folder_sync_tauri(
+                            app_handle_public,
+                            account.clone(),
+                            mnemonic,
+                        )
+                        .await;
                     });
                     crate::commands::syncing::register_task(app_handle.clone(), handle).await;
 
@@ -166,13 +194,29 @@ pub async fn set_sync_path(
                         let handle = tokio::spawn(async move {
                             let interval = 30u64;
                             loop {
-                                match crate::sync_shared::list_bucket_contents(account_for_cron_pub.clone(), "public".to_string()).await {
+                                match crate::sync_shared::list_bucket_contents(
+                                    account_for_cron_pub.clone(),
+                                    "public".to_string(),
+                                )
+                                .await
+                                {
                                     Ok(items) => {
-                                        if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool_pub, &account_for_cron_pub, "public", &items).await {
+                                        if let Err(e) =
+                                            crate::sync_shared::store_bucket_listing_in_db(
+                                                &pool_pub,
+                                                &account_for_cron_pub,
+                                                "public",
+                                                &items,
+                                            )
+                                            .await
+                                        {
                                             eprintln!("[set_sync_path][S3InventoryCron][public] Failed storing listing: {}", e);
                                         }
                                     }
-                                    Err(e) => eprintln!("[set_sync_path][S3InventoryCron][public] List failed: {}", e),
+                                    Err(e) => eprintln!(
+                                        "[set_sync_path][S3InventoryCron][public] List failed: {}",
+                                        e
+                                    ),
                                 }
                                 tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
                             }
@@ -187,7 +231,12 @@ pub async fn set_sync_path(
 
                     let handle = tokio::spawn(async move {
                         println!("[set_sync_path] Starting PRIVATE sync task...");
-                        start_private_folder_sync_tauri(app_handle_private, account.clone(), mnemonic).await;
+                        start_private_folder_sync_tauri(
+                            app_handle_private,
+                            account.clone(),
+                            mnemonic,
+                        )
+                        .await;
                     });
                     crate::commands::syncing::register_task(app_handle.clone(), handle).await;
 
@@ -198,13 +247,28 @@ pub async fn set_sync_path(
                         let handle = tokio::spawn(async move {
                             let interval = 30u64;
                             loop {
-                                match crate::sync_shared::list_bucket_contents(account_for_cron_priv.clone(), "private".to_string()).await {
+                                match crate::sync_shared::list_bucket_contents(
+                                    account_for_cron_priv.clone(),
+                                    "private".to_string(),
+                                )
+                                .await
+                                {
                                     Ok(items) => {
-                                        if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool_priv, &account_for_cron_priv, "private", &items).await {
+                                        if let Err(e) =
+                                            crate::sync_shared::store_bucket_listing_in_db(
+                                                &pool_priv,
+                                                &account_for_cron_priv,
+                                                "private",
+                                                &items,
+                                            )
+                                            .await
+                                        {
                                             eprintln!("[S3InventoryCron][private] Failed storing listing: {}", e);
                                         }
                                     }
-                                    Err(e) => eprintln!("[S3InventoryCron][private] List failed: {}", e),
+                                    Err(e) => {
+                                        eprintln!("[S3InventoryCron][private] List failed: {}", e)
+                                    }
                                 }
                                 tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
                             }
@@ -228,12 +292,14 @@ pub async fn transfer_balance_tauri(
     recipient_address: String,
     amount: String,
 ) -> Result<String, String> {
-    use subxt::tx::PairSigner;
-    use sp_core::{Pair, sr25519, crypto::Ss58Codec};
     use crate::substrate_client::get_substrate_client;
+    use sp_core::{crypto::Ss58Codec, sr25519, Pair};
+    use subxt::tx::PairSigner;
 
     // Parse the string to u128
-    let amount: u128 = amount.parse().map_err(|e| format!("Invalid amount: {}", e))?;
+    let amount: u128 = amount
+        .parse()
+        .map_err(|e| format!("Invalid amount: {}", e))?;
 
     // Create signer from sender's seed
     let pair = sr25519::Pair::from_string(&sender_seed, None)
@@ -250,7 +316,9 @@ pub async fn transfer_balance_tauri(
         .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
 
     // Use the generated call for transfer_keep_alive
-    let tx = custom_runtime::tx().balances().transfer_keep_alive(recipient.into(), amount);
+    let tx = custom_runtime::tx()
+        .balances()
+        .transfer_keep_alive(recipient.into(), amount);
 
     println!("[Substrate] Submitting balance transfer transaction...");
     let tx_hash = api
@@ -283,7 +351,10 @@ pub async fn get_sync_path_internal(is_public: bool) -> Result<SyncPathResult, S
             row.get::<String, _>("path")
         } else {
             // Return error instead of fallback to constant
-            return Err(format!("Sync path for {} not set yet. Please configure encryption key first.", path_type));
+            return Err(format!(
+                "Sync path for {} not set yet. Please configure encryption key first.",
+                path_type
+            ));
         };
         Ok(SyncPathResult { path, is_public })
     } else {
@@ -315,10 +386,7 @@ pub async fn test_wss_endpoint_command(endpoint: String) -> Result<bool, String>
 type SubAccountRole = custom_runtime::runtime_types::pallet_subaccount::pallet::Role;
 
 #[tauri::command]
-pub async fn add_sub_account_tauri(
-    main_seed: String,
-    sub_seed: String,
-) -> Result<String, String> {
+pub async fn add_sub_account_tauri(main_seed: String, sub_seed: String) -> Result<String, String> {
     // Acquire the global lock
     let _lock = SUBSTRATE_TX_LOCK.lock().await;
 
@@ -327,12 +395,14 @@ pub async fn add_sub_account_tauri(
         .map_err(|e| format!("Failed to create main signer pair: {e:?}"))?;
     let signer = PairSigner::new(main_pair.clone()); // Clone the pair for the signer
 
-    let main_id: sp_core::crypto::AccountId32 = sp_core::crypto::AccountId32::from(main_pair.public());
+    let main_id: sp_core::crypto::AccountId32 =
+        sp_core::crypto::AccountId32::from(main_pair.public());
 
     // Build sub account id from sub seed
     let sub_pair = sr25519::Pair::from_string(&sub_seed, None)
         .map_err(|e| format!("Failed to create sub pair: {e:?}"))?;
-    let sub_id: sp_core::crypto::AccountId32 = sp_core::crypto::AccountId32::from(sub_pair.public());
+    let sub_id: sp_core::crypto::AccountId32 =
+        sp_core::crypto::AccountId32::from(sub_pair.public());
 
     let api = get_substrate_client()
         .await
@@ -342,7 +412,10 @@ pub async fn add_sub_account_tauri(
     let role: SubAccountRole = SubAccountRole::UploadDelete;
 
     // Submit tx
-    let tx = custom_runtime::tx().sub_account().add_sub_account(main_id.into(), sub_id.into(), role);
+    let tx =
+        custom_runtime::tx()
+            .sub_account()
+            .add_sub_account(main_id.into(), sub_id.into(), role);
     println!("[Substrate] Submitting add_sub_account transaction...");
     let tx_hash = api
         .tx()
@@ -357,5 +430,7 @@ pub async fn add_sub_account_tauri(
 
     // small cooldown similar to other txs
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-    Ok(format!("✅ add_sub_account submitted! Finalized in block: {tx_hash}"))
+    Ok(format!(
+        "✅ add_sub_account submitted! Finalized in block: {tx_hash}"
+    ))
 }

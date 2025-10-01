@@ -1,19 +1,19 @@
 #![allow(unused_imports)]
+use crate::constants::ipfs::{AppSetupPhase, API_URL, APP_SETUP_EVENT};
+use crate::utils::binary::ensure_ipfs_binary;
 use once_cell::sync::OnceCell;
+use reqwest::Client;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+use tokio::fs;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Command,
 };
-use crate::constants::ipfs::{AppSetupPhase, APP_SETUP_EVENT, API_URL};
-use crate::utils::binary::ensure_ipfs_binary;
-use std::time::Duration;
-use tokio::time::sleep;
-use reqwest::Client;
-use std::path::{Path, PathBuf};
-use tokio::fs; 
 
 // For macOS/Linux permissions
 #[cfg(unix)]
@@ -80,7 +80,10 @@ async fn is_ipfs_api_up() -> bool {
         .timeout(Duration::from_secs(5))
         .build()
         .unwrap();
-    let response = client.get(format!("{}/api/v0/version", API_URL)).send().await;
+    let response = client
+        .get(format!("{}/api/v0/version", API_URL))
+        .send()
+        .await;
     matches!(response, Ok(resp) if resp.status().is_success())
 }
 
@@ -111,7 +114,10 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
 
     // If an IPFS daemon is already up, skip starting and just move to final phases
     if is_ipfs_api_up().await {
-        println!("[IPFS] Existing IPFS daemon detected on {}. Skipping start.", API_URL);
+        println!(
+            "[IPFS] Existing IPFS daemon detected on {}. Skipping start.",
+            API_URL
+        );
         sleep(Duration::from_secs(SMALL_SLEEP)).await;
         let app = emit_and_update_phase(app.clone(), AppSetupPhase::InitialisingDatabase).await;
         sleep(Duration::from_secs(SMALL_SLEEP)).await;
@@ -146,13 +152,22 @@ pub async fn start_ipfs_daemon(app: AppHandle) -> Result<(), String> {
         while let Ok(Some(line)) = lines.next_line().await {
             println!("[ipfs stdout] {}", line);
             if line.contains("Swarm listening on") {
-                emit_and_update_phase(app_clone_for_stdout.clone(), AppSetupPhase::ConnectingToNetwork).await;
+                emit_and_update_phase(
+                    app_clone_for_stdout.clone(),
+                    AppSetupPhase::ConnectingToNetwork,
+                )
+                .await;
             }
             if line.contains("Daemon is ready") || line.contains("API server listening") {
                 sleep(Duration::from_secs(SMALL_SLEEP)).await;
-                emit_and_update_phase(app_clone_for_stdout.clone(), AppSetupPhase::InitialisingDatabase).await;
+                emit_and_update_phase(
+                    app_clone_for_stdout.clone(),
+                    AppSetupPhase::InitialisingDatabase,
+                )
+                .await;
                 sleep(Duration::from_secs(SMALL_SLEEP)).await;
-                emit_and_update_phase(app_clone_for_stdout.clone(), AppSetupPhase::SyncingData).await;
+                emit_and_update_phase(app_clone_for_stdout.clone(), AppSetupPhase::SyncingData)
+                    .await;
                 sleep(Duration::from_secs(SMALL_SLEEP)).await;
                 emit_and_update_phase(app_clone_for_stdout.clone(), AppSetupPhase::Ready).await;
             }
@@ -184,15 +199,31 @@ async fn configure_ipfs_cors(bin_path: &PathBuf) -> Result<(), String> {
     }
 
     let cors_config = vec![
-        ("API.HTTPHeaders.Access-Control-Allow-Origin", "[\"http://localhost:3000\"]"),
-        ("API.HTTPHeaders.Access-Control-Allow-Methods", "[\"PUT\", \"GET\", \"POST\", \"OPTIONS\"]"),
-        ("API.HTTPHeaders.Access-Control-Allow-Headers", "[\"Authorization\"]"),
+        (
+            "API.HTTPHeaders.Access-Control-Allow-Origin",
+            "[\"http://localhost:3000\"]",
+        ),
+        (
+            "API.HTTPHeaders.Access-Control-Allow-Methods",
+            "[\"PUT\", \"GET\", \"POST\", \"OPTIONS\"]",
+        ),
+        (
+            "API.HTTPHeaders.Access-Control-Allow-Headers",
+            "[\"Authorization\"]",
+        ),
     ];
 
     for (key, value) in cors_config {
-        let output = spawn_ipfs_command(bin_path, &["config", "--json", key, value]).output().await.map_err(|e| format!("Failed to set CORS config {}: {}", key, e))?;
+        let output = spawn_ipfs_command(bin_path, &["config", "--json", key, value])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to set CORS config {}: {}", key, e))?;
         if !output.status.success() {
-            eprintln!("Failed to set CORS config {}: {}", key, String::from_utf8_lossy(&output.stderr));
+            eprintln!(
+                "Failed to set CORS config {}: {}",
+                key,
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 
@@ -248,39 +279,59 @@ async fn ensure_ipfs_not_running(_bin_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-
 #[cfg(target_os = "linux")]
 async fn install_aws_cli() -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
     use tokio::process::Command;
-    use std::os::unix::fs::PermissionsExt;
 
-    let install_dir = dirs::home_dir().ok_or("Could not find home directory")?.join(".aws-cli");
+    let install_dir = dirs::home_dir()
+        .ok_or("Could not find home directory")?
+        .join(".aws-cli");
     let bin_dir = install_dir.join("bin");
 
-    fs::create_dir_all(&bin_dir).await.map_err(|e| format!("Failed to create bin dir: {}", e))?;
+    fs::create_dir_all(&bin_dir)
+        .await
+        .map_err(|e| format!("Failed to create bin dir: {}", e))?;
 
     let url = "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip";
     let zip_path = install_dir.join("awscliv2.zip");
 
     let output = Command::new("curl")
-        .args(&["-L", url, "-o", zip_path.to_str().unwrap(), "-f", "--show-error"])
+        .args(&[
+            "-L",
+            url,
+            "-o",
+            zip_path.to_str().unwrap(),
+            "-f",
+            "--show-error",
+        ])
         .output()
         .await
         .map_err(|e| format!("Download command failed: {}", e))?;
 
     if !output.status.success() {
-        return Err(format!("Failed to download AWS CLI: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(format!(
+            "Failed to download AWS CLI: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
 
     let output = Command::new("unzip")
-        .args(&[zip_path.to_str().unwrap(), "-d", install_dir.to_str().unwrap()])
+        .args(&[
+            zip_path.to_str().unwrap(),
+            "-d",
+            install_dir.to_str().unwrap(),
+        ])
         .output()
         .await
         .map_err(|e| format!("Unzip command failed: {}", e))?;
 
     if !output.status.success() {
-        return Err(format!("Failed to unzip AWS CLI: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(format!(
+            "Failed to unzip AWS CLI: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
 
     // Ensure the dist/aws binary is executable (we will execute it in-place with its side-by-side files)
@@ -301,7 +352,10 @@ async fn install_aws_cli() -> Result<(), String> {
     if let Some(home) = dirs::home_dir() {
         let user_bin = home.join(".local").join("bin");
         if let Err(e) = fs::create_dir_all(&user_bin).await {
-            eprintln!("[AWS CLI] Warning: failed to ensure ~/.local/bin exists: {}", e);
+            eprintln!(
+                "[AWS CLI] Warning: failed to ensure ~/.local/bin exists: {}",
+                e
+            );
         } else {
             let user_path_aws = user_bin.join("aws");
             // Overwrite any existing file
@@ -318,7 +372,10 @@ async fn install_aws_cli() -> Result<(), String> {
             );
 
             if let Err(e) = fs::write(&user_path_aws, wrapper.as_bytes()).await {
-                eprintln!("[AWS CLI] Warning: failed to write wrapper to ~/.local/bin/aws: {}", e);
+                eprintln!(
+                    "[AWS CLI] Warning: failed to write wrapper to ~/.local/bin/aws: {}",
+                    e
+                );
             } else {
                 // Ensure executable
                 if let Ok(meta) = fs::metadata(&user_path_aws).await {
@@ -333,20 +390,23 @@ async fn install_aws_cli() -> Result<(), String> {
                     if !cur_path.split(':').any(|p| p == user_bin_str) {
                         cur_path = format!("{}:{}", user_bin_str, cur_path);
                         std::env::set_var("PATH", &cur_path);
-                        println!("[AWS CLI] Added {} to PATH for current process", user_bin_str);
+                        println!(
+                            "[AWS CLI] Added {} to PATH for current process",
+                            user_bin_str
+                        );
                     }
                 }
 
                 // Verify via the wrapper in ~/.local/bin directly
-                let verify = Command::new(&user_path_aws)
-                    .arg("--version")
-                    .output()
-                    .await;
+                let verify = Command::new(&user_path_aws).arg("--version").output().await;
                 if let Ok(v) = verify {
                     if v.status.success() {
                         println!("[AWS CLI] Verified aws launcher in ~/.local/bin");
                     } else {
-                        eprintln!("[AWS CLI] aws launcher in ~/.local/bin failed to run: {}", String::from_utf8_lossy(&v.stderr));
+                        eprintln!(
+                            "[AWS CLI] aws launcher in ~/.local/bin failed to run: {}",
+                            String::from_utf8_lossy(&v.stderr)
+                        );
                     }
                 }
             }
@@ -373,13 +433,17 @@ async fn install_aws_cli() -> Result<(), String> {
     // 2) Resolve Resources directory (dev or packaged) and log it
     let resources_dir = windows_resources_dir()
         .ok_or_else(|| "Failed to locate app Resources directory".to_string())?;
-    println!("[AWS CLI][Windows] Using Resources dir: {}", resources_dir.display());
+    println!(
+        "[AWS CLI][Windows] Using Resources dir: {}",
+        resources_dir.display()
+    );
 
     // 3) Build expected source and log candidates
-    let source_dir = resources_dir
-        .join("awscli-windows")
-        .join("AWSCLIV2");
-    println!("[AWS CLI][Windows] Expecting bundled CLI at: {}", source_dir.display());
+    let source_dir = resources_dir.join("awscli-windows").join("AWSCLIV2");
+    println!(
+        "[AWS CLI][Windows] Expecting bundled CLI at: {}",
+        source_dir.display()
+    );
 
     if !source_dir.exists() {
         // Extra diagnostics: list the resources dir to help debugging
@@ -477,10 +541,7 @@ async fn install_aws_cli() -> Result<(), String> {
         verify_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
-    let ok = verify_cmd
-        .status()
-        .await
-        .map_or(false, |s| s.success());
+    let ok = verify_cmd.status().await.map_or(false, |s| s.success());
     if !ok {
         return Err("aws.exe did not run successfully after install".to_string());
     }
@@ -495,8 +556,13 @@ async fn find_aws_binary_recursively(root: &Path, max_depth: usize) -> Option<Pa
     let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
     queue.push_back((root.to_path_buf(), 0));
     while let Some((dir, depth)) = queue.pop_front() {
-        if depth > max_depth { continue; }
-        let mut rd = match tokio::fs::read_dir(&dir).await { Ok(r) => r, Err(_) => continue };
+        if depth > max_depth {
+            continue;
+        }
+        let mut rd = match tokio::fs::read_dir(&dir).await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
         while let Ok(Some(ent)) = rd.next_entry().await {
             let p = ent.path();
             if let Ok(ft) = ent.file_type().await {
@@ -505,7 +571,9 @@ async fn find_aws_binary_recursively(root: &Path, max_depth: usize) -> Option<Pa
                     // If this dir is named "bin", look for a child named "aws"
                     if p.file_name().map(|n| n == "bin").unwrap_or(false) {
                         let candidate = p.join("aws");
-                        if candidate.exists() { return Some(candidate); }
+                        if candidate.exists() {
+                            return Some(candidate);
+                        }
                     }
                 }
             }
@@ -518,7 +586,6 @@ async fn find_aws_binary_recursively(root: &Path, max_depth: usize) -> Option<Pa
 async fn get_aws_state_file() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".hippius").join("aws_install_state"))
 }
-
 
 async fn mark_aws_installation_complete() {
     if let Some(state_file) = get_aws_state_file().await {
@@ -593,7 +660,10 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
     println!("[AWS CLI] Using Resources dir: {}", resources_dir.display());
 
     // 2. Define the source directory, pointing to the nested aws-cli folder
-    let source_dir = resources_dir.join("resources").join("awscli-macos-universal").join("aws-cli");
+    let source_dir = resources_dir
+        .join("resources")
+        .join("awscli-macos-universal")
+        .join("aws-cli");
 
     // 3. Check if the bundled directory actually exists
     if !source_dir.exists() {
@@ -611,7 +681,8 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
 
     // Ensure target parent directory exists
     if let Some(parent) = target_dir.parent() {
-        tokio::fs::create_dir_all(parent).await
+        tokio::fs::create_dir_all(parent)
+            .await
             .map_err(|e| format!("Failed to create target directory: {}", e))?;
     }
 
@@ -625,7 +696,7 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
         if dst_clone.exists() {
             let _ = fs::remove_dir_all(&dst_clone);
         }
-        
+
         fn copy_dir_recursive(src: &Path, dst: &Path) -> io::Result<()> {
             fs::create_dir_all(dst)?;
             for entry in fs::read_dir(src)? {
@@ -653,40 +724,54 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let meta = tokio::fs::metadata(&aws_bin).await
+            let meta = tokio::fs::metadata(&aws_bin)
+                .await
                 .map_err(|e| format!("Failed to get metadata for aws binary: {}", e))?;
             let mut perms = meta.permissions();
             perms.set_mode(0o755);
-            tokio::fs::set_permissions(&aws_bin, perms).await
+            tokio::fs::set_permissions(&aws_bin, perms)
+                .await
                 .map_err(|e| format!("Failed to set permissions on aws binary: {}", e))?;
         }
     } else {
         return Err("Copied files, but the 'aws' executable is missing.".to_string());
     }
 
-   // 7. Verify the installation
-   let mut cmd = Command::new(&aws_bin);
-   cmd.arg("--version");
-   #[cfg(target_os = "windows")]
-   {
-       use std::os::windows::process::CommandExt;
-       cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-   }
+    // 7. Verify the installation
+    let mut cmd = Command::new(&aws_bin);
+    cmd.arg("--version");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
 
-   let output = cmd.output().await.map_err(|e| format!("aws --version command failed after install: {}", e))?;
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("aws --version command failed after install: {}", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Bundled AWS CLI appears non-functional: {}", stderr));
+        return Err(format!(
+            "Bundled AWS CLI appears non-functional: {}",
+            stderr
+        ));
     }
 
-    println!("[AWS CLI] Installed from bundled resources to {}", target_dir.display());
+    println!(
+        "[AWS CLI] Installed from bundled resources to {}",
+        target_dir.display()
+    );
 
     // Also create a user-accessible launcher into ~/.local/bin so `aws` is available in the shell (macOS)
     if let Some(home) = dirs::home_dir() {
         let user_bin = home.join(".local").join("bin");
         if let Err(e) = tokio::fs::create_dir_all(&user_bin).await {
-            eprintln!("[AWS CLI][macOS] Warning: failed to ensure ~/.local/bin exists: {}", e);
+            eprintln!(
+                "[AWS CLI][macOS] Warning: failed to ensure ~/.local/bin exists: {}",
+                e
+            );
         } else {
             let user_path_aws = user_bin.join("aws");
             // Overwrite any existing file
@@ -701,7 +786,10 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
             );
 
             if let Err(e) = tokio::fs::write(&user_path_aws, wrapper.as_bytes()).await {
-                eprintln!("[AWS CLI][macOS] Warning: failed to write wrapper to ~/.local/bin/aws: {}", e);
+                eprintln!(
+                    "[AWS CLI][macOS] Warning: failed to write wrapper to ~/.local/bin/aws: {}",
+                    e
+                );
             } else {
                 // Ensure executable
                 if let Ok(meta) = tokio::fs::metadata(&user_path_aws).await {
@@ -720,7 +808,10 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
                     if !cur_path.split(':').any(|p| p == user_bin_str) {
                         cur_path = format!("{}:{}", user_bin_str, cur_path);
                         std::env::set_var("PATH", &cur_path);
-                        println!("[AWS CLI][macOS] Added {} to PATH for current process", user_bin_str);
+                        println!(
+                            "[AWS CLI][macOS] Added {} to PATH for current process",
+                            user_bin_str
+                        );
                     }
                 }
 
@@ -747,7 +838,10 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
                             {
                                 let _ = f.write_all(notice.as_bytes()).await;
                                 let _ = f.write_all(format!("{}\n", export_line).as_bytes()).await;
-                                println!("[AWS CLI][macOS] Appended PATH export to {}", path.display());
+                                println!(
+                                    "[AWS CLI][macOS] Appended PATH export to {}",
+                                    path.display()
+                                );
                             } else {
                                 eprintln!("[AWS CLI][macOS] Warning: could not open {} for appending PATH", path.display());
                             }
@@ -816,7 +910,9 @@ fn windows_resources_dir() -> Option<std::path::PathBuf> {
 }
 
 pub async fn get_aws_binary_path() -> Result<PathBuf, String> {
-    let base_dir = dirs::home_dir().ok_or("Could not find home directory")?.join(".aws-cli");
+    let base_dir = dirs::home_dir()
+        .ok_or("Could not find home directory")?
+        .join(".aws-cli");
 
     #[cfg(target_os = "windows")]
     {
@@ -859,8 +955,7 @@ async fn is_aws_cli_installed() -> bool {
             );
 
             let mut cmd = Command::new(&aws_binary_path);
-            cmd.arg("--version")
-               .env("PATH", &dynamic_path);
+            cmd.arg("--version").env("PATH", &dynamic_path);
 
             // On Unix, ensure we run from the binary's parent so its relative resources are found
             #[cfg(unix)]
@@ -884,7 +979,7 @@ async fn is_aws_cli_installed() -> bool {
     cmd.arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    
+
     // Still set the dynamic PATH in case the binary is found in the system PATH
     if let Ok(aws_binary_path) = get_aws_binary_path().await {
         let path_separator = if cfg!(windows) { ";" } else { ":" };
@@ -896,7 +991,7 @@ async fn is_aws_cli_installed() -> bool {
         );
         cmd.env("PATH", dynamic_path);
     }
-    
+
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;

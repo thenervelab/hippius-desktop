@@ -35,7 +35,7 @@ pub struct OriginalFileInfo {
     pub extension: String,
 }
 
-#[derive(Serialize, Deserialize,Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ErasureCodingInfo {
     pub k: usize,
     pub m: usize,
@@ -75,13 +75,12 @@ pub struct FileDetail {
     pub source: String,
     pub file_hash: String,
     pub miner_ids: String,
-    pub file_size: u64, 
+    pub file_size: u64,
     pub created_at: String,
     pub last_charged_at: String,
-    pub is_folder: bool, 
+    pub is_folder: bool,
     pub main_req_hash: String,
 }
-
 
 #[derive(Serialize, Deserialize)]
 struct FolderMetadata {
