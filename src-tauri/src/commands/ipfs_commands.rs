@@ -1,32 +1,29 @@
 #![allow(unused_imports)]
+use crate::commands::node::get_aws_binary_path;
+use crate::commands::types::*;
 use crate::{
-    DB_POOL,
     utils::{
-        accounts::{
-            decrypt_file
+        accounts::decrypt_file,
+        file_operations::{
+            copy_to_sync_and_add_to_db, copy_to_sync_folder, remove_from_sync_folder,
         },
-        ipfs::{
-            download_from_ipfs, download_from_ipfs_async,
-        },
-        file_operations::{ copy_to_sync_and_add_to_db,
-             remove_from_sync_folder, copy_to_sync_folder}
-    }
+        ipfs::{download_from_ipfs, download_from_ipfs_async},
+    },
+    DB_POOL,
 };
+use base64::{engine::general_purpose, Engine as _};
 use fs_extra;
-use std::fs;
+use futures::stream::{self, StreamExt};
+use futures::TryFutureExt;
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use sha2::{Digest, Sha256};
-use futures::TryFutureExt;
-use crate::commands::types::*;
-use std::path::{Path, PathBuf};
-use base64::{Engine as _, engine::general_purpose};
-use futures::stream::{self, StreamExt};
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tauri::Manager;
 use tokio::process::Command;
-use crate::commands::node::get_aws_binary_path;
-use std::collections::HashSet;
 
 // Drops the first segment and returns None if the remaining path is empty
 fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<Vec<String>> {
@@ -41,7 +38,11 @@ fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<V
             .map(|segment| segment)
             .filter(|s| !s.is_empty())
             .collect();
-        if cleaned.is_empty() { None } else { Some(cleaned) }
+        if cleaned.is_empty() {
+            None
+        } else {
+            Some(cleaned)
+        }
     } else {
         None
     }
@@ -61,17 +62,7 @@ pub async fn encrypt_and_upload_file(
         .to_string();
 
     // Instead of writing Vec<u8>, we just use the existing file path
-    copy_to_sync_and_add_to_db(
-        &path,
-        &account_id,
-        "",
-        "",
-        false,
-        false,
-        &file_name,
-        true,
-    )
-    .await;
+    copy_to_sync_and_add_to_db(&path, &account_id, "", "", false, false, &file_name, true).await;
 
     Ok(file_name)
 }
@@ -85,12 +76,9 @@ pub async fn download_and_decrypt_file(
     source: String,
     main_req_hash: String,
 ) -> Result<(), String> {
-
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
-        Ok(path) => {
-            path
-        }
+        Ok(path) => path,
         Err(e) => {
             // Fall back to checking system PATH with which crate
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
@@ -109,13 +97,16 @@ pub async fn download_and_decrypt_file(
         path_separator,
         std::env::var("PATH").unwrap_or_default()
     );
-    
 
     // If source exists locally, copy; otherwise pull from S3 using aws cli
     if Path::new(&source).exists() {
         println!("tried to copy directory locally");
-        std::fs::copy(&source, &output_file)
-            .map_err(|e| format!("Failed to copy from '{}' to '{}': {}", source, output_file, e))?;
+        std::fs::copy(&source, &output_file).map_err(|e| {
+            format!(
+                "Failed to copy from '{}' to '{}': {}",
+                source, output_file, e
+            )
+        })?;
         return Ok(());
     } else {
         let mut command = Command::new(&aws_binary_path);
@@ -141,7 +132,9 @@ pub async fn download_and_decrypt_file(
         if !status.success() {
             return Err(format!(
                 "aws s3 cp failed for source '{}' to '{}' with status {:?}",
-                source, output_file, status.code()
+                source,
+                output_file,
+                status.code()
             ));
         }
         return Ok(());
@@ -160,7 +153,8 @@ async fn reconstruct_and_decrypt_file(
         let chunk_size = metadata.erasure_coding.chunk_size;
         let file_hash = &metadata.original_file.hash;
 
-        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
+        let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> =
+            std::collections::HashMap::new();
         for chunk in &metadata.chunks {
             chunk_map
                 .entry(chunk.original_chunk)
@@ -174,7 +168,8 @@ async fn reconstruct_and_decrypt_file(
             let available_chunks = chunk_map.get(&orig_idx).ok_or("Missing chunk info")?;
             let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
             for chunk in available_chunks {
-                let data = download_from_ipfs(&api_url, &chunk.cid.cid).map_err(|e| e.to_string())?;
+                let data =
+                    download_from_ipfs(&api_url, &chunk.cid.cid).map_err(|e| e.to_string())?;
                 shards[chunk.share_idx] = Some(data);
             }
 
@@ -195,14 +190,18 @@ async fn reconstruct_and_decrypt_file(
                 chunk_size
             } else {
                 let total_bytes_so_far: usize = chunk_size * orig_idx;
-                metadata.erasure_coding.encrypted_size.saturating_sub(total_bytes_so_far)
+                metadata
+                    .erasure_coding
+                    .encrypted_size
+                    .saturating_sub(total_bytes_so_far)
             };
 
             let mut chunk_data = Vec::with_capacity(chunk_bytes_needed);
             let mut bytes_collected = 0;
             for i in 0..k {
                 if let Some(ref shard) = shards[i] {
-                    let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
+                    let bytes_to_take =
+                        std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
                     chunk_data.extend_from_slice(&shard[..bytes_to_take]);
                     bytes_collected += bytes_to_take;
                     if bytes_collected == chunk_bytes_needed {
@@ -218,10 +217,8 @@ async fn reconstruct_and_decrypt_file(
             encrypted_data.extend_from_slice(&chunk);
         }
 
-        let decrypted_data = tauri::async_runtime::block_on(decrypt_file(
-            &encrypted_data,
-            encryption_key,
-        ))?;
+        let decrypted_data =
+            tauri::async_runtime::block_on(decrypt_file(&encrypted_data, encryption_key))?;
 
         let mut hasher = Sha256::new();
         hasher.update(&decrypted_data);
@@ -233,7 +230,8 @@ async fn reconstruct_and_decrypt_file(
             ));
         }
 
-        std::fs::write(&output_path, &decrypted_data).map_err(|e| format!("Failed to write output file: {}", e))?;
+        std::fs::write(&output_path, &decrypted_data)
+            .map_err(|e| format!("Failed to write output file: {}", e))?;
         Ok(())
     })
     .await
@@ -253,22 +251,23 @@ pub async fn encrypt_and_upload_folder(
         return Err("Provided path is not a directory".to_string());
     }
 
-    let folder_name = folder_path.file_name()
+    let folder_name = folder_path
+        .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or_default()
         .to_string();
 
-
     copy_to_sync_and_add_to_db(
-        folder_path, 
-        &account_id, 
-        "", 
-        "", 
-        false, 
-        true, 
-        &folder_name, 
-        true
-    ).await;
+        folder_path,
+        &account_id,
+        "",
+        "",
+        false,
+        true,
+        &folder_name,
+        true,
+    )
+    .await;
 
     Ok(folder_name)
 }
@@ -288,9 +287,7 @@ pub async fn download_and_decrypt_folder(
 
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
-        Ok(path) => {
-            path
-        }
+        Ok(path) => path,
         Err(e) => {
             eprintln!("[download_and_decrypt_folder] Failed to get AWS binary path: {}, falling back to system PATH", e);
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
@@ -319,8 +316,9 @@ pub async fn download_and_decrypt_folder(
         return Ok(());
     } else {
         if let Some(parent) = destination_path.parent() {
-            tokio::fs::create_dir_all(parent).await
-               .map_err(|e| format!("Failed to create output directory: {}", e))?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create output directory: {}", e))?;
         }
         let mut command = Command::new(&aws_binary_path);
         command
@@ -333,23 +331,24 @@ pub async fn download_and_decrypt_folder(
             .arg("--recursive")
             .arg("--endpoint-url")
             .arg("https://s3.hippius.com");
-        
+
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        
+
         let status = command
             .status()
             .await
             .map_err(|e| format!("Failed to spawn 'aws s3 cp --recursive': {}", e))?;
-        
+
         if !status.success() {
             return Err(format!(
                 "aws s3 cp --recursive failed for source '{}' with status {:?}",
-                source, status.code()
+                source,
+                status.code()
             ));
         }
         return Ok(());
@@ -367,47 +366,63 @@ async fn reconstruct_and_decrypt_single_file(
         .map_err(|e| format!("Failed to parse file metadata: {}", e))?;
 
     if metadata.chunks.is_empty() {
-        return Err(format!("Cannot reconstruct file '{}': metadata contains no chunk information.", metadata.original_file.name));
+        return Err(format!(
+            "Cannot reconstruct file '{}': metadata contains no chunk information.",
+            metadata.original_file.name
+        ));
     }
 
     let k = metadata.erasure_coding.k;
     let m = metadata.erasure_coding.m;
     let chunk_size = metadata.erasure_coding.chunk_size;
 
-    let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> = std::collections::HashMap::new();
+    let mut chunk_map: std::collections::HashMap<usize, Vec<&ChunkInfo>> =
+        std::collections::HashMap::new();
     for chunk in &metadata.chunks {
-        chunk_map.entry(chunk.original_chunk).or_default().push(chunk);
+        chunk_map
+            .entry(chunk.original_chunk)
+            .or_default()
+            .push(chunk);
     }
-    
+
     let mut reconstructed_chunks_data = Vec::with_capacity(chunk_map.len());
     for orig_idx in 0..chunk_map.len() {
-        let available_shards = chunk_map.get(&orig_idx).ok_or("Missing chunk group in map")?;
+        let available_shards = chunk_map
+            .get(&orig_idx)
+            .ok_or("Missing chunk group in map")?;
         let mut shards: Vec<Option<Vec<u8>>> = vec![None; m];
-        
+
         for shard_info in available_shards.iter() {
-            let data = download_from_ipfs_async(&api_url, &shard_info.cid.cid).await.map_err(|e| e.to_string())?;
+            let data = download_from_ipfs_async(&api_url, &shard_info.cid.cid)
+                .await
+                .map_err(|e| e.to_string())?;
             shards[shard_info.share_idx] = Some(data);
         }
 
         if shards.iter().filter(|s| s.is_some()).count() < k {
             return Err(format!("Not enough shards for chunk {}", orig_idx));
         }
-        
+
         let r = ReedSolomon::new(k, m - k).map_err(|e| e.to_string())?;
-        r.reconstruct_data(&mut shards).map_err(|e| format!("Reconstruction failed: {}", e))?;
-        
+        r.reconstruct_data(&mut shards)
+            .map_err(|e| format!("Reconstruction failed: {}", e))?;
+
         let mut chunk_data = Vec::new();
         let mut bytes_collected = 0;
         let is_last_chunk = orig_idx == chunk_map.len() - 1;
         let chunk_bytes_needed = if !is_last_chunk {
             chunk_size
         } else {
-            metadata.erasure_coding.encrypted_size.saturating_sub(chunk_size * orig_idx)
+            metadata
+                .erasure_coding
+                .encrypted_size
+                .saturating_sub(chunk_size * orig_idx)
         };
 
         for i in 0..k {
             if let Some(shard) = &shards[i] {
-                let bytes_to_take = std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
+                let bytes_to_take =
+                    std::cmp::min(chunk_bytes_needed - bytes_collected, shard.len());
                 chunk_data.extend_from_slice(&shard[..bytes_to_take]);
                 bytes_collected += bytes_to_take;
                 if bytes_collected == chunk_bytes_needed {
@@ -419,17 +434,19 @@ async fn reconstruct_and_decrypt_single_file(
     }
 
     let encrypted_data: Vec<u8> = reconstructed_chunks_data.into_iter().flatten().collect();
-    let decrypted_data = decrypt_file(&encrypted_data, encryption_key.map(|k| (*k).clone())).await?;
-    
+    let decrypted_data =
+        decrypt_file(&encrypted_data, encryption_key.map(|k| (*k).clone())).await?;
+
     let actual_hash = format!("{:x}", Sha256::digest(&decrypted_data));
     if actual_hash != metadata.original_file.hash {
         return Err(format!("Hash mismatch for {}", metadata.original_file.name));
     }
 
-    tokio::fs::write(&output_path, &decrypted_data).await.map_err(|e| e.to_string())?;
+    tokio::fs::write(&output_path, &decrypted_data)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
-
 
 #[tauri::command]
 pub async fn add_file_to_private_folder(
@@ -439,7 +456,7 @@ pub async fn add_file_to_private_folder(
     file_path: String,
     _seed_phrase: String,
     _encryption_key: Option<String>,
-    subfolder_path: Option<Vec<String>>, 
+    subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     println!("[add_file_to_private_folder] Adding file: {}", file_path);
     let path = std::path::PathBuf::from(&file_path);
@@ -486,7 +503,10 @@ pub async fn remove_file_from_private_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    println!("[remove_file_from_private_folder] Removing file: {}", file_name);
+    println!(
+        "[remove_file_from_private_folder] Removing file: {}",
+        file_name
+    );
 
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
@@ -514,9 +534,10 @@ pub async fn remove_file_from_private_folder(
         &account_id,
         "",
         sync_subfolder_path,
-    ).await;
+    )
+    .await;
 
-    Ok(folder_name) 
+    Ok(folder_name)
 }
 
 #[tauri::command]
@@ -527,6 +548,10 @@ pub fn write_file(path: String, data: Vec<u8>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn delete_file(path: String) -> Result<(), String> {
+    use crate::commands::node::get_aws_binary_path;
+    use std::env;
+    use which::which;
+
     println!("[delete_file] Deleting file: {}", path);
     let path_obj = Path::new(&path);
     let is_dir = path_obj.is_dir();
@@ -534,15 +559,45 @@ pub async fn delete_file(path: String) -> Result<(), String> {
     if path_obj.exists() {
         // If path exists locally, remove it
         if is_dir {
-            fs::remove_dir_all(&path)
-                .map_err(|e| e.to_string())
+            fs::remove_dir_all(&path).map_err(|e| e.to_string())
         } else {
             // If file exists locally, remove it
             std::fs::remove_file(&path).map_err(|e| e.to_string())
         }
     } else {
         // If path doesn't exist locally, try to remove from Hippius S3
-        let mut cmd = Command::new("aws");
+        // Dynamically get the AWS binary path
+        let aws_binary_path = match get_aws_binary_path().await {
+            Ok(path) => {
+                println!("[delete_file] Found AWS binary at: {}", path.display());
+                path
+            }
+            Err(e) => {
+                eprintln!(
+                    "[delete_file] Failed to get AWS binary path: {}, falling back to system PATH",
+                    e
+                );
+                // Fall back to checking system PATH with which crate
+                if let Ok(path) = which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
+                    println!(
+                        "[delete_file] Found AWS in system PATH at: {}",
+                        path.display()
+                    );
+                    path
+                } else {
+                    return Err("AWS CLI not found in system PATH or custom location".to_string());
+                }
+            }
+        };
+
+        // Construct dynamic PATH with OS-appropriate separator
+        let path_separator = if cfg!(windows) { ";" } else { ":" };
+        let dynamic_path = format!(
+            "{}{}{}",
+            aws_binary_path.parent().unwrap().to_string_lossy(),
+            path_separator,
+            env::var("PATH").unwrap_or_default()
+        );
 
         // Build the command with appropriate arguments
         let mut args = vec!["s3", "rm"];
@@ -552,13 +607,14 @@ pub async fn delete_file(path: String) -> Result<(), String> {
             args.push("--recursive");
         }
 
-        // Add the path
+        // Add the path and Hippius S3 endpoint
         args.push(&path);
-
-        // Add Hippius S3 endpoint
         args.extend(["--endpoint", "https://s3.hippius.com"]);
 
-        cmd.args(&args);
+        let mut cmd = Command::new(&aws_binary_path);
+        cmd.env("AWS_PAGER", "")
+            .env("PATH", &dynamic_path)
+            .args(&args);
 
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
@@ -578,6 +634,7 @@ pub async fn delete_file(path: String) -> Result<(), String> {
         }
     }
 }
+
 #[tauri::command]
 pub fn read_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| e.to_string())
@@ -597,17 +654,7 @@ pub async fn upload_file_public(
         .to_string();
 
     // Use existing file directly instead of writing from Vec<u8>
-    copy_to_sync_and_add_to_db(
-        &path,
-        &account_id,
-        "",
-        "",
-        true,
-        false,
-        &file_name,
-        true,
-    )
-    .await;
+    copy_to_sync_and_add_to_db(&path, &account_id, "", "", true, false, &file_name, true).await;
 
     Ok(file_name)
 }
@@ -619,12 +666,9 @@ pub async fn download_file_public(
     source: String,
     main_req_hash: String,
 ) -> Result<(), String> {
-    
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
-        Ok(path) => {
-            path
-        }
+        Ok(path) => path,
         Err(e) => {
             eprintln!("[download_file_public] Failed to get AWS binary path: {}, falling back to system PATH", e);
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
@@ -648,8 +692,12 @@ pub async fn download_file_public(
     let source_exists = Path::new(&source).exists();
     if source_exists {
         println!("tried to copy directory locally");
-        std::fs::copy(&source, &output_file)
-            .map_err(|e| format!("[download_file_public] Failed to copy from '{}' to '{}': {}", source, output_file, e))?;
+        std::fs::copy(&source, &output_file).map_err(|e| {
+            format!(
+                "[download_file_public] Failed to copy from '{}' to '{}': {}",
+                source, output_file, e
+            )
+        })?;
         return Ok(());
     } else {
         // Execute: aws s3 cp <source> <output> --endpoint-url https://s3.hippius.com
@@ -663,28 +711,31 @@ pub async fn download_file_public(
             .arg(&output_file)
             .arg("--endpoint-url")
             .arg("https://s3.hippius.com");
-        
+
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        
-        let status = command
-            .status()
-            .await
-            .map_err(|e| format!("[download_file_public] Failed to spawn aws s3 cp (is AWS CLI on PATH?): {}", e))?;
-        
+
+        let status = command.status().await.map_err(|e| {
+            format!(
+                "[download_file_public] Failed to spawn aws s3 cp (is AWS CLI on PATH?): {}",
+                e
+            )
+        })?;
+
         if !status.success() {
             return Err(format!(
                 "[download_file_public] aws s3 cp failed for source '{}' to '{}' with status {:?}",
-                source, output_file, status.code()
+                source,
+                output_file,
+                status.code()
             ));
         }
         return Ok(());
     }
-    
 
     Ok(())
 }
@@ -695,17 +746,27 @@ pub async fn public_upload_folder(
     folder_path: String,
     _seed_phrase: String,
 ) -> Result<String, String> {
-    
     let folder_path = Path::new(&folder_path);
     if !folder_path.is_dir() {
         return Err("Provided path is not a directory".to_string());
     }
 
-    let folder_name = folder_path.file_name()
+    let folder_name = folder_path
+        .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .ok_or_else(|| "Invalid folder path, cannot extract folder name".to_string())?;
-    
-    copy_to_sync_and_add_to_db(Path::new(&folder_path), &account_id, "", "", true, true, &folder_name.clone(), true).await;
+
+    copy_to_sync_and_add_to_db(
+        Path::new(&folder_path),
+        &account_id,
+        "",
+        "",
+        true,
+        true,
+        &folder_name.clone(),
+        true,
+    )
+    .await;
     println!("[public_upload_folder] Folder uploaded successfully");
     Ok(folder_name)
 }
@@ -719,81 +780,79 @@ pub async fn public_download_folder(
     source: String,
     main_req_hash: String,
 ) -> Result<(), String> {
-        let source_path = Path::new(&source);
-        let destination_path = Path::new(&output_dir).join(&folder_name);
+    let source_path = Path::new(&source);
+    let destination_path = Path::new(&output_dir).join(&folder_name);
 
-        // Dynamically get the AWS binary path
-        let aws_binary_path = match get_aws_binary_path().await {
-            Ok(path) => {
+    // Dynamically get the AWS binary path
+    let aws_binary_path = match get_aws_binary_path().await {
+        Ok(path) => path,
+        Err(e) => {
+            if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
                 path
+            } else {
+                return Err("[public_download_folder] AWS CLI not found".to_string());
             }
-            Err(e) => {
-                if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
-                    path
-                } else {
-                    return Err("[public_download_folder] AWS CLI not found".to_string());
-                }
-            }
-        };
-
-        // Construct dynamic PATH with OS-appropriate separator
-        let path_separator = if cfg!(windows) { ";" } else { ":" };
-        let dynamic_path = format!(
-            "{}{}{}",
-            aws_binary_path.parent().unwrap().to_string_lossy(),
-            path_separator,
-            std::env::var("PATH").unwrap_or_default()
-        );
-
-        // First, check if the source path exists locally
-        if source_path.exists() && source_path.is_dir() {
-            println!("tried to copy directory locally");
-            let options = fs_extra::dir::CopyOptions::new().overwrite(true);
-            fs_extra::dir::copy(source_path, &output_dir, &options)
-                .map_err(|e| format!("Failed to copy directory locally: {}", e))?;
-
-            return Ok(());
-        } else {
-
-            // Ensure the parent directory for the output exists
-            if let Some(parent) = destination_path.parent() {
-                tokio::fs::create_dir_all(parent).await
-                   .map_err(|e| format!("Failed to create output directory: {}", e))?;
-           }
-
-            let mut command = Command::new(&aws_binary_path);
-            command
-                .env("AWS_PAGER", "")
-                .env("PATH", &dynamic_path)
-                .arg("s3")
-                .arg("cp")
-                .arg(&source)
-                .arg(&destination_path)
-                .arg("--recursive")
-                .arg("--endpoint-url")
-                .arg("https://s3.hippius.com");
-            
-            // Add Windows-specific flags to suppress terminal window
-            #[cfg(target_os = "windows")]
-            {
-                use std::os::windows::process::CommandExt;
-                command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            }
-            
-            let status = command
-                .status()
-                .await
-                .map_err(|e| format!("Failed to spawn 'aws s3 cp --recursive': {}", e))?;
-            
-            if !status.success() {
-                return Err(format!(
-                    "aws s3 cp --recursive failed for source '{}' with status {:?}",
-                    source, status.code()
-                ));
-            }
-            return Ok(());
         }
-    
+    };
+
+    // Construct dynamic PATH with OS-appropriate separator
+    let path_separator = if cfg!(windows) { ";" } else { ":" };
+    let dynamic_path = format!(
+        "{}{}{}",
+        aws_binary_path.parent().unwrap().to_string_lossy(),
+        path_separator,
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    // First, check if the source path exists locally
+    if source_path.exists() && source_path.is_dir() {
+        println!("tried to copy directory locally");
+        let options = fs_extra::dir::CopyOptions::new().overwrite(true);
+        fs_extra::dir::copy(source_path, &output_dir, &options)
+            .map_err(|e| format!("Failed to copy directory locally: {}", e))?;
+
+        return Ok(());
+    } else {
+        // Ensure the parent directory for the output exists
+        if let Some(parent) = destination_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create output directory: {}", e))?;
+        }
+
+        let mut command = Command::new(&aws_binary_path);
+        command
+            .env("AWS_PAGER", "")
+            .env("PATH", &dynamic_path)
+            .arg("s3")
+            .arg("cp")
+            .arg(&source)
+            .arg(&destination_path)
+            .arg("--recursive")
+            .arg("--endpoint-url")
+            .arg("https://s3.hippius.com");
+
+        // Add Windows-specific flags to suppress terminal window
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let status = command
+            .status()
+            .await
+            .map_err(|e| format!("Failed to spawn 'aws s3 cp --recursive': {}", e))?;
+
+        if !status.success() {
+            return Err(format!(
+                "aws s3 cp --recursive failed for source '{}' with status {:?}",
+                source,
+                status.code()
+            ));
+        }
+        return Ok(());
+    }
 }
 
 #[tauri::command]
@@ -804,11 +863,19 @@ pub async fn list_folder_contents(
     subfolder_path: Option<Vec<String>>,
 ) -> Result<Vec<FileDetail>, String> {
     let sync_root = if scope == "public" {
-        PathBuf::from(crate::utils::sync::get_public_sync_path().await.map_err(|e| e.to_string())?)
+        PathBuf::from(
+            crate::utils::sync::get_public_sync_path()
+                .await
+                .map_err(|e| e.to_string())?,
+        )
     } else {
-        PathBuf::from(crate::utils::sync::get_private_sync_path().await.map_err(|e| e.to_string())?)
+        PathBuf::from(
+            crate::utils::sync::get_private_sync_path()
+                .await
+                .map_err(|e| e.to_string())?,
+        )
     };
-    
+
     let mut local_path = sync_root.join(&main_folder_name);
     let normalized_subfolder_path = normalize_subfolder_path(subfolder_path.clone());
     // Build the full local path
@@ -820,37 +887,40 @@ pub async fn list_folder_contents(
 
     // Check if the local path exists and is a directory
     if local_path.is_dir() {
-        return list_local_folder_contents(&local_path, &main_folder_name, &subfolder_path, scope).await;
+        return list_local_folder_contents(&local_path, &main_folder_name, &subfolder_path, scope)
+            .await;
     }
-     
+
     // Fall back to S3 if local directory doesn't exist
     // First try to get the bucket name from the database
     let bucket_name = match crate::DB_POOL.get() {
         Some(pool) => {
             // Query the database to get the bucket name for this main_folder_name
-            let file_type = if scope == "public" { "public" } else { "private" };
-            
+            let file_type = if scope == "public" {
+                "public"
+            } else {
+                "private"
+            };
+
             match sqlx::query_scalar::<_, String>(
                 "SELECT DISTINCT bucket_name FROM user_profiles 
                  WHERE file_name = ?1 AND type = ?2 AND bucket_name IS NOT NULL 
-                 LIMIT 1"
+                 LIMIT 1",
             )
             .bind(&main_folder_name)
             .bind(file_type)
             .fetch_optional(pool)
             .await
             {
-                Ok(Some(bucket)) => {
-                    bucket
-                },
+                Ok(Some(bucket)) => bucket,
                 Ok(None) => {
                     format!("{}-{}", account_id, scope)
-                },
+                }
                 Err(e) => {
                     format!("{}-{}", account_id, scope)
                 }
             }
-        },
+        }
         None => {
             format!("{}-{}", account_id, scope)
         }
@@ -905,7 +975,6 @@ pub async fn list_folder_contents(
         item_name: &str,
         fallback_s3: &str,
     ) -> String {
-
         let local_prefix = match subfolder_path {
             Some(paths) if !paths.is_empty() => paths.join("/"),
             _ => main_folder_name.to_string(),
@@ -916,7 +985,9 @@ pub async fn list_folder_contents(
             return candidate.to_string_lossy().to_string();
         }
 
-        if let Some(p) = db_lookup_path_by_name(item_name).await { return p; }
+        if let Some(p) = db_lookup_path_by_name(item_name).await {
+            return p;
+        }
 
         fallback_s3.to_string()
     }
@@ -926,9 +997,7 @@ pub async fn list_folder_contents(
 
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
-        Ok(path) => {
-            path
-        }
+        Ok(path) => path,
         Err(e) => {
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
                 path
@@ -982,15 +1051,15 @@ pub async fn list_folder_contents(
     let output_str = String::from_utf8_lossy(&output.stdout);
     let result: serde_json::Value = serde_json::from_str(&output_str)
         .map_err(|e| format!("Failed to parse AWS CLI output: {}", e))?;
-    
+
     let mut direct_files: Vec<FileDetail> = Vec::new();
     // Process Contents (files) and extract subfolders
-    if let Some(contents) = result["Contents"].as_array() {        
+    if let Some(contents) = result["Contents"].as_array() {
         // First pass: collect all items and calculate folder sizes
         let mut folder_sizes: HashMap<String, u64> = HashMap::new();
         let mut folder_ipfs_hashes: HashMap<String, String> = HashMap::new();
         let mut file_items = Vec::new();
-        
+
         for item in contents {
             if let (Some(key), Some(size), Some(last_modified)) = (
                 item["Key"].as_str(),
@@ -998,8 +1067,10 @@ pub async fn list_folder_contents(
                 item["LastModified"].as_str(),
             ) {
                 // Skip the folder marker object itself
-                if key.ends_with('/') { continue; }
-                
+                if key.ends_with('/') {
+                    continue;
+                }
+
                 // Get IPFS hash from Owner.ID if available
                 let ipfs_hash = item["Owner"]
                     .as_object()
@@ -1007,11 +1078,13 @@ pub async fn list_folder_contents(
                     .and_then(|id| id.as_str())
                     .unwrap_or("pending")
                     .to_string();
-                
+
                 // Get relative path by removing the s3_prefix
                 if let Some(relative_path) = key.strip_prefix(&s3_prefix) {
-                    if relative_path.is_empty() { continue; }
-                    
+                    if relative_path.is_empty() {
+                        continue;
+                    }
+
                     if let Some(slash_index) = relative_path.find('/') {
                         // This is inside a subfolder
                         let folder_name = &relative_path[..slash_index];
@@ -1021,12 +1094,17 @@ pub async fn list_folder_contents(
                         }
                     } else {
                         // This is a direct file
-                        file_items.push((relative_path.to_string(), size, ipfs_hash, last_modified.to_string()));
+                        file_items.push((
+                            relative_path.to_string(),
+                            size,
+                            ipfs_hash,
+                            last_modified.to_string(),
+                        ));
                     }
                 }
             }
         }
-        
+
         // Process direct files
         for (relative_path, size, ipfs_hash, last_modified) in file_items {
             let s3_url = format!("s3://{}/{}{}", bucket_name, s3_prefix, relative_path);
@@ -1037,8 +1115,9 @@ pub async fn list_folder_contents(
                 &subfolder_path,
                 &relative_path,
                 &s3_url,
-            ).await;
-            
+            )
+            .await;
+
             // Parse the last modified date
             let last_modified_dt = chrono::DateTime::parse_from_rfc3339(&last_modified)
                 .map(|dt| dt.timestamp().to_string())
@@ -1046,12 +1125,20 @@ pub async fn list_folder_contents(
 
             let cid_hex = hex::encode(ipfs_hash.as_bytes());
             let file_hash_hex = cid_hex.clone();
-            
+
             direct_files.push(FileDetail {
                 file_name: relative_path,
-                cid: if cid_hex.is_empty() { "pending".to_string() } else { cid_hex.clone() },
+                cid: if cid_hex.is_empty() {
+                    "pending".to_string()
+                } else {
+                    cid_hex.clone()
+                },
                 source: src,
-                file_hash: if file_hash_hex.is_empty() { "pending".to_string() } else { file_hash_hex },
+                file_hash: if file_hash_hex.is_empty() {
+                    "pending".to_string()
+                } else {
+                    file_hash_hex
+                },
                 miner_ids: String::new(),
                 file_size: size,
                 created_at: last_modified_dt.clone(),
@@ -1060,7 +1147,7 @@ pub async fn list_folder_contents(
                 main_req_hash: "s3".to_string(),
             });
         }
-        
+
         // Add subfolders to the result with their sizes and IPFS hashes
         for (folder_name, size) in folder_sizes {
             let folder_key = format!("{}{}/", s3_prefix, folder_name);
@@ -1072,17 +1159,29 @@ pub async fn list_folder_contents(
                 &subfolder_path,
                 &folder_name,
                 &s3_url,
-            ).await;
-            
-            let ipfs_hash = folder_ipfs_hashes.get(&folder_name).cloned().unwrap_or_default();
+            )
+            .await;
+
+            let ipfs_hash = folder_ipfs_hashes
+                .get(&folder_name)
+                .cloned()
+                .unwrap_or_default();
             let cid_hex = hex::encode(ipfs_hash.as_bytes());
             let file_hash_hex = cid_hex.clone();
-            
+
             direct_files.push(FileDetail {
                 file_name: folder_name,
-                cid: if cid_hex.is_empty() { "pending".to_string() } else { cid_hex.clone() },
+                cid: if cid_hex.is_empty() {
+                    "pending".to_string()
+                } else {
+                    cid_hex.clone()
+                },
                 source: src,
-                file_hash: if file_hash_hex.is_empty() { "pending".to_string() } else { file_hash_hex },
+                file_hash: if file_hash_hex.is_empty() {
+                    "pending".to_string()
+                } else {
+                    file_hash_hex
+                },
                 miner_ids: String::new(),
                 file_size: size,
                 created_at: "0".to_string(),
@@ -1092,14 +1191,22 @@ pub async fn list_folder_contents(
             });
         }
     }
-    
+
     // Create sets of relative paths to exclude
     let mut uploading_or_deleted_paths = std::collections::HashSet::new();
     // Get recent items from state to filter out uploading/deleted files
     let recent_items = if scope == "public" {
-        crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().recent_items.clone()
+        crate::sync_shared::S3_PUBLIC_SYNC_STATE
+            .lock()
+            .unwrap()
+            .recent_items
+            .clone()
     } else {
-        crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().recent_items.clone()
+        crate::sync_shared::S3_PRIVATE_SYNC_STATE
+            .lock()
+            .unwrap()
+            .recent_items
+            .clone()
     };
 
     // Process recent items
@@ -1112,9 +1219,17 @@ pub async fn list_folder_contents(
     }
 
     let uploading_items = if scope == "public" {
-        crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().uploading_items.clone()
+        crate::sync_shared::S3_PUBLIC_SYNC_STATE
+            .lock()
+            .unwrap()
+            .uploading_items
+            .clone()
     } else {
-        crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().uploading_items.clone()
+        crate::sync_shared::S3_PRIVATE_SYNC_STATE
+            .lock()
+            .unwrap()
+            .uploading_items
+            .clone()
     };
 
     // Process uploading items
@@ -1130,8 +1245,8 @@ pub async fn list_folder_contents(
     let current_relative_path = match &subfolder_path {
         Some(parts) if !parts.is_empty() => {
             format!("{}/{}", main_folder_name, parts.join("/"))
-        },
-        _ => main_folder_name.clone()
+        }
+        _ => main_folder_name.clone(),
     };
 
     // Filter out files that are in the uploading or deleted state
@@ -1139,7 +1254,7 @@ pub async fn list_folder_contents(
         .into_iter()
         .filter(|file| {
             let file_relative_path = format!("{}/{}", current_relative_path, file.file_name);
-            
+
             let should_exclude = uploading_or_deleted_paths.iter().any(|excluded_path| {
                 if file.is_folder {
                     excluded_path.starts_with(&file_relative_path)
@@ -1147,7 +1262,7 @@ pub async fn list_folder_contents(
                     excluded_path == &file_relative_path
                 }
             });
-            
+
             if should_exclude {
                 false
             } else {
@@ -1155,7 +1270,6 @@ pub async fn list_folder_contents(
             }
         })
         .collect();
-
 
     Ok(filtered_files)
 }
@@ -1169,37 +1283,39 @@ async fn list_local_folder_contents(
 ) -> Result<Vec<FileDetail>, String> {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
-    
+
     let mut result = Vec::new();
-    
+
     // Helper to convert SystemTime to Unix timestamp string
     fn system_time_to_timestamp(time: SystemTime) -> String {
         time.duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs().to_string())
             .unwrap_or_else(|_| "0".to_string())
     }
-    
+
     // Read the directory entries
-    let entries = fs::read_dir(local_path)
-        .map_err(|e| format!("Failed to read local directory: {}", e))?;
-    
+    let entries =
+        fs::read_dir(local_path).map_err(|e| format!("Failed to read local directory: {}", e))?;
+
     for entry in entries {
         let entry = entry.map_err(|e| format!("Error reading directory entry: {}", e))?;
         let path = entry.path();
-        let file_name = path.file_name()
+        let file_name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| "Invalid file name".to_string())?
             .to_string();
-            
+
         let metadata = fs::metadata(&path)
             .map_err(|e| format!("Failed to get metadata for {}: {}", path.display(), e))?;
-            
+
         let is_dir = metadata.is_dir();
         let file_size = metadata.len();
-        let modified_time = metadata.modified()
+        let modified_time = metadata
+            .modified()
             .map(system_time_to_timestamp)
             .unwrap_or_else(|_| "0".to_string());
-            
+
         // Build the source path relative to the main sync folder
         let mut source_path = main_folder_name.to_string();
         if let Some(parts) = subfolder_path {
@@ -1212,7 +1328,7 @@ async fn list_local_folder_contents(
             source_path.push('/');
         }
         source_path.push_str(&file_name);
-        
+
         result.push(FileDetail {
             file_name: file_name.clone(),
             cid: "local".to_string(),
@@ -1229,17 +1345,33 @@ async fn list_local_folder_contents(
 
     // Get recent items from state to filter out uploading/deleted files
     let recent_items = if scope == "public" {
-        crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().recent_items.clone()
+        crate::sync_shared::S3_PUBLIC_SYNC_STATE
+            .lock()
+            .unwrap()
+            .recent_items
+            .clone()
     } else {
-        crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().recent_items.clone()
+        crate::sync_shared::S3_PRIVATE_SYNC_STATE
+            .lock()
+            .unwrap()
+            .recent_items
+            .clone()
     };
-    
+
     let uploading_items = if scope == "public" {
-        crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap().uploading_items.clone()
+        crate::sync_shared::S3_PUBLIC_SYNC_STATE
+            .lock()
+            .unwrap()
+            .uploading_items
+            .clone()
     } else {
-        crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap().uploading_items.clone()
+        crate::sync_shared::S3_PRIVATE_SYNC_STATE
+            .lock()
+            .unwrap()
+            .uploading_items
+            .clone()
     };
-    
+
     // Create sets of file names to exclude
     let mut uploading_or_deleted = std::collections::HashSet::new();
     for item in recent_items {
@@ -1247,13 +1379,13 @@ async fn list_local_folder_contents(
             uploading_or_deleted.insert(item.path);
         }
     }
-    
+
     for item in uploading_items {
         if item.action == "uploading" || item.action == "deleted" {
             uploading_or_deleted.insert(item.path);
         }
     }
-    
+
     // Filter out files that are in the uploading or deleted state
     let mut filtered_files: Vec<FileDetail> = result
         .into_iter()
@@ -1271,8 +1403,8 @@ async fn list_local_folder_contents(
         } else {
             std::cmp::Ordering::Greater
         }
-    });   
-    
+    });
+
     Ok(filtered_files)
 }
 
@@ -1293,11 +1425,14 @@ pub async fn add_file_to_public_folder(
         .unwrap_or("unknown")
         .to_string();
 
-    println!("[+] Adding file '{}' to folder '{}'", file_name, folder_name);
-    
+    println!(
+        "[+] Adding file '{}' to folder '{}'",
+        file_name, folder_name
+    );
+
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
     println!(
-        "[add_file_to_public_folder] subfolder_path: {:?}, cid: {}, normalized_subfolder: {:?}", 
+        "[add_file_to_public_folder] subfolder_path: {:?}, cid: {}, normalized_subfolder: {:?}",
         subfolder_path, folder_metadata_cid, normalized_subfolder
     );
 
@@ -1338,7 +1473,10 @@ pub async fn remove_file_from_public_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    println!("[-] Removing file '{}' from folder '{}'", file_name, folder_name);    
+    println!(
+        "[-] Removing file '{}' from folder '{}'",
+        file_name, folder_name
+    );
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
     // Remove from sync folder
@@ -1360,8 +1498,9 @@ pub async fn remove_file_from_public_folder(
         &account_id,
         "",
         sync_subfolder_path,
-    ).await;
-    
+    )
+    .await;
+
     Ok(folder_name)
 }
 
@@ -1374,11 +1513,14 @@ pub async fn add_folder_to_public_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    println!("[add_folder_to_public_folder] Adding folder: {}", folder_path);
+    println!(
+        "[add_folder_to_public_folder] Adding folder: {}",
+        folder_path
+    );
     let folder_path_obj = Path::new(&folder_path);
     // Main logic
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
-   
+
     let sync_subfolder_path = normalized_subfolder.as_ref().map(|path_vec| {
         let mut full_path = std::path::PathBuf::from(&folder_name);
         for segment in path_vec {
@@ -1413,7 +1555,10 @@ pub async fn remove_folder_from_public_folder(
     _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    println!("[-] Removing folder '{}' from folder '{}'", folder_to_remove, folder_name);
+    println!(
+        "[-] Removing folder '{}' from folder '{}'",
+        folder_to_remove, folder_name
+    );
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
     // Remove from sync folder
@@ -1435,7 +1580,8 @@ pub async fn remove_folder_from_public_folder(
         &account_id,
         "",
         sync_subfolder_path,
-    ).await;
+    )
+    .await;
 
     Ok(folder_name)
 }
@@ -1450,7 +1596,10 @@ pub async fn add_folder_to_private_folder(
     _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    println!("[add_folder_to_private_folder] Adding folder: {}", folder_path);
+    println!(
+        "[add_folder_to_private_folder] Adding folder: {}",
+        folder_path
+    );
     let folder_path_obj = Path::new(&folder_path);
 
     // --- Main logic ---
@@ -1474,7 +1623,8 @@ pub async fn add_folder_to_private_folder(
         true,
         &folder_name,
         sync_subfolder_path,
-    ).await;
+    )
+    .await;
 
     Ok(folder_name)
 }
@@ -1489,7 +1639,10 @@ pub async fn remove_folder_from_private_folder(
     _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
-    println!("[-] Removing private folder '{}' from folder '{}'", folder_to_remove, folder_name);
+    println!(
+        "[-] Removing private folder '{}' from folder '{}'",
+        folder_to_remove, folder_name
+    );
     // Main logic
     let normalized_subfolder = normalize_subfolder_path(subfolder_path.clone());
 
@@ -1518,10 +1671,7 @@ pub async fn remove_folder_from_private_folder(
 }
 
 #[tauri::command]
-pub async fn wipe_s3_objects(
-    account_id: String,
-    scope: String,
-) -> Result<(), String> {
+pub async fn wipe_s3_objects(account_id: String, scope: String) -> Result<(), String> {
     // Validate scope
     if scope != "public" && scope != "private" {
         return Err("Invalid scope. Must be 'public' or 'private'.".to_string());
@@ -1530,9 +1680,15 @@ pub async fn wipe_s3_objects(
     // First, clean up local sync directory if it exists
     match get_sync_path(&scope).await {
         Ok(sync_path) => {
-            println!("[wipe_s3_objects] Cleaning up local sync directory: {}", sync_path.display());
+            println!(
+                "[wipe_s3_objects] Cleaning up local sync directory: {}",
+                sync_path.display()
+            );
             if let Err(e) = delete_directory_contents(&sync_path) {
-                eprintln!("[wipe_s3_objects] Warning: Failed to clean up local sync directory: {}", e);
+                eprintln!(
+                    "[wipe_s3_objects] Warning: Failed to clean up local sync directory: {}",
+                    e
+                );
                 // Continue with other cleanup operations even if local cleanup fails
             } else {
                 println!("[wipe_s3_objects] Successfully cleaned up local sync directory");
@@ -1543,18 +1699,21 @@ pub async fn wipe_s3_objects(
             // Continue with other cleanup operations
         }
     }
-    
+
     // Clean up the database entries
     match delete_user_profiles_by_scope(&account_id, &scope).await {
         Ok(count) => {
-            println!("[wipe_s3_objects] Deleted {} {} records from user_profiles", count, scope);
+            println!(
+                "[wipe_s3_objects] Deleted {} {} records from user_profiles",
+                count, scope
+            );
         }
         Err(e) => {
             eprintln!("[wipe_s3_objects] Failed to clean up database: {}", e);
             return Err(format!("Failed to clean up database: {}", e));
         }
     }
-    
+
     // Then clean up S3 buckets
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
@@ -1563,9 +1722,15 @@ pub async fn wipe_s3_objects(
             path
         }
         Err(e) => {
-            eprintln!("[wipe_s3_objects] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            eprintln!(
+                "[wipe_s3_objects] Failed to get AWS binary path: {}, falling back to system PATH",
+                e
+            );
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
-                println!("[wipe_s3_objects] Found AWS in system PATH at: {}", path.display());
+                println!(
+                    "[wipe_s3_objects] Found AWS in system PATH at: {}",
+                    path.display()
+                );
                 path
             } else {
                 eprintln!("[wipe_s3_objects] AWS CLI not found in system PATH or custom location");
@@ -1584,15 +1749,16 @@ pub async fn wipe_s3_objects(
     );
 
     // List all buckets
-    let mut bucket_names = match crate::sync_shared::list_all_buckets(&aws_binary_path, &dynamic_path).await {
-        Ok(names) => names,
-        Err(e) => {
-            eprintln!("[wipe_s3_objects] Failed to list buckets: {}", e);
-            // Continue with database cleanup even if bucket listing fails
-            return Ok(());
-        }
-    };
-    
+    let mut bucket_names =
+        match crate::sync_shared::list_all_buckets(&aws_binary_path, &dynamic_path).await {
+            Ok(names) => names,
+            Err(e) => {
+                eprintln!("[wipe_s3_objects] Failed to list buckets: {}", e);
+                // Continue with database cleanup even if bucket listing fails
+                return Ok(());
+            }
+        };
+
     // Filter buckets based on scope
     if scope == "private" {
         bucket_names.retain(|name| name.ends_with("-private"));
@@ -1605,13 +1771,20 @@ pub async fn wipe_s3_objects(
         return Ok(());
     }
 
-    println!("[wipe_s3_objects] Found {} {} buckets to clean up", bucket_names.len(), scope);
-    
+    println!(
+        "[wipe_s3_objects] Found {} {} buckets to clean up",
+        bucket_names.len(),
+        scope
+    );
+
     // Process each matching bucket
     for bucket_name in bucket_names {
         let s3_uri = format!("s3://{}", bucket_name);
-        println!("[wipe_s3_objects] Removing all objects from bucket: {}", bucket_name);
-        
+        println!(
+            "[wipe_s3_objects] Removing all objects from bucket: {}",
+            bucket_name
+        );
+
         let mut command = Command::new(&aws_binary_path);
         command
             .env("AWS_PAGER", "")
@@ -1622,33 +1795,42 @@ pub async fn wipe_s3_objects(
             .arg("--recursive")
             .arg("--endpoint-url")
             .arg("https://s3.hippius.com");
-        
+
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        
-        let status = command
-            .status()
-            .await
-            .map_err(|e| format!("Failed to spawn 'aws s3 rm --recursive' for bucket '{}': {}", bucket_name, e))?;
-        
+
+        let status = command.status().await.map_err(|e| {
+            format!(
+                "Failed to spawn 'aws s3 rm --recursive' for bucket '{}': {}",
+                bucket_name, e
+            )
+        })?;
+
         if !status.success() {
             eprintln!(
                 "[wipe_s3_objects] aws s3 rm --recursive failed for bucket '{}' with status {:?}",
-                bucket_name, status.code()
+                bucket_name,
+                status.code()
             );
             // Continue with next bucket instead of failing
             continue;
         }
-        
-        println!("[wipe_s3_objects] Successfully removed all objects from bucket: {}", bucket_name);
+
+        println!(
+            "[wipe_s3_objects] Successfully removed all objects from bucket: {}",
+            bucket_name
+        );
     }
-    
-    println!("[wipe_s3_objects] Completed cleaning up {} buckets and database entries", scope);
-    
+
+    println!(
+        "[wipe_s3_objects] Completed cleaning up {} buckets and database entries",
+        scope
+    );
+
     // Move any remaining uploading items to recent items with "deleted" status
     {
         let state = if scope == "public" {
@@ -1656,13 +1838,13 @@ pub async fn wipe_s3_objects(
         } else {
             crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap()
         };
-        
+
         // Create a copy of uploading_items to avoid borrowing issues
         let uploading_items = state.uploading_items.clone();
-        
+
         // Release the lock before modifying the state
         drop(state);
-        
+
         // For each uploading item, create a deleted entry in recent_items
         for item in uploading_items {
             if item.scope == scope {
@@ -1676,43 +1858,41 @@ pub async fn wipe_s3_objects(
                     path: item_path.clone(),
                     timestamp: chrono::Utc::now().timestamp_millis(),
                 };
-                
+
                 let mut state = if scope == "public" {
                     crate::sync_shared::S3_PUBLIC_SYNC_STATE.lock().unwrap()
                 } else {
                     crate::sync_shared::S3_PRIVATE_SYNC_STATE.lock().unwrap()
                 };
-                
+
                 // Add to recent items
                 state.recent_items.push_front(deleted_item);
-                
+
                 // Trim the list if it gets too long
                 while state.recent_items.len() > crate::sync_shared::MAX_RECENT_ITEMS {
                     state.recent_items.pop_back();
                 }
-                
+
                 // Remove from uploading items using the cloned path
                 state.uploading_items.retain(|i| i.path != item_path);
             }
         }
     }
-    
+
     Ok(())
 }
 
 /// Deletes all user_profiles entries for a given account_id and scope
 async fn delete_user_profiles_by_scope(account_id: &str, scope: &str) -> Result<u64, String> {
     let pool = DB_POOL.get().ok_or("Database pool not available")?;
-    
-    let result = sqlx::query(
-        "DELETE FROM user_profiles WHERE owner = ?1 AND type = ?2"
-    )
-    .bind(account_id)
-    .bind(scope)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to delete user_profiles: {}", e))?;
-    
+
+    let result = sqlx::query("DELETE FROM user_profiles WHERE owner = ?1 AND type = ?2")
+        .bind(account_id)
+        .bind(scope)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to delete user_profiles: {}", e))?;
+
     Ok(result.rows_affected())
 }
 
@@ -1741,11 +1921,11 @@ fn delete_directory_contents(path: &Path) -> Result<(), String> {
     }
 
     for entry in fs::read_dir(path)
-        .map_err(|e| format!("Failed to read directory {}: {}", path.display(), e))? 
+        .map_err(|e| format!("Failed to read directory {}: {}", path.display(), e))?
     {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
         let path = entry.path();
-        
+
         if path.is_dir() {
             fs::remove_dir_all(&path)
                 .map_err(|e| format!("Failed to remove directory {}: {}", path.display(), e))?;
@@ -1760,13 +1940,13 @@ fn delete_directory_contents(path: &Path) -> Result<(), String> {
 
 fn extract_relative_path(full_path: &str, sync_root: &Path) -> Option<String> {
     let full_path = Path::new(full_path);
-    
+
     if let Ok(relative) = full_path.strip_prefix(sync_root) {
         let relative_str = relative.to_string_lossy().replace('\\', "/");
         if !relative_str.is_empty() {
             return Some(relative_str);
         }
     }
-    
+
     None
 }

@@ -65,6 +65,7 @@ interface FilesContentProps {
   totalPages: number;
   setCurrentPage: (page: number) => void;
   isSyncPathEmpty?: boolean;
+  onSyncPathConfigured?: () => void;
 }
 
 const FilesContent: FC<FilesContentProps> = ({
@@ -93,6 +94,7 @@ const FilesContent: FC<FilesContentProps> = ({
   totalPages,
   setCurrentPage,
   isSyncPathEmpty = false,
+  onSyncPathConfigured,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
@@ -276,7 +278,14 @@ const FilesContent: FC<FilesContentProps> = ({
       (!filteredData.length && !searchTerm && activeFilters.length === 0) ||
       error
     ) {
-      return <IPFSNoEntriesFound isRecentFiles={isRecentFiles} />;
+      return (
+        <IPFSNoEntriesFound
+          isRecentFiles={isRecentFiles}
+          isPrivateView={isPrivateView}
+          isSyncPathConfigured={!isSyncPathEmpty}
+          onStartSyncing={onSyncPathConfigured}
+        />
+      );
     }
 
     if (!filteredData.length && (searchTerm || activeFilters.length > 0)) {

@@ -1,7 +1,7 @@
 use once_cell::sync::OnceCell;
 // use sha2::Digest;
-use std::fs;
 use crate::constants::ipfs::KUBO_VERSION;
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration as StdDuration;
 use tokio::sync::Mutex;
@@ -80,7 +80,6 @@ pub async fn ensure_ipfs_binary(_app: tauri::AppHandle) -> Result<PathBuf, Strin
     };
 
     if should_download {
-
         println!("Starting IPFS binary download");
         // We're the downloading thread
         let result = task::spawn_blocking(move || download_and_extract_binary(&binary_path))
@@ -190,16 +189,15 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
         fs::write(&temp_file, &content)
             .map_err(|e| format!("Failed to write temporary file: {}", e))?;
 
-        let file = fs::File::open(&temp_file)
-            .map_err(|e| format!("Failed to open zip file: {}", e))?;
+        let file =
+            fs::File::open(&temp_file).map_err(|e| format!("Failed to open zip file: {}", e))?;
 
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| format!("Failed to read zip archive: {}", e))?;
+        let mut archive =
+            zip::ZipArchive::new(file).map_err(|e| format!("Failed to read zip archive: {}", e))?;
 
         archive
             .extract(&temp_dir)
             .map_err(|e| format!("Failed to extract zip archive: {}", e))?;
-
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -210,8 +208,8 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
             .map_err(|e| format!("Failed to write temporary file: {}", e))?;
 
         println!("Opening archive for extraction");
-        let tar_gz = fs::File::open(&temp_file)
-            .map_err(|e| format!("Failed to open archive: {}", e))?;
+        let tar_gz =
+            fs::File::open(&temp_file).map_err(|e| format!("Failed to open archive: {}", e))?;
         let tar = flate2::read::GzDecoder::new(tar_gz);
         let mut archive = tar::Archive::new(tar);
 
@@ -219,7 +217,6 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
         archive
             .unpack(&temp_dir)
             .map_err(|e| format!("Failed to extract archive: {}", e))?;
-
     }
 
     // Look for IPFS binary
@@ -232,7 +229,9 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
         #[cfg(target_os = "windows")]
         temp_dir.join("go-ipfs").join("ipfs.exe"),
         #[cfg(target_os = "windows")]
-        temp_dir.join(format!("kubo_v{}", KUBO_VERSION)).join("ipfs.exe"),
+        temp_dir
+            .join(format!("kubo_v{}", KUBO_VERSION))
+            .join("ipfs.exe"),
         #[cfg(target_os = "windows")]
         temp_dir.join("ipfs").join("ipfs.exe"), // Additional path
         #[cfg(not(target_os = "windows"))]
@@ -243,18 +242,17 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
         temp_dir.join("go-ipfs").join("ipfs"),
     ];
 
-    let source_binary = possible_paths.clone()
+    let source_binary = possible_paths
+        .clone()
         .into_iter()
-        .find(|path| {
-            path.exists()
-        })
+        .find(|path| path.exists())
         .ok_or_else(|| {
             format!(
                 "IPFS binary not found after extraction in {:?}. Checked paths: {:?}",
-                temp_dir, possible_paths.clone()
+                temp_dir,
+                possible_paths.clone()
             )
         })?;
-
 
     // Remove existing binary if it exists
     if binary_path.exists() {
@@ -344,7 +342,10 @@ pub fn ensure_ipfs_repo_initialized(bin_path: &PathBuf) -> Result<(), String> {
 
 // Helper to spawn IPFS commands with correct flags (no terminal popups on Windows)
 #[cfg(windows)]
-pub fn spawn_ipfs_command_blocking(bin_path: &std::path::Path, args: &[&str]) -> std::process::Command {
+pub fn spawn_ipfs_command_blocking(
+    bin_path: &std::path::Path,
+    args: &[&str],
+) -> std::process::Command {
     use std::os::windows::process::CommandExt;
     let mut cmd = std::process::Command::new(bin_path);
     cmd.args(args)
@@ -356,7 +357,10 @@ pub fn spawn_ipfs_command_blocking(bin_path: &std::path::Path, args: &[&str]) ->
 }
 
 #[cfg(unix)]
-pub fn spawn_ipfs_command_blocking(bin_path: &std::path::Path, args: &[&str]) -> std::process::Command {
+pub fn spawn_ipfs_command_blocking(
+    bin_path: &std::path::Path,
+    args: &[&str],
+) -> std::process::Command {
     let mut cmd = std::process::Command::new(bin_path);
     cmd.args(args)
         .stdin(std::process::Stdio::null())

@@ -7,7 +7,7 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
             println!("[Window] Close requested");
             api.prevent_close();
             let app_handle = window.app_handle().clone();
-            
+
             tauri::async_runtime::spawn(async move {
                 println!("[Window] Stopping IPFS daemon...");
                 stop_ipfs_daemon().await;

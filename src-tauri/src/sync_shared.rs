@@ -1,21 +1,21 @@
-use std::sync::{Arc, Mutex};
-use std::collections::{HashSet, VecDeque};
-use tauri::{AppHandle, Wry};
-use crate::constants::folder_sync::{SyncStatusResponse}; 
-use once_cell::sync::Lazy;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::path::Path; 
-use std::path::PathBuf;
-use std::fs;
-use std::process::Command;
-use serde::Serialize;
-use sqlx::SqlitePool;
-use hex;
-use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::commands::node::get_aws_binary_path;
+use crate::constants::folder_sync::SyncStatusResponse;
 use crate::user_profile_sync::UserProfileFileWithType;
 use crate::utils::file_operations::calculate_local_size;
-use crate::commands::node::get_aws_binary_path;
+use hex;
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use sqlx::SqlitePool;
+use std::collections::HashMap;
+use std::collections::{HashSet, VecDeque};
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Wry};
 
 /// Parses a line from the `aws s3 sync` output to create a RecentItem.
 pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
@@ -44,7 +44,9 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
 
     // Helper to build item
     let mk_item = |name: &str, action: &str, path: String| -> Option<RecentItem> {
-        if name.is_empty() { return None; }
+        if name.is_empty() {
+            return None;
+        }
         let now_ms: i64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -62,8 +64,15 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
     // Handle 'upload:' lines: "upload: <src> to s3://..."
     if let Some(rest) = s.strip_prefix("upload:") {
         let rest = rest.trim_start();
-        let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
-        let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let src = if let Some(idx) = rest.find(" to ") {
+            &rest[..idx]
+        } else {
+            rest
+        };
+        let file_name = Path::new(src)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
         let path_abs = abs_path(src);
         return mk_item(file_name, "uploaded", path_abs);
     }
@@ -71,8 +80,15 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
     // Handle 'copy:' lines similarly to upload (ACL/metadata changes)
     if let Some(rest) = s.strip_prefix("copy:") {
         let rest = rest.trim_start();
-        let src = if let Some(idx) = rest.find(" to ") { &rest[..idx] } else { rest };
-        let file_name = Path::new(src).file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let src = if let Some(idx) = rest.find(" to ") {
+            &rest[..idx]
+        } else {
+            rest
+        };
+        let file_name = Path::new(src)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
         let path_abs = abs_path(src);
         return mk_item(file_name, "uploaded", path_abs);
     }
@@ -89,7 +105,7 @@ pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
 
 pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<(String, &'static str)>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashSet::new())));
-pub static GLOBAL_CANCEL_TOKEN: Lazy<Arc<AtomicBool>> = 
+pub static GLOBAL_CANCEL_TOKEN: Lazy<Arc<AtomicBool>> =
     Lazy::new(|| Arc::new(AtomicBool::new(false)));
 
 pub const MAX_RECENT_ITEMS: usize = 100;
@@ -121,19 +137,19 @@ impl RecentItem {
         let is_deleted = self.action == "deleted" || self.action == "remove";
         UserProfileFileWithType {
             owner: account_id.to_string(),
-            cid: "".to_string(),    // Not available in RecentItem
+            cid: "".to_string(),       // Not available in RecentItem
             file_hash: "".to_string(), // Not available in RecentItem
             file_name: self.name.clone(),
             file_size_in_bytes: file_size,
-            is_assigned: false,      // Default value
-            last_charged_at: 0,      // Default value
-            main_req_hash: "s3".to_string(), // Indicates this came from S3 sync
+            is_assigned: false,                 // Default value
+            last_charged_at: 0,                 // Default value
+            main_req_hash: "s3".to_string(),    // Indicates this came from S3 sync
             selected_validator: "".to_string(), // Not available
-            total_replicas: 1,       // Default value
-            block_number: 0,         // Not available
-            profile_cid: "".to_string(), // Not available
+            total_replicas: 1,                  // Default value
+            block_number: 0,                    // Not available
+            profile_cid: "".to_string(),        // Not available
             source: self.path.clone(),
-            miner_ids: None,         // Not available
+            miner_ids: None,                   // Not available
             created_at: self.timestamp / 1000, // Convert ms to seconds
             is_folder: self.kind == "folder",
             type_: self.scope.clone(),
@@ -147,7 +163,7 @@ pub struct S3SyncState {
     pub in_progress: bool,
     pub total_files: usize,
     pub processed_files: usize,
-    pub uploading_items: Vec<RecentItem>,  // Track multiple uploading files
+    pub uploading_items: Vec<RecentItem>, // Track multiple uploading files
     pub recent_items: VecDeque<RecentItem>, // Stores the last N items
 }
 
@@ -161,7 +177,7 @@ pub static S3_PUBLIC_SYNC_STATE: Lazy<Arc<Mutex<S3SyncState>>> =
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct SyncActivityResponse {
     pub recent: Vec<UserProfileFileWithType>,
-    pub uploading: Vec<UserProfileFileWithType>
+    pub uploading: Vec<UserProfileFileWithType>,
 }
 
 // --- Update Tauri Commands to Aggregate Data ---
@@ -199,11 +215,13 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
     let limit = limit.unwrap_or(100);
 
     // Combine and sort recent items
-    let mut recent: Vec<RecentItem> = p_state.recent_items.iter()
+    let mut recent: Vec<RecentItem> = p_state
+        .recent_items
+        .iter()
         .chain(pub_state.recent_items.iter())
         .cloned()
         .collect();
-    
+
     // Sort by timestamp (newest first)
     recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     recent.truncate(limit);
@@ -214,29 +232,41 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
     uploading.extend(pub_state.uploading_items.iter().cloned());
 
     // Convert to unified format with account_id as owner
-    let recent_unified = recent.iter()
+    let recent_unified = recent
+        .iter()
         .map(|item| item.to_user_profile_file(&account_id))
         .collect();
-        
-    let uploading_unified = uploading.iter()
+
+    let uploading_unified = uploading
+        .iter()
         .map(|item| item.to_user_profile_file(&account_id))
         .collect();
-    
-    SyncActivityResponse { 
+
+    SyncActivityResponse {
         recent: recent_unified,
-        uploading: uploading_unified 
+        uploading: uploading_unified,
     }
 }
 
-pub fn reset_all_sync_state() {
-    
+/// Stops all running sync processes and resets sync state
+pub fn stop_all_sync_processes() {
+    println!("[Sync] Stopping all sync processes...");
+
+    // Signal all sync processes to stop
     GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
-    
+
+    // Clear all syncing accounts
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-        syncing_accounts.clear();
+        if !syncing_accounts.is_empty() {
+            println!(
+                "[Sync] Clearing {} syncing accounts",
+                syncing_accounts.len()
+            );
+            syncing_accounts.clear();
+        }
     }
-    
+
     // Reset S3 sync states
     {
         let mut private_status = S3_PRIVATE_SYNC_STATE.lock().unwrap();
@@ -246,6 +276,63 @@ pub fn reset_all_sync_state() {
         let mut public_status = S3_PUBLIC_SYNC_STATE.lock().unwrap();
         *public_status = S3SyncState::default();
     }
+
+    // Reset cancellation token to allow new syncs
+    GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
+    println!("[Sync] All sync processes stopped and states reset");
+}
+
+/// Stops sync processes and resets state for a specific scope
+///
+/// # Arguments
+/// * `scope` - The scope to stop syncing for ("public" or "private")
+pub fn stop_sync_for_scope(scope: &str) {
+    println!("[Sync] Stopping sync processes for scope: {}", scope);
+
+    // Signal sync processes to stop
+    GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
+
+    // Clear syncing accounts for the specified scope
+    {
+        let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
+        let before_count = syncing_accounts.len();
+        syncing_accounts.retain(|(_, sync_type)| *sync_type != scope);
+        let after_count = syncing_accounts.len();
+        if before_count != after_count {
+            println!(
+                "[Sync] Cleared {} syncing accounts for scope: {}",
+                before_count - after_count,
+                scope
+            );
+        }
+    }
+
+    // Reset the appropriate sync state
+    match scope {
+        "private" => {
+            let mut private_status = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+            *private_status = S3SyncState::default();
+            println!("[Sync] Reset private sync state");
+        }
+        "public" => {
+            let mut public_status = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+            *public_status = S3SyncState::default();
+            println!("[Sync] Reset public sync state");
+        }
+        _ => {
+            println!("[Sync] Warning: Unknown scope '{}', no state reset", scope);
+            return;
+        }
+    }
+
+    // Reset cancellation token to allow new syncs
+    GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
+    println!("[Sync] Sync processes stopped for scope: {}", scope);
+}
+
+/// Resets all sync state (kept for backward compatibility)
+pub fn reset_all_sync_state() {
+    stop_all_sync_processes();
 }
 
 pub fn prepare_for_new_sync() {
@@ -266,7 +353,7 @@ pub fn update_uploaded_file(scope: &str, file_path: &str) -> Option<RecentItem> 
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    
+
     if file_name.is_empty() {
         return None;
     }
@@ -313,13 +400,10 @@ pub fn update_uploaded_file(scope: &str, file_path: &str) -> Option<RecentItem> 
     Some(uploaded_item)
 }
 
-
 #[tauri::command]
 pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);
 }
-
-
 
 // Helper to collect files recursively
 pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
@@ -342,11 +426,13 @@ pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::i
     Ok(())
 }
 
-
 /// Helper function to list all S3 buckets
-pub async fn list_all_buckets(aws_binary_path: &std::path::Path, dynamic_path: &str) -> Result<Vec<String>, String> {
+pub async fn list_all_buckets(
+    aws_binary_path: &std::path::Path,
+    dynamic_path: &str,
+) -> Result<Vec<String>, String> {
     let endpoint_url = "https://s3.hippius.com";
-        
+
     let mut command = Command::new(aws_binary_path);
     command
         .env("AWS_PAGER", "")
@@ -387,17 +473,20 @@ pub async fn list_all_buckets(aws_binary_path: &std::path::Path, dynamic_path: &
 }
 
 /// Lists all files and folders across all S3 buckets
-pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<Vec<BucketItem>, String> {
+pub async fn list_bucket_contents(
+    _account_id: String,
+    scope: String,
+) -> Result<Vec<BucketItem>, String> {
     println!("[ListAllBuckets] Listing contents for all buckets");
 
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
-        Ok(path) => {
-
-            path
-        }
+        Ok(path) => path,
         Err(e) => {
-            eprintln!("[ListAllBuckets] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            eprintln!(
+                "[ListAllBuckets] Failed to get AWS binary path: {}, falling back to system PATH",
+                e
+            );
             which::which(if cfg!(windows) { "aws.exe" } else { "aws" })
                 .map_err(|_| "AWS CLI not found in system PATH".to_string())?
         }
@@ -414,37 +503,41 @@ pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<
 
     // Get all bucket names and filter based on scope
     let mut bucket_names = list_all_buckets(&aws_binary_path, &dynamic_path).await?;
-    
-    // Filter buckets based on scope
-    if scope == "private" {
-        bucket_names.retain(|name| name.ends_with("-private"));
-    } else if scope == "public" {
-        bucket_names.retain(|name| !name.ends_with("-private"));
-    } else {
+
+    // Filter buckets based on scope and format
+    if scope != "private" && scope != "public" {
         return Err("Invalid scope. Must be 'public' or 'private'.".to_string());
     }
-    
+
+    // Look for either -{scope}- in the middle or -{scope} at the end
+    let scope_pattern = format!("-{scope}-");
+    let scope_suffix = format!("-{scope}");
+    bucket_names.retain(|name| name.contains(&scope_pattern) || name.ends_with(&scope_suffix));
 
     let mut all_items = Vec::new();
     let mut errors = Vec::new();
 
     // Process each bucket in parallel
-    let handles: Vec<_> = bucket_names.into_iter().map(|bucket_name| {
-        let aws_path = aws_binary_path.clone();
-        let path_clone = dynamic_path.clone();
-        
-        tokio::spawn(async move {
-            match list_single_bucket_contents(&aws_path, &path_clone, &bucket_name).await {
-                Ok(items) => {
-                    Ok(items)
+    let handles: Vec<_> = bucket_names
+        .into_iter()
+        .map(|bucket_name| {
+            let aws_path = aws_binary_path.clone();
+            let path_clone = dynamic_path.clone();
+
+            tokio::spawn(async move {
+                match list_single_bucket_contents(&aws_path, &path_clone, &bucket_name).await {
+                    Ok(items) => Ok(items),
+                    Err(e) => {
+                        eprintln!(
+                            "[ListAllBuckets] Error processing bucket {}: {}",
+                            bucket_name, e
+                        );
+                        Err((bucket_name, e))
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[ListAllBuckets] Error processing bucket {}: {}", bucket_name, e);
-                    Err((bucket_name, e))
-                }
-            }
+            })
         })
-    }).collect();
+        .collect();
 
     // Wait for all buckets to be processed
     for handle in handles {
@@ -456,7 +549,11 @@ pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<
     }
 
     if !errors.is_empty() {
-        eprintln!("[ListAllBuckets] Completed with {} errors: {:?}", errors.len(), errors);
+        eprintln!(
+            "[ListAllBuckets] Completed with {} errors: {:?}",
+            errors.len(),
+            errors
+        );
         if all_items.is_empty() {
             return Err(format!("Failed to list any buckets: {}", errors.join("; ")));
         }
@@ -472,7 +569,7 @@ pub async fn list_bucket_contents(_account_id: String, scope: String) -> Result<
         }
         is_new
     });
-    
+
     Ok(all_items)
 }
 
@@ -499,18 +596,18 @@ async fn list_single_bucket_contents(
             .arg(bucket_name)
             .arg("--endpoint-url")
             .arg(endpoint_url);
-        
+
         if let Some(token) = &continuation_token {
             command.arg("--continuation-token").arg(token);
         }
-        
+
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        
+
         let output = command
             .output()
             .map_err(|e| format!("Failed to execute aws command: {}", e))?;
@@ -519,7 +616,10 @@ async fn list_single_bucket_contents(
             let stderr = String::from_utf8_lossy(&output.stderr);
             // Skip non-existent buckets instead of failing
             if stderr.contains("NoSuchBucket") {
-                println!("[ListBucket] Bucket {} does not exist, skipping", bucket_name);
+                println!(
+                    "[ListBucket] Bucket {} does not exist, skipping",
+                    bucket_name
+                );
                 return Ok(Vec::new());
             }
             return Err(format!("Failed to list bucket contents: {}", stderr));
@@ -534,9 +634,7 @@ async fn list_single_bucket_contents(
         }
 
         is_truncated = result["IsTruncated"].as_bool().unwrap_or(false);
-        continuation_token = result["NextContinuationToken"]
-            .as_str()
-            .map(String::from);
+        continuation_token = result["NextContinuationToken"].as_str().map(String::from);
     }
 
     // Process the collected objects
@@ -547,7 +645,10 @@ async fn list_single_bucket_contents(
     let mut folder_ipfs_hash: HashMap<String, String> = HashMap::new();
 
     for item in all_objects {
-        let storage_class = item["StorageClass"].as_str().unwrap_or("STANDARD").to_string();
+        let storage_class = item["StorageClass"]
+            .as_str()
+            .unwrap_or("STANDARD")
+            .to_string();
         let ipfs_hash = item["Owner"]
             .as_object()
             .and_then(|o| o.get("ID"))
@@ -602,9 +703,12 @@ async fn list_single_bucket_contents(
         .into_iter()
         .map(|(path, size)| {
             let last_modified = folder_last_modified.get(&path).cloned().unwrap_or_default();
-            let storage_class = folder_storage_class.get(&path).cloned().unwrap_or_else(|| "STANDARD".to_string());
+            let storage_class = folder_storage_class
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| "STANDARD".to_string());
             let ipfs_hash = folder_ipfs_hash.get(&path).cloned().unwrap_or_default();
-            
+
             BucketItem {
                 path,
                 size,
@@ -619,7 +723,7 @@ async fn list_single_bucket_contents(
 
     // Combine root files and folders
     root_files.append(&mut root_folders);
-    
+
     Ok(root_files)
 }
 
@@ -628,7 +732,7 @@ pub struct BucketItem {
     pub path: String,
     pub size: u64,
     pub last_modified: String,
-    pub is_folder: bool, 
+    pub is_folder: bool,
     pub storage_class: String,
     pub ipfs_hash: String,
     pub bucket_name: String,
@@ -640,7 +744,11 @@ pub async fn store_bucket_listing_in_db(
     scope: &str,
     items: &[BucketItem],
 ) -> Result<usize, sqlx::Error> {
-    let file_type = if scope == "public" { "public" } else { "private" };
+    let file_type = if scope == "public" {
+        "public"
+    } else {
+        "private"
+    };
 
     // Get recent items from state
     let recent_items = if scope == "public" {
@@ -652,18 +760,20 @@ pub async fn store_bucket_listing_in_db(
     // Extract file names of items that are currently being uploaded (exclude these from deletion)
     let uploading_file_names: Vec<&str> = recent_items
         .iter()
-        .filter(|item| item.action != "deleted") 
+        .filter(|item| item.action != "deleted")
         .map(|item| item.name.as_str())
         .collect();
 
     let deleted_file_names: Vec<&str> = recent_items
         .iter()
-        .filter(|item| item.action == "deleted")  
+        .filter(|item| item.action == "deleted")
         .map(|item| item.name.as_str())
         .collect();
 
     // Build the delete query
-    let mut query = "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'".to_string();
+    let mut query =
+        "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND main_req_hash = 's3'"
+            .to_string();
 
     // Add condition to exclude only uploading files (not all recent items)
     if !uploading_file_names.is_empty() {
@@ -671,9 +781,7 @@ pub async fn store_bucket_listing_in_db(
         query.push_str(&format!(" AND file_name NOT IN ({})", placeholders));
     }
 
-    let mut query = sqlx::query(&query)
-        .bind(owner)
-        .bind(file_type);
+    let mut query = sqlx::query(&query).bind(owner).bind(file_type);
 
     // Bind uploading file names to exclude from deletion
     for name in uploading_file_names {
@@ -683,7 +791,7 @@ pub async fn store_bucket_listing_in_db(
     query.execute(pool).await?;
 
     let mut stored = 0usize;
-    
+
     // Get the list of deleted file names from recent items
     let deleted_files: HashSet<&str> = recent_items
         .iter()
@@ -713,7 +821,7 @@ pub async fn store_bucket_listing_in_db(
             WHERE NOT EXISTS (
                 SELECT 1 FROM user_profiles 
                 WHERE file_name = ? AND type = ? AND owner = ?
-            )"
+            )",
         )
         .bind(&file_name)
         .bind(owner)
@@ -725,15 +833,17 @@ pub async fn store_bucket_listing_in_db(
         .bind("s3")
         .bind("")
         .bind(0i64)
-        .bind(0i64) 
+        .bind(0i64)
         .bind("")
         .bind(&source)
         .bind("")
         .bind(file_type)
         .bind(it.is_folder)
-        .bind(chrono::DateTime::parse_from_rfc3339(&it.last_modified)
-            .unwrap_or_else(|_| chrono::Utc::now().into())
-            .timestamp() as i64)
+        .bind(
+            chrono::DateTime::parse_from_rfc3339(&it.last_modified)
+                .unwrap_or_else(|_| chrono::Utc::now().into())
+                .timestamp() as i64,
+        )
         .bind(&it.bucket_name)
         // WHERE NOT EXISTS conditions
         .bind(&file_name)
@@ -757,13 +867,17 @@ pub async fn insert_bucket_items_if_absent(
     scope: &str,
     items: &[BucketItem],
 ) -> Result<usize, sqlx::Error> {
-    let file_type = if scope == "public" { "public" } else { "private" };
+    let file_type = if scope == "public" {
+        "public"
+    } else {
+        "private"
+    };
     let mut stored = 0usize;
 
     for it in items {
         let file_name = it.path.clone();
         let exists: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM user_profiles WHERE owner = ? AND type = ? AND file_name = ? LIMIT 1"
+            "SELECT 1 FROM user_profiles WHERE owner = ? AND type = ? AND file_name = ? LIMIT 1",
         )
         .bind(owner)
         .bind(file_type)
@@ -807,7 +921,10 @@ pub async fn insert_bucket_items_if_absent(
             stored += 1;
         }
     }
-    println!("[InsertBucketItemsIfAbsent] Inserted {} items for {} {}", stored, owner, scope);
+    println!(
+        "[InsertBucketItemsIfAbsent] Inserted {} items for {} {}",
+        stored, owner, scope
+    );
     Ok(stored)
 }
 
@@ -818,7 +935,8 @@ pub async fn insert_bucket_item_if_absent(
     scope: &str,
     item: &BucketItem,
 ) -> Result<bool, sqlx::Error> {
-    let added = insert_bucket_items_if_absent(pool, owner, scope, std::slice::from_ref(item)).await?;
+    let added =
+        insert_bucket_items_if_absent(pool, owner, scope, std::slice::from_ref(item)).await?;
     Ok(added > 0)
 }
 
@@ -830,7 +948,11 @@ pub async fn delete_bucket_item_by_name(
     scope: &str,
     name: &str,
 ) -> Result<u64, sqlx::Error> {
-    let file_type = if scope == "public" { "public" } else { "private" };
+    let file_type = if scope == "public" {
+        "public"
+    } else {
+        "private"
+    };
     let res = sqlx::query(
         "DELETE FROM user_profiles WHERE owner = ? AND type = ? AND file_name = ? AND main_req_hash = 's3'",
     )

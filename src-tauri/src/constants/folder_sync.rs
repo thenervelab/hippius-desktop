@@ -1,4 +1,3 @@
-
 #[derive(serde::Serialize)]
 pub struct SyncStatusResponse {
     pub synced_files: usize,

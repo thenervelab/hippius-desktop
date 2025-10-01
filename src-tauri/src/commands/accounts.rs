@@ -1,13 +1,13 @@
+use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 use crate::constants::substrate::WSS_ENDPOINT;
 use crate::utils::accounts::{
     create_and_store_encryption_key, import_encryption_key, list_encryption_keys,
 };
 use chrono::Utc;
-use sp_core::sr25519;
 use sp_core::crypto::Ss58Codec;
+use sp_core::sr25519;
 use sp_core::Pair;
 use sqlx::Row;
-use crate::commands::syncing::{load_encryption_key, decrypt_phrase};
 
 #[tauri::command]
 pub async fn create_encryption_key() -> Result<(), String> {
@@ -64,7 +64,6 @@ pub struct SubAccountExport {
     pub created_at: Option<String>,
 }
 
-
 use sha2::{Digest, Sha256};
 pub fn generate_key_fingerprint(key_bytes: &[u8]) -> Result<String, String> {
     let mut hasher = Sha256::new();
@@ -96,11 +95,12 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
     if let Some(public_path) = params.public_sync_path {
         if !public_path.trim().is_empty() {
             println!("[Import] Importing public sync path: {}", public_path);
-            let existing_path: Option<(String,)> = sqlx::query_as("SELECT path FROM sync_paths WHERE type = ?")
-                .bind("public")
-                .fetch_optional(&mut *tx) // Fix: Dereference tx
-                .await
-                .map_err(|e| format!("Failed to check existing public sync path: {}", e))?;
+            let existing_path: Option<(String,)> =
+                sqlx::query_as("SELECT path FROM sync_paths WHERE type = ?")
+                    .bind("public")
+                    .fetch_optional(&mut *tx) // Fix: Dereference tx
+                    .await
+                    .map_err(|e| format!("Failed to check existing public sync path: {}", e))?;
 
             if existing_path.map(|p| p.0) != Some(public_path.clone()) {
                 let result = sqlx::query(
@@ -127,11 +127,12 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
     if let Some(private_path) = params.private_sync_path {
         if !private_path.trim().is_empty() {
             println!("[Import] Importing private sync path: {}", private_path);
-            let existing_path: Option<(String,)> = sqlx::query_as("SELECT path FROM sync_paths WHERE type = ?")
-                .bind("private")
-                .fetch_optional(&mut *tx) // Fix: Dereference tx
-                .await
-                .map_err(|e| format!("Failed to check existing private sync path: {}", e))?;
+            let existing_path: Option<(String,)> =
+                sqlx::query_as("SELECT path FROM sync_paths WHERE type = ?")
+                    .bind("private")
+                    .fetch_optional(&mut *tx) // Fix: Dereference tx
+                    .await
+                    .map_err(|e| format!("Failed to check existing private sync path: {}", e))?;
 
             if existing_path.map(|p| p.0) != Some(private_path.clone()) {
                 let result = sqlx::query(
@@ -163,7 +164,8 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
             // Decode and validate the base64 key
             let key_bytes = match base64::decode(&key_base64) {
                 Ok(bytes) => {
-                    if bytes.len() != 32 { // Adjust length as needed
+                    if bytes.len() != 32 {
+                        // Adjust length as needed
                         eprintln!("[Import] Invalid encryption key length: {}", bytes.len());
                         skipped_items.push("encryption key (invalid length)".to_string());
                         continue;
@@ -188,13 +190,12 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
             };
 
             // Check if key with this fingerprint already exists
-            let key_exists: Option<(i64,)> = sqlx::query_as(
-                "SELECT 1 FROM encryption_keys WHERE fingerprint = ?"
-            )
-            .bind(&key_fingerprint)
-            .fetch_optional(&mut *tx) // Fix: Dereference tx
-            .await
-            .map_err(|e| format!("Failed to check for existing key: {}", e))?;
+            let key_exists: Option<(i64,)> =
+                sqlx::query_as("SELECT 1 FROM encryption_keys WHERE fingerprint = ?")
+                    .bind(&key_fingerprint)
+                    .fetch_optional(&mut *tx) // Fix: Dereference tx
+                    .await
+                    .map_err(|e| format!("Failed to check for existing key: {}", e))?;
 
             if key_exists.is_some() {
                 println!("[Import] Encryption key already exists, skipping");
@@ -206,7 +207,10 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
             match import_encryption_key(key_bytes).await {
                 Ok(key_name) => {
                     key_count += 1;
-                    println!("[Import] Encryption key imported successfully: {}", key_name);
+                    println!(
+                        "[Import] Encryption key imported successfully: {}",
+                        key_name
+                    );
                 }
                 Err(e) => {
                     eprintln!("[Import] Failed to import encryption key: {}", e);
@@ -236,39 +240,52 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
             let mut imported_count = 0;
             // Validate sub-account seed phrase
             if account.sub_account_seed_phrase.trim().is_empty() {
-                eprintln!("[Import] Invalid empty seed phrase for account ID: {}", account.account_id);
+                eprintln!(
+                    "[Import] Invalid empty seed phrase for account ID: {}",
+                    account.account_id
+                );
                 skipped_items.push(format!("sub-account {} (empty seed)", account.account_id));
                 continue;
             }
 
             // Check if sub-account already exists
-            let exists: Option<(i64,)> = sqlx::query_as(
-                "SELECT 1 FROM sub_accounts WHERE account_id = ?"
-            )
-            .bind(&account.account_id)
-            .fetch_optional(&mut *tx) // Fix: Dereference tx
-            .await
-            .map_err(|e| format!("Failed to check for existing sub-account: {}", e))?;
+            let exists: Option<(i64,)> =
+                sqlx::query_as("SELECT 1 FROM sub_accounts WHERE account_id = ?")
+                    .bind(&account.account_id)
+                    .fetch_optional(&mut *tx) // Fix: Dereference tx
+                    .await
+                    .map_err(|e| format!("Failed to check for existing sub-account: {}", e))?;
 
             if exists.is_some() {
-                println!("[Import] Sub-account already exists, skipping: {}", account.account_id);
+                println!(
+                    "[Import] Sub-account already exists, skipping: {}",
+                    account.account_id
+                );
                 skipped_items.push(format!("sub-account {} (duplicate)", account.account_id));
                 continue;
             }
 
             let result = sqlx::query(
                 "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase, created_at) 
-                 VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))"
+                 VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))",
             )
             .bind(&account.account_id)
             .bind(&account.sub_account_seed_phrase)
             .bind(account.created_at)
             .execute(&mut *tx) // Fix: Dereference tx
             .await
-            .map_err(|e| format!("Failed to import sub-account for account ID {}: {}", account.account_id, e))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to import sub-account for account ID {}: {}",
+                    account.account_id, e
+                )
+            })?;
 
             imported_count += 1;
-            println!("[Import] Imported sub-account for account ID: {}", account.account_id);
+            println!(
+                "[Import] Imported sub-account for account ID: {}",
+                account.account_id
+            );
         }
 
         if imported_count > 0 {
@@ -284,7 +301,10 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
     // Construct success message
     let mut message_parts = Vec::new();
     if !imported_items.is_empty() {
-        message_parts.push(format!("Successfully imported {}", imported_items.join(", ")));
+        message_parts.push(format!(
+            "Successfully imported {}",
+            imported_items.join(", ")
+        ));
     }
     if !skipped_items.is_empty() {
         message_parts.push(format!("Skipped {}", skipped_items.join(", ")));
@@ -330,27 +350,26 @@ pub async fn export_app_data() -> Result<ExportDataResult, String> {
     let encryption_keys: Vec<String> = keys.into_iter().map(|(key, _id)| key).collect();
 
     // Get sub-accounts
-    let sub_accounts_rows = sqlx::query(
-    "SELECT account_id, sub_account_seed_phrase, created_at FROM sub_accounts"
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch sub-accounts: {}", e))?;
+    let sub_accounts_rows =
+        sqlx::query("SELECT account_id, sub_account_seed_phrase, created_at FROM sub_accounts")
+            .fetch_all(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch sub-accounts: {}", e))?;
 
     let sub_accounts = sub_accounts_rows
-    .into_iter()
-    .map(|row| {
-        let account_id: String = row.get("account_id");
-        let sub_account_seed_phrase: String = row.get("sub_account_seed_phrase");
-        let created_at: Option<String> = row.get("created_at");
-        
-        SubAccountExport {
-            account_id,
-            sub_account_seed_phrase,
-            created_at,
-        }
-    })
-    .collect::<Vec<_>>();
+        .into_iter()
+        .map(|row| {
+            let account_id: String = row.get("account_id");
+            let sub_account_seed_phrase: String = row.get("sub_account_seed_phrase");
+            let created_at: Option<String> = row.get("created_at");
+
+            SubAccountExport {
+                account_id,
+                sub_account_seed_phrase,
+                created_at,
+            }
+        })
+        .collect::<Vec<_>>();
     println!(
         "[Export] Exported {} encryption keys, {} sub-accounts, public path: {:?}, private path: {:?}",
         encryption_keys.len(),
@@ -399,7 +418,6 @@ pub async fn reset_app() -> Result<(), String> {
     }
     println!("[Reset App] All tables cleared.");
 
-
     println!("[Reset App] Restoring default WSS endpoint...");
     if let Err(e) = sqlx::query("INSERT OR REPLACE INTO wss_endpoint (id, endpoint) VALUES (1, ?)")
         .bind(WSS_ENDPOINT)
@@ -429,16 +447,17 @@ pub async fn get_all_subaccount_addresses() -> Result<Vec<(String, String)>, Str
 
     // Get all sub-account seed phrases
     let sub_accounts = match sqlx::query_as::<_, (String, String)>(
-        "SELECT account_id, sub_account_seed_phrase FROM sub_accounts"
+        "SELECT account_id, sub_account_seed_phrase FROM sub_accounts",
     )
     .fetch_all(pool)
-    .await {
+    .await
+    {
         Ok(accounts) => accounts,
         Err(e) => return Err(format!("Failed to fetch sub-accounts: {}", e)),
     };
 
     let mut result = Vec::new();
-    
+
     // Try to load encryption key for decryption
     let maybe_key = load_encryption_key(pool).await;
 
@@ -455,7 +474,10 @@ pub async fn get_all_subaccount_addresses() -> Result<Vec<(String, String)>, Str
             let ss58 = pair.public().to_ss58check();
             result.push((account_id, ss58));
         } else {
-            eprintln!("Failed to create keypair from phrase for account_id: {}", account_id);
+            eprintln!(
+                "Failed to create keypair from phrase for account_id: {}",
+                account_id
+            );
         }
     }
 

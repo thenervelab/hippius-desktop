@@ -99,7 +99,13 @@ const ReferralLinkCard: React.FC = () => {
             <Dialog.Trigger asChild>
               <button className="flex items-center text-xs gap-1">
                 <Refresh className="size-[18px] text-grey-60" />
-                Refresh Link
+                {loading && !lastCode ? (
+                  <div className="h-4 w-20 bg-grey-70 rounded animate-pulse" />
+                ) : lastCode ? (
+                  "Refresh Link"
+                ) : (
+                  "Generate Link"
+                )}
               </button>
             </Dialog.Trigger>
           </div>
@@ -116,7 +122,7 @@ const ReferralLinkCard: React.FC = () => {
                   fullLink
                 ) : (
                   <span className="text-red-400 text-sm font-medium">
-                    No referral link found
+                    Click &apos;Generate Link&apos; to create one.
                   </span>
                 )}
               </div>

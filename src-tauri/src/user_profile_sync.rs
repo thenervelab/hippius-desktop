@@ -1,28 +1,28 @@
 #![allow(unused_imports)]
-use std::time::Duration;
-use tokio::time;
-use crate::substrate_client::get_substrate_client;
-use subxt::utils::AccountId32;
-use reqwest::Client;
-use crate::DB_POOL;
 use crate::commands::substrate_tx::custom_runtime;
-use hex;
-use serde::Serialize;
-use sqlx::FromRow;
-use std::collections::HashSet;
-use std::sync::Mutex;
-use once_cell::sync::Lazy;
-use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
-use subxt::storage::StorageKeyValuePair;
-use serde_json;
-use sqlx::Row;
-use std::str;
-use std::path::Path;
-use tauri::{AppHandle, Manager};
-use tauri::Emitter;
 use crate::events::AppEvent;
+use crate::substrate_client::get_substrate_client;
 use crate::sync_shared::GLOBAL_CANCEL_TOKEN;
+use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
+use crate::DB_POOL;
+use hex;
+use once_cell::sync::Lazy;
+use reqwest::Client;
+use serde::Serialize;
+use serde_json;
+use sqlx::FromRow;
+use sqlx::Row;
+use std::collections::HashSet;
+use std::path::Path;
+use std::str;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
+use std::time::Duration;
+use subxt::storage::StorageKeyValuePair;
+use subxt::utils::AccountId32;
+use tauri::Emitter;
+use tauri::{AppHandle, Manager};
+use tokio::time;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,10 +87,9 @@ fn bounded_vec_to_string(bytes: &[u8]) -> String {
 pub fn decode_file_hash(file_hash_bytes: &[u8]) -> Result<String, String> {
     let hex_str = String::from_utf8_lossy(file_hash_bytes).to_string();
     let clean_hex = hex_str.trim_start_matches("0x");
-    let decoded_bytes = hex::decode(clean_hex)
-        .map_err(|e| format!("Hex decode error: {}", e))?;
-    let decoded_str = str::from_utf8(&decoded_bytes)
-        .map_err(|e| format!("UTF-8 conversion error: {}", e))?;
+    let decoded_bytes = hex::decode(clean_hex).map_err(|e| format!("Hex decode error: {}", e))?;
+    let decoded_str =
+        str::from_utf8(&decoded_bytes).map_err(|e| format!("UTF-8 conversion error: {}", e))?;
     Ok(decoded_str.to_string())
 }
 
@@ -98,7 +97,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
     {
         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
         if syncing_accounts.contains(account_id) {
-            println!("[UserSync] Account {} is already syncing, skipping.", account_id);
+            println!(
+                "[UserSync] Account {} is already syncing, skipping.",
+                account_id
+            );
             return;
         }
         syncing_accounts.insert(account_id.to_string());
@@ -132,14 +134,17 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
         loop {
             // Check global cancellation token
             if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
-                println!("[UserSync] Global cancellation detected, stopping sync for account {}", account_id);
+                println!(
+                    "[UserSync] Global cancellation detected, stopping sync for account {}",
+                    account_id
+                );
                 {
                     let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
                     syncing_accounts.remove(&account_id);
                 }
                 return;
             }
-            
+
             println!("[UserSync] Periodic check: scanning for unsynced data...");
 
             let account: AccountId32 = match account_id.parse() {
@@ -159,7 +164,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                     }
                     Err(e) => {
                         retry_count += 1;
-                        eprintln!("[UserSync] Failed to get latest storage (attempt {}/{}): {e}", retry_count, max_retries);
+                        eprintln!(
+                            "[UserSync] Failed to get latest storage (attempt {}/{}): {e}",
+                            retry_count, max_retries
+                        );
                         crate::substrate_client::clear_substrate_client();
 
                         match get_substrate_client().await {
@@ -168,7 +176,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                 println!("[UserSync] Successfully reconnected to substrate node");
                             }
                             Err(e) => {
-                                eprintln!("[UserSync] Failed to reconnect to substrate client: {}", e);
+                                eprintln!(
+                                    "[UserSync] Failed to reconnect to substrate client: {}",
+                                    e
+                                );
                                 if retry_count >= max_retries {
                                     eprintln!("[UserSync] Max retries reached, waiting 5 minutes before trying again");
                                     time::sleep(Duration::from_secs(300)).await;
@@ -195,27 +206,40 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
 
             // Step 1: Fetch and parse user profile data
             let profile_res = storage
-                .fetch(&custom_runtime::storage().ipfs_pallet().user_profile(&account))
+                .fetch(
+                    &custom_runtime::storage()
+                        .ipfs_pallet()
+                        .user_profile(&account),
+                )
                 .await;
 
             let profile_cid = match profile_res {
                 Ok(Some(bounded_vec)) => bounded_vec_to_string(&bounded_vec.0),
                 Ok(None) => {
-                    let _ = app_handle_clone.emit("app-event", AppEvent {
-                        event_type: "error".to_string(),
-                        message: "User profile not available".to_string(),
-                        details: Some(format!("No profile found on-chain for account: {}", account_id)),
-                    });
+                    let _ = app_handle_clone.emit(
+                        "app-event",
+                        AppEvent {
+                            event_type: "error".to_string(),
+                            message: "User profile not available".to_string(),
+                            details: Some(format!(
+                                "No profile found on-chain for account: {}",
+                                account_id
+                            )),
+                        },
+                    );
                     profile_parsed_successfully = true;
                     String::new()
                 }
                 Err(e) => {
                     eprintln!("[UserSync] Error fetching UserProfile: {e}");
-                    let _ = app_handle_clone.emit("app-event", AppEvent {
-                        event_type: "error".to_string(),
-                        message: "Failed to fetch user profile".to_string(),
-                        details: Some(e.to_string()),
-                    });
+                    let _ = app_handle_clone.emit(
+                        "app-event",
+                        AppEvent {
+                            event_type: "error".to_string(),
+                            message: "Failed to fetch user profile".to_string(),
+                            details: Some(e.to_string()),
+                        },
+                    );
                     time::sleep(Duration::from_secs(120)).await;
                     continue;
                 }
@@ -230,7 +254,6 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                 while ipfs_retry_count < max_ipfs_retries && !profile_fetched {
                     match client.get(&ipfs_url).send().await {
                         Ok(resp) => {
-
                             if resp.status().is_success() {
                                 match resp.text().await {
                                     Ok(data) => {
@@ -240,22 +263,35 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                 profile_fetched = true;
                                                 if let Some(files) = profile_data.as_array() {
                                                     for file in files {
-                                                        let file_name = file.get("file_name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                                                        let file_name = file
+                                                            .get("file_name")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or_default()
+                                                            .to_string();
 
                                                         // Skip files ending with .ff.ec_metadata, .ff, or .ec
                                                         if file_name.ends_with(".ff.ec_metadata")
                                                             || file_name.ends_with(".ff")
-                                                            || file_name.ends_with(".ec") 
+                                                            || file_name.ends_with(".ec")
                                                             || file_name.ends_with(".s.folder")
-                                                            || file_name.ends_with(".s.folder.ec_metadata"){
+                                                            || file_name
+                                                                .ends_with(".s.folder.ec_metadata")
+                                                        {
                                                             continue;
                                                         }
 
-                                                        let file_hash = if let Some(v) = file.get("file_hash") {
+                                                        let file_hash = if let Some(v) =
+                                                            file.get("file_hash")
+                                                        {
                                                             if let Some(s) = v.as_str() {
                                                                 s.to_string()
                                                             } else if let Some(arr) = v.as_array() {
-                                                                let bytes: Vec<u8> = arr.iter().filter_map(|n| n.as_u64().map(|u| u as u8)).collect();
+                                                                let bytes: Vec<u8> = arr
+                                                                    .iter()
+                                                                    .filter_map(|n| {
+                                                                        n.as_u64().map(|u| u as u8)
+                                                                    })
+                                                                    .collect();
                                                                 hex::encode(bytes)
                                                             } else {
                                                                 "".to_string()
@@ -264,77 +300,164 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                             "".to_string()
                                                         };
 
-                                                        let file_size_in_bytes = file.get("file_size_in_bytes").and_then(|v| v.as_i64()).unwrap_or(0);
-                                                        let is_assigned = file.get("is_assigned").and_then(|v| v.as_bool()).unwrap_or(false);
-                                                        let last_charged_at = file.get("last_charged_at").and_then(|v| v.as_i64()).unwrap_or(0);
-                                                        let main_req_hash = file.get("main_req_hash")
+                                                        let file_size_in_bytes = file
+                                                            .get("file_size_in_bytes")
+                                                            .and_then(|v| v.as_i64())
+                                                            .unwrap_or(0);
+                                                        let is_assigned = file
+                                                            .get("is_assigned")
+                                                            .and_then(|v| v.as_bool())
+                                                            .unwrap_or(false);
+                                                        let last_charged_at = file
+                                                            .get("last_charged_at")
+                                                            .and_then(|v| v.as_i64())
+                                                            .unwrap_or(0);
+                                                        let main_req_hash = file
+                                                            .get("main_req_hash")
                                                             .and_then(|v| v.as_str())
-                                                            .map(|s| {
-                                                                match hex::decode(s) {
-                                                                    Ok(bytes) => match String::from_utf8(bytes) {
+                                                            .map(|s| match hex::decode(s) {
+                                                                Ok(bytes) => {
+                                                                    match String::from_utf8(bytes) {
                                                                         Ok(decoded) => decoded,
                                                                         Err(_) => s.to_string(),
-                                                                    },
-                                                                    Err(_) => s.to_string(),
+                                                                    }
                                                                 }
+                                                                Err(_) => s.to_string(),
                                                             })
                                                             .unwrap_or_default();
-                                                        let selected_validator = file.get("selected_validator").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                                                        let total_replicas = file.get("total_replicas").and_then(|v| v.as_i64()).unwrap_or(0);
-                                                        let created_at = file.get("created_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                                                        let selected_validator = file
+                                                            .get("selected_validator")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or_default()
+                                                            .to_string();
+                                                        let total_replicas = file
+                                                            .get("total_replicas")
+                                                            .and_then(|v| v.as_i64())
+                                                            .unwrap_or(0);
+                                                        let created_at = file
+                                                            .get("created_at")
+                                                            .and_then(|v| v.as_i64())
+                                                            .unwrap_or(0);
                                                         let mut source = "Hippius".to_string();
-                                                        let miner_ids_json = if let Some(miner_ids) = file.get("miner_ids").and_then(|v| v.as_array()) {
-                                                            let ids: Vec<String> = miner_ids.iter().filter_map(|id| id.as_str().map(|s| s.to_string())).collect();
-                                                            serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string())
-                                                        } else {
-                                                            "[]".to_string()
-                                                        };
+                                                        let miner_ids_json =
+                                                            if let Some(miner_ids) = file
+                                                                .get("miner_ids")
+                                                                .and_then(|v| v.as_array())
+                                                            {
+                                                                let ids: Vec<String> = miner_ids
+                                                                    .iter()
+                                                                    .filter_map(|id| {
+                                                                        id.as_str()
+                                                                            .map(|s| s.to_string())
+                                                                    })
+                                                                    .collect();
+                                                                serde_json::to_string(&ids)
+                                                                    .unwrap_or_else(|_| {
+                                                                        "[]".to_string()
+                                                                    })
+                                                            } else {
+                                                                "[]".to_string()
+                                                            };
 
-                                                        let is_folder = file_name.ends_with("-folder")
+                                                        let is_folder = file_name
+                                                            .ends_with("-folder")
                                                             || file_name.ends_with(".folder")
-                                                            || file_name.ends_with(".folder.ec_metadata")
-                                                            || file_name.ends_with("-folder.ec_metadata");
+                                                            || file_name
+                                                                .ends_with(".folder.ec_metadata")
+                                                            || file_name
+                                                                .ends_with("-folder.ec_metadata");
 
-                                                        let mut file_type = if file_name.ends_with(".ec_metadata")
-                                                            || file_name.ends_with(".folder.ec_metadata")
-                                                            || file_name.ends_with("-folder.ec_metadata") {
+                                                        let mut file_type = if file_name
+                                                            .ends_with(".ec_metadata")
+                                                            || file_name
+                                                                .ends_with(".folder.ec_metadata")
+                                                            || file_name
+                                                                .ends_with("-folder.ec_metadata")
+                                                        {
                                                             "private".to_string()
                                                         } else {
                                                             "public".to_string()
                                                         };
 
-                                                        let mut actual_file_size = file_size_in_bytes;
+                                                        let mut actual_file_size =
+                                                            file_size_in_bytes;
 
                                                         let base_file_name = {
                                                             let mut name = file_name.clone();
-                                                            if name.ends_with(".folder.ec_metadata") {
-                                                                name = name.trim_end_matches(".folder.ec_metadata").to_string();
-                                                            } else if name.ends_with("-folder.ec_metadata") {
-                                                                name = name.trim_end_matches("-folder.ec_metadata").to_string();
-                                                            } else if name.ends_with(".ec_metadata") {
-                                                                name = name.trim_end_matches(".ec_metadata").to_string();
+                                                            if name.ends_with(".folder.ec_metadata")
+                                                            {
+                                                                name = name
+                                                                    .trim_end_matches(
+                                                                        ".folder.ec_metadata",
+                                                                    )
+                                                                    .to_string();
+                                                            } else if name
+                                                                .ends_with("-folder.ec_metadata")
+                                                            {
+                                                                name = name
+                                                                    .trim_end_matches(
+                                                                        "-folder.ec_metadata",
+                                                                    )
+                                                                    .to_string();
+                                                            } else if name.ends_with(".ec_metadata")
+                                                            {
+                                                                name = name
+                                                                    .trim_end_matches(
+                                                                        ".ec_metadata",
+                                                                    )
+                                                                    .to_string();
                                                             } else if name.ends_with(".folder") {
-                                                                name = name.trim_end_matches(".folder").to_string();
+                                                                name = name
+                                                                    .trim_end_matches(".folder")
+                                                                    .to_string();
                                                             } else if name.ends_with("-folder") {
-                                                                name = name.trim_end_matches("-folder").to_string();
+                                                                name = name
+                                                                    .trim_end_matches("-folder")
+                                                                    .to_string();
                                                             }
                                                             name
                                                         };
-                                    
-                                                        if file_name.ends_with(".ec_metadata") && !file_name.ends_with(".folder.ec_metadata") && !file_name.ends_with("-folder.ec_metadata") {
-                                                            let decoded_hash = decode_file_hash(&file_hash.as_bytes())
-                                                                .unwrap_or_else(|_| "Invalid file hash".to_string());
+
+                                                        if file_name.ends_with(".ec_metadata")
+                                                            && !file_name
+                                                                .ends_with(".folder.ec_metadata")
+                                                            && !file_name
+                                                                .ends_with("-folder.ec_metadata")
+                                                        {
+                                                            let decoded_hash = decode_file_hash(
+                                                                &file_hash.as_bytes(),
+                                                            )
+                                                            .unwrap_or_else(|_| {
+                                                                "Invalid file hash".to_string()
+                                                            });
                                                             let ipfs_url = format!("https://get.hippius.network/ipfs/{}", decoded_hash);
-                                                            match client.get(&ipfs_url).send().await {
+                                                            match client.get(&ipfs_url).send().await
+                                                            {
                                                                 Ok(resp) => {
-                                                                    if let Ok(data) = resp.text().await {
-                                                                        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(&data) {
-                                                                            if let Some(original_file) = metadata.get("original_file") {
+                                                                    if let Ok(data) =
+                                                                        resp.text().await
+                                                                    {
+                                                                        if let Ok(metadata) =
+                                                                            serde_json::from_str::<
+                                                                                serde_json::Value,
+                                                                            >(
+                                                                                &data
+                                                                            )
+                                                                        {
+                                                                            if let Some(
+                                                                                original_file,
+                                                                            ) = metadata.get(
+                                                                                "original_file",
+                                                                            ) {
                                                                                 if let Some(size) = original_file.get("size").and_then(|v| v.as_i64()) {
                                                                                     actual_file_size = size;
                                                                                 }
                                                                             }
-                                                                            if let Some(erasure_coding) = metadata.get("erasure_coding") {
+                                                                            if let Some(
+                                                                                erasure_coding,
+                                                                            ) = metadata.get(
+                                                                                "erasure_coding",
+                                                                            ) {
                                                                                 if let Some(encrypted) = erasure_coding.get("encrypted").and_then(|v| v.as_bool()) {
                                                                                     if !encrypted {
                                                                                         file_type = "public".to_string();
@@ -354,19 +477,36 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                                 }
                                                             }
                                                         } else if is_folder {
-                                                            let decoded_hash = decode_file_hash(&file_hash.as_bytes())
-                                                                .unwrap_or_else(|_| "Invalid file hash".to_string());
+                                                            let decoded_hash = decode_file_hash(
+                                                                &file_hash.as_bytes(),
+                                                            )
+                                                            .unwrap_or_else(|_| {
+                                                                "Invalid file hash".to_string()
+                                                            });
                                                             let ipfs_url = format!("https://get.hippius.network/ipfs/{}", decoded_hash);
-                                                            match client.get(&ipfs_url).send().await {
+                                                            match client.get(&ipfs_url).send().await
+                                                            {
                                                                 Ok(resp) => {
-                                                                    if let Ok(data) = resp.text().await {
-                                                                        if let Ok(folder_data) = serde_json::from_str::<serde_json::Value>(&data) {
-                                                                            if let Some(files) = folder_data.as_array() {
+                                                                    if let Ok(data) =
+                                                                        resp.text().await
+                                                                    {
+                                                                        if let Ok(folder_data) =
+                                                                            serde_json::from_str::<
+                                                                                serde_json::Value,
+                                                                            >(
+                                                                                &data
+                                                                            )
+                                                                        {
+                                                                            if let Some(files) =
+                                                                                folder_data
+                                                                                    .as_array()
+                                                                            {
                                                                                 let total_size: i64 = files.iter()
                                                                                     .filter_map(|file| file.get("file_size"))
                                                                                     .filter_map(|size| size.as_i64())
                                                                                     .sum();
-                                                                                actual_file_size = total_size;
+                                                                                actual_file_size =
+                                                                                    total_size;
                                                                             }
                                                                         }
                                                                     }
@@ -382,39 +522,56 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                             }
                                                         }
 
-                                                        if file_type == "public" && public_sync_path.is_some() {
-                                                            let public_path = format!("{}/{}", public_sync_path.as_ref().unwrap(), base_file_name);
+                                                        if file_type == "public"
+                                                            && public_sync_path.is_some()
+                                                        {
+                                                            let public_path = format!(
+                                                                "{}/{}",
+                                                                public_sync_path.as_ref().unwrap(),
+                                                                base_file_name
+                                                            );
                                                             if Path::new(&public_path).exists() {
                                                                 source = public_path;
                                                             }
-                                                        } else if file_type == "private" && private_sync_path.is_some() {
-                                                            let private_path = format!("{}/{}", private_sync_path.as_ref().unwrap(), base_file_name);
+                                                        } else if file_type == "private"
+                                                            && private_sync_path.is_some()
+                                                        {
+                                                            let private_path = format!(
+                                                                "{}/{}",
+                                                                private_sync_path.as_ref().unwrap(),
+                                                                base_file_name
+                                                            );
                                                             if Path::new(&private_path).exists() {
                                                                 source = private_path;
                                                             }
                                                         }
 
-                                                        let file_key = (file_hash.clone(), file_name.clone());
+                                                        let file_key =
+                                                            (file_hash.clone(), file_name.clone());
                                                         if seen_files.insert(file_key) {
-                                                            records_to_insert.push(UserProfileFile {
-                                                                owner: account_id.clone(),
-                                                                cid: profile_cid.clone(),
-                                                                file_hash,
-                                                                file_name: file_name.clone(),
-                                                                file_size_in_bytes: actual_file_size,
-                                                                is_assigned,
-                                                                last_charged_at,
-                                                                main_req_hash,
-                                                                selected_validator,
-                                                                total_replicas,
-                                                                block_number: 0,
-                                                                profile_cid: profile_cid.clone(),
-                                                                source,
-                                                                miner_ids: Some(miner_ids_json),
-                                                                created_at,
-                                                                file_type,
-                                                                is_folder,
-                                                            });
+                                                            records_to_insert.push(
+                                                                UserProfileFile {
+                                                                    owner: account_id.clone(),
+                                                                    cid: profile_cid.clone(),
+                                                                    file_hash,
+                                                                    file_name: file_name.clone(),
+                                                                    file_size_in_bytes:
+                                                                        actual_file_size,
+                                                                    is_assigned,
+                                                                    last_charged_at,
+                                                                    main_req_hash,
+                                                                    selected_validator,
+                                                                    total_replicas,
+                                                                    block_number: 0,
+                                                                    profile_cid: profile_cid
+                                                                        .clone(),
+                                                                    source,
+                                                                    miner_ids: Some(miner_ids_json),
+                                                                    created_at,
+                                                                    file_type,
+                                                                    is_folder,
+                                                                },
+                                                            );
                                                         }
                                                     }
                                                 } else {
@@ -423,55 +580,96 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                             }
                                             Err(e) => {
                                                 eprintln!("[UserSync] Invalid JSON for CID {}: {}. Error: {}", profile_cid, data, e);
-                                                let _ = app_handle_clone.emit("app-event", AppEvent {
-                                                    event_type: "error".to_string(),
-                                                    message: "Invalid JSON in profile data".to_string(),
-                                                    details: Some(format!("CID: {}, Error: {}", profile_cid, e)),
-                                                });
+                                                let _ = app_handle_clone.emit(
+                                                    "app-event",
+                                                    AppEvent {
+                                                        event_type: "error".to_string(),
+                                                        message: "Invalid JSON in profile data"
+                                                            .to_string(),
+                                                        details: Some(format!(
+                                                            "CID: {}, Error: {}",
+                                                            profile_cid, e
+                                                        )),
+                                                    },
+                                                );
                                             }
                                         }
                                     }
                                     Err(e) => {
                                         eprintln!("[UserSync] Failed to get text from IPFS response for CID {}: {}", profile_cid, e);
-                                        let _ = app_handle_clone.emit("app-event", AppEvent {
-                                            event_type: "error".to_string(),
-                                            message: "Failed to parse IPFS response".to_string(),
-                                            details: Some(format!("CID: {}, Error: {}", profile_cid, e)),
-                                        });
+                                        let _ = app_handle_clone.emit(
+                                            "app-event",
+                                            AppEvent {
+                                                event_type: "error".to_string(),
+                                                message: "Failed to parse IPFS response"
+                                                    .to_string(),
+                                                details: Some(format!(
+                                                    "CID: {}, Error: {}",
+                                                    profile_cid, e
+                                                )),
+                                            },
+                                        );
                                         ipfs_retry_count += 1;
                                         if ipfs_retry_count < max_ipfs_retries {
                                             let wait_time = 5 * ipfs_retry_count;
-                                            eprintln!("[UserSync] Retrying IPFS fetch in {} seconds...", wait_time);
-                                            time::sleep(Duration::from_secs(wait_time as u64)).await;
+                                            eprintln!(
+                                                "[UserSync] Retrying IPFS fetch in {} seconds...",
+                                                wait_time
+                                            );
+                                            time::sleep(Duration::from_secs(wait_time as u64))
+                                                .await;
                                         }
                                     }
                                 }
                             } else {
-                                eprintln!("[UserSync] IPFS request failed for CID {}: Status {}", profile_cid, resp.status());
-                                let _ = app_handle_clone.emit("app-event", AppEvent {
-                                    event_type: "error".to_string(),
-                                    message: "Failed to fetch from IPFS".to_string(),
-                                    details: Some(format!("CID: {}, Status: {}", profile_cid, resp.status())),
-                                });
+                                eprintln!(
+                                    "[UserSync] IPFS request failed for CID {}: Status {}",
+                                    profile_cid,
+                                    resp.status()
+                                );
+                                let _ = app_handle_clone.emit(
+                                    "app-event",
+                                    AppEvent {
+                                        event_type: "error".to_string(),
+                                        message: "Failed to fetch from IPFS".to_string(),
+                                        details: Some(format!(
+                                            "CID: {}, Status: {}",
+                                            profile_cid,
+                                            resp.status()
+                                        )),
+                                    },
+                                );
                                 ipfs_retry_count += 1;
                                 if ipfs_retry_count < max_ipfs_retries {
                                     let wait_time = 5 * ipfs_retry_count;
-                                    eprintln!("[UserSync] Retrying IPFS fetch in {} seconds...", wait_time);
+                                    eprintln!(
+                                        "[UserSync] Retrying IPFS fetch in {} seconds...",
+                                        wait_time
+                                    );
                                     time::sleep(Duration::from_secs(wait_time as u64)).await;
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("[UserSync] Failed to fetch from IPFS for CID {}: {}", profile_cid, e);
-                            let _ = app_handle_clone.emit("app-event", AppEvent {
-                                event_type: "error".to_string(),
-                                message: "Failed to fetch from IPFS".to_string(),
-                                details: Some(format!("CID: {}, Error: {}", profile_cid, e)),
-                            });
+                            eprintln!(
+                                "[UserSync] Failed to fetch from IPFS for CID {}: {}",
+                                profile_cid, e
+                            );
+                            let _ = app_handle_clone.emit(
+                                "app-event",
+                                AppEvent {
+                                    event_type: "error".to_string(),
+                                    message: "Failed to fetch from IPFS".to_string(),
+                                    details: Some(format!("CID: {}, Error: {}", profile_cid, e)),
+                                },
+                            );
                             ipfs_retry_count += 1;
                             if ipfs_retry_count < max_ipfs_retries {
                                 let wait_time = 5 * ipfs_retry_count;
-                                eprintln!("[UserSync] Retrying IPFS fetch in {} seconds...", wait_time);
+                                eprintln!(
+                                    "[UserSync] Retrying IPFS fetch in {} seconds...",
+                                    wait_time
+                                );
                                 time::sleep(Duration::from_secs(wait_time as u64)).await;
                             }
                         }
@@ -480,26 +678,42 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
 
                 if !profile_fetched {
                     eprintln!("[UserSync] Failed to fetch profile for CID {} after {} retries, continuing with storage requests", profile_cid, max_ipfs_retries);
-                    let _ = app_handle_clone.emit("app-event", AppEvent {
-                        event_type: "error".to_string(),
-                        message: "Failed to fetch profile from IPFS".to_string(),
-                        details: Some(format!("CID: {}, Retries: {}", profile_cid, max_ipfs_retries)),
-                    });
+                    let _ = app_handle_clone.emit(
+                        "app-event",
+                        AppEvent {
+                            event_type: "error".to_string(),
+                            message: "Failed to fetch profile from IPFS".to_string(),
+                            details: Some(format!(
+                                "CID: {}, Retries: {}",
+                                profile_cid, max_ipfs_retries
+                            )),
+                        },
+                    );
                 }
             } else {
                 println!("[UserSync] Profile CID is empty, proceeding with storage requests");
             }
 
             // Step 2: Fetch and parse storage requests
-            let mut iter = match storage.iter(custom_runtime::storage().ipfs_pallet().user_storage_requests_iter()).await {
+            let mut iter = match storage
+                .iter(
+                    custom_runtime::storage()
+                        .ipfs_pallet()
+                        .user_storage_requests_iter(),
+                )
+                .await
+            {
                 Ok(i) => i,
                 Err(e) => {
                     eprintln!("[UserSync] Error fetching storage requests iterator: {e}");
-                    let _ = app_handle_clone.emit("app-event", AppEvent {
-                        event_type: "error".to_string(),
-                        message: "Failed to fetch storage requests".to_string(),
-                        details: Some(e.to_string()),
-                    });
+                    let _ = app_handle_clone.emit(
+                        "app-event",
+                        AppEvent {
+                            event_type: "error".to_string(),
+                            message: "Failed to fetch storage requests".to_string(),
+                            details: Some(e.to_string()),
+                        },
+                    );
                     time::sleep(Duration::from_secs(120)).await;
                     continue;
                 }
@@ -518,7 +732,7 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                     }
                     return;
                 }
-                
+
                 match result {
                     Ok(StorageKeyValuePair { value, .. }) => {
                         if let Some(storage_request) = value {
@@ -528,9 +742,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                 // Skip files ending with .ff.ec_metadata, .ff, or .ec
                                 if file_name.ends_with(".ff.ec_metadata")
                                     || file_name.ends_with(".ff")
-                                    || file_name.ends_with(".ec") 
+                                    || file_name.ends_with(".ec")
                                     || file_name.ends_with(".s.folder")
-                                    || file_name.ends_with(".s.folder.ec_metadata"){
+                                    || file_name.ends_with(".s.folder.ec_metadata")
+                                {
                                     continue;
                                 }
 
@@ -539,17 +754,22 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                 let file_size_in_bytes = 0;
 
                                 let owner_ss58 = format!("{}", storage_request.owner);
-                                let validator_ss58 = format!("{}", storage_request.selected_validator);
+                                let validator_ss58 =
+                                    format!("{}", storage_request.selected_validator);
                                 let block_number = storage_request.last_charged_at as i64;
 
-                                let miner_ids_json = if let Some(miner_ids) = &storage_request.miner_ids {
-                                    let miner_ids_vec: Vec<String> = miner_ids.0.iter()
-                                        .map(|id| bounded_vec_to_string(&id.0))
-                                        .collect();
-                                    serde_json::to_string(&miner_ids_vec).unwrap_or_else(|_| "[]".to_string())
-                                } else {
-                                    "[]".to_string()
-                                };
+                                let miner_ids_json =
+                                    if let Some(miner_ids) = &storage_request.miner_ids {
+                                        let miner_ids_vec: Vec<String> = miner_ids
+                                            .0
+                                            .iter()
+                                            .map(|id| bounded_vec_to_string(&id.0))
+                                            .collect();
+                                        serde_json::to_string(&miner_ids_vec)
+                                            .unwrap_or_else(|_| "[]".to_string())
+                                    } else {
+                                        "[]".to_string()
+                                    };
 
                                 let is_folder = file_name.ends_with("-folder")
                                     || file_name.ends_with(".folder")
@@ -558,7 +778,8 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
 
                                 let file_type = if file_name.ends_with(".ec_metadata")
                                     || file_name.ends_with(".folder.ec_metadata")
-                                    || file_name.ends_with("-folder.ec_metadata") {
+                                    || file_name.ends_with("-folder.ec_metadata")
+                                {
                                     "private".to_string()
                                 } else {
                                     "public".to_string()
@@ -567,9 +788,13 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                 let base_file_name = {
                                     let mut name = file_name.clone();
                                     if name.ends_with(".folder.ec_metadata") {
-                                        name = name.trim_end_matches(".folder.ec_metadata").to_string();
+                                        name = name
+                                            .trim_end_matches(".folder.ec_metadata")
+                                            .to_string();
                                     } else if name.ends_with("-folder.ec_metadata") {
-                                        name = name.trim_end_matches("-folder.ec_metadata").to_string();
+                                        name = name
+                                            .trim_end_matches("-folder.ec_metadata")
+                                            .to_string();
                                     } else if name.ends_with(".ec_metadata") {
                                         name = name.trim_end_matches(".ec_metadata").to_string();
                                     } else if name.ends_with(".folder") {
@@ -585,12 +810,20 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
 
                                 let mut source = "Hippius".to_string();
                                 if file_type == "public" && public_sync_path.is_some() {
-                                    let public_path = format!("{}/{}", public_sync_path.as_ref().unwrap(), base_file_name);
+                                    let public_path = format!(
+                                        "{}/{}",
+                                        public_sync_path.as_ref().unwrap(),
+                                        base_file_name
+                                    );
                                     if Path::new(&public_path).exists() {
                                         source = public_path;
                                     }
                                 } else if file_type == "private" && private_sync_path.is_some() {
-                                    let private_path = format!("{}/{}", private_sync_path.as_ref().unwrap(), base_file_name);
+                                    let private_path = format!(
+                                        "{}/{}",
+                                        private_sync_path.as_ref().unwrap(),
+                                        base_file_name
+                                    );
                                     if Path::new(&private_path).exists() {
                                         source = private_path;
                                     }
@@ -629,16 +862,21 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                 storage_retry_count, max_storage_retries
                             );
                             eprintln!("[UserSync] Connection reset during storage iteration (attempt {}/{}): {e}", storage_retry_count, max_storage_retries);
-                            let _ = app_handle_clone.emit("app-event", AppEvent {
-                                event_type: "error".to_string(),
-                                message: "Connection to node was reset".to_string(),
-                                details: Some(error_message),
-                            });
+                            let _ = app_handle_clone.emit(
+                                "app-event",
+                                AppEvent {
+                                    event_type: "error".to_string(),
+                                    message: "Connection to node was reset".to_string(),
+                                    details: Some(error_message),
+                                },
+                            );
                             crate::substrate_client::clear_substrate_client();
                             match get_substrate_client().await {
                                 Ok(new_api) => {
                                     api = new_api;
-                                    println!("[UserSync] Successfully reconnected to substrate node");
+                                    println!(
+                                        "[UserSync] Successfully reconnected to substrate node"
+                                    );
                                     // Reinitialize the iterator after reconnection
                                     let new_storage_query = custom_runtime::storage()
                                         .ipfs_pallet()
@@ -663,60 +901,87 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                         Err(e) => {
                                             let error_message = format!("[UserSync] Failed to get latest storage after reconnect: {e}");
                                             eprintln!("[UserSync] Failed to get latest storage after reconnect: {e}");
-                                            let _ = app_handle_clone.emit("app-event", AppEvent {
-                                                event_type: "error".to_string(),
-                                                message: "Failed to reconnect to node".to_string(),
-                                                details: Some(error_message),
-                                            });
+                                            let _ = app_handle_clone.emit(
+                                                "app-event",
+                                                AppEvent {
+                                                    event_type: "error".to_string(),
+                                                    message: "Failed to reconnect to node"
+                                                        .to_string(),
+                                                    details: Some(error_message),
+                                                },
+                                            );
                                             if storage_retry_count >= max_storage_retries {
                                                 eprintln!("[UserSync] Max storage retries reached, waiting 5 minutes");
                                                 time::sleep(Duration::from_secs(300)).await;
                                                 storage_retry_count = 0;
                                             } else {
-                                                let wait_time = std::cmp::min(30 * storage_retry_count, 300);
+                                                let wait_time =
+                                                    std::cmp::min(30 * storage_retry_count, 300);
                                                 eprintln!("[UserSync] Retrying storage fetch in {} seconds...", wait_time);
-                                                time::sleep(Duration::from_secs(wait_time as u64)).await;
+                                                time::sleep(Duration::from_secs(wait_time as u64))
+                                                    .await;
                                             }
                                             continue;
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    let error_message = format!("[UserSync] Failed to reconnect to substrate client: {e}");
-                                    eprintln!("[UserSync] Failed to reconnect to substrate client: {e}");
-                                    let _ = app_handle_clone.emit("app-event", AppEvent {
-                                        event_type: "error".to_string(),
-                                        message: "Failed to reconnect to node client".to_string(),
-                                        details: Some(error_message),
-                                    });
+                                    let error_message = format!(
+                                        "[UserSync] Failed to reconnect to substrate client: {e}"
+                                    );
+                                    eprintln!(
+                                        "[UserSync] Failed to reconnect to substrate client: {e}"
+                                    );
+                                    let _ = app_handle_clone.emit(
+                                        "app-event",
+                                        AppEvent {
+                                            event_type: "error".to_string(),
+                                            message: "Failed to reconnect to node client"
+                                                .to_string(),
+                                            details: Some(error_message),
+                                        },
+                                    );
                                     if storage_retry_count >= max_storage_retries {
                                         eprintln!("[UserSync] Max storage retries reached, waiting 5 minutes");
                                         time::sleep(Duration::from_secs(300)).await;
                                         storage_retry_count = 0;
                                     } else {
-                                        let wait_time = std::cmp::min(30 * storage_retry_count, 300);
-                                        eprintln!("[UserSync] Retrying storage fetch in {} seconds...", wait_time);
+                                        let wait_time =
+                                            std::cmp::min(30 * storage_retry_count, 300);
+                                        eprintln!(
+                                            "[UserSync] Retrying storage fetch in {} seconds...",
+                                            wait_time
+                                        );
                                         time::sleep(Duration::from_secs(wait_time as u64)).await;
                                     }
                                     continue;
                                 }
                             }
                         } else {
-                            let error_message = format!("[UserSync] Error decoding storage request entry: {e}");
+                            let error_message =
+                                format!("[UserSync] Error decoding storage request entry: {e}");
                             eprintln!("[UserSync] Error decoding storage request entry: {e}");
-                            let _ = app_handle_clone.emit("app-event", AppEvent {
-                                event_type: "error".to_string(),
-                                message: "Failed to read on-chain data".to_string(),
-                                details: Some(error_message),
-                            });
+                            let _ = app_handle_clone.emit(
+                                "app-event",
+                                AppEvent {
+                                    event_type: "error".to_string(),
+                                    message: "Failed to read on-chain data".to_string(),
+                                    details: Some(error_message),
+                                },
+                            );
                             storage_retry_count += 1;
                             if storage_retry_count >= max_storage_retries {
-                                eprintln!("[UserSync] Max storage retries reached, waiting 5 minutes");
+                                eprintln!(
+                                    "[UserSync] Max storage retries reached, waiting 5 minutes"
+                                );
                                 time::sleep(Duration::from_secs(300)).await;
                                 storage_retry_count = 0;
                             } else {
                                 let wait_time = std::cmp::min(30 * storage_retry_count, 300);
-                                eprintln!("[UserSync] Retrying storage fetch in {} seconds...", wait_time);
+                                eprintln!(
+                                    "[UserSync] Retrying storage fetch in {} seconds...",
+                                    wait_time
+                                );
                                 time::sleep(Duration::from_secs(wait_time as u64)).await;
                             }
                             continue;
@@ -735,11 +1000,14 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                         Ok(_) => println!("[UserSync] Cleared non-S3 user_profiles records"),
                         Err(e) => {
                             eprintln!("[UserSync] Failed to clear user_profiles table: {e}");
-                            let _ = app_handle_clone.emit("app-event", AppEvent {
-                                event_type: "error".to_string(),
-                                message: "Failed to clear user profiles table".to_string(),
-                                details: Some(e.to_string()),
-                            });
+                            let _ = app_handle_clone.emit(
+                                "app-event",
+                                AppEvent {
+                                    event_type: "error".to_string(),
+                                    message: "Failed to clear user profiles table".to_string(),
+                                    details: Some(e.to_string()),
+                                },
+                            );
                             time::sleep(Duration::from_secs(120)).await;
                             continue;
                         }
@@ -815,7 +1083,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                    type, is_folder
             FROM user_profiles
             WHERE owner = ?
-            "#
+            "#,
         )
         .bind(&owner)
         .fetch_all(pool)
@@ -833,7 +1101,11 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                     let base_name = {
                         // If file_name has a path like "public-syn/pub-sync.jpeg", use only the last segment
                         let mut name = if file_name.contains('/') {
-                            file_name.rsplit('/').next().unwrap_or(&file_name).to_string()
+                            file_name
+                                .rsplit('/')
+                                .next()
+                                .unwrap_or(&file_name)
+                                .to_string()
                         } else {
                             file_name.clone()
                         };
@@ -861,7 +1133,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                     // Check if the file/folder exists in sync paths
                     if type_ == "public" && public_sync_path.is_some() {
                         let sync_path = public_sync_path.as_ref().unwrap();
-                        
+
                         if is_folder {
                             // For folders, check if the folder exists directly in the sync path
                             let full_path = format!("{}/{}", sync_path, base_name);
@@ -870,7 +1142,9 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                             } else {
                                 // Also check if folder exists without any modifications
                                 let direct_path = format!("{}/{}", sync_path, file_name);
-                                if Path::new(&direct_path).exists() && Path::new(&direct_path).is_dir() {
+                                if Path::new(&direct_path).exists()
+                                    && Path::new(&direct_path).is_dir()
+                                {
                                     source = direct_path;
                                 } else {
                                     // Check for folder with common suffixes
@@ -882,9 +1156,11 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                                         format!("{}/{}.folder.ec_metadata", sync_path, base_name),
                                         format!("{}/{}-folder.ec_metadata", sync_path, base_name),
                                     ];
-                                    
+
                                     for variation in variations {
-                                        if Path::new(&variation).exists() && Path::new(&variation).is_dir() {
+                                        if Path::new(&variation).exists()
+                                            && Path::new(&variation).is_dir()
+                                        {
                                             source = variation;
                                             break;
                                         }
@@ -906,7 +1182,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                         }
                     } else if type_ == "private" && private_sync_path.is_some() {
                         let sync_path = private_sync_path.as_ref().unwrap();
-                        
+
                         if is_folder {
                             // For folders, check if the folder exists directly in the sync path
                             let full_path = format!("{}/{}", sync_path, base_name);
@@ -915,7 +1191,9 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                             } else {
                                 // Also check if folder exists without any modifications
                                 let direct_path = format!("{}/{}", sync_path, file_name);
-                                if Path::new(&direct_path).exists() && Path::new(&direct_path).is_dir() {
+                                if Path::new(&direct_path).exists()
+                                    && Path::new(&direct_path).is_dir()
+                                {
                                     source = direct_path;
                                 } else {
                                     // Check for folder with common suffixes
@@ -927,9 +1205,11 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                                         format!("{}/{}.folder.ec_metadata", sync_path, base_name),
                                         format!("{}/{}-folder.ec_metadata", sync_path, base_name),
                                     ];
-                                    
+
                                     for variation in variations {
-                                        if Path::new(&variation).exists() && Path::new(&variation).is_dir() {
+                                        if Path::new(&variation).exists()
+                                            && Path::new(&variation).is_dir()
+                                        {
                                             source = variation;
                                             break;
                                         }
@@ -954,7 +1234,7 @@ pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileW
                     // If source is still "Hippius", check file_paths table
                     if source == "Hippius" {
                         if let Ok(path_record) = sqlx::query_as::<_, (String,)>(
-                            "SELECT path FROM file_paths WHERE file_name = ? LIMIT 1"
+                            "SELECT path FROM file_paths WHERE file_name = ? LIMIT 1",
                         )
                         .bind(&file_name)
                         .fetch_optional(pool)
@@ -1004,7 +1284,7 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
             SELECT file_name, file_size_in_bytes, type
             FROM user_profiles
             WHERE owner = ?
-            "#
+            "#,
         )
         .bind(&owner)
         .fetch_all(pool)
@@ -1036,6 +1316,9 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
 
 #[tauri::command]
 pub async fn start_user_profile_sync_tauri(app_handle: AppHandle, account_id: String) {
-    println!("[UserSync] Received request to start sync for account: {}", account_id);
+    println!(
+        "[UserSync] Received request to start sync for account: {}",
+        account_id
+    );
     start_user_sync(app_handle, &account_id);
 }
