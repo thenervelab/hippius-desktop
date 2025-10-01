@@ -19,14 +19,15 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
     <th
       className={cn(
         "font-semibold text-sm px-4 border-x first:border-l-transparent last:border-r-transparent border-b py-3.5 text-grey-70",
-        canSort && "pr-8",
+        canSort && "pr-8 cursor-pointer hover:bg-gray-50/30",
         sortOrder && canSort && cn("text-primary-50", activeSortClassName),
         className
       )}
       onClick={(event) => {
-        header.column.toggleSorting(
-          sortOrder === "asc" || !sortOrder ? true : false
-        );
+        if (canSort) {
+          console.log(`Clicking on column: ${header.id}, current sort: ${sortOrder}`);
+          header.column.toggleSorting();
+        }
         if (onClick) {
           onClick(event);
         }
@@ -45,10 +46,10 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
         {canSort ? (
           <button className={cn("relative flex h-fit w-fit whitespace-nowrap", header.column.columnDef.header !== "hALPHA EARNED" && "uppercase")}>
             {flexRender(header.column.columnDef.header, header.getContext())}
-            {sortOrder && (
+            {sortOrder && canSort && (
               <ChevronDown
                 className={cn(
-                  "absolute mt-0.5 -right-5 w-4 duration-300",
+                  "absolute mt-0.5 -right-5 w-4 text-primary-50 duration-300",
                   sortOrder === "asc" && "rotate-180"
                 )}
               />

@@ -172,6 +172,20 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     setShouldResetPagination(true);
   }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
 
+  // Reset pagination when view changes between private/public
+  useEffect(() => {
+    console.log("View changed, resetting pagination");
+    // Force reset pagination
+    setShouldResetPagination(true);
+    setCurrentPage(1);
+    
+    // Also reset search and filters to start fresh
+    setSearchTerm("");
+    setSelectedFileTypes([]);
+    setSelectedDate("");
+    setSelectedFileSize(0);
+  }, [isPrivateView, setCurrentPage]);
+
   // Handle pagination reset
   useEffect(() => {
     if (shouldResetPagination) {

@@ -370,7 +370,7 @@ const FilesContent: FC<FilesContentProps> = ({
 
             <div className="mt-2 font-medium text-center bg-primary-50 p-4 rounded-lg shadow-lg">
               <div className="text-white text-base">
-                Drop files here to upload them tosdfa
+                Drop files here to upload them to
               </div>
               <div className="flex items-center justify-center">
                 <HardDrive className="size-6 text-white mr-2" />
