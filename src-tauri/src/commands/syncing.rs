@@ -1,30 +1,36 @@
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{reset_all_sync_state, prepare_for_new_sync, stop_sync_for_scope, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE};
+use crate::sync_shared::{
+    prepare_for_new_sync, reset_all_sync_state, stop_sync_for_scope, S3_PRIVATE_SYNC_STATE,
+    S3_PUBLIC_SYNC_STATE,
+};
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
-use tauri::Manager;
-use tokio::sync::Mutex;
-use std::sync::Arc;
-use sqlx;
-use sp_core::sr25519;
-use sp_core::Pair;
+use base64 as b64;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
-use base64 as b64;
+use sp_core::sr25519;
+use sp_core::Pair;
+use sqlx;
+use std::sync::Arc;
+use tauri::Manager;
+use tokio::sync::Mutex;
 
 /// Stops sync processes for a specific scope ("public" or "private")
 #[tauri::command]
 pub async fn stop_sync_for_scope_command(scope: String) -> Result<(), String> {
     println!("[StopSync] Stopping sync for scope: {}", scope);
-    
+
     // Validate scope
     if scope != "public" && scope != "private" {
-        return Err(format!("Invalid scope: {}. Must be 'public' or 'private'", scope));
+        return Err(format!(
+            "Invalid scope: {}. Must be 'public' or 'private'",
+            scope
+        ));
     }
-    
+
     // Call the shared function to stop sync for the specified scope
     stop_sync_for_scope(&scope);
-    
+
     println!("[StopSync] Successfully stopped sync for scope: {}", scope);
     Ok(())
 }
@@ -49,7 +55,7 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
     std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
     std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
     std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
-    
+
     // Get AWS binary path
     let aws_binary_path = match crate::commands::node::get_aws_binary_path().await {
         Ok(path) => path,
@@ -67,28 +73,45 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
         path_separator,
         std::env::var("PATH").unwrap_or_default()
     );
-    
+
     // Helper function to run aws configure commands
     fn run_aws_configure(aws_binary_path: &std::path::Path, dynamic_path: &str, args: &[&str]) {
         use std::process::Command;
-        
+
         let mut cmd = Command::new(aws_binary_path);
-        cmd.env("PATH", dynamic_path)
-           .args(args);
-        
+        cmd.env("PATH", dynamic_path).args(args);
+
         // Add Windows-specific flags to suppress terminal window
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
-        
+
         let _ = cmd.status();
     }
-    
+
     // Configure AWS S3 multipart upload settings
-    run_aws_configure(&aws_binary_path, &dynamic_path, &["configure", "set", "default.s3.multipart_chunksize", "134217728"]);
-    run_aws_configure(&aws_binary_path, &dynamic_path, &["configure", "set", "default.s3.multipart_threshold", "134217728"]);
+    run_aws_configure(
+        &aws_binary_path,
+        &dynamic_path,
+        &[
+            "configure",
+            "set",
+            "default.s3.multipart_chunksize",
+            "134217728",
+        ],
+    );
+    run_aws_configure(
+        &aws_binary_path,
+        &dynamic_path,
+        &[
+            "configure",
+            "set",
+            "default.s3.multipart_threshold",
+            "134217728",
+        ],
+    );
 }
 
 #[tauri::command]
@@ -98,19 +121,19 @@ pub async fn initialize_sync(
     mnemonic: String,
 ) -> Result<(), String> {
     let state = app.state::<Arc<AppState>>();
-    
+
     // First, signal cancellation for any existing sync processes
     reset_all_sync_state();
-    
+
     // Cancel any existing sync tasks
     let mut sync_state = state.sync.lock().await;
     for task in sync_state.tasks.drain(..) {
         task.abort(); // Cancel the previous sync tasks
     }
-    
+
     // Wait a bit for cleanup to complete
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    
+
     // Prepare for new sync (reset cancellation token)
     prepare_for_new_sync();
 
@@ -136,7 +159,9 @@ pub async fn initialize_sync(
         let private_enabled = match get_private_sync_path().await {
             Ok(p) if !p.trim().is_empty() => true,
             _ => {
-                println!("[SyncInit] No private sync path configured; skipping private folder sync task");
+                println!(
+                    "[SyncInit] No private sync path configured; skipping private folder sync task"
+                );
                 false
             }
         };
@@ -144,7 +169,9 @@ pub async fn initialize_sync(
         let public_enabled = match get_public_sync_path().await {
             Ok(p) if !p.trim().is_empty() => true,
             _ => {
-                println!("[SyncInit] No public sync path configured; skipping public folder sync task");
+                println!(
+                    "[SyncInit] No public sync path configured; skipping public folder sync task"
+                );
                 false
             }
         };
@@ -158,22 +185,40 @@ pub async fn initialize_sync(
 
         let folder_task = if private_enabled {
             Some(tokio::spawn(async move {
-                start_private_folder_sync_tauri(app_handle_folder_sync, account_for_bg, mnemonic_for_bg).await;
+                start_private_folder_sync_tauri(
+                    app_handle_folder_sync,
+                    account_for_bg,
+                    mnemonic_for_bg,
+                )
+                .await;
             }))
-        } else { None };
+        } else {
+            None
+        };
 
         let public_folder_task = if public_enabled {
             Some(tokio::spawn(async move {
-                start_public_folder_sync_tauri(app_handle_public_folder_sync, account_clone2, mnemonic_clone).await;
+                start_public_folder_sync_tauri(
+                    app_handle_public_folder_sync,
+                    account_clone2,
+                    mnemonic_clone,
+                )
+                .await;
             }))
-        } else { None };
+        } else {
+            None
+        };
 
         // Record task handles into global AppState so cleanup can abort them
         let state = app_for_bg.state::<Arc<AppState>>();
         let mut guard = state.sync.lock().await;
         // guard.tasks.push(user_profile_task);
-        if let Some(handle) = public_folder_task { guard.tasks.push(handle); }
-        if let Some(handle) = folder_task { guard.tasks.push(handle); }
+        if let Some(handle) = public_folder_task {
+            guard.tasks.push(handle);
+        }
+        if let Some(handle) = folder_task {
+            guard.tasks.push(handle);
+        }
 
         // Start S3 inventory cron in background (runs every 30 seconds)
         if let Some(pool) = crate::DB_POOL.get() {
@@ -185,12 +230,31 @@ pub async fn initialize_sync(
                 let public_cron_handle = tokio::spawn(async move {
                     let interval = 30u64; // 30 seconds
                     loop {
-                        match crate::sync_shared::list_bucket_contents(account_for_cron_pub.clone(), "public".to_string()).await {
+                        match crate::sync_shared::list_bucket_contents(
+                            account_for_cron_pub.clone(),
+                            "public".to_string(),
+                        )
+                        .await
+                        {
                             Ok(items) => {
-                                if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool_pub, &account_for_cron_pub, "public", &items).await {
-                                    eprintln!("[S3InventoryCron][public] Failed storing listing: {}", e);
+                                if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(
+                                    &pool_pub,
+                                    &account_for_cron_pub,
+                                    "public",
+                                    &items,
+                                )
+                                .await
+                                {
+                                    eprintln!(
+                                        "[S3InventoryCron][public] Failed storing listing: {}",
+                                        e
+                                    );
                                 } else {
-                                    println!("[S3InventoryCron][public] Stored {} items for {}", items.len(), account_for_cron_pub);
+                                    println!(
+                                        "[S3InventoryCron][public] Stored {} items for {}",
+                                        items.len(),
+                                        account_for_cron_pub
+                                    );
                                 }
                             }
                             Err(e) => eprintln!("[S3InventoryCron][public] List failed: {}", e),
@@ -209,12 +273,31 @@ pub async fn initialize_sync(
                 let private_cron_handle = tokio::spawn(async move {
                     let interval = 30u64; // 30 seconds
                     loop {
-                        match crate::sync_shared::list_bucket_contents(account_for_cron_priv.clone(), "private".to_string()).await {
+                        match crate::sync_shared::list_bucket_contents(
+                            account_for_cron_priv.clone(),
+                            "private".to_string(),
+                        )
+                        .await
+                        {
                             Ok(items) => {
-                                if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(&pool_priv, &account_for_cron_priv, "private", &items).await {
-                                    eprintln!("[S3InventoryCron][private] Failed storing listing: {}", e);
+                                if let Err(e) = crate::sync_shared::store_bucket_listing_in_db(
+                                    &pool_priv,
+                                    &account_for_cron_priv,
+                                    "private",
+                                    &items,
+                                )
+                                .await
+                                {
+                                    eprintln!(
+                                        "[S3InventoryCron][private] Failed storing listing: {}",
+                                        e
+                                    );
                                 } else {
-                                    println!("[S3InventoryCron][private] Stored {} items for {}", items.len(), account_for_cron_priv);
+                                    println!(
+                                        "[S3InventoryCron][private] Stored {} items for {}",
+                                        items.len(),
+                                        account_for_cron_priv
+                                    );
                                 }
                             }
                             Err(e) => eprintln!("[S3InventoryCron][private] List failed: {}", e),
@@ -238,24 +321,27 @@ pub async fn initialize_sync(
 #[tauri::command]
 pub async fn cleanup_sync(app: tauri::AppHandle) -> Result<(), String> {
     println!("[Cleanup] Starting sync cleanup...");
-    
+
     // Stop all sync processes and reset state
     crate::sync_shared::stop_all_sync_processes();
 
     // Abort any running tasks
     let state = app.state::<Arc<AppState>>();
     let mut sync_state = state.sync.lock().await;
-    
+
     if !sync_state.tasks.is_empty() {
-        println!("[Cleanup] Aborting {} running tasks...", sync_state.tasks.len());
+        println!(
+            "[Cleanup] Aborting {} running tasks...",
+            sync_state.tasks.len()
+        );
         for task in sync_state.tasks.drain(..) {
             task.abort();
         }
-        
+
         // Give tasks a moment to handle the abort
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
-    
+
     println!("[Cleanup] Sync cleanup completed");
     Ok(())
 }
@@ -276,7 +362,9 @@ pub async fn load_encryption_key(pool: &sqlx::SqlitePool) -> Option<SbKey> {
         Ok(Some((bytes,))) => {
             if bytes.len() == secretbox::KEYBYTES {
                 Some(SbKey::from_slice(&bytes).unwrap())
-            } else { None }
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -297,7 +385,9 @@ fn encrypt_phrase(plain: &str, key: &SbKey) -> String {
 #[allow(deprecated)]
 pub fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
     let bytes = b64::decode(b64_in).ok()?;
-    if bytes.len() < secretbox::NONCEBYTES { return None; }
+    if bytes.len() < secretbox::NONCEBYTES {
+        return None;
+    }
     let (nonce_b, ct) = bytes.split_at(secretbox::NONCEBYTES);
     let nonce = SbNonce::from_slice(nonce_b)?;
     let pt = secretbox::open(ct, &nonce, key).ok()?;
@@ -314,11 +404,12 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
         let maybe_key = load_encryption_key(pool).await;
 
         match sqlx::query_as::<_, (String,)>(
-            "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1"
+            "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1",
         )
         .bind(&account_id)
         .fetch_optional(pool)
-        .await {
+        .await
+        {
             Ok(Some((stored_str,))) => {
                 if let Some(key) = &maybe_key {
                     // Try decrypt; if fails, treat as legacy plaintext and migrate
@@ -330,7 +421,7 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 } else {
                     return stored_str;
                 }
-            },
+            }
             Ok(None) => {
                 // Create a new subaccount (sr25519) and store it encrypted
                 let (_pair, phrase, _seed) = sr25519::Pair::generate_with_phrase(None);
@@ -341,15 +432,22 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                     phrase.clone()
                 };
                 if let Err(e) = sqlx::query(
-                    "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase) VALUES (?, ?)"
+                    "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase) VALUES (?, ?)",
                 )
                 .bind(&account_id)
                 .bind(&to_store)
                 .execute(pool)
-                .await {
-                    eprintln!("[SyncInit] Failed to insert new subaccount for {}: {}", account_id, e);
+                .await
+                {
+                    eprintln!(
+                        "[SyncInit] Failed to insert new subaccount for {}: {}",
+                        account_id, e
+                    );
                 } else {
-                    println!("[SyncInit] Stored new subaccount seed phrase for account_id={}", account_id);
+                    println!(
+                        "[SyncInit] Stored new subaccount seed phrase for account_id={}",
+                        account_id
+                    );
                 }
 
                 // Try to register subaccount on-chain; if we get the specific
@@ -359,11 +457,21 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 {
                     let main_seed_plain = mnemonic.clone();
                     let sub_seed_plain = phrase.clone();
-                    match crate::commands::substrate_tx::add_sub_account_tauri(main_seed_plain, sub_seed_plain).await {
-                        Ok(msg) => println!("[SyncInit] add_sub_account submitted successfully: {}", msg),
+                    match crate::commands::substrate_tx::add_sub_account_tauri(
+                        main_seed_plain,
+                        sub_seed_plain,
+                    )
+                    .await
+                    {
+                        Ok(msg) => {
+                            println!("[SyncInit] add_sub_account submitted successfully: {}", msg)
+                        }
                         Err(err) => {
                             let err_str = err.to_string();
-                            eprintln!("[SyncInit] Failed to submit add_sub_account extrinsic: {}", err_str);
+                            eprintln!(
+                                "[SyncInit] Failed to submit add_sub_account extrinsic: {}",
+                                err_str
+                            );
                             if err_str.contains("MainCannotBeSubAccount") {
                                 println!("[SyncInit] Detected MainCannotBeSubAccount; storing provided mnemonic as subaccount for account_id={}", account_id);
                                 // Encrypt mnemonic if key available, otherwise store plaintext
@@ -391,14 +499,17 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 }
 
                 return chosen_seed_for_session;
-            },
+            }
             Err(e) => {
                 eprintln!("[SyncInit] DB query error for sub_accounts ({}), falling back to provided mnemonic", e);
                 return mnemonic.clone();
             }
         }
     } else {
-        println!("[SyncInit] DB pool unavailable; falling back to provided mnemonic for account_id={}", account_id);
+        println!(
+            "[SyncInit] DB pool unavailable; falling back to provided mnemonic for account_id={}",
+            account_id
+        );
         return mnemonic.clone();
     }
 }

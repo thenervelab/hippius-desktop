@@ -1,5 +1,5 @@
-use crate::commands::substrate_tx::SyncPathResult;
 use crate::commands::substrate_tx::get_sync_path_internal;
+use crate::commands::substrate_tx::SyncPathResult;
 
 pub async fn get_public_sync_path() -> Result<String, String> {
     match get_sync_path_internal(true).await {

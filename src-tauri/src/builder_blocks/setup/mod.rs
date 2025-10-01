@@ -1,14 +1,8 @@
-use tauri::{
-    Builder, Manager, Wry,
-};
-use sqlx::sqlite::SqlitePool;
+use crate::{constants::substrate::WSS_ENDPOINT, DB_POOL};
 use dirs;
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
-use crate::{
-    DB_POOL,
-    constants::substrate::WSS_ENDPOINT,
-};
-
+use tauri::{Builder, Manager, Wry};
 
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas
@@ -97,9 +91,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
         // Check and add any missing columns
         let pragma_sql = format!("PRAGMA table_info({})", table_name);
-        let columns_info = sqlx::query(&pragma_sql)
-            .fetch_all(pool)
-            .await?;
+        let columns_info = sqlx::query(&pragma_sql).fetch_all(pool).await?;
 
         for (column_name, column_type) in *columns {
             let column_exists = columns_info.iter().any(|row| {
@@ -108,10 +100,14 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             });
 
             if !column_exists {
-                println!("[Setup] Adding column {} to table {}", column_name, table_name);
-                sqlx::query(
-                    &format!("ALTER TABLE {} ADD COLUMN {} {}", table_name, column_name, column_type)
-                )
+                println!(
+                    "[Setup] Adding column {} to table {}",
+                    column_name, table_name
+                );
+                sqlx::query(&format!(
+                    "ALTER TABLE {} ADD COLUMN {} {}",
+                    table_name, column_name, column_type
+                ))
                 .execute(pool)
                 .await?;
             }
@@ -124,7 +120,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             key_name TEXT NOT NULL UNIQUE,
             key BLOB NOT NULL
-        )"
+        )",
     )
     .execute(pool)
     .await?;
@@ -135,7 +131,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             path TEXT NOT NULL,
             type TEXT NOT NULL UNIQUE,
             timestamp INTEGER NOT NULL
-        )"
+        )",
     )
     .execute(pool)
     .await?;
@@ -145,7 +141,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             id INTEGER PRIMARY KEY CHECK (id = 1),
             endpoint TEXT NOT NULL,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )"
+        )",
     )
     .execute(pool)
     .await?;
@@ -157,7 +153,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             file_hash TEXT NOT NULL,
             timestamp INTEGER NOT NULL,
             path TEXT NOT NULL
-        )"
+        )",
     )
     .execute(pool)
     .await?;
@@ -168,7 +164,7 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             account_id TEXT NOT NULL,
             sub_account_seed_phrase TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )"
+        )",
     )
     .execute(pool)
     .await?;
@@ -179,32 +175,27 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
             println!("[Setup] .setup() closure called in setup.rs");
-            
+
             let handle = app.handle().clone();
             let win = app.get_webview_window("main").expect("main window not found");
 
             if let Some(m) = win.current_monitor()? {
-               
                 let phys   = m.size();
                 let origin = m.position();        // PhysicalPosition<i32>
 
-                
                 let w = (phys.width as f64 * 0.8) as u32;
                 let h = (phys.height as f64 * 0.9) as u32;
 
-              
                 let pos_x = origin.x + ((phys.width  as i32 - w as i32) / 2);
                 let pos_y = origin.y + ((phys.height as i32 - h as i32) / 2);
 
-                
                 win.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w, height: h }))?;
                 win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
-                win.show()?;       
+                win.show()?;
             }
             // Spawn async task for database initialization and IPFS daemon
             tauri::async_runtime::spawn(async move {
                 println!("[Setup] async block started in setup.rs");
-                
                 // Database initialization
                 let home_dir = dirs::home_dir().expect("Failed to get home directory");
                 let db_dir = home_dir.join(".hippius");
@@ -312,7 +303,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 // after update check is complete via start_ipfs_setup_when_ready command
                 println!("[Setup] IPFS daemon startup deferred until after update check");
             });
-            
             Ok(())
         })
-    }
+}

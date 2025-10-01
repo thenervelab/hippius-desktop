@@ -1,15 +1,13 @@
-use sodiumoxide::crypto::secretbox;
 use crate::DB_POOL;
-use sqlx::Row;
-use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
+use sodiumoxide::crypto::secretbox;
+use sqlx::Row;
 
 /// Generate a random key name
 fn generate_key_name() -> String {
     let mut rng = thread_rng();
-    let random_string: String = (0..8)
-        .map(|_| rng.sample(Alphanumeric) as char)
-        .collect();
+    let random_string: String = (0..8).map(|_| rng.sample(Alphanumeric) as char).collect();
     format!("key_{}", random_string)
 }
 
@@ -26,16 +24,14 @@ pub async fn create_and_store_encryption_key() -> Result<(), String> {
         .execute(pool)
         .await
         .map_err(|e| format!("DB error (create table): {}", e))?;
-        
-        sqlx::query(
-            "INSERT INTO encryption_keys (key_name, key) VALUES (?, ?)"
-        )
-        .bind(&key_name)
-        .bind(&key_bytes)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("DB error (insert key): {}", e))?;
-        
+
+        sqlx::query("INSERT INTO encryption_keys (key_name, key) VALUES (?, ?)")
+            .bind(&key_name)
+            .bind(&key_bytes)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("DB error (insert key): {}", e))?;
+
         println!("Created new encryption key: {}", key_name);
         Ok(())
     } else {
@@ -47,22 +43,23 @@ pub async fn create_and_store_encryption_key() -> Result<(), String> {
 pub async fn import_encryption_key(key_bytes: Vec<u8>) -> Result<String, String> {
     // Validate key length
     if key_bytes.len() != secretbox::KEYBYTES {
-        return Err(format!("Invalid key length. Expected {} bytes", secretbox::KEYBYTES));
+        return Err(format!(
+            "Invalid key length. Expected {} bytes",
+            secretbox::KEYBYTES
+        ));
     }
 
     if let Some(pool) = DB_POOL.get() {
         // Generate random name for imported key
         let key_name = generate_key_name();
-        
-        sqlx::query(
-            "INSERT INTO encryption_keys (key_name, key) VALUES (?, ?)"
-        )
-        .bind(&key_name)
-        .bind(&key_bytes)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("DB error (insert imported key): {}", e))?;
-        
+
+        sqlx::query("INSERT INTO encryption_keys (key_name, key) VALUES (?, ?)")
+            .bind(&key_name)
+            .bind(&key_bytes)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("DB error (insert imported key): {}", e))?;
+
         Ok(key_name)
     } else {
         Err("DB_POOL not initialized".to_string())
@@ -84,7 +81,10 @@ async fn get_latest_encryption_key_from_db() -> Result<secretbox::Key, String> {
 }
 
 /// Decrypts file data using the key from the DB, extracting the nonce.
-pub async fn decrypt_file(encrypted_data: &[u8], encryption_key: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
+pub async fn decrypt_file(
+    encrypted_data: &[u8],
+    encryption_key: Option<Vec<u8>>,
+) -> Result<Vec<u8>, String> {
     if encrypted_data.len() < secretbox::NONCEBYTES {
         return Err("Encrypted data too short".to_string());
     }
@@ -92,8 +92,8 @@ pub async fn decrypt_file(encrypted_data: &[u8], encryption_key: Option<Vec<u8>>
     let key = match encryption_key {
         Some(key_bytes) => {
             secretbox::Key::from_slice(&key_bytes).ok_or("Invalid key length".to_string())?
-        },
-        None => get_latest_encryption_key_from_db().await?
+        }
+        None => get_latest_encryption_key_from_db().await?,
     };
     let nonce = secretbox::Nonce::from_slice(nonce_bytes).ok_or("Invalid nonce")?;
     secretbox::open(ciphertext, &nonce, &key).map_err(|_| "Decryption failed".to_string())
@@ -107,12 +107,15 @@ pub async fn list_encryption_keys() -> Result<Vec<(String, i64)>, String> {
             .fetch_all(pool)
             .await
             .map_err(|e| format!("DB error (fetch keys): {}", e))?;
-            
-        Ok(rows.iter().map(|row| {
-            let key_bytes: Vec<u8> = row.get("key");
-            let key_b64 = base64::encode(&key_bytes);
-            (key_b64, row.get::<i64, _>("id"))
-        }).collect())
+
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let key_bytes: Vec<u8> = row.get("key");
+                let key_b64 = base64::encode(&key_bytes);
+                (key_b64, row.get::<i64, _>("id"))
+            })
+            .collect())
     } else {
         Err("DB_POOL not initialized".to_string())
     }
