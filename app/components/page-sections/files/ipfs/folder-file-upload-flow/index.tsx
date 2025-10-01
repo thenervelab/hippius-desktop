@@ -174,6 +174,8 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     subfolderPath: folderPath || null
                 };
 
+                console.log("Invoking", functionName, "with params:", params);
+
                 await invoke<string>(functionName, params);
 
                 // Update progress

@@ -14,17 +14,38 @@ import { toast } from "sonner";
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
 const HIPPIUS_OPEN_MODAL_EVENT = "hippius:open-modal";
 
-const IPFSNoEntriesFound: React.FC<{ isRecentFiles?: boolean }> = ({
+interface IPFSNoEntriesFoundProps {
+  isRecentFiles?: boolean;
+  isPrivateView?: boolean;
+  isSyncPathConfigured?: boolean;
+  isCheckingSyncPath?: boolean;
+  onStartSyncing?: () => void;
+}
+
+const IPFSNoEntriesFound: React.FC<IPFSNoEntriesFoundProps> = ({
   isRecentFiles = false,
+  isPrivateView = false,
+  isSyncPathConfigured = true,
+  isCheckingSyncPath = false,
+  onStartSyncing,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFiles = useCallback((files: FileList) => {
+  const handleFiles = useCallback(async (files: FileList) => {
     if (files.length === 0) {
       toast.error("No Files Found");
       return;
     }
+
+    // Check if sync path is configured for non-recent files
+    if (!isRecentFiles && !isSyncPathConfigured) {
+      toast.error(
+        `Please select a sync path for ${isPrivateView ? "private" : "public"} files before uploading.`
+      );
+      return;
+    }
+
     if (typeof window !== "undefined") {
       const event = new CustomEvent(HIPPIUS_DROP_EVENT, { detail: { files } });
       window.dispatchEvent(event);
@@ -32,11 +53,18 @@ const IPFSNoEntriesFound: React.FC<{ isRecentFiles?: boolean }> = ({
         `${files.length} ${files.length === 1 ? "file" : "files"} ready to upload`
       );
     }
-  }, []);
+  }, [isRecentFiles, isSyncPathConfigured, isPrivateView]);
 
   const handleOpenModal = useCallback((e?: React.MouseEvent) => {
     e?.preventDefault();
     e?.stopPropagation();
+
+    // If sync path is not configured and not recent files, trigger start syncing
+    if (!isRecentFiles && !isSyncPathConfigured) {
+      onStartSyncing?.();
+      return;
+    }
+
     if (typeof window !== "undefined") {
       const event = new CustomEvent(HIPPIUS_OPEN_MODAL_EVENT, {
         bubbles: true,
@@ -44,7 +72,7 @@ const IPFSNoEntriesFound: React.FC<{ isRecentFiles?: boolean }> = ({
       });
       window.dispatchEvent(event);
     }
-  }, []);
+  }, [isRecentFiles, isSyncPathConfigured, onStartSyncing]);
 
   const handleOnChange = (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -125,14 +153,28 @@ const IPFSNoEntriesFound: React.FC<{ isRecentFiles?: boolean }> = ({
             <div className="text-sm text-grey-60 font-medium mb-4 text-center">
               {!isDragging ? (
                 <>
-                  You currently do not have any entries uploaded to Hippius.{" "}
-                  <span className="text-primary-50">
-                    Drop files here or use the button
-                  </span>
+                  {!isSyncPathConfigured ? (
+                    <>
+                      You need to select a sync path for{" "}
+                      <span className="text-primary-50">
+                        {isPrivateView ? "private" : "public"} files
+                      </span>{" "}
+                      before uploading.
+                    </>
+                  ) : (
+                    <>
+                      You currently do not have any entries uploaded to Hippius.{" "}
+                      <span className="text-primary-50">
+                        Drop files here or use the button
+                      </span>
+                    </>
+                  )}
                 </>
               ) : (
                 <div className="mt-2 text-primary-50 font-bold">
-                  Drop files here to upload
+                  {!isSyncPathConfigured
+                    ? "Please set up sync path first"
+                    : "Drop files here to upload"}
                 </div>
               )}
             </div>
@@ -140,8 +182,13 @@ const IPFSNoEntriesFound: React.FC<{ isRecentFiles?: boolean }> = ({
             <CardButton
               onClick={handleOpenModal}
               className="flex gap-x-2 items-center w-full h-14"
+              disabled={isCheckingSyncPath}
             >
-              Upload a File
+              {isCheckingSyncPath
+                ? "Checking sync path..."
+                : !isSyncPathConfigured
+                  ? "Start Syncing"
+                  : "Upload a File"}
             </CardButton>
           </div>
 

@@ -376,8 +376,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       } catch (error) {
         console.error("Failed to set sync folder:", error);
         toast.error(
-          `Failed to set sync folder: ${
-            error instanceof Error ? error.message : "Unknown error"
+          `Failed to set sync folder: ${error instanceof Error ? error.message : "Unknown error"
           }`
         );
       }
@@ -424,8 +423,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     } catch (error) {
       console.error("Failed to skip sync folder setup:", error);
       toast.error(
-        `Failed to skip sync folder setup: ${
-          error instanceof Error ? error.message : "Unknown error"
+        `Failed to skip sync folder setup: ${error instanceof Error ? error.message : "Unknown error"
         }`
       );
     }
@@ -674,6 +672,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             totalPages={totalPages}
             setCurrentPage={setCurrentPage}
             isSyncPathEmpty={isCurrentSyncPathEmpty}
+            onSyncPathConfigured={handleStartSyncing}
           />
         </div>
       </FileSelectionProvider>
