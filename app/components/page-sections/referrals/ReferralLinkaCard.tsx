@@ -122,7 +122,7 @@ const ReferralLinkCard: React.FC = () => {
                   fullLink
                 ) : (
                   <span className="text-red-400 text-sm font-medium">
-                    Click 'Generate Link' to create one.
+                    Click &apos;Generate Link&apos; to create one.
                   </span>
                 )}
               </div>
