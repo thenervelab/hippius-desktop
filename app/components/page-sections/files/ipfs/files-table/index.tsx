@@ -11,6 +11,7 @@ import {
   getCoreRowModel,
   useReactTable,
   getSortedRowModel,
+  SortingState,
 } from "@tanstack/react-table";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import * as TableModule from "@/components/ui/alt-table";
@@ -274,14 +275,14 @@ const FilesTable: FC<FilesTableProps> = memo(
         return [
           ...(file.isFolder && folderUrl
             ? [
-                {
-                  icon: <Folder className="size-4" />,
-                  itemTitle: "Open",
-                  onItemClick: () => {
-                    router.push(folderUrl);
-                  },
+              {
+                icon: <Folder className="size-4" />,
+                itemTitle: "Open",
+                onItemClick: () => {
+                  router.push(folderUrl);
                 },
-              ]
+              },
+            ]
             : []),
           {
             icon: <Download className="size-4" />,
@@ -290,12 +291,12 @@ const FilesTable: FC<FilesTableProps> = memo(
           },
           ...(fileType === "video" || fileType === "image" || fileType === "PDF"
             ? [
-                {
-                  icon: <Icons.Eye className="size-4" />,
-                  itemTitle: "View",
-                  onItemClick: () => handleSetSelectedFile(file),
-                },
-              ]
+              {
+                icon: <Icons.Eye className="size-4" />,
+                itemTitle: "View",
+                onItemClick: () => handleSetSelectedFile(file),
+              },
+            ]
             : []),
           {
             icon: <Share className="size-4" />,
@@ -374,7 +375,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         ...selectionColumn,
         columnHelper.accessor("name", {
           header: "NAME",
-          enableSorting: false,
+          enableSorting: true,
           id: "name",
           cell: (info) => {
             const { fileFormat } = getFilePartsFromFileName(info.getValue());
@@ -552,8 +553,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                   >
                     {original.source && original.source.length > 53
                       ? original.source.slice(0, 40) +
-                        "..." +
-                        original.source.slice(-10)
+                      "..." +
+                      original.source.slice(-10)
                       : original.source ?? ""}
                   </div>
                 )}
@@ -599,21 +600,70 @@ const FilesTable: FC<FilesTableProps> = memo(
       ]
     );
 
+    // Add sorting state management
+    const [sorting, setSorting] = useState<SortingState>([]);
+    const [prevFileCount, setPrevFileCount] = useState<number>(0);
+
+    // Reset sorting when files change significantly (like switching views)
+    useEffect(() => {
+      // Check if we have a significant change in the number of files
+      // which indicates a view switch (private/public) or major filter change
+      if (prevFileCount > 0 && Math.abs(allFiles.length - prevFileCount) > 5) {
+        console.log('Files changed significantly, resetting sorting');
+        setSorting([]);
+      }
+
+      // Update the previous file count
+      setPrevFileCount(allFiles.length);
+    }, [allFiles.length, prevFileCount]);
+
+    const handleSortingChange = useCallback((updaterOrValue: SortingState | ((old: SortingState) => SortingState)) => {
+      console.log('Sorting changed:', updaterOrValue);
+      setSorting(updaterOrValue);
+    }, []);
+
     const tableConfig = useMemo(
       () => ({
         columns,
-        data: files || [],
+        data: allFiles || [], // Use all files for sorting, not just paginated data
+        state: {
+          sorting,
+        },
+        onSortingChange: handleSortingChange,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
+        manualSorting: false,
         defaultColumn: {
           minSize: 40,
           size: undefined,
         },
+        enableRowSelection: false,
+        enableMultiRowSelection: false,
+        enableSubRowSelection: false,
+        // Disable column resizing and other dynamic features
+        enableColumnResizing: false,
+        enableExpanding: false,
+        enableGrouping: false,
+        // Use stable ID generation
+        getRowId: (row: FormattedUserIpfsFile) => row.actualFileName || row.name,
+
       }),
-      [columns, files]
+      [columns, allFiles, sorting, handleSortingChange]
     );
 
+    console.log("allfiles", allFiles);
+    console.log("files", files);
     const table = useReactTable(tableConfig);
+
+    // Get sorted rows and manually paginate them
+    const paginatedRows = useMemo(() => {
+      const sortedRows = table.getRowModel().rows;
+      console.log('Sorted rows:', sortedRows.length, 'Current sorting state:', sorting);
+      const pageSize = 12; // Use the same page size as the paginated data
+      const start = (currentPage - 1) * pageSize;
+      const end = start + pageSize;
+      return sortedRows.slice(start, end);
+    }, [table, currentPage, sorting]);
 
     const headerRows = useMemo(
       () =>
@@ -628,12 +678,12 @@ const FilesTable: FC<FilesTableProps> = memo(
             ))}
           </TableModule.Tr>
         )),
-      [table, isSelectionMode]
+      [table, isSelectionMode, sorting]
     );
 
     const tableBody = useMemo(
       () =>
-        table.getRowModel().rows?.map((row) => {
+        paginatedRows?.map((row) => {
           const rowData = row.original;
           let rowState: "success" | "pending" | "error" = "success";
 
@@ -654,20 +704,20 @@ const FilesTable: FC<FilesTableProps> = memo(
                 rowState === "error" && "bg-red-200/20",
                 isSelectionMode && rowData.isAssigned && "cursor-pointer",
                 isSelectionMode &&
-                  selectedFiles.some(
-                    (f) => f.actualFileName === rowData.actualFileName
-                  ) &&
-                  rowData.isAssigned &&
-                  "bg-primary-60/10",
+                selectedFiles.some(
+                  (f) => f.actualFileName === rowData.actualFileName
+                ) &&
+                rowData.isAssigned &&
+                "bg-primary-60/10",
                 isSelectionMode &&
-                  !selectedFiles.some(
-                    (f) => f.actualFileName === rowData.actualFileName
-                  ) &&
-                  rowData.isAssigned &&
-                  "hover:bg-primary-60/8",
+                !selectedFiles.some(
+                  (f) => f.actualFileName === rowData.actualFileName
+                ) &&
+                rowData.isAssigned &&
+                "hover:bg-primary-60/8",
                 isSelectionMode &&
-                  !rowData.isAssigned &&
-                  "opacity-50 cursor-not-allowed"
+                !rowData.isAssigned &&
+                "opacity-50 cursor-not-allowed"
               )}
               onContextMenu={(e) => localHandleContextMenu(e, rowData)}
               onClick={(e) => {
@@ -680,8 +730,6 @@ const FilesTable: FC<FilesTableProps> = memo(
                 ) {
                   return;
                 }
-
-                console.log("here is again");
 
                 if (isSelectionMode && rowData.isAssigned) {
                   e.preventDefault();
@@ -705,7 +753,7 @@ const FilesTable: FC<FilesTableProps> = memo(
           );
         }),
       [
-        table,
+        paginatedRows,
         localHandleContextMenu,
         isSelectionMode,
         toggleFileSelection,
@@ -731,9 +779,8 @@ const FilesTable: FC<FilesTableProps> = memo(
       if (sharedState || !localIsFileDetailsOpen) return null;
       return (
         <SidebarDialog
-          heading={`${
-            localFileDetailsFile?.isFolder ? "Folder" : "File"
-          } Details`}
+          heading={`${localFileDetailsFile?.isFolder ? "Folder" : "File"
+            } Details`}
           open={localIsFileDetailsOpen}
           onOpenChange={setLocalIsFileDetailsOpen}
         >
@@ -770,9 +817,9 @@ const FilesTable: FC<FilesTableProps> = memo(
             className={cn(
               "duration-300 delay-300",
               isUnpinnedOpen &&
-                totalPages === 1 &&
-                files.length > 2 &&
-                "mb-[90px]"
+              totalPages === 1 &&
+              files.length > 2 &&
+              "mb-[90px]"
             )}
             key={`pagination-${currentPage}-${files?.length}`}
           >
