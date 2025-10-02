@@ -121,9 +121,15 @@ const ReferralLinkCard: React.FC = () => {
                 ) : lastCode ? (
                   fullLink
                 ) : (
-                  <span className="text-red-400 text-sm font-medium">
-                    Click &apos;Generate Link&apos; to create one.
-                  </span>
+                  <div className="text-grey-60 text-sm font-medium">
+                    Click{" "}
+                    <Dialog.Trigger asChild>
+                      <button className="text-grey-50 underline hover:text-grey-40 transition-colors font-medium">
+                        Generate Link
+                      </button>
+                    </Dialog.Trigger>{" "}
+                    to create one
+                  </div>
                 )}
               </div>
               {lastCode && (
