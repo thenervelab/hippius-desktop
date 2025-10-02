@@ -53,7 +53,7 @@ export const ONBOARDING_SCREENS = [
       "Effective Management of Permissions",
       "Securely Save API Key Seed",
     ],
-    imagePath: "/assets/onboarding/subaccounts.png",
+    imagePath: "/assets/onboarding/api-keys.png",
     imageMarginBottom: "mb-[75px]",
     imageClassName: "pl-4",
   },
