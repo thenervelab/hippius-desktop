@@ -2,7 +2,6 @@ use crate::commands::node::get_aws_binary_path;
 use crate::constants::folder_sync::SyncStatusResponse;
 use crate::user_profile_sync::UserProfileFileWithType;
 use crate::utils::file_operations::calculate_local_size;
-use hex;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -182,6 +181,7 @@ pub struct SyncActivityResponse {
 
 // --- Update Tauri Commands to Aggregate Data ---
 #[tauri::command]
+#[allow(dead_code)]
 pub fn get_sync_status() -> SyncStatusResponse {
     let private_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
     let public_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
@@ -821,7 +821,7 @@ pub async fn store_bucket_listing_in_db(
         .map(|item| item.name.as_str())
         .collect();
 
-    let deleted_file_names: Vec<&str> = recent_items
+    let _deleted_file_names: Vec<&str> = recent_items
         .iter()
         .filter(|item| item.action == "deleted")
         .map(|item| item.name.as_str())
@@ -899,7 +899,7 @@ pub async fn store_bucket_listing_in_db(
         .bind(
             chrono::DateTime::parse_from_rfc3339(&it.last_modified)
                 .unwrap_or_else(|_| chrono::Utc::now().into())
-                .timestamp() as i64,
+                .timestamp(),
         )
         .bind(&it.bucket_name)
         // WHERE NOT EXISTS conditions
@@ -970,7 +970,7 @@ pub async fn insert_bucket_items_if_absent(
             .bind(it.is_folder)
             .bind(chrono::DateTime::parse_from_rfc3339(&it.last_modified)
                 .unwrap_or_else(|_| chrono::Utc::now().into())
-                .timestamp() as i64)
+                .timestamp())
             .bind(&it.bucket_name)
             .execute(pool)
             .await?;

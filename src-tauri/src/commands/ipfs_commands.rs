@@ -2,6 +2,7 @@
 use crate::commands::node::get_aws_binary_path;
 use crate::commands::types::*;
 use crate::{
+    DB_POOL,
     utils::{
         accounts::decrypt_file,
         file_operations::{
@@ -9,12 +10,11 @@ use crate::{
         },
         ipfs::{download_from_ipfs, download_from_ipfs_async},
     },
-    DB_POOL,
 };
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use fs_extra;
-use futures::stream::{self, StreamExt};
 use futures::TryFutureExt;
+use futures::stream::{self, StreamExt};
 use reed_solomon_erasure::galois_8::ReedSolomon;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -33,11 +33,7 @@ fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<V
             path.remove(0);
         }
         // Sanitize the remaining segments
-        let cleaned: Vec<String> = path
-            .into_iter()
-            .map(|segment| segment)
-            .filter(|s| !s.is_empty())
-            .collect();
+        let cleaned: Vec<String> = path.into_iter().filter(|s| !s.is_empty()).collect();
         if cleaned.is_empty() {
             None
         } else {
@@ -70,16 +66,16 @@ pub async fn encrypt_and_upload_file(
 #[tauri::command]
 pub async fn download_and_decrypt_file(
     _account_id: String,
-    metadata_cid: String,
+    _metadata_cid: String,
     output_file: String,
-    encryption_key: Option<String>,
+    _encryption_key: Option<String>,
     source: String,
-    main_req_hash: String,
+    _main_req_hash: String,
 ) -> Result<(), String> {
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => path,
-        Err(e) => {
+        Err(_e) => {
             // Fall back to checking system PATH with which crate
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
                 path
@@ -107,7 +103,7 @@ pub async fn download_and_decrypt_file(
                 source, output_file, e
             )
         })?;
-        return Ok(());
+        Ok(())
     } else {
         let mut command = Command::new(&aws_binary_path);
         command
@@ -137,10 +133,11 @@ pub async fn download_and_decrypt_file(
                 status.code()
             ));
         }
-        return Ok(());
+        Ok(())
     }
 }
 
+#[allow(dead_code)]
 async fn reconstruct_and_decrypt_file(
     metadata: Metadata,
     output_path: String,
@@ -275,12 +272,12 @@ pub async fn encrypt_and_upload_folder(
 #[tauri::command]
 pub async fn download_and_decrypt_folder(
     _account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     output_dir: String,
-    encryption_key: Option<String>,
+    _encryption_key: Option<String>,
     source: String,
-    main_req_hash: String,
+    _main_req_hash: String,
 ) -> Result<(), String> {
     let source_path = Path::new(&source);
     let destination_path = Path::new(&output_dir).join(&folder_name);
@@ -289,7 +286,10 @@ pub async fn download_and_decrypt_folder(
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => path,
         Err(e) => {
-            eprintln!("[download_and_decrypt_folder] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            eprintln!(
+                "[download_and_decrypt_folder] Failed to get AWS binary path: {}, falling back to system PATH",
+                e
+            );
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
                 path
             } else {
@@ -353,9 +353,11 @@ pub async fn download_and_decrypt_folder(
         }
         return Ok(());
     }
+    #[allow(unreachable_code)]
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn reconstruct_and_decrypt_single_file(
     metadata_bytes: Vec<u8>,
     output_path: PathBuf,
@@ -460,7 +462,9 @@ pub async fn add_file_to_private_folder(
 ) -> Result<String, String> {
     println!("[add_file_to_private_folder] Adding file: {}", file_path);
     let path = std::path::PathBuf::from(&file_path);
-    let file_name = path
+
+    #[allow(dead_code)]
+    let _file_name = path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown")
@@ -497,7 +501,7 @@ pub async fn add_file_to_private_folder(
 #[tauri::command]
 pub async fn remove_file_from_private_folder(
     account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     file_name: String,
     _seed_phrase: String,
@@ -661,16 +665,19 @@ pub async fn upload_file_public(
 
 #[tauri::command]
 pub async fn download_file_public(
-    file_cid: String,
+    _file_cid: String,
     output_file: String,
     source: String,
-    main_req_hash: String,
+    _main_req_hash: String,
 ) -> Result<(), String> {
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => path,
         Err(e) => {
-            eprintln!("[download_file_public] Failed to get AWS binary path: {}, falling back to system PATH", e);
+            eprintln!(
+                "[download_file_public] Failed to get AWS binary path: {}, falling back to system PATH",
+                e
+            );
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
                 path
             } else {
@@ -737,6 +744,7 @@ pub async fn download_file_public(
         return Ok(());
     }
 
+    #[allow(unreachable_code)]
     Ok(())
 }
 
@@ -774,11 +782,11 @@ pub async fn public_upload_folder(
 #[tauri::command]
 pub async fn public_download_folder(
     _account_id: String,
-    folder_metadata_cid: String,
+    _folder_metadata_cid: String,
     folder_name: String,
     output_dir: String,
     source: String,
-    main_req_hash: String,
+    _main_req_hash: String,
 ) -> Result<(), String> {
     let source_path = Path::new(&source);
     let destination_path = Path::new(&output_dir).join(&folder_name);
@@ -786,7 +794,7 @@ pub async fn public_download_folder(
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => path,
-        Err(e) => {
+        Err(_e) => {
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
                 path
             } else {
@@ -811,7 +819,7 @@ pub async fn public_download_folder(
         fs_extra::dir::copy(source_path, &output_dir, &options)
             .map_err(|e| format!("Failed to copy directory locally: {}", e))?;
 
-        return Ok(());
+        Ok(())
     } else {
         // Ensure the parent directory for the output exists
         if let Some(parent) = destination_path.parent() {
@@ -851,7 +859,7 @@ pub async fn public_download_folder(
                 status.code()
             ));
         }
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -916,7 +924,7 @@ pub async fn list_folder_contents(
                 Ok(None) => {
                     format!("{}-{}", account_id, scope)
                 }
-                Err(e) => {
+                Err(_e) => {
                     format!("{}-{}", account_id, scope)
                 }
             }
@@ -934,18 +942,18 @@ pub async fn list_folder_contents(
         .cloned()
         .unwrap_or_else(|| vec![main_folder_name.clone()]);
     let s3_prefix = format!("{}/", path_parts.join("/"));
-    let full_s3_uri_prefix = format!("s3://{}/{}", bucket_name, s3_prefix);
+    let _full_s3_uri_prefix = format!("s3://{}/{}", bucket_name, s3_prefix);
 
     async fn get_sync_root(scope: &str) -> Result<PathBuf, String> {
         if scope == "public" {
             crate::utils::sync::get_public_sync_path()
                 .await
-                .map(|s| PathBuf::from(s))
+                .map(PathBuf::from)
                 .map_err(|e| e.to_string())
         } else {
             crate::utils::sync::get_private_sync_path()
                 .await
-                .map(|s| PathBuf::from(s))
+                .map(PathBuf::from)
                 .map_err(|e| e.to_string())
         }
     }
@@ -998,7 +1006,7 @@ pub async fn list_folder_contents(
     // Dynamically get the AWS binary path
     let aws_binary_path = match get_aws_binary_path().await {
         Ok(path) => path,
-        Err(e) => {
+        Err(_e) => {
             if let Ok(path) = which::which(if cfg!(windows) { "aws.exe" } else { "aws" }) {
                 path
             } else {
@@ -1263,11 +1271,7 @@ pub async fn list_folder_contents(
                 }
             });
 
-            if should_exclude {
-                false
-            } else {
-                true
-            }
+            !should_exclude
         })
         .collect();
 

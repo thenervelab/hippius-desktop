@@ -1,16 +1,17 @@
+use crate::DB_POOL;
 use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 use crate::sync_shared::collect_files_recursively;
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
-use crate::DB_POOL;
 use hex;
+use sp_core::Pair;
 use sp_core::crypto::Ss58Codec;
 use sp_core::sr25519;
-use sp_core::Pair;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // Helper to generate all possible file name variations
+#[allow(dead_code)]
 pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
     let variations = vec![
         base_name.to_string(),
@@ -32,6 +33,7 @@ pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub async fn unpin_user_file_by_name(file_name: &str, _seed_phrase: &str) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
         let variations = get_file_name_variations(file_name);
@@ -76,7 +78,7 @@ pub async fn unpin_user_file_by_name(file_name: &str, _seed_phrase: &str) -> Res
 
 pub async fn delete_and_unpin_user_file_records_by_name(
     file_name: &str,
-    seed_phrase: &str,
+    _seed_phrase: &str,
     is_public: bool,
     should_delete_folder: bool,
 ) -> Result<u64, String> {
@@ -90,7 +92,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
         .unwrap_or(false);
         // Remove from sync folder
-        remove_file_from_sync_and_db(&file_name, is_public, is_folder, should_delete_folder).await;
+        remove_file_from_sync_and_db(file_name, is_public, is_folder, should_delete_folder).await;
 
         Ok(1)
     } else {
@@ -236,7 +238,7 @@ pub async fn copy_to_sync_and_add_to_db(
             "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
         )
         .bind(account_id)
-        .bind(&requested_file_name)
+        .bind(requested_file_name)
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
@@ -254,7 +256,7 @@ pub async fn copy_to_sync_and_add_to_db(
                 .bind(account_id)
                 .bind(metadata_cid)
                 .bind(&file_hash)
-                .bind(&requested_file_name)
+                .bind(requested_file_name)
                 .bind(file_size_in_bytes)
                 .bind(false)
                 .bind("s3")  
@@ -269,7 +271,7 @@ pub async fn copy_to_sync_and_add_to_db(
             let _ = sqlx::query(
                     "INSERT INTO file_paths (file_name, file_hash, timestamp, path) VALUES (?, ?, ?, ?)"
                 )
-                .bind(&requested_file_name)
+                .bind(requested_file_name)
                 .bind(&file_hash)
                 .bind(chrono::Utc::now().timestamp())
                 .bind(&dest_path_str_clone)
@@ -288,12 +290,9 @@ pub async fn copy_to_sync_and_add_to_db(
                 }
             }
             copy_dir(original_path, &dest_path);
-        } else {
-            if !dest_path.exists() {
-                if let Err(e) = fs::copy(original_path, &dest_path) {
-                    eprintln!("Failed to copy file to sync folder: {}", e);
-                    return;
-                }
+        } else if !dest_path.exists() {
+            if let Err(e) = fs::copy(original_path, &dest_path) {
+                eprintln!("Failed to copy file to sync folder: {}", e);
             }
         }
     }
@@ -362,7 +361,7 @@ pub async fn remove_file_from_sync_and_db(
         let source = get_source_from_user_profiles(file_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
-        let bucket_name = get_bucket_from_user_profiles(file_name, is_public)
+        let _bucket_name = get_bucket_from_user_profiles(file_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
         if source.starts_with("s3://") {
@@ -458,7 +457,7 @@ pub async fn copy_to_sync_folder(
         let source = get_source_from_user_profiles(meta_folder_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
-        let bucket_name = get_bucket_from_user_profiles(meta_folder_name, is_public)
+        let _bucket_name = get_bucket_from_user_profiles(meta_folder_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
         // Try S3 removal as fallback
@@ -479,7 +478,7 @@ pub async fn copy_to_sync_folder(
             };
             let _ = execute_aws_s3_cp(
                 &target_source,
-                &original_path.to_string_lossy().to_string(),
+                original_path.to_string_lossy().as_ref(),
                 is_folder,
             )
             .await;
@@ -569,7 +568,7 @@ pub async fn copy_to_sync_folder(
             .await
             .unwrap_or(None);
 
-            if let Some(_) = exists {
+            if exists.is_some() {
                 // Update existing record
                 let _ = sqlx::query(
                     "UPDATE user_profiles SET 
@@ -628,12 +627,9 @@ pub async fn copy_to_sync_folder(
                 }
             }
             copy_dir(original_path, &dest_path);
-        } else {
-            if !dest_path.exists() {
-                if let Err(e) = fs::copy(original_path, &dest_path) {
-                    eprintln!("Failed to copy file to sync folder: {}", e);
-                    return;
-                }
+        } else if !dest_path.exists() {
+            if let Err(e) = fs::copy(original_path, &dest_path) {
+                eprintln!("Failed to copy file to sync folder: {}", e);
             }
         }
     }
@@ -644,9 +640,9 @@ pub async fn remove_from_sync_folder(
     folder_name: &str,
     is_public: bool,
     is_folder: bool,
-    meta_folder_name: &str,
-    folder_manifest_cid: &str,
-    account_id: &str,
+    _meta_folder_name: &str,
+    _folder_manifest_cid: &str,
+    _account_id: &str,
     _requested_cid: &str,
     subfolder_path: Option<String>,
 ) {
@@ -690,7 +686,7 @@ pub async fn remove_from_sync_folder(
         let source = get_source_from_user_profiles(folder_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
-        let bucket_name = get_bucket_from_user_profiles(folder_name, is_public)
+        let _bucket_name = get_bucket_from_user_profiles(folder_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
         println!("s3_path : {}", s3_path);
@@ -731,7 +727,7 @@ pub async fn remove_from_sync_folder(
                 for file in &files {
                     if let Err(e) = fs::remove_file(file) {
                         eprintln!("Failed to remove file from sync folder: {}", e);
-                    }                    
+                    }
                 }
 
                 let folder_relative_path = PathBuf::from(folder_name).join(file_name);
@@ -865,7 +861,7 @@ async fn execute_aws_s3_cp(source: &str, local_path: &str, is_folder: bool) -> R
         }
 
         // Get the folder name from the local path
-        let local_trimmed = local_path.trim_end_matches(|c| c == '/' || c == '\\');
+        let local_trimmed = local_path.trim_end_matches(['/', '\\']);
         if let Some(folder_name_os) = Path::new(local_trimmed).file_name() {
             let folder_name = folder_name_os.to_string_lossy();
             dest.push('/');

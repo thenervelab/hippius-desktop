@@ -1,23 +1,21 @@
-use crate::commands::syncing::ensure_aws_env;
+use crate::DB_POOL;
 use crate::substrate_client::{
     get_current_wss_endpoint, get_substrate_client, test_wss_endpoint, update_wss_endpoint,
 };
 use crate::sync_shared::{
-    S3SyncState, GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, SYNCING_ACCOUNTS,
+    GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, S3SyncState, SYNCING_ACCOUNTS,
 };
-use crate::DB_POOL;
 use crate::{start_private_folder_sync_tauri, start_public_folder_sync_tauri};
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
-use sp_core::{sr25519, Pair};
+use sp_core::{Pair, sr25519};
 use sqlx::Row;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use subxt::tx::PairSigner;
-use tauri::AppHandle;
-use tauri::Manager;
+
 use tokio::sync::Mutex;
 use tauri::Emitter;
 
@@ -223,7 +221,10 @@ pub async fn set_sync_path(
                                             )
                                             .await
                                         {
-                                            eprintln!("[set_sync_path][S3InventoryCron][public] Failed storing listing: {}", e);
+                                            eprintln!(
+                                                "[set_sync_path][S3InventoryCron][public] Failed storing listing: {}",
+                                                e
+                                            );
                                         }
                                     }
                                     Err(e) => eprintln!(
@@ -288,7 +289,10 @@ pub async fn set_sync_path(
                                             )
                                             .await
                                         {
-                                            eprintln!("[S3InventoryCron][private] Failed storing listing: {}", e);
+                                            eprintln!(
+                                                "[S3InventoryCron][private] Failed storing listing: {}",
+                                                e
+                                            );
                                         }
                                     }
                                     Err(e) => {
@@ -318,7 +322,7 @@ pub async fn transfer_balance_tauri(
     amount: String,
 ) -> Result<String, String> {
     use crate::substrate_client::get_substrate_client;
-    use sp_core::{crypto::Ss58Codec, sr25519, Pair};
+    use sp_core::{Pair, crypto::Ss58Codec, sr25519};
     use subxt::tx::PairSigner;
 
     // Parse the string to u128

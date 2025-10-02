@@ -1,5 +1,5 @@
 #![allow(unused_imports)]
-use crate::constants::ipfs::{AppSetupPhase, API_URL, APP_SETUP_EVENT};
+use crate::constants::ipfs::{API_URL, APP_SETUP_EVENT, AppSetupPhase};
 use crate::utils::binary::ensure_ipfs_binary;
 use once_cell::sync::OnceCell;
 use reqwest::Client;
@@ -242,7 +242,7 @@ pub async fn stop_ipfs_daemon() {
 }
 
 #[cfg(target_os = "macos")]
-async fn ensure_ipfs_not_running(bin_path: &Path) -> Result<(), String> {
+async fn ensure_ipfs_not_running(_bin_path: &Path) -> Result<(), String> {
     let output = Command::new("pkill")
         .arg("-f")
         .arg("ipfs daemon")
@@ -389,7 +389,9 @@ async fn install_aws_cli() -> Result<(), String> {
                     let user_bin_str = user_bin.to_string_lossy().to_string();
                     if !cur_path.split(':').any(|p| p == user_bin_str) {
                         cur_path = format!("{}:{}", user_bin_str, cur_path);
-                        std::env::set_var("PATH", &cur_path);
+                        unsafe {
+                            std::env::set_var("PATH", &cur_path);
+                        }
                         println!(
                             "[AWS CLI] Added {} to PATH for current process",
                             user_bin_str
@@ -541,7 +543,7 @@ async fn install_aws_cli() -> Result<(), String> {
         verify_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
-    let ok = verify_cmd.status().await.map_or(false, |s| s.success());
+    let ok = verify_cmd.status().await.is_ok_and(|s| s.success());
     if !ok {
         return Err("aws.exe did not run successfully after install".to_string());
     }
@@ -807,7 +809,9 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
                     let user_bin_str = user_bin.to_string_lossy().to_string();
                     if !cur_path.split(':').any(|p| p == user_bin_str) {
                         cur_path = format!("{}:{}", user_bin_str, cur_path);
-                        std::env::set_var("PATH", &cur_path);
+                        unsafe {
+                            std::env::set_var("PATH", &cur_path);
+                        }
                         println!(
                             "[AWS CLI][macOS] Added {} to PATH for current process",
                             user_bin_str
@@ -843,7 +847,10 @@ async fn install_aws_cli_from_bundle_macos() -> Result<(), String> {
                                     path.display()
                                 );
                             } else {
-                                eprintln!("[AWS CLI][macOS] Warning: could not open {} for appending PATH", path.display());
+                                eprintln!(
+                                    "[AWS CLI][macOS] Warning: could not open {} for appending PATH",
+                                    path.display()
+                                );
                             }
                         }
                     }
@@ -968,7 +975,7 @@ async fn is_aws_cli_installed() -> bool {
                 cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
             }
 
-            if cmd.output().await.map_or(false, |o| o.status.success()) {
+            if cmd.output().await.is_ok_and(|o| o.status.success()) {
                 return true;
             }
         }
@@ -998,5 +1005,5 @@ async fn is_aws_cli_installed() -> bool {
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
-    cmd.status().await.map_or(false, |s| s.success())
+    cmd.status().await.is_ok_and(|s| s.success())
 }

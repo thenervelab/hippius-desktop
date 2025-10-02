@@ -276,7 +276,7 @@ fn download_and_extract_binary(binary_path: &PathBuf) -> Result<PathBuf, String>
 
     // Verify the binary works
     #[cfg(target_os = "windows")]
-    let mut cmd = std::process::Command::new(&binary_path);
+    let mut cmd = std::process::Command::new(binary_path);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;

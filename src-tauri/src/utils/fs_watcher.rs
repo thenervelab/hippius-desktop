@@ -2,8 +2,7 @@ use log::{error, info};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Sender};
-use std::time::Duration;
+use std::sync::mpsc::channel;
 use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug)]
@@ -14,7 +13,9 @@ pub enum FsEvent {
 
 pub struct FsWatcher {
     _watcher: RecommendedWatcher,
+    #[allow(dead_code)]
     root_dir: PathBuf,
+    #[allow(dead_code)]
     event_sender: UnboundedSender<FsEvent>,
 }
 
@@ -205,6 +206,7 @@ impl FsWatcher {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_root_dir(&self) -> &Path {
         &self.root_dir
     }
