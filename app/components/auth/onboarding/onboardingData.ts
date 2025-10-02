@@ -46,7 +46,7 @@ export const ONBOARDING_SCREENS = [
     id: 4,
     titleText: "Upload Securely with API Keys",
     description:
-      "Add sub-accounts with upload and delete permissions. Then you can use each sub-account's seed to securely upload files to your S3 storage.",
+      "Add API keys with upload and delete permissions. Then you can use each API Key's seed to securely upload files to your S3 storage.",
     screentTitleText: "Manage Access with API Keys",
     bulletPoints: [
       "Permission Assignment to API Keys",

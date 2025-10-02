@@ -256,7 +256,7 @@ const SubAccounts: React.FC = () => {
 
   const onCreate = useCallback(() => {
     if (!draftAddress.trim()) {
-      toast.error("Sub account address is required");
+      toast.error("Address is required");
       return;
     }
     setFormOpen(false);
