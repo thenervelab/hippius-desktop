@@ -95,7 +95,7 @@ async fn process_batch(
                 };
 
                 let size = if *is_dir {
-                    folder_size(&path)
+                    folder_size(path)
                 } else {
                     std::fs::metadata(path).ok().map(|m| m.len()).unwrap_or(0)
                 };
@@ -907,7 +907,7 @@ pub async fn start_public_folder_sync(
                                                     .bind(&name)
                                                     .bind(file_hash)
                                                     .bind(chrono::Utc::now().timestamp())
-                                                    .bind(&abs_path.to_string_lossy())
+                                                    .bind(abs_path.to_string_lossy())
                                                     .execute(&pool)
                                                     .await {
                                                         eprintln!("[PublicFolderSync] Failed to insert into file_paths '{}': {}", name, e);
@@ -942,10 +942,8 @@ pub async fn start_public_folder_sync(
         if let Some(stderr) = child.stderr.take() {
             let reader = BufReader::new(stderr);
             thread::spawn(move || {
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        eprintln!("[AWS Public Sync][STDERR] {}", line);
-                    }
+                for line in reader.lines().flatten() {
+                    eprintln!("[AWS Public Sync][STDERR] {}", line);
                 }
             });
         }

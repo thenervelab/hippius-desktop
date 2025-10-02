@@ -1,19 +1,15 @@
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{
-    prepare_for_new_sync, reset_all_sync_state, stop_sync_for_scope, S3_PRIVATE_SYNC_STATE,
-    S3_PUBLIC_SYNC_STATE,
-};
-use crate::utils::sync::{get_private_sync_path, get_public_sync_path, is_first_run};
+use crate::sync_shared::{prepare_for_new_sync, reset_all_sync_state, stop_sync_for_scope};
+use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use base64 as b64;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
-use sp_core::sr25519;
 use sp_core::Pair;
+use sp_core::sr25519;
 use sqlx;
 use std::sync::Arc;
 use tauri::Manager;
-use tauri::Emitter;
 use tokio::sync::Mutex;
 
 /// Stops sync processes for a specific scope ("public" or "private")
@@ -53,10 +49,11 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
 
     // Configure AWS env
     let encoded_seed = b64::encode(&seed_to_use);
-    std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
-    std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
-
+    unsafe {
+        std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
+        std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
+    }
     // Get AWS binary path
     let aws_binary_path = match crate::commands::node::get_aws_binary_path().await {
         Ok(path) => path,
@@ -144,10 +141,10 @@ pub async fn initialize_sync(
     let mnemonic_for_bg = mnemonic.clone();
     let parent_task = tokio::spawn(async move {
         // Spawn sync tasks
-        let app_handle_clone = app_for_bg.clone();
+        let _app_handle_clone = app_for_bg.clone();
         let app_handle_folder_sync = app_for_bg.clone();
         let app_handle_public_folder_sync = app_for_bg.clone();
-        let account_clone = account_for_bg.clone();
+        let _account_clone = account_for_bg.clone();
         let account_clone2 = account_for_bg.clone();
         let account_clone3 = account_for_bg.clone();
         let mnemonic_clone = mnemonic_for_bg.clone();
@@ -181,7 +178,9 @@ pub async fn initialize_sync(
         if public_enabled || private_enabled {
             ensure_aws_env(account_for_bg.clone(), mnemonic_for_bg.clone()).await;
         } else {
-            println!("[SyncInit] Both public and private sync are disabled; skipping AWS credentials setup");
+            println!(
+                "[SyncInit] Both public and private sync are disabled; skipping AWS credentials setup"
+            );
         }
 
         let folder_task = if private_enabled {
@@ -415,20 +414,19 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 if let Some(key) = &maybe_key {
                     // Try decrypt; if fails, treat as legacy plaintext and migrate
                     if let Some(decrypted) = decrypt_phrase(&stored_str, key) {
-                        return decrypted;
+                        decrypted
                     } else {
-                        return stored_str;
+                        stored_str
                     }
                 } else {
-                    return stored_str;
+                    stored_str
                 }
             }
             Ok(None) => {
                 // Create a new subaccount (sr25519) and store it encrypted
                 let (_pair, phrase, _seed) = sr25519::Pair::generate_with_phrase(None);
                 let to_store = if let Some(key) = &maybe_key {
-                    let enc = encrypt_phrase(&phrase, key);
-                    enc
+                    encrypt_phrase(&phrase, key)
                 } else {
                     phrase.clone()
                 };
@@ -474,7 +472,10 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                                 err_str
                             );
                             if err_str.contains("MainCannotBeSubAccount") {
-                                println!("[SyncInit] Detected MainCannotBeSubAccount; storing provided mnemonic as subaccount for account_id={}", account_id);
+                                println!(
+                                    "[SyncInit] Detected MainCannotBeSubAccount; storing provided mnemonic as subaccount for account_id={}",
+                                    account_id
+                                );
                                 // Encrypt mnemonic if key available, otherwise store plaintext
                                 let to_store = if let Some(key) = &maybe_key {
                                     encrypt_phrase(&mnemonic, key)
@@ -499,11 +500,14 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                     }
                 }
 
-                return chosen_seed_for_session;
+                chosen_seed_for_session
             }
             Err(e) => {
-                eprintln!("[SyncInit] DB query error for sub_accounts ({}), falling back to provided mnemonic", e);
-                return mnemonic.clone();
+                eprintln!(
+                    "[SyncInit] DB query error for sub_accounts ({}), falling back to provided mnemonic",
+                    e
+                );
+                mnemonic.clone()
             }
         }
     } else {
@@ -511,6 +515,6 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
             "[SyncInit] DB pool unavailable; falling back to provided mnemonic for account_id={}",
             account_id
         );
-        return mnemonic.clone();
+        mnemonic.clone()
     }
 }

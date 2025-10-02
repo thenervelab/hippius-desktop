@@ -1,7 +1,6 @@
-use crate::commands::substrate_tx::get_sync_path_internal;
-use crate::commands::substrate_tx::SyncPathResult;
 use crate::DB_POOL;
-use sqlx::Row;
+use crate::commands::substrate_tx::SyncPathResult;
+use crate::commands::substrate_tx::get_sync_path_internal;
 
 pub async fn get_public_sync_path() -> Result<String, String> {
     match get_sync_path_internal(true).await {
@@ -26,7 +25,7 @@ pub async fn is_first_run() -> Result<bool, String> {
     let table_exists: Result<Option<(i64,)>, _> = sqlx::query_as(
         "SELECT COUNT(*) as count 
          FROM sqlite_master 
-         WHERE type='table' AND name='is_first_run'"
+         WHERE type='table' AND name='is_first_run'",
     )
     .fetch_optional(pool)
     .await;
@@ -68,13 +67,15 @@ pub async fn is_first_run() -> Result<bool, String> {
 
 /// Marks the first run as completed in the database
 pub async fn mark_first_run_complete() -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or_else(|| "Database pool not initialized".to_string())?;
+    let pool = DB_POOL
+        .get()
+        .ok_or_else(|| "Database pool not initialized".to_string())?;
 
     // Try to update the existing row
     let result = sqlx::query(
         "UPDATE is_first_run 
          SET is_completed = TRUE, last_updated = CURRENT_TIMESTAMP 
-         WHERE id = 1"
+         WHERE id = 1",
     )
     .execute(pool)
     .await;
@@ -82,20 +83,20 @@ pub async fn mark_first_run_complete() -> Result<(), String> {
     match result {
         Ok(r) if r.rows_affected() > 0 => Ok(()), // Successfully updated
         Ok(_) => Err("No rows found in is_first_run to mark as complete".to_string()), // Table exists but empty
-        Err(e) => Err(format!("Failed to update first run status: {}", e)), // SQL error
+        Err(e) => Err(format!("Failed to update first run status: {}", e)),            // SQL error
     }
 }
 
+#[allow(dead_code)]
 pub async fn is_first_run_completed() -> Result<bool, String> {
     let pool = DB_POOL
         .get()
         .ok_or_else(|| "Database pool not initialized".to_string())?;
 
     // Count total rows first
-    let row_count: Result<Option<(i64,)>, _> =
-        sqlx::query_as("SELECT COUNT(*) FROM is_first_run")
-            .fetch_optional(pool)
-            .await;
+    let row_count: Result<Option<(i64,)>, _> = sqlx::query_as("SELECT COUNT(*) FROM is_first_run")
+        .fetch_optional(pool)
+        .await;
 
     match row_count {
         Ok(Some((0,))) => Err("No rows found in is_first_run".to_string()),
@@ -112,9 +113,7 @@ pub async fn is_first_run_completed() -> Result<bool, String> {
                 Err(e) => Err(format!("Failed to fetch is_completed flag: {}", e)),
             }
         }
-        Ok(Some((count,))) if count > 1 => {
-            Err("Multiple rows found in is_first_run".to_string())
-        }
+        Ok(Some((count,))) if count > 1 => Err("Multiple rows found in is_first_run".to_string()),
         Ok(Some((count,))) => {
             // Covers any other unexpected counts (like negatives, which shouldn't happen)
             Err(format!("Unexpected row count in is_first_run: {}", count))
@@ -124,17 +123,15 @@ pub async fn is_first_run_completed() -> Result<bool, String> {
     }
 }
 
-
 pub async fn is_sync_completed() -> Result<bool, String> {
     let pool = DB_POOL
         .get()
         .ok_or_else(|| "Database pool not initialized".to_string())?;
 
-    let result: Result<Option<(bool,)>, _> = sqlx::query_as(
-        "SELECT is_completed FROM is_first_run WHERE id = 1"
-    )
-    .fetch_optional(pool)
-    .await;
+    let result: Result<Option<(bool,)>, _> =
+        sqlx::query_as("SELECT is_completed FROM is_first_run WHERE id = 1")
+            .fetch_optional(pool)
+            .await;
 
     match result {
         Ok(Some((is_completed,))) => Ok(is_completed),

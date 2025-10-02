@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct CidInfo {
     pub cid: String,
     pub filename: String,
@@ -10,6 +11,7 @@ pub struct CidInfo {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct ChunkInfo {
     pub name: String,
     pub path: String,
@@ -20,6 +22,7 @@ pub struct ChunkInfo {
 }
 
 #[derive(Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Metadata {
     pub original_file: OriginalFileInfo,
     pub erasure_coding: ErasureCodingInfo,
@@ -28,6 +31,7 @@ pub struct Metadata {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct OriginalFileInfo {
     pub name: String,
     pub size: usize,
@@ -36,6 +40,7 @@ pub struct OriginalFileInfo {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct ErasureCodingInfo {
     pub k: usize,
     pub m: usize,
@@ -46,6 +51,7 @@ pub struct ErasureCodingInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct FileEntry {
     pub file_name: String,
     pub file_size: usize,
@@ -53,6 +59,7 @@ pub struct FileEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct FolderReference {
     pub cid: String,
     #[serde(alias = "filename", alias = "file_name")]
@@ -60,6 +67,7 @@ pub struct FolderReference {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct FolderFileEntry {
     #[serde(alias = "filename", alias = "file_name")]
     pub file_name: String,
@@ -83,6 +91,7 @@ pub struct FileDetail {
 }
 
 #[derive(Serialize, Deserialize)]
+#[allow(dead_code)]
 struct FolderMetadata {
     version: u32,
     files: Vec<FileEntry>,

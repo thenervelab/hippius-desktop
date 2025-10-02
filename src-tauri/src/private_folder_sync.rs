@@ -13,7 +13,6 @@ use crate::sync_shared::{folder_size, update_uploaded_file};
 use crate::utils::fs_watcher::{FsEvent, FsWatcher};
 use crate::utils::sync::get_private_sync_path;
 use crate::DB_POOL;
-use chrono;
 use log::error;
 use serde_json::json;
 use sp_core::crypto::Ss58Codec;
@@ -624,7 +623,7 @@ pub async fn start_private_folder_sync(
                                                     .bind(&name)
                                                     .bind(file_hash)
                                                     .bind(chrono::Utc::now().timestamp())
-                                                    .bind(&abs_path.to_string_lossy())
+                                                    .bind(abs_path.to_string_lossy())
                                                     .execute(&pool)
                                                     .await {
                                                         eprintln!("[PrivateFolderSync] Failed to insert into file_paths '{}': {}", name, e);
@@ -762,7 +761,7 @@ async fn process_batch(
                 };
 
                 let size = if *is_dir {
-                    folder_size(&path)
+                    folder_size(path)
                 } else {
                     std::fs::metadata(path).ok().map(|m| m.len()).unwrap_or(0)
                 };

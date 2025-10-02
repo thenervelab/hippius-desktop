@@ -1,22 +1,20 @@
 #![allow(unused_imports)]
+use crate::DB_POOL;
 use crate::commands::substrate_tx::custom_runtime;
 use crate::events::AppEvent;
 use crate::substrate_client::get_substrate_client;
 use crate::sync_shared::GLOBAL_CANCEL_TOKEN;
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
-use crate::DB_POOL;
-use hex;
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::Serialize;
-use serde_json;
 use sqlx::FromRow;
 use sqlx::Row;
 use std::collections::HashSet;
 use std::path::Path;
 use std::str;
-use std::sync::atomic::Ordering;
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use subxt::storage::StorageKeyValuePair;
 use subxt::utils::AccountId32;
@@ -181,7 +179,9 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                     e
                                 );
                                 if retry_count >= max_retries {
-                                    eprintln!("[UserSync] Max retries reached, waiting 5 minutes before trying again");
+                                    eprintln!(
+                                        "[UserSync] Max retries reached, waiting 5 minutes before trying again"
+                                    );
                                     time::sleep(Duration::from_secs(300)).await;
                                     retry_count = 0;
                                     continue;
@@ -425,12 +425,15 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                                 .ends_with("-folder.ec_metadata")
                                                         {
                                                             let decoded_hash = decode_file_hash(
-                                                                &file_hash.as_bytes(),
+                                                                file_hash.as_bytes(),
                                                             )
                                                             .unwrap_or_else(|_| {
                                                                 "Invalid file hash".to_string()
                                                             });
-                                                            let ipfs_url = format!("https://get.hippius.network/ipfs/{}", decoded_hash);
+                                                            let ipfs_url = format!(
+                                                                "https://get.hippius.network/ipfs/{}",
+                                                                decoded_hash
+                                                            );
                                                             match client.get(&ipfs_url).send().await
                                                             {
                                                                 Ok(resp) => {
@@ -468,7 +471,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                                     }
                                                                 }
                                                                 Err(e) => {
-                                                                    eprintln!("[UserSync] Failed to fetch metadata for {}: {}", file_hash, e);
+                                                                    eprintln!(
+                                                                        "[UserSync] Failed to fetch metadata for {}: {}",
+                                                                        file_hash, e
+                                                                    );
                                                                     let _ = app_handle_clone.emit("app-event", AppEvent {
                                                                         event_type: "error".to_string(),
                                                                         message: "Failed to fetch metadata".to_string(),
@@ -478,12 +484,15 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                             }
                                                         } else if is_folder {
                                                             let decoded_hash = decode_file_hash(
-                                                                &file_hash.as_bytes(),
+                                                                file_hash.as_bytes(),
                                                             )
                                                             .unwrap_or_else(|_| {
                                                                 "Invalid file hash".to_string()
                                                             });
-                                                            let ipfs_url = format!("https://get.hippius.network/ipfs/{}", decoded_hash);
+                                                            let ipfs_url = format!(
+                                                                "https://get.hippius.network/ipfs/{}",
+                                                                decoded_hash
+                                                            );
                                                             match client.get(&ipfs_url).send().await
                                                             {
                                                                 Ok(resp) => {
@@ -512,7 +521,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                                     }
                                                                 }
                                                                 Err(e) => {
-                                                                    eprintln!("[UserSync] Failed to fetch folder content for {}: {}", file_hash, e);
+                                                                    eprintln!(
+                                                                        "[UserSync] Failed to fetch folder content for {}: {}",
+                                                                        file_hash, e
+                                                                    );
                                                                     let _ = app_handle_clone.emit("app-event", AppEvent {
                                                                         event_type: "error".to_string(),
                                                                         message: "Failed to fetch folder content".to_string(),
@@ -575,11 +587,17 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                         }
                                                     }
                                                 } else {
-                                                    println!("[UserSync] No files array found in profile data for CID: {}", profile_cid);
+                                                    println!(
+                                                        "[UserSync] No files array found in profile data for CID: {}",
+                                                        profile_cid
+                                                    );
                                                 }
                                             }
                                             Err(e) => {
-                                                eprintln!("[UserSync] Invalid JSON for CID {}: {}. Error: {}", profile_cid, data, e);
+                                                eprintln!(
+                                                    "[UserSync] Invalid JSON for CID {}: {}. Error: {}",
+                                                    profile_cid, data, e
+                                                );
                                                 let _ = app_handle_clone.emit(
                                                     "app-event",
                                                     AppEvent {
@@ -596,7 +614,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                         }
                                     }
                                     Err(e) => {
-                                        eprintln!("[UserSync] Failed to get text from IPFS response for CID {}: {}", profile_cid, e);
+                                        eprintln!(
+                                            "[UserSync] Failed to get text from IPFS response for CID {}: {}",
+                                            profile_cid, e
+                                        );
                                         let _ = app_handle_clone.emit(
                                             "app-event",
                                             AppEvent {
@@ -677,7 +698,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                 }
 
                 if !profile_fetched {
-                    eprintln!("[UserSync] Failed to fetch profile for CID {} after {} retries, continuing with storage requests", profile_cid, max_ipfs_retries);
+                    eprintln!(
+                        "[UserSync] Failed to fetch profile for CID {} after {} retries, continuing with storage requests",
+                        profile_cid, max_ipfs_retries
+                    );
                     let _ = app_handle_clone.emit(
                         "app-event",
                         AppEvent {
@@ -725,7 +749,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
             while let Some(result) = iter.next().await {
                 // Check global cancellation during iteration
                 if GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst) {
-                    println!("[UserSync] Global cancellation detected during storage iteration, stopping sync for account {}", account_id);
+                    println!(
+                        "[UserSync] Global cancellation detected during storage iteration, stopping sync for account {}",
+                        account_id
+                    );
                     {
                         let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
                         syncing_accounts.remove(&account_id);
@@ -861,7 +888,10 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                 "[UserSync] Connection reset during storage iteration (attempt {}/{}): {e}",
                                 storage_retry_count, max_storage_retries
                             );
-                            eprintln!("[UserSync] Connection reset during storage iteration (attempt {}/{}): {e}", storage_retry_count, max_storage_retries);
+                            eprintln!(
+                                "[UserSync] Connection reset during storage iteration (attempt {}/{}): {e}",
+                                storage_retry_count, max_storage_retries
+                            );
                             let _ = app_handle_clone.emit(
                                 "app-event",
                                 AppEvent {
@@ -886,8 +916,12 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                             iter = match new_storage.iter(new_storage_query).await {
                                                 Ok(i) => i,
                                                 Err(e) => {
-                                                    let error_message = format!("[UserSync] Failed to reinitialize storage iterator: {e}");
-                                                    eprintln!("[UserSync] Failed to reinitialize storage iterator: {e}");
+                                                    let error_message = format!(
+                                                        "[UserSync] Failed to reinitialize storage iterator: {e}"
+                                                    );
+                                                    eprintln!(
+                                                        "[UserSync] Failed to reinitialize storage iterator: {e}"
+                                                    );
                                                     let _ = app_handle_clone.emit("app-event", AppEvent {
                                                         event_type: "error".to_string(),
                                                         message: "Failed to restart sync after node reset".to_string(),
@@ -899,8 +933,12 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                             };
                                         }
                                         Err(e) => {
-                                            let error_message = format!("[UserSync] Failed to get latest storage after reconnect: {e}");
-                                            eprintln!("[UserSync] Failed to get latest storage after reconnect: {e}");
+                                            let error_message = format!(
+                                                "[UserSync] Failed to get latest storage after reconnect: {e}"
+                                            );
+                                            eprintln!(
+                                                "[UserSync] Failed to get latest storage after reconnect: {e}"
+                                            );
                                             let _ = app_handle_clone.emit(
                                                 "app-event",
                                                 AppEvent {
@@ -911,13 +949,18 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                                 },
                                             );
                                             if storage_retry_count >= max_storage_retries {
-                                                eprintln!("[UserSync] Max storage retries reached, waiting 5 minutes");
+                                                eprintln!(
+                                                    "[UserSync] Max storage retries reached, waiting 5 minutes"
+                                                );
                                                 time::sleep(Duration::from_secs(300)).await;
                                                 storage_retry_count = 0;
                                             } else {
                                                 let wait_time =
                                                     std::cmp::min(30 * storage_retry_count, 300);
-                                                eprintln!("[UserSync] Retrying storage fetch in {} seconds...", wait_time);
+                                                eprintln!(
+                                                    "[UserSync] Retrying storage fetch in {} seconds...",
+                                                    wait_time
+                                                );
                                                 time::sleep(Duration::from_secs(wait_time as u64))
                                                     .await;
                                             }
@@ -942,7 +985,9 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                                         },
                                     );
                                     if storage_retry_count >= max_storage_retries {
-                                        eprintln!("[UserSync] Max storage retries reached, waiting 5 minutes");
+                                        eprintln!(
+                                            "[UserSync] Max storage retries reached, waiting 5 minutes"
+                                        );
                                         time::sleep(Duration::from_secs(300)).await;
                                         storage_retry_count = 0;
                                     } else {
@@ -992,7 +1037,7 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
 
             // Step 3: Clear and insert into user_profiles table
             if let Some(pool) = DB_POOL.get() {
-                if records_to_insert.len() > 0 && profile_parsed_successfully {
+                if !records_to_insert.is_empty() && profile_parsed_successfully {
                     match sqlx::query("DELETE FROM user_profiles WHERE main_req_hash <> 's3'")
                         .execute(pool)
                         .await
@@ -1013,7 +1058,7 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                         }
                     }
 
-                    for record in records_to_insert {
+                    for _record in records_to_insert {
                         // let insert_result = sqlx::query(
                         //     "INSERT INTO user_profiles (
                         //         owner, cid, file_hash, file_name, file_size_in_bytes,
@@ -1052,8 +1097,11 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
                         // }
                     }
                 } else {
-                    println!("[UserSync] Skipping user_profiles table clear: profile_parsed_successfully={}, records_to_insert.len()={}",
-                        profile_parsed_successfully, records_to_insert.len());
+                    println!(
+                        "[UserSync] Skipping user_profiles table clear: profile_parsed_successfully={}, records_to_insert.len()={}",
+                        profile_parsed_successfully,
+                        records_to_insert.len()
+                    );
                 }
             }
 
@@ -1065,14 +1113,8 @@ pub fn start_user_sync(app_handle: AppHandle, account_id: &str) {
 #[tauri::command]
 pub async fn get_user_synced_files(owner: String) -> Result<Vec<UserProfileFileWithType>, String> {
     if let Some(pool) = DB_POOL.get() {
-        let public_sync_path = match get_public_sync_path().await {
-            Ok(path) => Some(path),
-            Err(_) => None,
-        };
-        let private_sync_path = match get_private_sync_path().await {
-            Ok(path) => Some(path),
-            Err(_) => None,
-        };
+        let public_sync_path = (get_public_sync_path().await).ok();
+        let private_sync_path = (get_private_sync_path().await).ok();
 
         let user_profile_rows = sqlx::query(
             r#"
@@ -1315,6 +1357,7 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
 }
 
 #[tauri::command]
+#[allow(dead_code)]
 pub async fn start_user_profile_sync_tauri(app_handle: AppHandle, account_id: String) {
     println!(
         "[UserSync] Received request to start sync for account: {}",
