@@ -1,4 +1,3 @@
-use crate::commands::node::stop_ipfs_daemon;
 use tauri::{Builder, Manager, Wry};
 
 pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
@@ -8,8 +7,6 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
         let app_handle = window.app_handle().clone();
 
         tauri::async_runtime::spawn(async move {
-            println!("[Window] Stopping IPFS daemon...");
-            stop_ipfs_daemon().await;
             println!("[Window] Exiting application...");
             app_handle.exit(0);
         });

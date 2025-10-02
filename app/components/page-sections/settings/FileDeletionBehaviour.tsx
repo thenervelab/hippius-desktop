@@ -6,8 +6,10 @@ import { toast } from "sonner";
 import * as Dialog from "@radix-ui/react-dialog";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { InView } from "react-intersection-observer";
+import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
-type DeletionBehaviour = "upload-only" | "remote-backup" | "mirror-delete" | "restore-files";
+type DeletionBehaviour = "upload_only" | "local_only_deletes" | "mirror_local_deletes" | "restore_from_remote";
 
 interface ConfirmationDialog {
     type: DeletionBehaviour;
@@ -15,10 +17,11 @@ interface ConfirmationDialog {
 }
 
 const FileDeletionBehaviour: React.FC = () => {
-    const [selectedBehaviour, setSelectedBehaviour] = useState<DeletionBehaviour>("upload-only");
-    const [originalBehaviour, setOriginalBehaviour] = useState<DeletionBehaviour>("upload-only");
+    const { polkadotAddress, mnemonic } = useWalletAuth();
+    const [selectedBehaviour, setSelectedBehaviour] = useState<DeletionBehaviour>("upload_only");
+    const [originalBehaviour, setOriginalBehaviour] = useState<DeletionBehaviour>("upload_only");
     const [confirmationDialog, setConfirmationDialog] = useState<ConfirmationDialog>({
-        type: "upload-only",
+        type: "upload_only",
         isOpen: false
     });
     const [isSaving, setIsSaving] = useState(false);
@@ -29,10 +32,10 @@ const FileDeletionBehaviour: React.FC = () => {
     useEffect(() => {
         const loadCurrentSetting = async () => {
             try {
-                // TODO: Implement backend call to get current file deletion behaviour
-                // const currentBehaviour = await invoke("get_file_deletion_behaviour");
-                // setSelectedBehaviour(currentBehaviour);
-                // setOriginalBehaviour(currentBehaviour);
+                const currentBehaviour = await invoke("get_bucket_policy") as { sync_policy: DeletionBehaviour };
+                console.log("Current behaviour from backend:", currentBehaviour);
+                setSelectedBehaviour(currentBehaviour.sync_policy);
+                setOriginalBehaviour(currentBehaviour.sync_policy);
 
                 console.log("Loading current file deletion behaviour setting...");
             } catch (error) {
@@ -45,24 +48,24 @@ const FileDeletionBehaviour: React.FC = () => {
 
     const behaviourOptions = [
         {
-            id: "upload-only" as DeletionBehaviour,
+            id: "upload_only" as DeletionBehaviour,
             title: "Upload only",
             description: "Never download files from the cloud, only upload local files and keep remote backup even after local files are deleted",
             isDefault: true
         },
         {
-            id: "remote-backup" as DeletionBehaviour,
+            id: "local_only_deletes" as DeletionBehaviour,
             title: "Remote Backup",
             description: "Keep a copy in the cloud. Your deleted local files will stay safe as backups",
             isDefault: false
         }, {
-            id: "mirror-delete" as DeletionBehaviour,
+            id: "mirror_local_deletes" as DeletionBehaviour,
             title: "Mirror Local Delete",
             description: "Automatically delete the file from the cloud if it's removed from your local computer",
             isDefault: false
         },
         {
-            id: "restore-files" as DeletionBehaviour,
+            id: "restore_from_remote" as DeletionBehaviour,
             title: "Restore Local Files",
             description: "Automatically re-download deleted files from the cloud to restore them on your computer",
             isDefault: false
@@ -71,25 +74,25 @@ const FileDeletionBehaviour: React.FC = () => {
 
     const getConfirmationContent = (type: DeletionBehaviour) => {
         switch (type) {
-            case "upload-only":
+            case "upload_only":
                 return {
                     title: "Upload Only",
                     message: "This will never download files from the cloud, only upload local files and keep remote backup even after local files are deleted. Do you want to proceed?",
                     icon: <Icons.Trash className="size-6 text-white" />
                 };
-            case "remote-backup":
+            case "local_only_deletes":
                 return {
                     title: "Remote Backup",
                     message: "This will keep files in the cloud as a backup even after being deleted locally. Do you want to proceed?",
                     icon: <Icons.Trash className="size-6 text-white" />
                 };
-            case "mirror-delete":
+            case "mirror_local_deletes":
                 return {
                     title: "Mirror Local Delete",
                     message: "This will delete all files from the cloud that were deleted locally. Do you want to proceed?",
                     icon: <Icons.Trash className="size-6 text-white" />
                 };
-            case "restore-files":
+            case "restore_from_remote":
                 return {
                     title: "Restore Local Files",
                     message: "This will download all files from the cloud storage to the local folder. Do you want to proceed?",
@@ -113,11 +116,11 @@ const FileDeletionBehaviour: React.FC = () => {
         setIsSaving(true);
 
         try {
-            // TODO: Implement backend call to save file deletion behaviour
-            // await invoke("set_file_deletion_behaviour", { behaviour: selectedBehaviour });
-
-            // Simulate API call delay
-            // await new Promise(resolve => setTimeout(resolve, 1000));
+            await invoke("set_bucket_policy", {
+                accountId: polkadotAddress,
+                mnemonic: mnemonic,
+                policy: { sync_policy: selectedBehaviour }
+            });
 
             toast.success("File deletion behaviour updated successfully");
             setConfirmationDialog({ type: selectedBehaviour, isOpen: false });

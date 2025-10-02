@@ -9,12 +9,14 @@ mod ipfs;
 mod private_folder_sync;
 mod public_folder_sync;
 mod substrate_client;
+mod sync_engine;
 mod sync_shared;
 mod user_profile_sync;
 mod utils;
 
 use crate::commands::syncing::{
-    cleanup_sync, initialize_sync, stop_sync_for_scope_command, AppState, SyncState,
+    AppState, SyncState, cleanup_sync, get_bucket_policy, initialize_sync, set_bucket_policy,
+    stop_sync_for_scope_command,
 };
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::private_folder_sync::start_private_folder_sync_tauri;
@@ -33,10 +35,7 @@ use commands::ipfs_commands::{
     encrypt_and_upload_folder, list_folder_contents, public_download_folder, public_upload_folder,
     read_file, remove_file_from_private_folder, remove_file_from_public_folder,
     remove_folder_from_private_folder, remove_folder_from_public_folder, upload_file_public,
-    wipe_s3_objects, write_file,
-};
-use commands::node::{
-    get_current_setup_phase, start_ipfs_daemon, start_ipfs_setup_when_ready, stop_ipfs_daemon,
+    wipe_s3_objects, write_file
 };
 use commands::substrate_tx::{
     get_sync_path, get_wss_endpoint, set_sync_path, test_wss_endpoint_command,
@@ -83,10 +82,6 @@ fn main() {
             }
         }))
         .invoke_handler(tauri::generate_handler![
-            start_ipfs_daemon,
-            start_ipfs_setup_when_ready,
-            stop_ipfs_daemon,
-            get_current_setup_phase,
             encrypt_and_upload_file,
             download_and_decrypt_file,
             upload_file_public,
@@ -100,7 +95,6 @@ fn main() {
             start_public_folder_sync_tauri,
             cleanup_sync,
             get_user_synced_files,
-            // get_sync_status,
             get_ipfs_node_info,
             get_ipfs_bandwidth,
             get_ipfs_peers,
@@ -134,7 +128,9 @@ fn main() {
             add_folder_to_private_folder,
             remove_folder_from_private_folder,
             get_sync_activity,
-            stop_sync_for_scope_command
+            stop_sync_for_scope_command,
+            set_bucket_policy,
+            get_bucket_policy
         ]);
 
     let builder = setup(builder);

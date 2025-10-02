@@ -67,6 +67,15 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
+        (
+            "bucket_policies",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("sync_policy", "TEXT NOT NULL DEFAULT 'upload_only' CHECK(sync_policy IN ('mirror_local_deletes', 'restore_from_remote', 'local_only_deletes', 'upload_only'))"),
+                ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
     ];
 
     for (table_name, columns) in TABLE_SCHEMAS {
@@ -162,6 +171,34 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bucket_policies (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            sync_policy TEXT NOT NULL DEFAULT 'upload_only' CHECK(sync_policy IN ('mirror_local_deletes', 'restore_from_remote', 'local_only_deletes', 'upload_only')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "INSERT OR IGNORE INTO bucket_policies (id, sync_policy) 
+         VALUES (1, 'upload_only')"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TRIGGER IF NOT EXISTS update_bucket_policies_timestamp
+        AFTER UPDATE ON bucket_policies
+        BEGIN
+            UPDATE bucket_policies SET updated_at = CURRENT_TIMESTAMP WHERE id = 1;
+        END;"
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -250,7 +287,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                         println!("[Setup] Found {} existing encryption key(s)", count);
                     }
                 }
-
                 // Initialize WSS endpoint if it doesn't exist
                 let endpoint_exists: Option<(i64,)> = sqlx::query_as(
                     "SELECT COUNT(*) as count FROM wss_endpoint"
@@ -278,10 +314,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 }
 
                 println!("[Setup] Database initialized successfully");
-
-                // Don't start IPFS daemon immediately - let frontend control when to start
-                // after update check is complete via start_ipfs_setup_when_ready command
-                println!("[Setup] IPFS daemon startup deferred until after update check");
             });
             Ok(())
         })

@@ -62,8 +62,6 @@
             "icons/TrayIcon.png",
             "icons/SyncingTrayIcon.png",
             "icons/SyncCompletedTrayIcon.png",
-            "resources/awscli-macos-universal",
-            "resources/awscli-windows",
             "icons/*.png",
             "icons/generic-image.png"
         ],
