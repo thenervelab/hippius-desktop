@@ -168,18 +168,9 @@ export default function CheckForUpdateDialog({
             break;
           }
         }
-      }); setStatus("complete");
+      });
 
-      // Wait 2 seconds then attempt relaunch
-      setTimeout(async () => {
-        setStatus("restarting");
-        try {
-          await relaunch();
-        } catch (restartErr) {
-          console.error("Failed to restart automatically:", restartErr);
-          // App will show manual restart option after 2 minutes
-        }
-      }, 2000);
+      setStatus("complete");
 
     } catch (err) {
       console.error("Update failed:", err);
@@ -384,12 +375,12 @@ export default function CheckForUpdateDialog({
                           </div>
 
                           <h1 className="text-[40px] leading-[48px] text-grey-40 mt-2">
-                            Update is now complete. Restart to complete the process
+                            Update is now complete. Please restart the app to use the new version.
                           </h1>
 
                           <div className="mt-6">
                             <p className="text-grey-50 font-medium text-lg mb-2">
-                              Installing... <span className="text-primary-50">100%</span>
+                              Installation Complete <span className="text-primary-50">100%</span>
                             </p>
                             <ProgressBar progress={100} />
                           </div>
@@ -406,7 +397,7 @@ export default function CheckForUpdateDialog({
                           </div>
 
                           <h1 className="text-[28px] lg:text-[40px] leading-[48px] text-grey-40 mt-2">
-                            Update is now complete. Restarting application...
+                            Update is now complete. Restarting app...
                           </h1>
 
                           <div className="mt-6">
@@ -488,8 +479,8 @@ export default function CheckForUpdateDialog({
                       </div>
                     )}
 
-                    {(status === "complete" || status === "restarting") && (
-                      <div className="shrink-0 flex flex-col gap-4 mt-10">
+                    {status === "complete" && (
+                      <div className="shrink-0 flex flex-col gap-2 mt-10">
                         <CardButton
                           variant="dialog"
                           className="w-[208px] h-[48px] py-4 text-base"
@@ -497,15 +488,15 @@ export default function CheckForUpdateDialog({
                             try {
                               relaunch();
                             } catch (err) {
-                              console.error("Manual restart failed:", err);
-                              toast.error("Unable to restart automatically. Please restart the app manually.");
+                              console.error("Restart failed:", err);
+                              toast.error("Unable to restart the app. Please restart manually.");
                             }
                           }}
                         >
                           Restart Now
                         </CardButton>
-                        <p className="text-grey-60 text-sm text-center">
-                          If the app doesn&apos;t restart automatically, click the button above
+                        <p className="text-grey-60 text-sm">
+                          Click the button above to restart and use the new version
                         </p>
                       </div>
                     )}

@@ -20,7 +20,6 @@ export { default as BarChart } from "./bar-chart";
 export { default as ScatterPlot } from "./scatter-plot";
 export * from "./typography";
 export * as Icons from "./icons";
-export * as TableModule from "./table";
 export { default as StatusPill } from "./status-pill";
 export { default as ThreeDotLoader } from "./three-dot-loader";
 export { default as StatsBox } from "./stats-box";
