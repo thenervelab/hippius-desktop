@@ -957,13 +957,6 @@ async fn process_batch(
             }
         };
 
-        // Emit the sync status update
-        let _ = app_handle.emit("sync-status-update", &status);
-
-        // Also emit an activity update
-        let activity = crate::sync_shared::get_sync_activity(owner.to_string(), Some(50));
-        let _ = app_handle.emit("sync-activity-update", &activity);
-
         println!("[privateFolderSync] Emitted status and activity updates");
     }
 }

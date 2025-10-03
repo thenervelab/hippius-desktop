@@ -4,7 +4,7 @@ use crate::sync_shared::{
     prepare_for_new_sync, reset_all_sync_state, stop_sync_for_scope, S3_PRIVATE_SYNC_STATE,
     S3_PUBLIC_SYNC_STATE,
 };
-use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
+use crate::utils::sync::{get_private_sync_path, get_public_sync_path, is_first_run};
 use base64 as b64;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
@@ -13,6 +13,7 @@ use sp_core::Pair;
 use sqlx;
 use std::sync::Arc;
 use tauri::Manager;
+use tauri::Emitter;
 use tokio::sync::Mutex;
 
 /// Stops sync processes for a specific scope ("public" or "private")
@@ -128,7 +129,7 @@ pub async fn initialize_sync(
     // Cancel any existing sync tasks
     let mut sync_state = state.sync.lock().await;
     for task in sync_state.tasks.drain(..) {
-        task.abort(); // Cancel the previous sync tasks
+        task.abort();
     }
 
     // Wait a bit for cleanup to complete

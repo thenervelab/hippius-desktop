@@ -15,7 +15,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Wry};
+use tauri::{AppHandle, Wry, Emitter};
 
 /// Parses a line from the `aws s3 sync` output to create a RecentItem.
 pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
@@ -209,27 +209,73 @@ pub fn get_sync_status() -> SyncStatusResponse {
 }
 
 #[tauri::command]
-pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivityResponse {
-    let p_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
-    let pub_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-    let limit = limit.unwrap_or(100);
+pub async fn get_sync_activity(
+    app: tauri::AppHandle,
+    account_id: String,
+    limit: Option<usize>,
+) -> SyncActivityResponse {
+    // Collect all the data we need while holding the locks
+    let (recent, uploading) = {
+        let p_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
+        let pub_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
+        let limit = limit.unwrap_or(100);
 
-    // Combine and sort recent items
-    let mut recent: Vec<RecentItem> = p_state
-        .recent_items
-        .iter()
-        .chain(pub_state.recent_items.iter())
-        .cloned()
-        .collect();
+        // Combine and sort recent items
+        let mut recent: Vec<RecentItem> = p_state
+            .recent_items
+            .iter()
+            .chain(pub_state.recent_items.iter())
+            .cloned()
+            .collect();
 
-    // Sort by timestamp (newest first)
-    recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    recent.truncate(limit);
+        // Sort by timestamp (newest first)
+        recent.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        recent.truncate(limit);
 
-    // Get currently uploading items from both states
-    let mut uploading = Vec::new();
-    uploading.extend(p_state.uploading_items.iter().cloned());
-    uploading.extend(pub_state.uploading_items.iter().cloned());
+        // Get currently uploading items from both states
+        let mut uploading = Vec::new();
+        uploading.extend(p_state.uploading_items.iter().cloned());
+        uploading.extend(pub_state.uploading_items.iter().cloned());
+
+        (recent, uploading)
+    };
+
+    // Now we can safely await without holding the locks
+    if uploading.is_empty() && !recent.is_empty() {
+        match crate::utils::sync::is_sync_completed().await {
+            Ok(false) => {
+                // Mark sync as completed
+                if let Err(e) = crate::utils::sync::mark_first_run_complete().await {
+                    eprintln!("Failed to mark sync as completed: {}", e);
+                }
+                if let Err(e) = app.emit("sync_completed", ()).map_err(|e| e.to_string()) {
+                    eprintln!("Failed to emit sync_completed event: {}", e);
+                }
+                println!("[Sync] Sync completed with {} recent items", recent.len());
+            }
+            Ok(true) => {
+                // Sync already marked as completed, do nothing
+            }
+            Err(e) => {
+                eprintln!("Failed to check sync completion status: {}", e);
+            }
+        }
+    } else if !uploading.is_empty() {
+        match crate::utils::sync::is_first_run().await {
+            Ok(true) => {
+                if let Err(e) = app.emit("started_syncing", ()).map_err(|e| e.to_string()) {
+                    eprintln!("Failed to emit started_syncing event: {}", e);
+                }
+                println!("[Sync] Sync started with {} items uploading", uploading.len());
+            }
+            Ok(false) => {
+                // Not the first run → do nothing
+            }
+            Err(err) => {
+                eprintln!("Failed to determine if first run: {}", err);
+            }
+        }
+    }
 
     // Convert to unified format with account_id as owner
     let recent_unified = recent
@@ -247,7 +293,6 @@ pub fn get_sync_activity(account_id: String, limit: Option<usize>) -> SyncActivi
         uploading: uploading_unified,
     }
 }
-
 /// Stops all running sync processes and resets sync state
 pub fn stop_all_sync_processes() {
     println!("[Sync] Stopping all sync processes...");
