@@ -1070,7 +1070,7 @@ pub async fn list_folder_contents(
                 if key.ends_with('/') {
                     continue;
                 }
-
+                println!("item : {}", item);
                 // Get IPFS hash from Owner.ID if available
                 let ipfs_hash = item["Owner"]
                     .as_object()

@@ -33,29 +33,6 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             ],
         ),
         (
-            "sync_folder_files",
-            &[
-                ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
-                ("owner", "TEXT NOT NULL"),
-                ("cid", "TEXT NOT NULL"),
-                ("file_hash", "TEXT"),
-                ("file_name", "TEXT"),
-                ("file_size_in_bytes", "INTEGER"),
-                ("is_assigned", "BOOLEAN"),
-                ("last_charged_at", "INTEGER"),
-                ("main_req_hash", "TEXT"),
-                ("selected_validator", "TEXT"),
-                ("total_replicas", "INTEGER"),
-                ("block_number", "INTEGER NOT NULL"),
-                ("processed_timestamp", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-                ("profile_cid", "TEXT"),
-                ("source", "TEXT"),
-                ("miner_ids", "TEXT"),
-                ("type", "TEXT"),
-                ("is_folder", "BOOLEAN"),
-            ],
-        ),
-        (
             "file_paths",
             &[
                 ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -169,6 +146,18 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Create is_first_run table to track first-time app launch
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS is_first_run (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            is_started BOOLEAN NOT NULL DEFAULT TRUE,
+            is_completed BOOLEAN NOT NULL DEFAULT FALSE,
+            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -235,19 +224,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     "#
                 ).execute(&pool).await {
                     eprintln!("[Setup] Failed to update type, is_folder, and source columns in user_profiles: {}", e);
-                }
-
-                // Set default values for sync_folder_files
-                if let Err(e) = sqlx::query(
-                    r#"
-                    UPDATE sync_folder_files 
-                    SET type = 'public',
-                        is_folder = 0,
-                        source = 'Hippius'
-                    WHERE type IS NULL OR is_folder IS NULL OR source IS NULL
-                    "#
-                ).execute(&pool).await {
-                    eprintln!("[Setup] Failed to update default values in sync_folder_files: {}", e);
                 }
 
                 // Check if any encryption keys exist, create one if none found

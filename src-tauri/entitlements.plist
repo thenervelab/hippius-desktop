@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>com.apple.security.app-sandbox</key>
-    <true/>
+    <false/>
     <key>com.apple.security.network.client</key>
     <true/>
     <key>com.apple.security.network.server</key>
@@ -32,8 +32,7 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
-    <!-- Add these new entitlements for persistent file access -->
-    <key>com.apple.security.files.all</key>
+    <!-- <key>com.apple.security.files.all</key>
     <dict>
         <key>read</key>
         <true/>
@@ -43,6 +42,6 @@
     <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
     <array>
         <string>/</string>
-    </array>
+    </array> -->
 </dict>
 </plist>

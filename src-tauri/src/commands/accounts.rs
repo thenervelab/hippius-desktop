@@ -397,12 +397,12 @@ pub async fn reset_app() -> Result<(), String> {
 
     let tables_to_clear = vec![
         "user_profiles",
-        "sync_folder_files",
         "file_paths",
         "encryption_keys",
         "sync_paths",
         "wss_endpoint",
         "sub_accounts",
+        "is_first_run",
     ];
 
     for table in tables_to_clear {

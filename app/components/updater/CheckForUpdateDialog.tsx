@@ -324,7 +324,7 @@ export default function CheckForUpdateDialog({
                           </div>
 
                           <h1 className="text-[40px] leading-[48px] text-grey-10 mt-4">
-                            Please wait while your update is downloaded
+                            Please wait while your update is downloading
                           </h1>
 
                           <div className="mt-6">
@@ -353,7 +353,7 @@ export default function CheckForUpdateDialog({
                           </div>
 
                           <h1 className="text-[40px] leading-[48px] text-grey-40 mt-2">
-                            Please wait while your update is installed
+                            Please wait while your update is installing
                           </h1>
 
                           <div className="mt-6">
