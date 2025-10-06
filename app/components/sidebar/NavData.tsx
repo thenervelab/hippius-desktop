@@ -46,11 +46,11 @@ export const navItems: NavItemData[] = [
       }
     ]
   },
-  {
-    label: "Wallet",
-    path: "/wallet",
-    icon: <Icons.Wallet />
-  },
+  // {
+  //   label: "Wallet",
+  //   path: "/wallet",
+  //   icon: <Icons.Wallet />
+  // },
   {
     label: "Billing",
     path: "/billing",
