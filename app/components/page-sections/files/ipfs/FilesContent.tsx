@@ -17,9 +17,7 @@ import IPFSNoEntriesFound from "./files-table/IpfsNoEntriesFound";
 import InsufficientCreditsDialog from "./InsufficientCreditsDialog";
 import UploadStatusWidget from "./UploadStatusWidget";
 import SidebarDialog from "@/app/components/ui/SidebarDialog";
-import FilterDialogContent from "./filter-dialog-content";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
-import { FileTypes } from "@/lib/types/fileTypes";
 import DeleteConfirmationDialog from "@/app/components/DeleteConfirmationDialog";
 import SidebarDialogContent from "./file-details-dialog-content";
 import VideoDialog from "./files-table/VideoDialog";
@@ -45,19 +43,6 @@ interface FilesContentProps {
   viewMode: "list" | "card";
   shouldResetPagination: boolean;
   handlePaginationReset: () => void;
-  isFilterOpen: boolean;
-  setIsFilterOpen: (isOpen: boolean) => void;
-  selectedFileTypes: FileTypes[];
-  selectedDate: string;
-  selectedFileSize: number;
-  selectedSizeUnit: string;
-  handleApplyFilters: (
-    fileTypes: FileTypes[],
-    date: string,
-    fileSize: number,
-    sizeUnit: string
-  ) => void;
-  handleResetFilters: () => void;
   error?: unknown;
   isPrivateView: boolean;
   addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void }>;
@@ -79,14 +64,6 @@ const FilesContent: FC<FilesContentProps> = ({
   viewMode,
   shouldResetPagination,
   handlePaginationReset,
-  isFilterOpen,
-  setIsFilterOpen,
-  selectedFileTypes,
-  selectedDate,
-  selectedFileSize,
-  selectedSizeUnit,
-  handleApplyFilters,
-  handleResetFilters,
   error,
   isPrivateView,
   addButtonRef,
@@ -496,20 +473,7 @@ const FilesContent: FC<FilesContentProps> = ({
         <SidebarDialogContent file={fileDetailsFile ?? undefined} />
       </SidebarDialog>
 
-      <SidebarDialog
-        heading="Filter"
-        open={isFilterOpen}
-        onOpenChange={setIsFilterOpen}
-      >
-        <FilterDialogContent
-          selectedFileTypes={selectedFileTypes}
-          selectedDate={selectedDate}
-          selectedFileSize={selectedFileSize}
-          selectedSizeUnit={selectedSizeUnit}
-          onApplyFilters={handleApplyFilters}
-          onResetFilters={handleResetFilters}
-        />
-      </SidebarDialog>
+
     </>
   );
 };

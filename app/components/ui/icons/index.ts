@@ -48,6 +48,7 @@ export { default as Location } from "./Location";
 export { default as Chart } from "./Chart";
 export { default as Timer } from "./Timer";
 export { default as Calendar } from "./Calendar";
+export { default as CalendarNew } from "./CalendarNew";
 export { default as Folder } from "./Folder";
 export { default as FolderCloud } from "./FolderCloud";
 export { default as FolderMinus } from "./FolderMinus";
@@ -160,4 +161,5 @@ export { default as GasStation } from "./GasStation";
 export { default as EstimatedTime } from "./EstimatedTime";
 export { default as ArrowDown } from "./ArrowDown";
 export { default as MoneyTick } from "./MoneyTick";
+export { default as UnknownFile } from "./UnknownFile";
 

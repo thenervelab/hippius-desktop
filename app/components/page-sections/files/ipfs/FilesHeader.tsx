@@ -20,6 +20,8 @@ import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
 import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
+import FilterPills from "./FilterPills";
+import { FileTypes } from "@/lib/types/fileTypes";
 
 interface FilesHeaderProps {
   isRecentFiles?: boolean;
@@ -33,7 +35,6 @@ interface FilesHeaderProps {
   handleSearchChange: (value: string) => void;
   activeFilters: ActiveFilter[];
   handleRemoveFilter: (filter: ActiveFilter) => void;
-  setIsFilterOpen: (isOpen: boolean) => void;
   refetchUserFiles: () => void;
   addButtonRef: React.RefObject<{
     openWithFiles(files: FileList): void;
@@ -43,6 +44,13 @@ interface FilesHeaderProps {
   syncFolderPath?: string;
   isSyncPathEmpty?: boolean;
   onStartSyncing?: () => void;
+  // New filter props
+  selectedFileTypes: FileTypes[];
+  selectedDate: string;
+  selectedFileSizes: number[];
+  onFileTypesChange: (types: FileTypes[]) => void;
+  onDateChange: (date: string) => void;
+  onFileSizesChange: (sizes: number[]) => void;
 }
 
 const FilesHeader: FC<FilesHeaderProps> = ({
@@ -57,12 +65,18 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   handleSearchChange,
   activeFilters,
   handleRemoveFilter,
-  setIsFilterOpen,
   refetchUserFiles,
   addButtonRef,
   syncFolderPath,
   isSyncPathEmpty = false,
   onStartSyncing,
+  // New filter props
+  selectedFileTypes,
+  selectedDate,
+  selectedFileSizes,
+  onFileTypesChange,
+  onDateChange,
+  onFileSizesChange,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
   const [syncFolderPermissionGranted, setSyncFolderPermissionGranted] =
@@ -153,25 +167,66 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   return (
     <>
       {!isRecentFiles && (
-        <div className="flex items-center gap-4">
+        <div className="flex items-center justify-between gap-4">
           <StorageStateList
             storageUsed={formattedStorageSize}
             numberOfFiles={allFilteredDataLength || 0}
           />
-        </div>
-      )}
-      <div className="flex justify-between items-center w-full gap-6 flex-wrap mt-5">
-        {isRecentFiles ? (
-          <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
-        ) : (
-          <div className="">
+          <div className="flex items-center gap-2">
             <SearchInput
               className="h-9"
               value={searchTerm}
               onChange={handleSearchChange}
               placeholder="Search file"
             />
+            <button
+              onClick={() => setIsDeleteDialogOpen(true)}
+              className="flex items-center justify-center gap-1 h-9 px-2 py-2 min-w-[150px] rounded bg-error-50 border border-error-60 text-white hover:bg-error-60 active:bg-error-70 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
+            >
+              <Icons.Trash className="size-4" />
+              <span className="ml-1">Delete All Files</span>
+            </button>
+            <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
+              <button
+                className={cn(
+                  "p-1 rounded",
+                  viewMode === "list"
+                    ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                    : "bg-grey-100 text-grey-70"
+                )}
+                onClick={() => setViewMode("list")}
+                aria-label="List View"
+              >
+                <List className="size-5" />
+              </button>
+              <button
+                className={cn(
+                  "p-1 rounded",
+                  viewMode === "card"
+                    ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                    : "bg-grey-100 text-grey-70"
+                )}
+                onClick={() => setViewMode("card")}
+                aria-label="Card View"
+              >
+                <Icons.Category className="size-5" />
+              </button>
+            </div>
           </div>
+        </div>
+      )}
+      <div className="flex justify-between items-center w-full gap-6 flex-wrap mt-5">
+        {isRecentFiles ? (
+          <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
+        ) : (
+          <FilterPills
+            selectedFileTypes={selectedFileTypes}
+            selectedDate={selectedDate}
+            selectedFileSizes={selectedFileSizes}
+            onFileTypesChange={onFileTypesChange}
+            onDateChange={onDateChange}
+            onFileSizesChange={onFileSizesChange}
+          />
         )}
 
         <div className="flex items-center gap-3 flex-wrap">
@@ -179,59 +234,44 @@ const FilesHeader: FC<FilesHeaderProps> = ({
             refetching={isRefetching || isFetching}
             onClick={() => refetchUserFiles()}
           />
-          <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
-            <button
-              className={cn(
-                "p-1 rounded",
-                viewMode === "list"
-                  ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
-                  : "bg-grey-100 text-grey-70"
-              )}
-              onClick={() => setViewMode("list")}
-              aria-label="List View"
-            >
-              <List className="size-5" />
-            </button>
-            <button
-              className={cn(
-                "p-1 rounded",
-                viewMode === "card"
-                  ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
-                  : "bg-grey-100 text-grey-70"
-              )}
-              onClick={() => setViewMode("card")}
-              aria-label="Card View"
-            >
-              <Icons.Category className="size-5" />
-            </button>
-          </div>
           {isRecentFiles && (
-            <button
-              onClick={handleViewAllFiles}
-              className="px-2 py-2 items-center flex bg-grey-90  border border-grey-80 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
-            >
-              View All Files
-              <Icons.ArrowRight className="size-[14px] ml-1" />
-            </button>
-          )}
-          {!isRecentFiles && (
-            <div
-              className="flex border border-grey-80 p-1 rounded cursor-pointer"
-              onClick={() => setIsFilterOpen(true)}
-            >
+            <>
+              <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
+                <button
+                  className={cn(
+                    "p-1 rounded",
+                    viewMode === "list"
+                      ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                      : "bg-grey-100 text-grey-70"
+                  )}
+                  onClick={() => setViewMode("list")}
+                  aria-label="List View"
+                >
+                  <List className="size-5" />
+                </button>
+                <button
+                  className={cn(
+                    "p-1 rounded",
+                    viewMode === "card"
+                      ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                      : "bg-grey-100 text-grey-70"
+                  )}
+                  onClick={() => setViewMode("card")}
+                  aria-label="Card View"
+                >
+                  <Icons.Category className="size-5" />
+                </button>
+              </div>
               <button
-                className="flex justify-center items-center p-1 bg-white text-grey-70 rounded"
-                aria-label="Filter"
+                onClick={handleViewAllFiles}
+                className="px-2 py-2 items-center flex bg-grey-90  border border-grey-80 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
               >
-                <Icons.Filter className="size-5" />
-                {activeFilters.length > 0 && (
-                  <span className="ml-1 p-1 bg-primary-100 text-primary-30 border border-primary-80 text-xs rounded min-w-4 h-4 flex items-center justify-center ">
-                    {activeFilters.length}
-                  </span>
-                )}
+                View All Files
+                <Icons.ArrowRight className="size-[14px] ml-1" />
               </button>
-            </div>
+            </>
           )}
+
 
           <>
 
@@ -257,17 +297,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               <span className="ml-1">Open Sync Folder</span>
             </button>
 
-            {/* Delete All Files button - not showing in Recent Files view */}
-            {!isRecentFiles && (
-              <button
-                onClick={() => setIsDeleteDialogOpen(true)}
-                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-error-50 border border-error-60 text-white hover:bg-error-60 active:bg-error-70 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
-              >
-                <Icons.Trash className="size-4" />
-                <span className="ml-1">Delete All Files</span>
-              </button>
-            )}
-
             {!isSyncPathEmpty && <AddButton ref={addButtonRef} className="h-9" />}
             {isSyncPathEmpty && (
               // Show Start Syncing button when sync path is empty (user skipped)
@@ -283,7 +312,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
         <FilterChips
           filters={activeFilters}
           onRemoveFilter={handleRemoveFilter}
-          onOpenFilterDialog={() => setIsFilterOpen(true)}
           className="mt-4 mb-2"
         />
       )}

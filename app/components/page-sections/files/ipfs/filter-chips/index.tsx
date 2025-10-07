@@ -14,7 +14,7 @@ export interface ActiveFilter {
 interface FilterChipsProps {
     filters: ActiveFilter[];
     onRemoveFilter: (filter: ActiveFilter) => void;
-    onOpenFilterDialog: () => void;
+    onOpenFilterDialog?: () => void;
     className?: string;
     maxVisible?: number;
 }
@@ -49,7 +49,7 @@ const FilterChips: React.FC<FilterChipsProps> = ({
                 </div>
             ))}
 
-            {hiddenCount > 0 && (
+            {hiddenCount > 0 && onOpenFilterDialog && (
                 <div
                     className="flex items-center gap-1 px-2 py-1 bg-grey-90 border border-grey-80 rounded text-sm text-primary-50 cursor-pointer hover:bg-grey-80"
                     onClick={onOpenFilterDialog}

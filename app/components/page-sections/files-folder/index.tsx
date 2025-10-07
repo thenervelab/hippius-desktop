@@ -92,8 +92,7 @@ export default function FolderView({
   const [selectedFileTypes, setSelectedFileTypes] = useState<FileTypes[]>([]);
   const [selectedDate, setSelectedDate] = useState("");
   const [selectedFileSize, setSelectedFileSize] = useState(0);
-  const [selectedSizeUnit, setSelectedSizeUnit] = useState("GB");
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
+
   const [syncFolderPath, setSyncFolderPath] = useState<string>("");
   const [isLoadingSyncPath, setIsLoadingSyncPath] = useState(true);
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
@@ -314,30 +313,7 @@ export default function FolderView({
     }
   };
 
-  const handleApplyFilters = useCallback(
-    (
-      fileTypes: FileTypes[],
-      date: string,
-      fileSize: number,
-      sizeUnit: string
-    ) => {
-      setSelectedFileTypes(fileTypes);
-      setSelectedDate(date);
-      setSelectedFileSize(fileSize);
-      setSelectedSizeUnit(sizeUnit);
-      setIsFilterOpen(false);
-      setShouldResetPagination(true);
-    },
-    []
-  );
 
-  const handleResetFilters = useCallback(() => {
-    setSelectedFileTypes([]);
-    setSelectedDate("");
-    setSelectedFileSize(0);
-    setSelectedSizeUnit("GB");
-    setShouldResetPagination(true);
-  }, []);
 
   const handleSearchChange = useCallback((value: string) => {
     setSearchTerm(value);
@@ -446,20 +422,7 @@ export default function FolderView({
               </button>
             </div>
 
-            <div className="flex border border-grey-80 p-1 rounded">
-              <button
-                className="flex justify-center items-center p-1 cursor-pointer bg-white text-grey-70 rounded"
-                onClick={() => setIsFilterOpen(true)}
-                aria-label="Filter"
-              >
-                <Icons.Filter className="size-5" />
-                {activeFilters.length > 0 && (
-                  <span className="ml-1 p-1 bg-primary-100 text-primary-30 border border-primary-80 text-xs rounded min-w-4 h-4 flex items-center justify-center">
-                    {activeFilters.length}
-                  </span>
-                )}
-              </button>
-            </div>
+
 
             {/* Only show upload buttons if sync path is configured */}
             {!isSyncPathEmpty && !isLoadingSyncPath && (
@@ -508,7 +471,6 @@ export default function FolderView({
           <FilterChips
             filters={activeFilters}
             onRemoveFilter={handleRemoveFilter}
-            onOpenFilterDialog={() => setIsFilterOpen(true)}
             className="mt-4 mb-2"
           />
         )}
@@ -544,14 +506,6 @@ export default function FolderView({
                 viewMode={viewMode}
                 shouldResetPagination={shouldResetPagination}
                 handlePaginationReset={handlePaginationReset}
-                isFilterOpen={isFilterOpen}
-                setIsFilterOpen={setIsFilterOpen}
-                selectedFileTypes={selectedFileTypes}
-                selectedDate={selectedDate}
-                selectedFileSize={selectedFileSize}
-                selectedSizeUnit={selectedSizeUnit}
-                handleApplyFilters={handleApplyFilters}
-                handleResetFilters={handleResetFilters}
                 isPrivateView={isPrivateFolder}
                 currentPage={currentPage}
                 totalPages={totalPages}

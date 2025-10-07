@@ -64,7 +64,7 @@ interface Filter {
 interface FilesTableProps {
   showUnpinnedDialog?: boolean;
   files: FormattedUserIpfsFile[];
-  allFiles: FormattedUserIpfsFile[]; // Full list of files for header checkbox selection
+  allFiles: FormattedUserIpfsFile[];
   resetPagination?: boolean;
   onPaginationReset?: () => void;
   isRecentFiles?: boolean;
@@ -518,50 +518,32 @@ const FilesTable: FC<FilesTableProps> = memo(
             );
           },
         }),
-        columnHelper.display({
-          header: "LOCATION",
-          id: "location",
-          enableSorting: false,
-          cell: ({ row: { original } }) => {
-            const getParentDirectory = (path: string): string => {
-              // Return Hippius for S3 paths
-              if (path && path.startsWith("s3://")) {
-                return "Hippius";
-              }
-
-              if (!path) return "Unknown";
-              const parts = path.split(/[/\\]/).filter((p) => p.trim());
-              if (parts.length >= 2) {
-                return parts[parts.length - 2];
-              }
-              return "Hippius";
-            };
-
-            const parentDir = getParentDirectory(original.source ?? "");
-            const isS3Source =
-              original.source && original.source.startsWith("s3://");
-
-            return (
-              <div className="flex flex-col">
-                <div className="text-grey-20 text-base font-medium">
-                  {parentDir}
-                </div>
-                {original.source !== "Hippius" && !isS3Source && (
-                  <div
-                    className="text-grey-70 text-xs truncate max-w-[250px] xl:max-w-[100%]"
-                    title={original.source}
-                  >
-                    {original.source && original.source.length > 53
-                      ? original.source.slice(0, 40) +
-                      "..." +
-                      original.source.slice(-10)
-                      : original.source ?? ""}
-                  </div>
-                )}
-              </div>
-            );
+        columnHelper.accessor(
+          (row) => {
+            const { fileFormat } = getFilePartsFromFileName(row.name);
+            const fileType = getFileTypeFromExtension(fileFormat || null);
+            return row.isFolder
+              ? "Folder"
+              : fileType
+                ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
+                : "Document";
           },
-        }),
+          {
+            header: "FILE TYPE",
+            id: "type",
+            enableSorting: true,
+            cell: ({ getValue }) => {
+              const value = getValue();
+              return (
+                <div className="flex flex-col">
+                  <div className="text-grey-70 text-base font-medium">
+                    {value}
+                  </div>
+                </div>
+              );
+            },
+          }
+        ),
         columnHelper.display({
           id: "actions",
           header: "",
@@ -652,7 +634,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     );
 
     console.log("allfiles", allFiles);
-    console.log("files", files);
+    console.log("files from files-table", files);
     const table = useReactTable(tableConfig);
 
     // Get sorted rows and manually paginate them
@@ -663,7 +645,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       const start = (currentPage - 1) * pageSize;
       const end = start + pageSize;
       return sortedRows.slice(start, end);
-    }, [table, currentPage, sorting]);
+    }, [table, currentPage, sorting, files]);
 
     const headerRows = useMemo(
       () =>
@@ -760,7 +742,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         selectedFiles,
         currentPage,
         searchTerm,
-        files,
+        files
       ]
     );
 

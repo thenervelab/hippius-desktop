@@ -13,8 +13,9 @@ import {
   Sheet,
   SVG,
   Terminal,
-  File,
   Folder2,
+  UnknownFile,
+  CentralizedDataBase,
 } from "@/components/ui/icons";
 import { FileTypes } from "@/lib/types/fileTypes";
 
@@ -24,27 +25,28 @@ const fileTypes: Array<{
   icon: React.FC<Record<string, unknown>>;
   color: string;
 }> = [
-  { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
-  { type: "image", label: "Picture", icon: Image, color: "text-[#ea4335]" },
-  {
-    type: "document",
-    label: "Unknown",
-    icon: File,
-    color: "text-primary-70 fill-primary-60",
-  },
-  { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
-  {
-    type: "PPT",
-    label: "PPT",
-    icon: Presentation,
-    color: "text-[#fbbc04]",
-  },
-  { type: "XLS", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
-  { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
-  { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
-  { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
-  { type: "folder", label: "Folder", icon: Folder2, color: "text-primary-40" },
-];
+    { type: "folder", label: "Folder", icon: Folder2, color: "text-primary-40" },
+    { type: "video", label: "Video", icon: Video, color: "text-[#ea4335]" },
+    {
+      type: "document",
+      label: "Unknown",
+      icon: UnknownFile,
+      color: "text-primary-70 fill-primary-60",
+    },
+    { type: "image", label: "Picture", icon: Image, color: "text-[#ea4335]" },
+    { type: "code", label: "JSON File", icon: Terminal, color: "text-[#4285F4]" },
+    { type: "sql", label: "SQL", icon: CentralizedDataBase, color: "text-[#4285F4]" },
+    { type: "svg", label: "SVG", icon: SVG, color: "text-black" },
+    { type: "XLS", label: "XLS", icon: Sheet, color: "text-[#34a853]" },
+    { type: "PDF", label: "PDF", icon: PDF, color: "text-[#ea4335]" },
+    {
+      type: "PPT",
+      label: "PPT",
+      icon: Presentation,
+      color: "text-[#fbbc04]",
+    },
+    { type: "doc", label: "Doc", icon: Document, color: "text-[#4285F4]" },
+  ];
 
 interface FileTypeSelectorProps {
   selectedTypes?: FileTypes[];
@@ -63,47 +65,26 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
   };
 
   const getDisplayText = () => {
-    if (selectedTypes.length === 0) return "Type";
+    if (selectedTypes.length === 0) return "File Type";
     if (selectedTypes.length === 1) {
       const selectedType = fileTypes.find((ft) => ft.type === selectedTypes[0]);
-      return selectedType?.label || "Type";
+      return selectedType?.label || "File Type";
     }
     return `${selectedTypes.length} types selected`;
-  };
-
-  const getDisplayIcon = () => {
-    if (selectedTypes.length === 1) {
-      const selectedType = fileTypes.find((ft) => ft.type === selectedTypes[0]);
-      if (selectedType) {
-        return (
-          <selectedType.icon
-            className={cn("size-[14px]", selectedType.color)}
-          />
-        );
-      }
-    }
-    return <Icons.FileFilter className="size-[14px] text-grey-10" />;
   };
 
   return (
     <Menubar.Root>
       <Menubar.Menu>
         <Menubar.Trigger asChild>
-          <button className="flex justify-between group p-2 bg-grey-90 w-full rounded border border-grey-80 hover:bg-grey-80 transition-colors">
-            <div className="flex gap-2">
-              <div className="flex justify-center items-center p-1">
-                {getDisplayIcon()}
-              </div>
-              <div className="text-sm font-medium text-grey-10 leading-5">
-                {getDisplayText()}
-              </div>
+          <button className="flex justify-center group px-3 py-2 bg-grey-100 w-full rounded-[24px] border border-grey-80 hover:bg-grey-80 min-w-[112px] transition-colors">
+            <div className="text-sm font-medium text-grey-40 leading-5">
+              {getDisplayText()}
             </div>
-            <div className="rounded border border-prmary-80 bg-primary-100 flex justify-center items-center p-[3px]">
-              <Icons.ChevronDown className="size-[14px] text-primary-50 transition-transform duration-200 group-data-[state=open]:rotate-180" />
-            </div>
+            <Icons.ChevronDown className="ml-2 mt-0.5 size-4 text-grey-10 transition-transform duration-200 group-data-[state=open]:rotate-180" />
           </button>
         </Menubar.Trigger>
-        <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[326px] z-50">
+        <Menubar.Content className="mt-1 bg-white border border-grey-80 rounded-lg px-2 py-1 shadow-menu min-w-[153px] z-50">
           {fileTypes.map((fileType) => (
             <Menubar.Item
               key={fileType.type}
@@ -119,14 +100,14 @@ const FileTypeSelector: React.FC<FileTypeSelectorProps> = ({
                 onCheckedChange={() => handleTypeToggle(fileType.type)}
               >
                 <Checkbox.Indicator>
-                  <Check className="h-3.5 w-3.5 text-white" />
+                  <Check className="size-4 text-white" />
                 </Checkbox.Indicator>
               </Checkbox.Root>
-              <div className="flex gap-1.5 items-center">
+              <div className="flex gap-1 items-center">
                 <div className="flex justify-center items-center p-0.5">
-                  <fileType.icon className={cn("size-4", fileType.color)} />
+                  <fileType.icon className={cn("size-5", fileType.color)} />
                 </div>
-                <span className="flex-1 font-medium text-xs">
+                <span className="flex-1 font-medium text-base text-grey-40">
                   {fileType.label}
                 </span>
               </div>

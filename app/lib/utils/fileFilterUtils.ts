@@ -9,6 +9,7 @@ export interface FilterCriteria {
     fileTypes: FileTypes[];
     dateFilter: string;
     fileSize: number;
+    fileSizes?: number[]; // New array-based file size filter
 }
 
 export interface ActiveFilter {
@@ -40,6 +41,8 @@ export function filterFiles(
     // Handle undefined or null files
     if (!files || !files.length) return [];
 
+
+
     let result = [...files];
 
     // Apply search filter if search term exists
@@ -62,16 +65,42 @@ export function filterFiles(
         });
     }
 
-    // Apply date filter if selected and files have timestamps
-    if (criteria.dateFilter) {
-        const now = new Date();
-        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
+    // Apply date filter if selected
+    if (criteria.dateFilter && criteria.dateFilter.trim() !== '') {
         result = result.filter(file => {
-            // Skip files without timestamps
-            if (!file.timestamp) return false;
+            let fileDate: Date;
 
-            const fileDate = file.timestamp;
+            if (file.timestamp) {
+                // Use timestamp if available (already a Date object)
+                fileDate = file.timestamp;
+            } else if (file.createdAt) {
+                // Convert timestamp using the same logic as FormattedTimestamp component
+                const isRecentTimestamp = (file.createdAt > 946684800 && file.createdAt < 4102444800); // Between 2000-01-01 and 2100-01-01
+
+                // Convert timestamp to milliseconds for JavaScript Date
+                // Unix timestamps are in seconds, JavaScript needs milliseconds
+                fileDate = new Date(isRecentTimestamp ? file.createdAt * 1000 : file.createdAt);
+
+                // If the date is invalid or extremely old/future, exclude from filtering
+                if (isNaN(fileDate.getTime()) || fileDate.getFullYear() < 2000 || fileDate.getFullYear() > 2100) {
+                    return false;
+                }
+            } else {
+                // If no date info available, exclude from date filtering
+                return false;
+            }            // Handle custom date selection (YYYY-MM-DD format)
+            if (criteria.dateFilter.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                const selectedDate = new Date(criteria.dateFilter);
+                selectedDate.setHours(0, 0, 0, 0);
+                const nextDay = new Date(selectedDate);
+                nextDay.setDate(nextDay.getDate() + 1);
+
+                return fileDate >= selectedDate && fileDate < nextDay;
+            }
+
+            // Handle predefined date ranges (legacy support)
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
             switch (criteria.dateFilter) {
                 case 'today':
@@ -106,10 +135,38 @@ export function filterFiles(
         });
     }
 
-    // Apply file size filter if value is greater than 0
-    if (criteria.fileSize > 0) {
+    // Apply file size filter - prioritize array-based filter if available
+    if (criteria.fileSizes && criteria.fileSizes.length > 0) {
         result = result.filter(file => {
-            if (!file.size) return false; // Skip files without size info
+            if (!file.size) {
+                return false; // Skip files without size info
+            }
+            const fileSize = BigInt(file.size);
+
+            const matches = criteria.fileSizes!.some(threshold => {
+                let isMatch = false;
+                // Define size ranges based on predefined options
+                if (threshold === 1) { // Small: < 1 MB
+                    isMatch = fileSize < BigInt(1024 * 1024);
+                } else if (threshold === 1024 * 1024) { // Medium: 1 MB - 100 MB
+                    isMatch = fileSize >= BigInt(1024 * 1024) && fileSize <= BigInt(100 * 1024 * 1024);
+                } else if (threshold === 100 * 1024 * 1024) { // Large: 100 MB - 1 GB
+                    isMatch = fileSize > BigInt(100 * 1024 * 1024) && fileSize <= BigInt(1024 * 1024 * 1024);
+                } else if (threshold === 1024 * 1024 * 1024) { // Very Large: > 1 GB
+                    isMatch = fileSize > BigInt(1024 * 1024 * 1024);
+                } else {
+                    // Handle custom sizes: use >= threshold
+                    isMatch = fileSize >= BigInt(threshold);
+                }
+                return isMatch;
+            });
+
+            return matches;
+        });
+    } else if (criteria.fileSize > 0) {
+        // Fallback to original file size filter
+        result = result.filter(file => {
+            if (!file.size) return false;
             return BigInt(file.size) >= BigInt(criteria.fileSize);
         });
     }
@@ -123,7 +180,8 @@ export function filterFiles(
 export function generateActiveFilters(
     fileTypes: FileTypes[],
     dateFilter: string,
-    fileSize: number
+    fileSize: number,
+    fileSizes?: number[]
 ): ActiveFilter[] {
     const activeFilters: ActiveFilter[] = [];
     const dateOptions = getDateOptions();
@@ -139,27 +197,61 @@ export function generateActiveFilters(
     });
 
     // Add date filter
-    if (dateFilter) {
-        const currentYear = new Date().getFullYear();
-        let displayValue = dateOptions[dateFilter as keyof typeof dateOptions];
+    if (dateFilter && dateFilter.trim() !== '') {
+        let displayValue: string;
 
-        // Add year info for thisyear and lastyear filters
-        if (dateFilter === 'thisyear') {
-            displayValue = `${displayValue} (${currentYear})`;
-        } else if (dateFilter === 'lastyear') {
-            displayValue = `${displayValue} (${currentYear - 1})`;
+        // Check if it's a custom date (YYYY-MM-DD format)
+        if (dateFilter.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            try {
+                const date = new Date(dateFilter);
+                const months = [
+                    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+                ];
+                displayValue = `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+            } catch {
+                displayValue = dateFilter;
+            }
+        } else {
+            // Handle predefined date options
+            const currentYear = new Date().getFullYear();
+            displayValue = dateOptions[dateFilter as keyof typeof dateOptions] || dateFilter;
+
+            // Add year info for thisyear and lastyear filters
+            if (dateFilter === 'thisyear') {
+                displayValue = `${displayValue} (${currentYear})`;
+            } else if (dateFilter === 'lastyear') {
+                displayValue = `${displayValue} (${currentYear - 1})`;
+            }
         }
 
         activeFilters.push({
             type: 'date',
             value: dateFilter,
-            label: 'Date upload:',
+            label: 'Date:',
             displayValue
         });
     }
 
-    // Add file size filter
-    if (fileSize > 0) {
+    // Add file size filters - prioritize array-based filter
+    if (fileSizes && fileSizes.length > 0) {
+        const sizeLabels: Record<number, string> = {
+            1: 'Small (< 1 MB)',
+            [1024 * 1024]: 'Medium (1 MB - 100 MB)',
+            [100 * 1024 * 1024]: 'Large (100 MB - 1 GB)',
+            [1024 * 1024 * 1024]: 'Very Large (> 1 GB)'
+        };
+
+        fileSizes.forEach(size => {
+            activeFilters.push({
+                type: 'fileSize',
+                value: String(size),
+                label: 'Size:',
+                displayValue: sizeLabels[size] || `≥ ${formatBytesFromBigInt(BigInt(size))}`
+            });
+        });
+    } else if (fileSize > 0) {
+        // Fallback to original file size filter
         activeFilters.push({
             type: 'fileSize',
             value: String(fileSize),
