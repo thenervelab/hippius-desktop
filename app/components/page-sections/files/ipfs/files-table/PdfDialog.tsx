@@ -17,14 +17,19 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 export const PdfDialogTrigger: React.FC<{
   children: ReactNode;
   onClick: () => void;
-}> = ({ children, onClick }) => {
+  hasCheckmark?: boolean;
+}> = ({ children, onClick, hasCheckmark = false }) => {
   return (
     <button
       onClick={onClick}
       className="px-4 py-[22px] relative group overflow-hidden flex items-center w-full"
     >
       <span>{children}</span>
-      <div className="absolute pointer-events-none right-4 pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white">
+      {/* Eye icon on hover - positioned to avoid checkmark */}
+      <div className={cn(
+        "absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white",
+        hasCheckmark ? "right-10" : "right-4"
+      )}>
         <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[3px]" />
       </div>
     </button>

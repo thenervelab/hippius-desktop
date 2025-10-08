@@ -12,18 +12,24 @@ import {
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { cn } from "@/lib/utils";
 
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
   onClick: () => void;
-}> = ({ children, onClick }) => {
+  hasCheckmark?: boolean;
+}> = ({ children, onClick, hasCheckmark = false }) => {
   return (
     <button
       onClick={onClick}
       className="px-4 py-[22px] relative group overflow-hidden flex items-center w-full"
     >
       <span>{children}</span>
-      <div className="absolute pointer-events-none right-4 pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white">
+      {/* Play icon on hover - positioned to avoid checkmark */}
+      <div className={cn(
+        "absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white",
+        hasCheckmark ? "right-10" : "right-4"
+      )}>
         <Icons.PlayCircle className="size-5 text-primary-60 [&>path]:stroke-[4px]" />
       </div>
     </button>

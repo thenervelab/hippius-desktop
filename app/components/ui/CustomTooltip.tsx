@@ -143,7 +143,7 @@ const CustomTooltip: React.FC<CustomTooltipProps> = ({
             <div
                 ref={tooltipRef}
                 style={tooltipStyle}
-                className={cn("absolute z-50 bg-white border border-grey-80 rounded-lg px-2 py-2 text-[10px] font-medium text-grey-40 shadow-lg whitespace-normal break-words opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200", tooltipClassName)}
+                className={cn("absolute z-[9999] bg-white border border-grey-80 rounded-lg px-2 py-2 text-[10px] font-medium text-grey-40 shadow-lg whitespace-normal break-words opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200", tooltipClassName)}
             >
                 {tooltip}
                 <div style={arrowStyle} />
