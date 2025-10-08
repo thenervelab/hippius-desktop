@@ -9,7 +9,7 @@ import NotificationList from "./NotificationList";
 import NotificationDetailView from "./NotificationDetailView";
 import NoNotificationsFound from "./NoNotificationsFound";
 import NoNotificationsEnabled from "./NoNotificationsEnabled";
-import { Toaster, toast } from "sonner";
+import { toast } from "sonner";
 import { useSetAtom, useAtom } from "jotai";
 import {
   refreshUnreadCountAtom,
@@ -174,10 +174,9 @@ const Notifications = () => {
     refreshUnread();
   };
 
-  // New: archive all
   const handleArchiveAll = async () => {
     await deleteAllNotifications();
-    toast.success("All notifications archived");
+    toast.success("All notifications deleted");
     await refresh();
     await refreshUnread();
     // Removed window.dispatchEvent. We refetch directly.
@@ -224,16 +223,18 @@ const Notifications = () => {
             </label>
 
             <button
-              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
               onClick={handleAllRead}
+              disabled={visible.length === 0}
             >
               Mark all as Read
             </button>
             {/* New: Delete All */}
             <button
-              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-error-60 hover:text-white active:bg-error-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
+              className="px-4 py-2.5 items-center bg-grey-90 rounded hover:bg-error-60 hover:text-white active:bg-error-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-grey-90 disabled:hover:text-grey-10"
               onClick={handleArchiveAll}
-              title="Remove all notifications"
+              disabled={visible.length === 0}
+              title={visible.length === 0 ? "No notifications to delete" : "Remove all notifications"}
             >
               Delete All
             </button>
@@ -270,7 +271,6 @@ const Notifications = () => {
           </>
         )}
       </div>
-      <Toaster />
     </DashboardTitleWrapper>
   );
 };

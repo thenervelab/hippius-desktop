@@ -21,7 +21,6 @@ const nextConfig = {
   // Performance settings from next.config.ts
   poweredByHeader: false,
   reactStrictMode: true,
-  swcMinify: true,
   compress: true,
 
   // Image optimization settings

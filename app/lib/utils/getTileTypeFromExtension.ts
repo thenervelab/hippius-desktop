@@ -11,6 +11,7 @@ export const SUPPORTED_FILE_TYPES = [
     "doc",
     "ec",
     "code",
+    "sql",
     "svg",
     "folder",
 ] as const;
@@ -21,6 +22,7 @@ export const extensionGroups: Record<FileTypes, string[]> = {
     document: ["txt", "csv"],
     doc: ["doc", "docx"],
     code: ["json"],
+    sql: ["sql", "db", "sqlite", "sqlite3"],
     svg: ["svg"],
     PDF: ["pdf"],
     PPT: ["ppt", "pptx"],

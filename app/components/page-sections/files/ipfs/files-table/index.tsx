@@ -30,6 +30,7 @@ import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
+import CustomTooltip from "@/components/ui/CustomTooltip";
 import SelectionActionBar from "../SelectionActionBar";
 import { SelectionColumn, SelectionHeaderColumn } from "../SelectionColumn";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
@@ -64,7 +65,7 @@ interface Filter {
 interface FilesTableProps {
   showUnpinnedDialog?: boolean;
   files: FormattedUserIpfsFile[];
-  allFiles: FormattedUserIpfsFile[]; // Full list of files for header checkbox selection
+  allFiles: FormattedUserIpfsFile[];
   resetPagination?: boolean;
   onPaginationReset?: () => void;
   isRecentFiles?: boolean;
@@ -79,6 +80,33 @@ interface FilesTableProps {
   totalPages: number;
   setCurrentPage: (page: number) => void;
 }
+
+// Component to wrap NameCell with checkmark positioned outside dialog triggers
+const NameCellWithCheckmark: React.FC<{
+  children: React.ReactNode;
+  hasCheckmark: boolean;
+  isFolder: boolean;
+}> = ({ children, hasCheckmark, isFolder }) => {
+  return (
+    <>
+      {children}
+      {/* Checkmark positioned at the end of the cell, outside any dialog triggers */}
+      {!isFolder && hasCheckmark && (
+        <div
+          className="absolute right-4 top-1/2 -translate-y-[36%] z-20 cursor-pointer"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <CustomTooltip
+            tooltip="Synced from your computer"
+            tooltipClassName="z-[9999]"
+          >
+            <Icons.TickCircle className="size-4 text-primary-70 hover:text-primary-60 transition-colors" />
+          </CustomTooltip>
+        </div>
+      )}
+    </>
+  );
+};
 
 // Create stable action functions outside component to prevent recreation
 const openExplorerUrl = async (decodedCid: string) => {
@@ -381,112 +409,136 @@ const FilesTable: FC<FilesTableProps> = memo(
             const { fileFormat } = getFilePartsFromFileName(info.getValue());
             const fileType = getFileTypeFromExtension(fileFormat || null);
 
+            // Check if file has checkmark (locally synced)
+            const hasCheckmark = Boolean(info.row.original.source &&
+              !info.row.original.source.startsWith('s3://') &&
+              !info.row.original.source.startsWith('ipfs://') &&
+              !info.row.original.source.toLowerCase().includes('hippius') &&
+              (info.row.original.source.includes('/') || info.row.original.source.includes('\\')));
+
             if (fileType === "video") {
-              return isSelectionMode ? (
-                <NameCell
-                  className="px-4 py-[22px]"
-                  rawName={info.getValue()}
-                  actualName={info.row.original.actualFileName}
-                  cid={info.row.original.cid}
-                  isAssigned={info.row.original.isAssigned}
-                  fileType={fileType}
-                  isPreviewable={false}
-                  isFolder={info.row.original.isFolder}
-                  source={info.row.original.source}
-                  mainReqHash={info.row.original.mainReqHash}
-                />
-              ) : (
-                <VideoDialogTrigger
-                  onClick={() => handleSetSelectedFile(info.row.original)}
-                >
-                  <NameCell
-                    rawName={info.getValue()}
-                    actualName={info.row.original.actualFileName}
-                    cid={info.row.original.cid}
-                    isAssigned={info.row.original.isAssigned}
-                    fileType={fileType}
-                    isPreviewable={true}
-                    isFolder={info.row.original.isFolder}
-                    source={info.row.original.source}
-                    mainReqHash={info.row.original.mainReqHash}
-                  />
-                </VideoDialogTrigger>
+              return (
+                <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
+                  {isSelectionMode ? (
+                    <NameCell
+                      className="px-4 py-[22px]"
+                      rawName={info.getValue()}
+                      actualName={info.row.original.actualFileName}
+                      cid={info.row.original.cid}
+                      isAssigned={info.row.original.isAssigned}
+                      fileType={fileType}
+                      isPreviewable={false}
+                      isFolder={info.row.original.isFolder}
+                      source={info.row.original.source}
+                      mainReqHash={info.row.original.mainReqHash}
+                    />
+                  ) : (
+                    <VideoDialogTrigger
+                      onClick={() => handleSetSelectedFile(info.row.original)}
+                      hasCheckmark={hasCheckmark}
+                    >
+                      <NameCell
+                        rawName={info.getValue()}
+                        actualName={info.row.original.actualFileName}
+                        cid={info.row.original.cid}
+                        isAssigned={info.row.original.isAssigned}
+                        fileType={fileType}
+                        isPreviewable={true}
+                        isFolder={info.row.original.isFolder}
+                        source={info.row.original.source}
+                        mainReqHash={info.row.original.mainReqHash}
+                      />
+                    </VideoDialogTrigger>
+                  )}
+                </NameCellWithCheckmark>
               );
             } else if (fileType === "image") {
-              return isSelectionMode ? (
-                <NameCell
-                  className="px-4 py-[22px]"
-                  rawName={info.getValue()}
-                  actualName={info.row.original.actualFileName}
-                  cid={info.row.original.cid}
-                  isAssigned={info.row.original.isAssigned}
-                  fileType={fileType}
-                  isPreviewable={false}
-                  isFolder={info.row.original.isFolder}
-                  source={info.row.original.source}
-                  mainReqHash={info.row.original.mainReqHash}
-                />
-              ) : (
-                <ImageDialogTrigger
-                  onClick={() => handleSetSelectedFile(info.row.original)}
-                >
-                  <NameCell
-                    rawName={info.getValue()}
-                    actualName={info.row.original.actualFileName}
-                    cid={info.row.original.cid}
-                    isAssigned={info.row.original.isAssigned}
-                    fileType={fileType}
-                    isPreviewable={true}
-                    isFolder={info.row.original.isFolder}
-                    source={info.row.original.source}
-                    mainReqHash={info.row.original.mainReqHash}
-                  />
-                </ImageDialogTrigger>
+              return (
+                <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
+                  {isSelectionMode ? (
+                    <NameCell
+                      className="px-4 py-[22px]"
+                      rawName={info.getValue()}
+                      actualName={info.row.original.actualFileName}
+                      cid={info.row.original.cid}
+                      isAssigned={info.row.original.isAssigned}
+                      fileType={fileType}
+                      isPreviewable={false}
+                      isFolder={info.row.original.isFolder}
+                      source={info.row.original.source}
+                      mainReqHash={info.row.original.mainReqHash}
+                    />
+                  ) : (
+                    <ImageDialogTrigger
+                      onClick={() => handleSetSelectedFile(info.row.original)}
+                      hasCheckmark={hasCheckmark}
+                    >
+                      <NameCell
+                        rawName={info.getValue()}
+                        actualName={info.row.original.actualFileName}
+                        cid={info.row.original.cid}
+                        isAssigned={info.row.original.isAssigned}
+                        fileType={fileType}
+                        isPreviewable={true}
+                        isFolder={info.row.original.isFolder}
+                        source={info.row.original.source}
+                        mainReqHash={info.row.original.mainReqHash}
+                      />
+                    </ImageDialogTrigger>
+                  )}
+                </NameCellWithCheckmark>
               );
             } else if (fileType === "PDF") {
-              return isSelectionMode ? (
-                <NameCell
-                  className="px-4 py-[22px]"
-                  rawName={info.getValue()}
-                  actualName={info.row.original.actualFileName}
-                  cid={info.row.original.cid}
-                  isAssigned={info.row.original.isAssigned}
-                  fileType={fileType}
-                  isPreviewable={false}
-                  isFolder={info.row.original.isFolder}
-                  source={info.row.original.source}
-                  mainReqHash={info.row.original.mainReqHash}
-                />
-              ) : (
-                <PdfDialogTrigger
-                  onClick={() => handleSetSelectedFile(info.row.original)}
-                >
-                  <NameCell
-                    rawName={info.getValue()}
-                    actualName={info.row.original.actualFileName}
-                    cid={info.row.original.cid}
-                    isAssigned={info.row.original.isAssigned}
-                    fileType={fileType}
-                    isPreviewable={true}
-                    isFolder={info.row.original.isFolder}
-                    source={info.row.original.source}
-                    mainReqHash={info.row.original.mainReqHash}
-                  />
-                </PdfDialogTrigger>
+              return (
+                <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
+                  {isSelectionMode ? (
+                    <NameCell
+                      className="px-4 py-[22px]"
+                      rawName={info.getValue()}
+                      actualName={info.row.original.actualFileName}
+                      cid={info.row.original.cid}
+                      isAssigned={info.row.original.isAssigned}
+                      fileType={fileType}
+                      isPreviewable={false}
+                      isFolder={info.row.original.isFolder}
+                      source={info.row.original.source}
+                      mainReqHash={info.row.original.mainReqHash}
+                    />
+                  ) : (
+                    <PdfDialogTrigger
+                      onClick={() => handleSetSelectedFile(info.row.original)}
+                      hasCheckmark={hasCheckmark}
+                    >
+                      <NameCell
+                        rawName={info.getValue()}
+                        actualName={info.row.original.actualFileName}
+                        cid={info.row.original.cid}
+                        isAssigned={info.row.original.isAssigned}
+                        fileType={fileType}
+                        isPreviewable={true}
+                        isFolder={info.row.original.isFolder}
+                        source={info.row.original.source}
+                        mainReqHash={info.row.original.mainReqHash}
+                      />
+                    </PdfDialogTrigger>
+                  )}
+                </NameCellWithCheckmark>
               );
             }
             return (
-              <NameCell
-                className="px-4 py-[22px]"
-                rawName={info.getValue()}
-                actualName={info.row.original.actualFileName}
-                cid={info.row.original.cid}
-                isAssigned={info.row.original.isAssigned}
-                fileType={fileType || "document"}
-                isFolder={info.row.original.isFolder}
-                source={info.row.original.source}
-                mainReqHash={info.row.original.mainReqHash}
-              />
+              <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
+                <NameCell
+                  className="px-4 py-[22px]"
+                  rawName={info.getValue()}
+                  actualName={info.row.original.actualFileName}
+                  cid={info.row.original.cid}
+                  isAssigned={info.row.original.isAssigned}
+                  fileType={fileType || "document"}
+                  isFolder={info.row.original.isFolder}
+                  source={info.row.original.source}
+                  mainReqHash={info.row.original.mainReqHash}
+                />
+              </NameCellWithCheckmark>
             );
           },
         }),
@@ -518,50 +570,32 @@ const FilesTable: FC<FilesTableProps> = memo(
             );
           },
         }),
-        columnHelper.display({
-          header: "LOCATION",
-          id: "location",
-          enableSorting: false,
-          cell: ({ row: { original } }) => {
-            const getParentDirectory = (path: string): string => {
-              // Return Hippius for S3 paths
-              if (path && path.startsWith("s3://")) {
-                return "Hippius";
-              }
-
-              if (!path) return "Unknown";
-              const parts = path.split(/[/\\]/).filter((p) => p.trim());
-              if (parts.length >= 2) {
-                return parts[parts.length - 2];
-              }
-              return "Hippius";
-            };
-
-            const parentDir = getParentDirectory(original.source ?? "");
-            const isS3Source =
-              original.source && original.source.startsWith("s3://");
-
-            return (
-              <div className="flex flex-col">
-                <div className="text-grey-20 text-base font-medium">
-                  {parentDir}
-                </div>
-                {original.source !== "Hippius" && !isS3Source && (
-                  <div
-                    className="text-grey-70 text-xs truncate max-w-[250px] xl:max-w-[100%]"
-                    title={original.source}
-                  >
-                    {original.source && original.source.length > 53
-                      ? original.source.slice(0, 40) +
-                      "..." +
-                      original.source.slice(-10)
-                      : original.source ?? ""}
-                  </div>
-                )}
-              </div>
-            );
+        columnHelper.accessor(
+          (row) => {
+            const { fileFormat } = getFilePartsFromFileName(row.name);
+            const fileType = getFileTypeFromExtension(fileFormat || null);
+            return row.isFolder
+              ? "Folder"
+              : fileType
+                ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
+                : "Document";
           },
-        }),
+          {
+            header: "FILE TYPE",
+            id: "type",
+            enableSorting: true,
+            cell: ({ getValue }) => {
+              const value = getValue();
+              return (
+                <div className="flex flex-col">
+                  <div className="text-grey-70 text-base font-medium">
+                    {value}
+                  </div>
+                </div>
+              );
+            },
+          }
+        ),
         columnHelper.display({
           id: "actions",
           header: "",
@@ -652,7 +686,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     );
 
     console.log("allfiles", allFiles);
-    console.log("files", files);
+    console.log("files from files-table", files);
     const table = useReactTable(tableConfig);
 
     // Get sorted rows and manually paginate them
@@ -663,7 +697,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       const start = (currentPage - 1) * pageSize;
       const end = start + pageSize;
       return sortedRows.slice(start, end);
-    }, [table, currentPage, sorting]);
+    }, [table, currentPage, sorting, files]);
 
     const headerRows = useMemo(
       () =>
@@ -742,7 +776,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 <TableModule.Td
                   className={cn(
                     cell.column.id === "actions" && "",
-                    cell.column.id === "name" && "p-0",
+                    cell.column.id === "name" && "p-0 relative",
                     cell.column.id === "cid" && "p-0"
                   )}
                   key={cell.id}
@@ -760,7 +794,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         selectedFiles,
         currentPage,
         searchTerm,
-        files,
+        files
       ]
     );
 

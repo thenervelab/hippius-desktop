@@ -1,5 +1,6 @@
 import React from 'react';
 import { formatCompactDate } from '@/app/lib/utils/dateUtils';
+import cn from '@/app/lib/utils/cn';
 
 interface FormattedTimestampProps {
     timestamp: number;
@@ -28,7 +29,7 @@ const FormattedTimestamp: React.FC<FormattedTimestampProps> = ({
     const formattedDate = formatCompactDate(date);
 
     return (
-        <div className={`text-left text-base font-medium text-grey-60 self-start ${className || ''}`}>
+        <div className={cn("text-left text-base font-medium text-grey-60 self-start", className)}>
             <div>{formattedDate}</div>
         </div>
     );

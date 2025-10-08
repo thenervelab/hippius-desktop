@@ -1,6 +1,13 @@
 "use client";
 
-import { FC, useEffect, useRef, useMemo, useState, useCallback } from "react";
+import React, {
+  FC,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+} from "react";
 import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
 import { WaitAMoment } from "@/components/ui";
@@ -68,7 +75,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
 
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [shouldResetPagination, setShouldResetPagination] = useState(false);
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
     undefined as string | null | undefined
@@ -84,11 +90,14 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
 
-  // Filter states
-  const [selectedFileTypes, setSelectedFileTypes] = useState<FileTypes[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>("");
-  const [selectedFileSize, setSelectedFileSize] = useState<number>(0);
-  const [selectedSizeUnit, setSelectedSizeUnit] = useState<string>("GB");
+  // Filter states - using a single atomic state to prevent race conditions
+  const [filterState, setFilterState] = useState({
+    fileTypes: [] as FileTypes[],
+    date: "",
+    fileSize: 0,
+    fileSizes: [] as number[],
+    lastUpdated: Date.now()
+  });
 
   // Active filters state
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
@@ -141,49 +150,69 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const filteredData = useMemo(() => {
     return filterFiles(allFilteredData, {
       searchTerm,
-      fileTypes: selectedFileTypes,
-      dateFilter: selectedDate,
-      fileSize: selectedFileSize,
+      fileTypes: filterState.fileTypes,
+      dateFilter: filterState.date,
+      fileSize: filterState.fileSize,
+      fileSizes: filterState.fileSizes,
     });
   }, [
     allFilteredData,
     searchTerm,
-    selectedFileTypes,
-    selectedDate,
-    selectedFileSize,
+    filterState.fileTypes,
+    filterState.date,
+    filterState.fileSize,
+    filterState.fileSizes,
   ]);
 
   // Shared pagination state between list and card views
   const { paginatedData, setCurrentPage, currentPage, totalPages } =
     usePagination(filteredData, 12);
 
+  // Batch update helper to prevent multiple rapid filter updates
+  const updateFilters = useCallback((updates: Partial<typeof filterState>) => {
+    setFilterState(prev => ({
+      ...prev,
+      ...updates,
+      lastUpdated: Date.now()
+    }));
+    // Always reset pagination when filters change
+    setCurrentPage(1);
+    setShouldResetPagination(true);
+  }, [setCurrentPage]);
+
+
+
   // Update active filters when filter settings change
   useEffect(() => {
     const newActiveFilters = generateActiveFilters(
-      selectedFileTypes,
-      selectedDate,
-      selectedFileSize
+      filterState.fileTypes,
+      filterState.date,
+      filterState.fileSize,
+      filterState.fileSizes
     );
     setActiveFilters(newActiveFilters);
-  }, [selectedFileTypes, selectedDate, selectedFileSize]);
+  }, [filterState.fileTypes, filterState.date, filterState.fileSize, filterState.fileSizes, filterState.lastUpdated]);
 
   // Reset pagination when filters change
   useEffect(() => {
     setShouldResetPagination(true);
-  }, [searchTerm, selectedFileTypes, selectedDate, selectedFileSize]);
+  }, [searchTerm, filterState.fileTypes, filterState.date, filterState.fileSize, filterState.fileSizes, filterState.lastUpdated]);
 
   // Reset pagination when view changes between private/public
   useEffect(() => {
-    console.log("View changed, resetting pagination");
     // Force reset pagination
     setShouldResetPagination(true);
     setCurrentPage(1);
-    
+
     // Also reset search and filters to start fresh
     setSearchTerm("");
-    setSelectedFileTypes([]);
-    setSelectedDate("");
-    setSelectedFileSize(0);
+    setFilterState({
+      fileTypes: [],
+      date: "",
+      fileSize: 0,
+      fileSizes: [],
+      lastUpdated: Date.now()
+    });
   }, [isPrivateView, setCurrentPage]);
 
   // Handle pagination reset
@@ -198,40 +227,25 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   }, []);
 
   // Handle removing a filter
-  const handleRemoveFilter = (filter: ActiveFilter) => {
-    switch (filter.type) {
+  const handleRemoveFilter = useCallback((filter: ActiveFilter) => {
+    const updates: Partial<typeof filterState> = {}; switch (filter.type) {
       case "fileType":
-        setSelectedFileTypes((prev) =>
-          prev.filter((type) => type !== filter.value)
-        );
+        updates.fileTypes = filterState.fileTypes.filter((type: FileTypes) => type !== filter.value);
         break;
 
       case "date":
-        setSelectedDate("");
+        updates.date = "";
         break;
 
       case "fileSize":
-        setSelectedFileSize(0);
+        // Remove specific file size from the array
+        const sizeValue = parseInt(filter.value);
+        updates.fileSizes = filterState.fileSizes.filter((size: number) => size !== sizeValue);
         break;
     }
-  };
 
-  // Handle applying filters from dialog
-  const handleApplyFilters = useCallback(
-    (
-      fileTypes: FileTypes[],
-      date: string,
-      fileSize: number,
-      sizeUnit: string
-    ) => {
-      setSelectedFileTypes(fileTypes);
-      setSelectedDate(date);
-      setSelectedFileSize(fileSize);
-      setSelectedSizeUnit(sizeUnit);
-      setIsFilterOpen(false);
-    },
-    []
-  );
+    updateFilters(updates);
+  }, [filterState.fileTypes, filterState.fileSizes, updateFilters]);
 
   // Format storage size with proper units based on view type
   const formattedStorageSize = useMemo(() => {
@@ -252,17 +266,23 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   }, [regularFilesData, isPrivateView, isRecentFiles]);
 
   // Handle resetting filters
-  const handleResetFilters = useCallback(() => {
-    setSelectedFileTypes([]);
-    setSelectedDate("");
-    setSelectedFileSize(0);
-    setSelectedSizeUnit("GB");
-  }, []);
-
   // Handle search input change
   const handleSearchChange = useCallback((value: string) => {
     setSearchTerm(value);
   }, []);
+
+  // Handle filter changes using atomic state updates
+  const handleFileTypesChange = useCallback((types: FileTypes[]) => {
+    updateFilters({ fileTypes: types });
+  }, [updateFilters]);
+
+  const handleDateChange = useCallback((date: string) => {
+    updateFilters({ date });
+  }, [updateFilters]);
+
+  const handleFileSizesChange = useCallback((sizes: number[]) => {
+    updateFilters({ fileSizes: sizes });
+  }, [updateFilters]);
 
   // Load public sync path
   useEffect(() => {
@@ -647,7 +667,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             handleSearchChange={handleSearchChange}
             activeFilters={activeFilters}
             handleRemoveFilter={handleRemoveFilter}
-            setIsFilterOpen={setIsFilterOpen}
             refetchUserFiles={
               isRecentFiles
                 ? refreshRecentFilesWithPinningQueue
@@ -659,6 +678,12 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             publicFileCount={publicFileCount}
             isSyncPathEmpty={isCurrentSyncPathEmpty}
             onStartSyncing={handleStartSyncing}
+            selectedFileTypes={filterState.fileTypes}
+            selectedDate={filterState.date}
+            selectedFileSizes={filterState.fileSizes}
+            onFileTypesChange={handleFileTypesChange}
+            onDateChange={handleDateChange}
+            onFileSizesChange={handleFileSizesChange}
           />
 
           <FilesContent
@@ -673,14 +698,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             viewMode={viewMode}
             shouldResetPagination={shouldResetPagination}
             handlePaginationReset={handlePaginationReset}
-            isFilterOpen={isFilterOpen}
-            setIsFilterOpen={setIsFilterOpen}
-            selectedFileTypes={selectedFileTypes}
-            selectedDate={selectedDate}
-            selectedFileSize={selectedFileSize}
-            selectedSizeUnit={selectedSizeUnit}
-            handleApplyFilters={handleApplyFilters}
-            handleResetFilters={handleResetFilters}
             error={error}
             currentPage={currentPage}
             totalPages={totalPages}
