@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import * as Menubar from "@radix-ui/react-menubar";
 import { Icons } from "@/components/ui";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface DateSelectorProps {
   selectedDate?: string;
@@ -218,15 +219,12 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                           setViewDate(new Date(year, viewDate.getMonth(), 1));
                           setShowYearPicker(false);
                         }}
-                        className={`
-                            p-2 text-sm rounded transition-colors
-                            ${isSelectedYear
-                            ? 'bg-primary-50 text-white font-medium'
-                            : isCurrentYear
-                              ? 'bg-primary-100 text-primary-40 font-medium hover:bg-primary-50 hover:text-white'
-                              : 'text-grey-30 hover:bg-grey-90'
-                          }
-                          `}
+                        className={cn(
+                          "p-2 text-sm rounded transition-colors",
+                          isSelectedYear && "bg-primary-50 text-white font-medium",
+                          !isSelectedYear && isCurrentYear && "bg-primary-100 text-primary-40 font-medium hover:bg-primary-50 hover:text-white",
+                          !isSelectedYear && !isCurrentYear && "text-grey-30 hover:bg-grey-90"
+                        )}
                       >
                         {year}
                       </button>
@@ -277,17 +275,14 @@ const DateSelector: React.FC<DateSelectorProps> = ({
                           handleDateSelect(dayObj.date);
                         }}
                         disabled={dayObj.isFuture}
-                        className={`
-                            text-xs py-2 px-1 rounded transition-colors min-h-[28px]
-                            ${!dayObj.isCurrentMonth
-                            ? 'text-grey-80 hover:bg-grey-90 cursor-pointer'
-                            : dayObj.isFuture
-                              ? 'text-grey-80 cursor-not-allowed'
-                              : 'text-grey-30 hover:bg-grey-90 cursor-pointer'
-                          }
-                            ${dayObj.isToday ? 'bg-primary-100 text-primary-40 font-medium' : ''}
-                            ${dayObj.isSelected ? 'bg-primary-50 text-white font-medium' : ''}
-                          `}
+                        className={cn(
+                          "text-xs py-2 px-1 rounded transition-colors min-h-[28px]",
+                          !dayObj.isCurrentMonth && "text-grey-80 hover:bg-grey-90 cursor-pointer",
+                          dayObj.isCurrentMonth && dayObj.isFuture && "text-grey-80 cursor-not-allowed",
+                          dayObj.isCurrentMonth && !dayObj.isFuture && "text-grey-30 hover:bg-grey-90 cursor-pointer",
+                          dayObj.isToday && "bg-primary-100 text-primary-40 font-medium",
+                          dayObj.isSelected && "bg-primary-50 text-white font-medium hover:bg-primary-50 hover:text-white"
+                        )}
                       >
                         {dayObj.date.getDate()}
                       </button>

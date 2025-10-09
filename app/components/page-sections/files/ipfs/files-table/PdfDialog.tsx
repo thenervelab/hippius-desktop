@@ -1,8 +1,6 @@
-/* eslint-disable @next/next/no-img-element */
-import React, { ReactNode, useState, useEffect } from "react";
+import React, { ReactNode, useState, useEffect, useCallback } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import {
@@ -12,7 +10,7 @@ import {
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
 
 export const PdfDialogTrigger: React.FC<{
   children: ReactNode;
@@ -49,6 +47,8 @@ const PdfDialog: React.FC<{
   const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [resolvedUrl, setResolvedUrl] = useState<string>("");
+  const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
   const { polkadotAddress } = useWalletAuth();
 
   useEffect(() => {
@@ -62,13 +62,34 @@ const PdfDialog: React.FC<{
     setLoaded(false);
   }, [file, allFiles]);
 
-  const handleNext = () => {
-    if (nextFile) onNavigate(nextFile);
-  };
+  // Resolve URL whenever file changes
+  useEffect(() => {
+    if (!file) return;
 
-  const handlePrev = () => {
+    const resolveUrl = async () => {
+      try {
+        const result = await getFileUrlAndSource(file);
+        setResolvedUrl(result.url);
+        setIsFromIpfs(result.isFromIpfs);
+      } catch (error) {
+        console.error('Failed to resolve URL:', error);
+        // Fallback to sync version
+        const result = getFileUrlAndSourceSync(file);
+        setResolvedUrl(result.url);
+        setIsFromIpfs(result.isFromIpfs);
+      }
+    };
+
+    resolveUrl();
+  }, [file]);
+
+  const handleNext = useCallback(() => {
+    if (nextFile) onNavigate(nextFile);
+  }, [nextFile, onNavigate]);
+
+  const handlePrev = useCallback(() => {
     if (prevFile) onNavigate(prevFile);
-  };
+  }, [prevFile, onNavigate]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -81,15 +102,11 @@ const PdfDialog: React.FC<{
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [file, nextFile, prevFile, onCloseClicked]);
+  }, [file, nextFile, prevFile, onCloseClicked, handleNext, handlePrev]);
 
-  const isHippius = !!file && file.source === "Hippius";
-  const normalised = file?.source?.replace(/\\/g, "/");
-  const pdfUrl =
-    file &&
-    (isHippius
-      ? `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
-      : convertFileSrc(normalised ?? ""));
+  if (!file) return null;
+
+  const pdfUrl = resolvedUrl;
 
   return (
     <Dialog.Root
@@ -130,10 +147,10 @@ const PdfDialog: React.FC<{
                         </span>
                       </button>
 
-                      {isHippius && (
+                      {isFromIpfs && (
                         <button
                           onClick={() => {
-                            navigator.clipboard.writeText(pdfUrl!).then(() => {
+                            navigator.clipboard.writeText(resolvedUrl).then(() => {
                               toast.success(
                                 "Copied to clipboard successfully!"
                               );
@@ -191,7 +208,7 @@ const PdfDialog: React.FC<{
                     className="relative shadow-dialog flex w-full h-full flex-col rounded overflow-hidden animate-scale-in-95-0.4"
                   >
                     <iframe
-                      src={pdfUrl!}
+                      src={pdfUrl}
                       width="100%"
                       height="100%"
                       className="border-none"

@@ -14,9 +14,9 @@ import {
   getFileIcon,
 } from "@/lib/utils/fileTypeUtils";
 import { Folder2 } from "@/components/ui/icons";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { toBlobUrl } from "@/components/page-sections/files/ipfs/files-table/VideoPlayer";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
+import { getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
 import * as Checkbox from "@radix-ui/react-checkbox";
@@ -129,26 +129,23 @@ const FileCard: React.FC<FileCardProps> = ({
 
     (async () => {
       try {
-        const isHippius = file.source === "Hippius";
-        const normalised = file.source?.replace(/\\/g, "/");
-        let cidUrl = isHippius
-          ? `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
-          : convertFileSrc(normalised ?? "");
+        const { url: cidUrl, isFromIpfs } = getFileUrlAndSourceSync(file);
+        let finalUrl = cidUrl;
 
         if (fileType === "image") {
           const img = document.createElement("img");
-          img.onload = () => handleSuccess(cidUrl);
+          img.onload = () => handleSuccess(finalUrl);
           img.onerror = handleError;
-          img.src = cidUrl;
+          img.src = finalUrl;
 
           timeoutRef.current = setTimeout(handleError, 10000);
         } else if (fileType === "video") {
           timeoutRef.current = setTimeout(handleError, 15000);
 
-          if (!isHippius) {
+          if (!isFromIpfs) {
             try {
-              const blobUrl = await toBlobUrl(cidUrl);
-              cidUrl = blobUrl;
+              const blobUrl = await toBlobUrl(finalUrl);
+              finalUrl = blobUrl;
             } catch (error) {
               console.error(
                 `Failed to create blob URL for ${file.name}:`,
@@ -220,16 +217,13 @@ const FileCard: React.FC<FileCardProps> = ({
       }
     };
   }, [
-    file.cid,
-    file.name,
-    file.source,
+    file,
     fileType,
     shouldLoadThumbnail,
     thumbnailUrl,
     thumbnailError,
     loadAttempts,
-    isLoadingThumbnail,
-    file.isFolder
+    isLoadingThumbnail
   ]);
 
   return (
