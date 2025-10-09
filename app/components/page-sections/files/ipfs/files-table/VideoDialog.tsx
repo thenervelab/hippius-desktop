@@ -1,7 +1,6 @@
-import React, { ReactNode, useState, useEffect } from "react";
+import React, { ReactNode, useState, useEffect, useCallback } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import VideoPlayer from "./VideoPlayer";
@@ -11,8 +10,8 @@ import {
   getPrevViewableFile
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
+import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
 
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
@@ -48,6 +47,8 @@ const VideoDialog: React.FC<{
 }> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
   const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [resolvedUrl, setResolvedUrl] = useState<string>("");
+  const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
   const { polkadotAddress } = useWalletAuth();
 
   useEffect(() => {
@@ -60,17 +61,37 @@ const VideoDialog: React.FC<{
     setPrevFile(prev);
   }, [file, allFiles]);
 
-  const handleNext = () => {
+  // Resolve URL whenever file changes
+  useEffect(() => {
+    if (!file) return;
+    const resolveUrl = async () => {
+      try {
+        const result = await getFileUrlAndSource(file);
+        setResolvedUrl(result.url);
+        setIsFromIpfs(result.isFromIpfs);
+      } catch (error) {
+        console.error('VideoDialog - Failed to resolve URL:', error);
+        // Fallback to sync version
+        const result = getFileUrlAndSourceSync(file);
+        setResolvedUrl(result.url);
+        setIsFromIpfs(result.isFromIpfs);
+      }
+    };
+
+    resolveUrl();
+  }, [file]);
+
+  const handleNext = useCallback(() => {
     if (nextFile) {
       onNavigate(nextFile);
     }
-  };
+  }, [nextFile, onNavigate]);
 
-  const handlePrev = () => {
+  const handlePrev = useCallback(() => {
     if (prevFile) {
       onNavigate(prevFile);
     }
-  };
+  }, [prevFile, onNavigate]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -89,14 +110,10 @@ const VideoDialog: React.FC<{
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [file, nextFile, prevFile]);
+  }, [file, nextFile, prevFile, handleNext, handlePrev, onCloseClicked]);
   if (!file) return null;
-  const isHippius = file.source === "Hippius";
-  const normalised = file.source?.replace(/\\/g, "/");
-  const videoUrl = isHippius
-    ? `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
-    : convertFileSrc(normalised ?? "");
 
+  const videoUrl = resolvedUrl;
   const { fileFormat } = getFilePartsFromFileName(file.name);
   return (
     <Dialog.Root
@@ -140,11 +157,11 @@ const VideoDialog: React.FC<{
                               Download File
                             </span>
                           </button>
-                          {isHippius && (
+                          {isFromIpfs && (
                             <button
                               onClick={() => {
                                 navigator.clipboard
-                                  .writeText(videoUrl)
+                                  .writeText(resolvedUrl)
                                   .then(() => {
                                     toast.success(
                                       "Copied to clipboard successfully!"
@@ -189,7 +206,7 @@ const VideoDialog: React.FC<{
                     <div className="animate-scale-in-95-0.4 shadow-dialo bottom-0 grow flex w-full h-full flex-col top-8 rounded overflow-hidden relative data-[state=open]:animate-scale-in-95-0.4">
                       <VideoPlayer
                         videoUrl={videoUrl}
-                        isHippius={isHippius}
+                        isFromIpfs={isFromIpfs}
                         fileFormat={fileFormat}
                         file={file}
                         handleFileDownload={handleFileDownload}

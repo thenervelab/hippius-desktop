@@ -19,7 +19,7 @@ interface VideoPlayerProps {
   videoUrl: string;
   fileFormat: string;
   file?: FormattedUserIpfsFile;
-  isHippius?: boolean;
+  isFromIpfs?: boolean;
   handleFileDownload: (
     file: FormattedUserIpfsFile,
     polkadotAddress: string
@@ -29,7 +29,7 @@ interface VideoPlayerProps {
 const VideoPlayer: React.FC<VideoPlayerProps> = ({
   videoUrl,
   fileFormat,
-  isHippius = false,
+  isFromIpfs = false,
   file,
   handleFileDownload
 }) => {
@@ -60,6 +60,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useEffect(() => {
     setError("");
     clearLoadTimer();
+
+    // Don't start loading if no URL
+    if (!videoUrl || videoUrl.trim() === "") {
+      return;
+    }
+
     if (isFirefox && ["mkv", "3gp"].includes(fileFormat)) {
       setError("This video format isn't supported in Firefox");
       return;
@@ -74,19 +80,48 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     let revoke: string | null = null;
 
     (async () => {
-      if (isHippius) {
+      if (!videoUrl || videoUrl.trim() === "") {
+        setPlayUrl("");
+        return;
+      }
+
+      if (isFromIpfs) {
         setPlayUrl(videoUrl);
         return;
       }
-      const blobUrl = await toBlobUrl(videoUrl);
-      revoke = blobUrl;
-      setPlayUrl(blobUrl);
+
+      try {
+        const blobUrl = await toBlobUrl(videoUrl);
+        revoke = blobUrl;
+        setPlayUrl(blobUrl);
+      } catch (error) {
+        console.error('VideoPlayer - Failed to create blob URL:', error);
+        setError("Failed to load video file");
+      }
     })();
 
     return () => {
-      if (revoke) URL.revokeObjectURL(revoke);
+      if (revoke) {
+        URL.revokeObjectURL(revoke);
+      }
     };
-  }, [videoUrl, isHippius]);
+  }, [videoUrl, isFromIpfs]);
+  const finalPlayUrl = playUrl || videoUrl;
+
+  // Don't render MediaPlayer if no URL is available
+  if (!finalPlayUrl || finalPlayUrl.trim() === "") {
+    return (
+      <div className="flex items-center justify-center h-full text-white">
+        <div className="text-center">
+          <div className="text-lg font-medium mb-2">Loading video...</div>
+          <div className="text-sm text-gray-300">
+            {isFromIpfs ? "Resolving IPFS video URL..." : "Preparing video URL"}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <MediaPlayer
       key={reloadKey}
@@ -94,16 +129,25 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       load="eager"
       autoPlay
       src={{
-        src: playUrl || videoUrl,
+        src: finalPlayUrl,
         type: SUPPORTED_VIDEO_MIME_TYPES[
           fileFormat
         ] as import("@vidstack/react").VideoMimeType
       }}
       playsInline
-      onLoadedData={clearLoadTimer}
-      onError={() => {
+      onLoadedData={() => {
+        clearLoadTimer();
+      }}
+      onError={(error) => {
+        console.error('VideoPlayer - Media error:', error, 'URL:', finalPlayUrl, 'isFromIpfs:', isFromIpfs);
         clearLoadTimer();
         setError("Unable to play this video");
+      }}
+      onCanPlay={() => {
+        console.log('VideoPlayer - Video can play:', finalPlayUrl);
+      }}
+      onLoadStart={() => {
+        console.log('VideoPlayer - Video load started:', finalPlayUrl);
       }}
     >
       <MediaProvider />

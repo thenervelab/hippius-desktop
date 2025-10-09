@@ -1,8 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
-import React, { ReactNode, useState, useEffect } from "react";
+import React, { ReactNode, useState, useEffect, useCallback } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import { Loader2, AlertCircle } from "lucide-react";
@@ -13,7 +12,7 @@ import {
   getPrevViewableFile
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
 
 export const ImageDialogTrigger: React.FC<{
   children: ReactNode;
@@ -86,6 +85,8 @@ const ImageDialog: React.FC<{
   const [imageError, setImageError] = useState<string | null>(null);
   const [nextFile, setNextFile] = useState<FormattedUserIpfsFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserIpfsFile | null>(null);
+  const [resolvedUrl, setResolvedUrl] = useState<string>("");
+  const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
 
   // Calculate next and previous files whenever the current file changes
   useEffect(() => {
@@ -100,17 +101,38 @@ const ImageDialog: React.FC<{
     setImageError(null); // Reset error state when file changes
   }, [file, allFiles]);
 
-  const handleNext = () => {
+  // Resolve URL whenever file changes
+  useEffect(() => {
+    if (!file) return;
+
+    const resolveUrl = async () => {
+      try {
+        const result = await getFileUrlAndSource(file);
+        setResolvedUrl(result.url);
+        setIsFromIpfs(result.isFromIpfs);
+      } catch (error) {
+        console.error('Failed to resolve URL:', error);
+        // Fallback to sync version
+        const result = getFileUrlAndSourceSync(file);
+        setResolvedUrl(result.url);
+        setIsFromIpfs(result.isFromIpfs);
+      }
+    };
+
+    resolveUrl();
+  }, [file]);
+
+  const handleNext = useCallback(() => {
     if (nextFile) {
       onNavigate(nextFile);
     }
-  };
+  }, [nextFile, onNavigate]);
 
-  const handlePrev = () => {
+  const handlePrev = useCallback(() => {
     if (prevFile) {
       onNavigate(prevFile);
     }
-  };
+  }, [prevFile, onNavigate]);
 
   // Handle keyboard navigation
   useEffect(() => {
@@ -130,10 +152,11 @@ const ImageDialog: React.FC<{
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [file, nextFile, prevFile]);
+  }, [file, nextFile, prevFile, handleNext, handlePrev, onCloseClicked]);
 
-  const normalised = file && file.source?.replace(/\\/g, "/");
-  const isHippius = file && file.source === "Hippius";
+  if (!file) return null;
+
+  const imageUrl = resolvedUrl;
 
   return (
     <Dialog.Root
@@ -149,9 +172,6 @@ const ImageDialog: React.FC<{
           <Dialog.Content className="h-full max-w-screen-1.5xl text-grey-10 w-full flex flex-col items-center">
             {(() => {
               if (file) {
-                const imageUrl = isHippius
-                  ? `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
-                  : convertFileSrc(normalised ?? "");
 
                 return (
                   <>
@@ -181,11 +201,11 @@ const ImageDialog: React.FC<{
                               Download File
                             </span>
                           </button>
-                          {isHippius && (
+                          {isFromIpfs && (
                             <button
                               onClick={() => {
                                 navigator.clipboard
-                                  .writeText(imageUrl)
+                                  .writeText(resolvedUrl)
                                   .then(() => {
                                     toast.success(
                                       "Copied to clipboard successfully!"

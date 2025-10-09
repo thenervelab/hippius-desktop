@@ -15,6 +15,7 @@ import {
 } from "@tanstack/react-table";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import * as TableModule from "@/components/ui/alt-table";
+import { isLocalFile } from "@/app/lib/utils/ipfsUrlResolver";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
@@ -410,11 +411,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             const fileType = getFileTypeFromExtension(fileFormat || null);
 
             // Check if file has checkmark (locally synced)
-            const hasCheckmark = Boolean(info.row.original.source &&
-              !info.row.original.source.startsWith('s3://') &&
-              !info.row.original.source.startsWith('ipfs://') &&
-              !info.row.original.source.toLowerCase().includes('hippius') &&
-              (info.row.original.source.includes('/') || info.row.original.source.includes('\\')));
+            const hasCheckmark = isLocalFile(info.row.original.source);
 
             if (fileType === "video") {
               return (
