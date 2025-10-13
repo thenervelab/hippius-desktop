@@ -104,7 +104,7 @@ const EnhancedFileSizeSelector: React.FC<EnhancedFileSizeSelectorProps> = ({
             <Menubar.Root>
                 <Menubar.Menu>
                     <Menubar.Trigger asChild>
-                        <button className="flex justify-center group px-3 py-2 bg-grey-100 min-w-[112px] rounded-[24px] border border-grey-80 hover:bg-grey-80 transition-colors">
+                        <button className="flex justify-center group px-3 py-2 bg-grey-100 min-w-[112px] rounded border border-grey-80 hover:bg-grey-80 transition-colors">
                             <div className="text-sm font-medium text-grey-40 leading-5">
                                 {getDisplayText()}
                             </div>
