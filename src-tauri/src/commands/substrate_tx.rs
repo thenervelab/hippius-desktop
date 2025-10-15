@@ -19,6 +19,7 @@ use subxt::tx::PairSigner;
 use tauri::AppHandle;
 use tauri::Manager;
 use tokio::sync::Mutex;
+use tauri::Emitter;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -186,6 +187,18 @@ pub async fn set_sync_path(
                         .await;
                     });
                     crate::commands::syncing::register_task(app_handle.clone(), handle).await;
+                    // emit sync started event
+                    match crate::utils::sync::reset_sync_event_state("public").await {
+                        Ok(_) => {
+                            if let Err(e) = app_handle.emit("started_syncing", ()).map_err(|e| e.to_string()) {
+                                eprintln!("Failed to emit started_syncing event: {}", e);
+                            }
+                            println!("[Sync] public Sync started event emitted");
+                        }
+                        Err(err) => {
+                            eprintln!("Failed to determine if first run: {}", err);
+                        }
+                    }
 
                     // Start PUBLIC S3 listing cron
                     if let Some(pool) = crate::DB_POOL.get() {
@@ -239,6 +252,18 @@ pub async fn set_sync_path(
                         .await;
                     });
                     crate::commands::syncing::register_task(app_handle.clone(), handle).await;
+                    // emit sync started event
+                    match crate::utils::sync::reset_sync_event_state("private").await {
+                        Ok(_) => {
+                            if let Err(e) = app_handle.emit("started_syncing", ()).map_err(|e| e.to_string()) {
+                                eprintln!("Failed to emit started_syncing event: {}", e);
+                            }
+                            println!("[Sync] private Sync started event emitted");
+                        }
+                        Err(err) => {
+                            eprintln!("Failed to determine if first run: {}", err);
+                        }
+                    }
 
                     // Start PRIVATE S3 listing cron
                     if let Some(pool) = crate::DB_POOL.get() {

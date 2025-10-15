@@ -214,12 +214,13 @@ pub async fn get_sync_activity(
     account_id: String,
     limit: Option<usize>,
 ) -> SyncActivityResponse {
+    let limit = limit.unwrap_or(100);
+    
     // Collect all the data we need while holding the locks
-    let (recent, uploading) = {
+    let (recent, uploading, should_check_public, should_check_private) = {
         let p_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
         let pub_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-        let limit = limit.unwrap_or(100);
-
+        
         // Combine and sort recent items
         let mut recent: Vec<RecentItem> = p_state
             .recent_items
@@ -237,21 +238,25 @@ pub async fn get_sync_activity(
         uploading.extend(p_state.uploading_items.iter().cloned());
         uploading.extend(pub_state.uploading_items.iter().cloned());
 
-        (recent, uploading)
+        // Determine if we need to check sync completion
+        let should_check_public = pub_state.uploading_items.is_empty() && !pub_state.recent_items.is_empty();
+        let should_check_private = p_state.uploading_items.is_empty() && !p_state.recent_items.is_empty();
+
+        (recent, uploading, should_check_public, should_check_private)
     };
 
     // Now we can safely await without holding the locks
-    if uploading.is_empty() && !recent.is_empty() {
-        match crate::utils::sync::is_sync_completed().await {
+    if should_check_public {
+        match crate::utils::sync::is_sync_completed("public").await {
             Ok(false) => {
                 // Mark sync as completed
-                if let Err(e) = crate::utils::sync::mark_first_run_complete().await {
+                if let Err(e) = crate::utils::sync::mark_first_run_complete("public").await {
                     eprintln!("Failed to mark sync as completed: {}", e);
                 }
                 if let Err(e) = app.emit("sync_completed", ()).map_err(|e| e.to_string()) {
                     eprintln!("Failed to emit sync_completed event: {}", e);
                 }
-                println!("[Sync] Sync completed with {} recent items", recent.len());
+                println!("[Sync] public Sync completed with {} recent items", recent.len());
             }
             Ok(true) => {
                 // Sync already marked as completed, do nothing
@@ -260,22 +265,45 @@ pub async fn get_sync_activity(
                 eprintln!("Failed to check sync completion status: {}", e);
             }
         }
-    } else if !uploading.is_empty() {
-        match crate::utils::sync::is_first_run().await {
-            Ok(true) => {
-                if let Err(e) = app.emit("started_syncing", ()).map_err(|e| e.to_string()) {
-                    eprintln!("Failed to emit started_syncing event: {}", e);
-                }
-                println!("[Sync] Sync started with {} items uploading", uploading.len());
-            }
+    } 
+
+    if should_check_private {
+        match crate::utils::sync::is_sync_completed("private").await {
             Ok(false) => {
-                // Not the first run → do nothing
+                // Mark sync as completed
+                if let Err(e) = crate::utils::sync::mark_first_run_complete("private").await {
+                    eprintln!("Failed to mark sync as completed: {}", e);
+                }
+                if let Err(e) = app.emit("sync_completed", ()).map_err(|e| e.to_string()) {
+                    eprintln!("Failed to emit sync_completed event: {}", e);
+                }
+                println!("[Sync] private Sync completed with {} recent items", recent.len());
             }
-            Err(err) => {
-                eprintln!("Failed to determine if first run: {}", err);
+            Ok(true) => {
+                // Sync already marked as completed, do nothing
+            }
+            Err(e) => {
+                eprintln!("Failed to check sync completion status: {}", e);
             }
         }
     }
+
+    // if !pub_state.uploading_items.is_empty() {
+    //     match crate::utils::sync::is_first_run("public").await {
+    //         Ok(true) => {
+    //             if let Err(e) = app.emit("started_syncing", ()).map_err(|e| e.to_string()) {
+    //                 eprintln!("Failed to emit started_syncing event: {}", e);
+    //             }
+    //             println!("[Sync] Sync started with {} items uploading", uploading.len());
+    //         }
+    //         Ok(false) => {
+    //             // Not the first run → do nothing
+    //         }
+    //         Err(err) => {
+    //             eprintln!("Failed to determine if first run: {}", err);
+    //         }
+    //     }
+    // }
 
     // Convert to unified format with account_id as owner
     let recent_unified = recent
@@ -293,6 +321,7 @@ pub async fn get_sync_activity(
         uploading: uploading_unified,
     }
 }
+
 /// Stops all running sync processes and resets sync state
 pub fn stop_all_sync_processes() {
     println!("[Sync] Stopping all sync processes...");
