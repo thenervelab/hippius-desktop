@@ -88,7 +88,7 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
         return (
             <>
                 <CardButton
-                    className={cn("h-[40px] w-fit p-1", className)}
+                    className={cn("h-10 w-fit p-1", className)}
                     onClick={() => setIsOpen(true)}
                     disabled={isLoading}
                 >
