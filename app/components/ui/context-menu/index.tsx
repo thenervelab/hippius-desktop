@@ -16,6 +16,9 @@ import {
   Folder
 } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
+import { shouldAllowPreview } from "@/app/lib/utils/filePreviewPermissions";
+import { isLocalFile } from "@/app/lib/utils/ipfsUrlResolver";
+import { useMemo } from "react";
 
 interface ContextMenuProps {
   x: number;
@@ -44,6 +47,12 @@ export default function FileContextMenu({
   const [mounted, setMounted] = useState(false);
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
+
+  const isPrivateFolder = useMemo(() => {
+    const folderType = getParam('type');
+    if (folderType === 'private') return true;
+    return file?.type?.toLowerCase() === 'private';
+  }, [getParam, file]);
 
   useEffect(() => {
     setMounted(true);
@@ -135,7 +144,8 @@ export default function FileContextMenu({
           {(fileType === "video" ||
             fileType === "image" ||
             fileType === "PDF") &&
-            onSelectFile && (
+            onSelectFile &&
+            shouldAllowPreview(file, isLocalFile(file.source), isPrivateFolder) && (
               <button
                 className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
                 onClick={() => {

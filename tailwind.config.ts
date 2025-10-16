@@ -39,6 +39,10 @@ export default {
           "radial-gradient(16.34% 38.34%, #fff0 0%, #fff 100%);",
         "large-white-cloud-gradient":
           "radial-gradient(80.34% 80.34% at 50% 50%, rgba(255, 255, 255, 0) 0%, #FFFFFF 100%)",
+        "white-cloud-gradient-md":
+          "radial-gradient(50% 50% at 50% 50%, rgba(255, 255, 255, 0) 0%, #FFFFFF 100%)",
+        "white-cloud-gradient-sm":
+          "radial-gradient(70% 70% at 50% 50%, rgba(255, 255, 255, 0) 0%, #FFFFFF 100%)",
       },
       fontFamily: {
         sans: "var(--font-geist-sans)",

@@ -30,13 +30,10 @@ import { Folder } from "@/app/components/ui/icons";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
+import { isLocalFile } from "@/app/lib/utils/ipfsUrlResolver";
+import { shouldAllowPreview } from "@/app/lib/utils/filePreviewPermissions";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
-interface Filter {
-  type: string;
-  value: string | number;
-  label: string;
-}
 
 interface CardViewProps {
   showUnpinnedDialog?: boolean;
@@ -44,8 +41,6 @@ interface CardViewProps {
   resetPagination?: boolean;
   onPaginationReset?: () => void;
   isRecentFiles?: boolean;
-  searchTerm?: string;
-  activeFilters?: Filter[];
   sharedState?: FileViewSharedState;
   handleFileDownload: (
     file: FormattedUserIpfsFile,
@@ -61,8 +56,6 @@ const CardView: FC<CardViewProps> = ({
   resetPagination,
   onPaginationReset,
   isRecentFiles = false,
-  searchTerm = "",
-  activeFilters = [],
   sharedState,
   handleFileDownload,
   currentPage,
@@ -72,22 +65,22 @@ const CardView: FC<CardViewProps> = ({
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
-  const { isSelectionMode, selectedFiles, enterSelectionModeAndSelectFile, } = useFileSelection();
+  const { isSelectionMode, enterSelectionModeAndSelectFile, } = useFileSelection();
 
   const isPrivateFolder = useMemo(() => {
-    return selectedFiles.length > 0 && selectedFiles.some(file => file.type?.toLowerCase() === 'private');
-  }, [selectedFiles]);
+    const folderType = getParam('type');
+    if (folderType === 'private') return true;
+    return files.length > 0 && files.some((file: FormattedUserIpfsFile) => file.type?.toLowerCase() === 'private');
+  }, [getParam, files]);
 
   // State for captured files to delete (to handle timing issue with clearSelection)
   const [filesToDelete, setFilesToDelete] = useState<FormattedUserIpfsFile[]>([]);
-
 
   // Initialize delete hook with filesToDelete instead of selectedFiles
   const { mutate: deleteFiles, isPending: isDeleting } = useDeleteIpfsFile({
     files: filesToDelete,
     isPrivateFolder
   });
-
 
   const [localFileDetailsFile, setLocalFileDetailsFile] =
     useState<FormattedUserIpfsFile | null>(null);
@@ -153,11 +146,7 @@ const CardView: FC<CardViewProps> = ({
   );
 
   // Ensure files is always an array to prevent undefined errors
-  const safeFiles = useMemo(() => files || [], [files]);
 
-  const showEmptyState =
-    safeFiles.length === 0 &&
-    (searchTerm || (activeFilters && activeFilters.length > 0));
 
   useEffect(() => {
     if (resetPagination) {
@@ -166,24 +155,6 @@ const CardView: FC<CardViewProps> = ({
       }
     }
   }, [resetPagination, setCurrentPage, onPaginationReset]);
-
-  if (showEmptyState) {
-    return (
-      <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
-        <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
-          <Icons.File className="size-7 text-primary-50" />
-        </div>
-        <h3 className="text-lg font-medium text-grey-10 mb-1">
-          No matching files found
-        </h3>
-        <p className="text-grey-50 text-sm max-w-[270px] text-center">
-          Try adjusting the filters or clearing them to see more results.
-        </p>
-      </div>
-    );
-  }
-
-
 
   return (
     <div className="flex flex-col gap-y-8 relative">
@@ -238,7 +209,11 @@ const CardView: FC<CardViewProps> = ({
                           fileType === "image" ||
                           fileType === "PDF"
                         ) {
-                          setSelectedFile?.(file);
+                          // Check if preview is allowed for private files
+                          const hasCheckmark = isLocalFile(file.source);
+                          const canPreview = shouldAllowPreview(file, hasCheckmark, isPrivateFolder); if (canPreview) {
+                            setSelectedFile?.(file);
+                          }
                         } else if (file.isFolder) {
                           router.push(folderUrl);
                         }
@@ -276,19 +251,19 @@ const CardView: FC<CardViewProps> = ({
                               handleFileDownload(file, polkadotAddress ?? "");
                             }
                           },
-                          ...(fileType === "video" ||
-                            fileType === "image" ||
-                            fileType === "PDF"
-                            ? [
-                              {
+                          ...((fileType === "video" || fileType === "image" || fileType === "PDF")
+                            ? (() => {
+                              const hasCheckmark = isLocalFile(file.source);
+                              const canPreview = shouldAllowPreview(file, hasCheckmark, isPrivateFolder);
+                              return canPreview ? [{
                                 icon: <Icons.Eye className="size-4" />,
                                 itemTitle: "View",
                                 onItemClick: () => {
                                   setOpenMenuIndex(null);
                                   setSelectedFile?.(file);
-                                }
-                              }
-                            ]
+                                },
+                              }] : [];
+                            })()
                             : []),
                           {
                             icon: <Share className="size-4" />,
