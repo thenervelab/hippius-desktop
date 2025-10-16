@@ -25,8 +25,6 @@ export const isLocalFile = (source?: string): boolean => {
     return Boolean(
         source &&
         !source.startsWith('s3://') &&
-        !source.startsWith('ipfs://') &&
-        !source.toLowerCase().includes('hippius') &&
         (source.includes('/') || source.includes('\\'))
     );
 };
@@ -110,6 +108,17 @@ export const getFileUrlAndSource = async (file: FormattedUserIpfsFile) => {
     const isCidValid = isValidCid(file.cid);
     const hasLocalSource = isLocalFile(file.source);
 
+    // Priority 2: Use local source if available
+    if (hasLocalSource) {
+        const normalised = file.source!.replace(/\\/g, "/");
+        return {
+            url: convertFileSrc(normalised),
+            isFromIpfs: false,
+            isFromLocal: true,
+            resolvedCid: null,
+        };
+    }
+
     // Priority 1: Use IPFS if CID is valid
     if (isCidValid) {
         try {
@@ -137,16 +146,7 @@ export const getFileUrlAndSource = async (file: FormattedUserIpfsFile) => {
         }
     }
 
-    // Priority 2: Use local source if available
-    if (hasLocalSource) {
-        const normalised = file.source!.replace(/\\/g, "/");
-        return {
-            url: convertFileSrc(normalised),
-            isFromIpfs: false,
-            isFromLocal: true,
-            resolvedCid: null,
-        };
-    }
+
 
     // Fallback: Try IPFS even with potentially invalid CID
     const decodedCid = decodeHexCid(file.cid) || file.cid;

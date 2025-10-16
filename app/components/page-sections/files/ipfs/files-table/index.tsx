@@ -16,6 +16,7 @@ import {
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import * as TableModule from "@/components/ui/alt-table";
 import { isLocalFile } from "@/app/lib/utils/ipfsUrlResolver";
+import { shouldAllowPreview } from "@/app/lib/utils/filePreviewPermissions";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
@@ -57,12 +58,6 @@ import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
 
-interface Filter {
-  type: string;
-  value: string | number;
-  label: string;
-}
-
 interface FilesTableProps {
   showUnpinnedDialog?: boolean;
   files: FormattedUserIpfsFile[];
@@ -70,8 +65,6 @@ interface FilesTableProps {
   resetPagination?: boolean;
   onPaginationReset?: () => void;
   isRecentFiles?: boolean;
-  searchTerm?: string;
-  activeFilters?: Filter[];
   sharedState?: FileViewSharedState;
   handleFileDownload: (
     file: FormattedUserIpfsFile,
@@ -141,8 +134,6 @@ const FilesTable: FC<FilesTableProps> = memo(
     resetPagination,
     onPaginationReset,
     isRecentFiles = false,
-    searchTerm = "",
-    activeFilters = [],
     sharedState,
     handleFileDownload,
     currentPage,
@@ -205,13 +196,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       },
       [handleContextMenu]
     );
-
-    // Ensure files is always an array to prevent undefined errors
-    const safeFiles = useMemo(() => files || [], [files]);
-
-    const showEmptyState =
-      safeFiles.length === 0 &&
-      (searchTerm || (activeFilters && activeFilters.length > 0));
 
     useEffect(() => {
       if (resetPagination) {
@@ -292,7 +276,8 @@ const FilesTable: FC<FilesTableProps> = memo(
       (
         file: FormattedUserIpfsFile,
         fileType: string | null,
-        decodedCid: string
+        decodedCid: string,
+        canPreview: boolean = true
       ) => {
         // Compute folderUrl if file is a folder
         let folderUrl: string | undefined = undefined;
@@ -318,7 +303,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             itemTitle: "Download",
             onItemClick: () => handleDownload(file),
           },
-          ...(fileType === "video" || fileType === "image" || fileType === "PDF"
+          ...((fileType === "video" || fileType === "image" || fileType === "PDF") && canPreview
             ? [
               {
                 icon: <Icons.Eye className="size-4" />,
@@ -412,11 +397,12 @@ const FilesTable: FC<FilesTableProps> = memo(
 
             // Check if file has checkmark (locally synced)
             const hasCheckmark = isLocalFile(info.row.original.source);
+            const canPreview = shouldAllowPreview(info.row.original, hasCheckmark, isPrivateFolder);
 
             if (fileType === "video") {
               return (
                 <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
-                  {isSelectionMode ? (
+                  {isSelectionMode || !canPreview ? (
                     <NameCell
                       className="px-4 py-[22px]"
                       rawName={info.getValue()}
@@ -452,7 +438,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             } else if (fileType === "image") {
               return (
                 <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
-                  {isSelectionMode ? (
+                  {isSelectionMode || !canPreview ? (
                     <NameCell
                       className="px-4 py-[22px]"
                       rawName={info.getValue()}
@@ -488,7 +474,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             } else if (fileType === "PDF") {
               return (
                 <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
-                  {isSelectionMode ? (
+                  {isSelectionMode || !canPreview ? (
                     <NameCell
                       className="px-4 py-[22px]"
                       rawName={info.getValue()}
@@ -604,8 +590,8 @@ const FilesTable: FC<FilesTableProps> = memo(
             const decodedCid = decodeHexCid(cid);
             const { fileFormat } = getFilePartsFromFileName(name);
             const fileType = getFileTypeFromExtension(fileFormat || null);
-
-            const menuItems = createTableItems(file, fileType, decodedCid);
+            const hasCheckmark = isLocalFile(file.source);
+            const canPreview = shouldAllowPreview(file, hasCheckmark, isPrivateFolder); const menuItems = createTableItems(file, fileType, decodedCid, canPreview);
 
             return (
               <div className="flex justify-center items-center">
@@ -628,6 +614,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         createTableItems,
         selectionColumn,
         isSelectionMode,
+        isPrivateFolder,
       ]
     );
 
@@ -790,7 +777,6 @@ const FilesTable: FC<FilesTableProps> = memo(
         toggleFileSelection,
         selectedFiles,
         currentPage,
-        searchTerm,
         files
       ]
     );
@@ -819,22 +805,6 @@ const FilesTable: FC<FilesTableProps> = memo(
         </SidebarDialog>
       );
     }, [sharedState, localIsFileDetailsOpen, localFileDetailsFile]);
-
-    if (showEmptyState) {
-      return (
-        <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
-          <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
-            <Icons.File className="size-7 text-primary-50" />
-          </div>
-          <h3 className="text-lg font-medium text-grey-10 mb-1">
-            No matching files found
-          </h3>
-          <p className="text-grey-50 text-sm max-w-[270px] text-center">
-            Try adjusting the filters or clearing them to see more results.
-          </p>
-        </div>
-      );
-    }
 
     return (
       <div className="flex flex-col gap-y-8 relative">

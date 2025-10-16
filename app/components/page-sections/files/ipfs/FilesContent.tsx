@@ -10,7 +10,7 @@ import {
   DragEvent,
 } from "react";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
-import { Icons, WaitAMoment } from "@/components/ui";
+import { WaitAMoment } from "@/components/ui";
 import FilesTable from "./files-table";
 import CardView from "./card-view";
 import IPFSNoEntriesFound from "./files-table/IpfsNoEntriesFound";
@@ -31,6 +31,7 @@ import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
+import NoMatchingResults from "./NoMatchingResults";
 
 interface FilesContentProps {
   isRecentFiles?: boolean;
@@ -266,18 +267,14 @@ const FilesContent: FC<FilesContentProps> = ({
     }
 
     if (!filteredData.length && (searchTerm || activeFilters.length > 0)) {
+      const hasActiveFilters = activeFilters.length > 0;
+      const hasSearchTerm = Boolean(searchTerm && searchTerm.trim());
+
       return (
-        <div className="flex flex-col items-center justify-center py-16 min-h-[600px]">
-          <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
-            <Icons.File className="size-7 text-primary-50" />
-          </div>
-          <h3 className="text-lg font-medium text-grey-10 mb-1">
-            No matching files found
-          </h3>
-          <p className="text-grey-50 text-sm max-w-[270px] text-center">
-            Try adjusting the filters or clearing them to see more results.
-          </p>
-        </div>
+        <NoMatchingResults
+          searchTerm={hasSearchTerm ? searchTerm : undefined}
+          hasActiveFilters={hasActiveFilters}
+        />
       );
     }
 
@@ -290,9 +287,7 @@ const FilesContent: FC<FilesContentProps> = ({
           allFiles={filteredData}
           resetPagination={shouldResetPagination}
           onPaginationReset={handlePaginationReset}
-          searchTerm={searchTerm}
           handleFileDownload={handleFileDownload}
-          activeFilters={activeFilters}
           sharedState={sharedState}
           currentPage={currentPage}
           totalPages={totalPages}
@@ -308,8 +303,6 @@ const FilesContent: FC<FilesContentProps> = ({
           resetPagination={shouldResetPagination}
           onPaginationReset={handlePaginationReset}
           handleFileDownload={handleFileDownload}
-          searchTerm={searchTerm}
-          activeFilters={activeFilters}
           sharedState={sharedState}
           currentPage={currentPage}
           totalPages={totalPages}

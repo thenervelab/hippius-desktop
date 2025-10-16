@@ -33,6 +33,16 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             ],
         ),
         (
+            "is_first_run",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("is_started", "BOOLEAN NOT NULL DEFAULT TRUE"),
+                ("is_completed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("scope", "TEXT NOT NULL DEFAULT 'private'"),
+                ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
+        (
             "file_paths",
             &[
                 ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -141,18 +151,6 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             account_id TEXT NOT NULL,
             sub_account_seed_phrase TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )",
-    )
-    .execute(pool)
-    .await?;
-
-    // Create is_first_run table to track first-time app launch
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS is_first_run (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            is_started BOOLEAN NOT NULL DEFAULT TRUE,
-            is_completed BOOLEAN NOT NULL DEFAULT FALSE,
-            last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
     .execute(pool)

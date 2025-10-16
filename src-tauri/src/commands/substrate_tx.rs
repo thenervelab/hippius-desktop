@@ -19,6 +19,7 @@ use subxt::tx::PairSigner;
 use tauri::AppHandle;
 use tauri::Manager;
 use tokio::sync::Mutex;
+use tauri::Emitter;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -186,6 +187,18 @@ pub async fn set_sync_path(
                         .await;
                     });
                     crate::commands::syncing::register_task(app_handle.clone(), handle).await;
+                    // emit sync started event
+                    match crate::utils::sync::reset_sync_event_state("public").await {
+                        Ok(_) => {
+                            if let Err(e) = app_handle.emit("started_syncing", ()).map_err(|e| e.to_string()) {
+                                eprintln!("Failed to emit started_syncing event: {}", e);
+                            }
+                            println!("[Sync] public Sync started event emitted");
+                        }
+                        Err(err) => {
+                            eprintln!("Failed to determine if first run: {}", err);
+                        }
+                    }
 
                     // Start PUBLIC S3 listing cron
                     if let Some(pool) = crate::DB_POOL.get() {
@@ -239,6 +252,18 @@ pub async fn set_sync_path(
                         .await;
                     });
                     crate::commands::syncing::register_task(app_handle.clone(), handle).await;
+                    // emit sync started event
+                    match crate::utils::sync::reset_sync_event_state("private").await {
+                        Ok(_) => {
+                            if let Err(e) = app_handle.emit("started_syncing", ()).map_err(|e| e.to_string()) {
+                                eprintln!("Failed to emit started_syncing event: {}", e);
+                            }
+                            println!("[Sync] private Sync started event emitted");
+                        }
+                        Err(err) => {
+                            eprintln!("Failed to determine if first run: {}", err);
+                        }
+                    }
 
                     // Start PRIVATE S3 listing cron
                     if let Some(pool) = crate::DB_POOL.get() {
@@ -387,19 +412,45 @@ type SubAccountRole = custom_runtime::runtime_types::pallet_subaccount::pallet::
 
 #[tauri::command]
 pub async fn add_sub_account_tauri(main_seed: String, sub_seed: String) -> Result<String, String> {
+    let max_retries = 5;
+    let mut retry_count = 0;
+    let base_delay = std::time::Duration::from_secs(2);
+
+    loop {
+        match try_add_sub_account(&main_seed, &sub_seed).await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                if e.contains("MainCannotBeSubAccount") {
+                    return Err(e); // Special case - don't retry
+                }
+                
+                retry_count += 1;
+                if retry_count >= max_retries {
+                    return Err(format!("Failed after {} retries: {}", max_retries, e));
+                }
+                
+                let delay = base_delay * 2_u32.pow(retry_count - 1);
+                eprintln!("[Substrate] Attempt {} failed: {}. Retrying in {:?}", retry_count, e, delay);
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+}
+
+async fn try_add_sub_account(main_seed: &str, sub_seed: &str) -> Result<String, String> {
     // Acquire the global lock
     let _lock = SUBSTRATE_TX_LOCK.lock().await;
 
     // Build signer from main seed
-    let main_pair = sr25519::Pair::from_string(&main_seed, None)
+    let main_pair = sr25519::Pair::from_string(main_seed, None)
         .map_err(|e| format!("Failed to create main signer pair: {e:?}"))?;
-    let signer = PairSigner::new(main_pair.clone()); // Clone the pair for the signer
+    let signer = PairSigner::new(main_pair.clone());
 
     let main_id: sp_core::crypto::AccountId32 =
         sp_core::crypto::AccountId32::from(main_pair.public());
 
     // Build sub account id from sub seed
-    let sub_pair = sr25519::Pair::from_string(&sub_seed, None)
+    let sub_pair = sr25519::Pair::from_string(sub_seed, None)
         .map_err(|e| format!("Failed to create sub pair: {e:?}"))?;
     let sub_id: sp_core::crypto::AccountId32 =
         sp_core::crypto::AccountId32::from(sub_pair.public());
@@ -430,6 +481,7 @@ pub async fn add_sub_account_tauri(main_seed: String, sub_seed: String) -> Resul
 
     // small cooldown similar to other txs
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+
     Ok(format!(
         "✅ add_sub_account submitted! Finalized in block: {tx_hash}"
     ))
