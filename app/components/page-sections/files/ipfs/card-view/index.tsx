@@ -32,6 +32,7 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
 import { isLocalFile } from "@/app/lib/utils/ipfsUrlResolver";
 import { shouldAllowPreview } from "@/app/lib/utils/filePreviewPermissions";
+import SyncingLoader from "../SyncingLoader";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
@@ -49,6 +50,7 @@ interface CardViewProps {
   currentPage: number;
   totalPages: number;
   setCurrentPage: (page: number) => void;
+  isSyncing?: boolean;
 }
 
 const CardView: FC<CardViewProps> = ({
@@ -60,7 +62,8 @@ const CardView: FC<CardViewProps> = ({
   handleFileDownload,
   currentPage,
   totalPages,
-  setCurrentPage
+  setCurrentPage,
+  isSyncing = false
 }) => {
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
@@ -156,6 +159,14 @@ const CardView: FC<CardViewProps> = ({
     }
   }, [resetPagination, setCurrentPage, onPaginationReset]);
 
+  if (isSyncing) {
+    return (
+      <SyncingLoader
+        isRecentFiles={isRecentFiles}
+        message="Syncing has started"
+      />
+    );
+  }
   return (
     <div className="flex flex-col gap-y-8 relative">
 

@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import NoMatchingResults from "./NoMatchingResults";
+import { listen } from "@tauri-apps/api/event";
 
 interface FilesContentProps {
   isRecentFiles?: boolean;
@@ -76,6 +77,7 @@ const FilesContent: FC<FilesContentProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const dragCounterRef = useRef(0);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -193,6 +195,24 @@ const FilesContent: FC<FilesContentProps> = ({
     [addButtonRef, isSyncPathEmpty, isRecentFiles]
   );
 
+  // Listen to sync events from Tauri backend
+  useEffect(() => {
+    const startSyncingUnlisten = listen("started_syncing", () => {
+      console.log("[FilesContent] Sync started");
+      setIsSyncing(true);
+    });
+
+    const syncCompletedUnlisten = listen("sync_completed", () => {
+      console.log("[FilesContent] Sync completed");
+      setIsSyncing(false);
+    });
+
+    return () => {
+      startSyncingUnlisten.then((fn) => fn());
+      syncCompletedUnlisten.then((fn) => fn());
+    };
+  }, [])
+
   // Add global event listeners to clean up dragging state when dragging ends outside
   useEffect(() => {
     const handleDragEnd = () => {
@@ -292,6 +312,7 @@ const FilesContent: FC<FilesContentProps> = ({
           currentPage={currentPage}
           totalPages={totalPages}
           setCurrentPage={setCurrentPage}
+          isSyncing={isSyncing}
         />
       );
     } else {
@@ -307,6 +328,7 @@ const FilesContent: FC<FilesContentProps> = ({
           currentPage={currentPage}
           totalPages={totalPages}
           setCurrentPage={setCurrentPage}
+          isSyncing={isSyncing}
         />
       );
     }
