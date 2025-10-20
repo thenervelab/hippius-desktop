@@ -7,25 +7,42 @@ export interface ThProps<TData, TValue>
   header: Header<TData, TValue>;
   align?: "center" | "left" | "right";
   activeSortClassName?: string;
+  columnWidth?: number;
+  onResizeStart?: (columnId: string, startX: number) => void;
+  preventSort?: boolean;
 }
 
 export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
-  const { onClick, header, className, activeSortClassName, align, ...rest } =
+  const { onClick, header, className, activeSortClassName, align, columnWidth, onResizeStart, preventSort, ...rest } =
     props;
   const sortOrder = header.column.getIsSorted();
   const canSort = header.column.getCanSort();
 
+  const canResize = header.id !== 'actions';
+
   return (
     <th
       className={cn(
-        "font-semibold text-sm px-4 border-x first:border-l-transparent last:border-r-transparent border-b py-3.5 text-grey-70",
+        "font-semibold text-sm px-4 border-x first:border-l-transparent last:border-r-transparent border-b py-3.5 text-grey-70 relative",
         canSort && "pr-8 cursor-pointer hover:bg-gray-50/30",
         sortOrder && canSort && cn("text-primary-50", activeSortClassName),
         className
       )}
+      style={{
+        width: columnWidth ? `${columnWidth}%` : 'auto',
+      }}
       onClick={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest('.resize-handle')) {
+          return;
+        }
+
+        // Prevent sorting if we just finished resizing
+        if (preventSort) {
+          return;
+        }
+
         if (canSort) {
-          console.log(`Clicking on column: ${header.id}, current sort: ${sortOrder}`);
           header.column.toggleSorting();
         }
         if (onClick) {
@@ -61,6 +78,16 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
           </span>
         )}
       </div>
+
+      {canResize && (
+        <div
+          className="resize-handle absolute top-0 right-0 w-1 h-full cursor-col-resize"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            onResizeStart?.(header.id, e.clientX);
+          }}
+        />
+      )}
     </th>
   );
 }

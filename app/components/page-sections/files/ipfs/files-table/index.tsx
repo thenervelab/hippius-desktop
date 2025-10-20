@@ -12,6 +12,8 @@ import {
   useReactTable,
   getSortedRowModel,
   SortingState,
+
+
 } from "@tanstack/react-table";
 import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
 import * as TableModule from "@/components/ui/alt-table";
@@ -58,6 +60,73 @@ import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserIpfsFile>();
 
+
+// Default widths when NOT in selection mode (no selection column)
+const DEFAULT_COLUMN_WIDTHS_NO_SELECTION = {
+  name: 35,
+  size: 12,
+  date_uploaded: 32,
+  type: 16,
+  actions: 5,
+};
+
+const MIN_COLUMN_WIDTHS = {
+  selection: 10,
+  name: 17,
+  size: 15,
+  date_uploaded: 28,
+  type: 20,
+  actions: 10,
+};
+
+// Store the "base" column widths (without selection column) to preserve user preferences
+const getStoredBaseColumnWidths = (isRecentFiles: boolean, isPrivateFolder: boolean) => {
+  try {
+    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}_${isPrivateFolder ? 'private' : 'public'}`;
+    const stored = localStorage.getItem(key);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+    return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
+  } catch {
+    return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
+  }
+};
+
+const saveBaseColumnWidths = (columnWidths: Record<string, number>, isRecentFiles: boolean, isPrivateFolder: boolean) => {
+  try {
+    // Remove selection column before saving as base widths
+    const baseWidths = { ...columnWidths };
+    delete baseWidths.selection;
+
+    const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}_${isPrivateFolder ? 'private' : 'public'}`;
+    localStorage.setItem(key, JSON.stringify(baseWidths));
+  } catch { }
+};
+
+// Convert base widths to selection mode or normal mode
+const convertBaseWidthsToMode = (baseWidths: Record<string, number>, isSelectionMode: boolean) => {
+  if (!isSelectionMode) {
+    return baseWidths;
+  }
+
+  // Convert to selection mode - scale down to make room for selection column
+  const selectionColumnWidth = 5;
+  const availableWidthForOthers = 100 - selectionColumnWidth;
+  const currentTotal = Object.values(baseWidths).reduce((sum, width) => sum + width, 0);
+  const scaleFactor = availableWidthForOthers / currentTotal;
+
+  const selectionModeWidths: Record<string, number> = {};
+  Object.keys(baseWidths).forEach(key => {
+    selectionModeWidths[key] = baseWidths[key] * scaleFactor;
+  });
+  selectionModeWidths.selection = selectionColumnWidth;
+
+  return selectionModeWidths;
+};
+
+
+
 interface FilesTableProps {
   showUnpinnedDialog?: boolean;
   files: FormattedUserIpfsFile[];
@@ -79,13 +148,12 @@ interface FilesTableProps {
 const NameCellWithCheckmark: React.FC<{
   children: React.ReactNode;
   hasCheckmark: boolean;
-  isFolder: boolean;
-}> = ({ children, hasCheckmark, isFolder }) => {
+}> = ({ children, hasCheckmark }) => {
   return (
     <>
       {children}
       {/* Checkmark positioned at the end of the cell, outside any dialog triggers */}
-      {!isFolder && hasCheckmark && (
+      {hasCheckmark && (
         <div
           className="absolute right-4 top-1/2 -translate-y-[36%] z-20 cursor-pointer"
           onClick={(e) => e.stopPropagation()}
@@ -141,6 +209,8 @@ const FilesTable: FC<FilesTableProps> = memo(
     setCurrentPage,
   }) => {
     const { polkadotAddress } = useWalletAuth();
+    const [sorting, setSorting] = useState<SortingState>([]);
+    const [prevFileCount, setPrevFileCount] = useState<number>(0);
     const { getParam } = useUrlParams();
     const router = useRouter();
     const {
@@ -154,10 +224,10 @@ const FilesTable: FC<FilesTableProps> = memo(
     // Determine if this is a private folder based on the files
     const isPrivateFolder = useMemo(() => {
       return (
-        selectedFiles.length > 0 &&
-        selectedFiles.some((file) => file.type?.toLowerCase() === "private")
+        allFiles.length > 0 &&
+        allFiles.some((file) => file.type?.toLowerCase() === "private")
       );
-    }, [selectedFiles]);
+    }, [allFiles]);
 
     // State for captured files to delete (to handle timing issue with clearSelection)
     const [filesToDelete, setFilesToDelete] = useState<FormattedUserIpfsFile[]>(
@@ -367,8 +437,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       return [
         columnHelper.display({
           id: "selection",
-          size: 40,
-          maxSize: 40,
           header: () => (
             <div className="flex justify-center items-center h-full">
               <SelectionHeaderColumn files={allFiles} />
@@ -391,6 +459,8 @@ const FilesTable: FC<FilesTableProps> = memo(
           header: "NAME",
           enableSorting: true,
           id: "name",
+          minSize: 200,
+          maxSize: 1000,
           cell: (info) => {
             const { fileFormat } = getFilePartsFromFileName(info.getValue());
             const fileType = getFileTypeFromExtension(fileFormat || null);
@@ -401,7 +471,7 @@ const FilesTable: FC<FilesTableProps> = memo(
 
             if (fileType === "video") {
               return (
-                <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
+                <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
                   {isSelectionMode || !canPreview ? (
                     <NameCell
                       className="px-4 py-[22px]"
@@ -437,7 +507,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               );
             } else if (fileType === "image") {
               return (
-                <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
+                <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
                   {isSelectionMode || !canPreview ? (
                     <NameCell
                       className="px-4 py-[22px]"
@@ -473,7 +543,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               );
             } else if (fileType === "PDF") {
               return (
-                <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
+                <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
                   {isSelectionMode || !canPreview ? (
                     <NameCell
                       className="px-4 py-[22px]"
@@ -509,7 +579,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               );
             }
             return (
-              <NameCellWithCheckmark hasCheckmark={hasCheckmark} isFolder={Boolean(info.row.original.isFolder)}>
+              <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
                 <NameCell
                   className="px-4 py-[22px]"
                   rawName={info.getValue()}
@@ -534,7 +604,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             if (cell.row.original.tempData) return "...";
             if (value === undefined || value === 0) return "Unknown";
             return (
-              <div className="text-grey-20 text-base font-medium">
+              <div className="text-grey-20 text-base font-medium truncate">
                 {formatBytesFromBigInt(BigInt(value))}
               </div>
             );
@@ -547,9 +617,11 @@ const FilesTable: FC<FilesTableProps> = memo(
           cell: (cell) => {
             const createdAt = cell.row.original.createdAt;
             return createdAt === 0 ? (
-              "Unknown"
+              <div className="truncate">Unknown</div>
             ) : (
-              <FormattedTimestamp timestamp={createdAt} />
+              <div className="truncate">
+                <FormattedTimestamp timestamp={createdAt} />
+              </div>
             );
           },
         }),
@@ -571,7 +643,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               const value = getValue();
               return (
                 <div className="flex flex-col">
-                  <div className="text-grey-70 text-base font-medium">
+                  <div className="text-grey-70 text-base font-medium truncate">
                     {value}
                   </div>
                 </div>
@@ -582,8 +654,9 @@ const FilesTable: FC<FilesTableProps> = memo(
         columnHelper.display({
           id: "actions",
           header: "",
-          size: 40,
-          maxSize: 40,
+          minSize: 40,
+          maxSize: 60,
+          enableResizing: false,
           cell: ({ cell }) => {
             const file = cell.row.original;
             const { cid, name } = file;
@@ -614,13 +687,139 @@ const FilesTable: FC<FilesTableProps> = memo(
         createTableItems,
         selectionColumn,
         isSelectionMode,
-        isPrivateFolder,
-      ]
+        isPrivateFolder]
     );
 
-    // Add sorting state management
-    const [sorting, setSorting] = useState<SortingState>([]);
-    const [prevFileCount, setPrevFileCount] = useState<number>(0);
+
+    const [columnWidths, setColumnWidths] = useState(() => {
+      const baseWidths = getStoredBaseColumnWidths(isRecentFiles, isPrivateFolder);
+      return convertBaseWidthsToMode(baseWidths, isSelectionMode);
+    });
+
+    const [isResizing, setIsResizing] = useState(false);
+    const [resizeData, setResizeData] = useState<{
+      columnId: string;
+      startX: number;
+      startWidth: number;
+      nextColumnId: string;
+      nextStartWidth: number;
+    } | null>(null);
+    const [justResized, setJustResized] = useState(false);
+
+    // Load base widths when file context changes (not selection mode)
+    useEffect(() => {
+      const baseWidths = getStoredBaseColumnWidths(isRecentFiles, isPrivateFolder);
+      const newWidths = convertBaseWidthsToMode(baseWidths, isSelectionMode);
+      setColumnWidths(newWidths);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isRecentFiles, isPrivateFolder]);
+
+    useEffect(() => {
+      const timeoutId = setTimeout(() => {
+        saveBaseColumnWidths(columnWidths, isRecentFiles, isPrivateFolder);
+      }, 300);
+      return () => clearTimeout(timeoutId);
+    }, [columnWidths, isRecentFiles, isPrivateFolder]);
+
+    // Handle smooth transition when entering/exiting selection mode
+    const [prevSelectionMode, setPrevSelectionMode] = useState(isSelectionMode);
+
+    useEffect(() => {
+      if (prevSelectionMode !== isSelectionMode) {
+        setPrevSelectionMode(isSelectionMode);
+
+        setColumnWidths((prevWidths: Record<string, number>) => {
+          // Get the base widths (without selection column) from current widths
+          const baseWidths = { ...prevWidths };
+          delete baseWidths.selection;
+
+          // If we have selection column currently, convert back to base proportions
+          if (prevWidths.selection) {
+            const currentTotal = Object.values(baseWidths).reduce((sum, width) => sum + width, 0);
+            const scaleFactor = 100 / currentTotal;
+            Object.keys(baseWidths).forEach(key => {
+              baseWidths[key] = baseWidths[key] * scaleFactor;
+            });
+          }
+
+          // Convert base widths to the new mode
+          return convertBaseWidthsToMode(baseWidths, isSelectionMode);
+        });
+      }
+    }, [isSelectionMode, prevSelectionMode]);
+
+    const handleResizeStart = useCallback((columnId: string, startX: number) => {
+      const columnIds = Object.keys(columnWidths);
+      const currentIndex = columnIds.indexOf(columnId);
+      const nextColumnId = columnIds[currentIndex + 1];
+
+      if (nextColumnId && columnId !== 'actions') {
+        setIsResizing(true);
+        setResizeData({
+          columnId,
+          startX,
+          startWidth: columnWidths[columnId],
+          nextColumnId,
+          nextStartWidth: columnWidths[nextColumnId],
+        });
+      }
+    }, [columnWidths]);
+
+    const handleResizeMove = useCallback((clientX: number) => {
+      if (!resizeData || !isResizing) return;
+
+      // Use requestAnimationFrame for smoother updates
+      requestAnimationFrame(() => {
+        const diff = clientX - resizeData.startX;
+        // Increase sensitivity by using a more responsive calculation
+        // Base the percentage on a standard table width for consistent feel
+        const standardTableWidth = 1200; // Standard table width for calculation
+        const sensitivity = 2.2; // Multiplier for increased responsiveness
+        const diffPercent = (diff / standardTableWidth) * 100 * sensitivity;
+
+        const proposedCurrentWidth = resizeData.startWidth + diffPercent;
+        const proposedNextWidth = resizeData.nextStartWidth - diffPercent;
+
+        const currentMinWidth = MIN_COLUMN_WIDTHS[resizeData.columnId as keyof typeof MIN_COLUMN_WIDTHS] || 5;
+        const nextMinWidth = MIN_COLUMN_WIDTHS[resizeData.nextColumnId as keyof typeof MIN_COLUMN_WIDTHS] || 5;
+
+        // Only apply minimum constraints if the proposed width would be below minimum
+        const newCurrentWidth = proposedCurrentWidth < currentMinWidth ? currentMinWidth : Math.min(80, proposedCurrentWidth);
+        const newNextWidth = proposedNextWidth < nextMinWidth ? nextMinWidth : Math.min(80, proposedNextWidth);
+
+        // Only update if both columns respect their minimums
+        if (newCurrentWidth >= currentMinWidth && newNextWidth >= nextMinWidth) {
+          setColumnWidths((prev: Record<string, number>) => ({
+            ...prev,
+            [resizeData.columnId]: newCurrentWidth,
+            [resizeData.nextColumnId]: newNextWidth,
+          }));
+        }
+      });
+    }, [resizeData, isResizing]); const handleResizeEnd = useCallback(() => {
+      setIsResizing(false);
+      setResizeData(null);
+      setJustResized(true);
+      // Clear the flag after a short delay to allow normal clicking
+      setTimeout(() => {
+        setJustResized(false);
+      }, 100);
+    }, []);
+
+    useEffect(() => {
+      if (!isResizing) return;
+
+      const handleMouseMove = (e: MouseEvent) => handleResizeMove(e.clientX);
+      const handleMouseUp = () => handleResizeEnd();
+
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }, [isResizing, handleResizeMove, handleResizeEnd]);
 
     // Reset sorting when files change significantly (like switching views)
     useEffect(() => {
@@ -643,7 +842,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     const tableConfig = useMemo(
       () => ({
         columns,
-        data: allFiles || [], // Use all files for sorting, not just paginated data
+        data: allFiles || [],
         state: {
           sorting,
         },
@@ -651,15 +850,11 @@ const FilesTable: FC<FilesTableProps> = memo(
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         manualSorting: false,
-        defaultColumn: {
-          minSize: 40,
-          size: undefined,
-        },
         enableRowSelection: false,
         enableMultiRowSelection: false,
         enableSubRowSelection: false,
-        // Disable column resizing and other dynamic features
-        enableColumnResizing: false,
+        // Enable column resizing
+        enableColumnResizing: true,
         enableExpanding: false,
         enableGrouping: false,
         // Use stable ID generation
@@ -681,7 +876,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       const start = (currentPage - 1) * pageSize;
       const end = start + pageSize;
       return sortedRows.slice(start, end);
-    }, [table, currentPage, sorting, files]);
+    }, [table, currentPage, sorting]);
 
     const headerRows = useMemo(
       () =>
@@ -692,11 +887,14 @@ const FilesTable: FC<FilesTableProps> = memo(
                 key={header.id}
                 header={header}
                 align={header.id === "selection" ? "center" : "left"}
+                columnWidth={columnWidths[header.id]}
+                onResizeStart={handleResizeStart}
+                preventSort={justResized}
               />
             ))}
           </TableModule.Tr>
         )),
-      [table, isSelectionMode, sorting]
+      [table, columnWidths, handleResizeStart, isResizing, resizeData?.columnId, isSelectionMode, sorting, justResized]
     );
 
     const tableBody = useMemo(
@@ -765,6 +963,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   )}
                   key={cell.id}
                   cell={cell}
+                  columnWidth={columnWidths[cell.column.id]}
                 />
               ))}
             </TableModule.Tr>
@@ -776,8 +975,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         isSelectionMode,
         toggleFileSelection,
         selectedFiles,
-        currentPage,
-        files
+        columnWidths
       ]
     );
 
@@ -824,7 +1022,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             )}
             key={`pagination-${currentPage}-${files?.length}`}
           >
-            <TableModule.Table>
+            <TableModule.Table className="w-full table-fixed">
               <TableModule.THead>{headerRows}</TableModule.THead>
               <TableModule.TBody>{tableBody}</TableModule.TBody>
             </TableModule.Table>

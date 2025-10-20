@@ -124,7 +124,7 @@ const PdfDialog: React.FC<{
                   <div className="flex justify-between gap-2 sm:gap-6 w-full ">
                     <Dialog.Title className="data-[state=open] font-medium flex items-center gap-x-2 w-full text-xl">
                       <div className="rounded flex items-center justify-center">
-                        <Icons.PDF className="size-8" />
+                        <Icons.PDF className="size-8 text-[#ea4335]" />
                       </div>
                       <span
                         title={file.name}
