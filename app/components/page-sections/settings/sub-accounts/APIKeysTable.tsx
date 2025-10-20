@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import {
   createColumnHelper,
   getCoreRowModel,
@@ -18,7 +18,7 @@ import {
   Pagination
 } from "@/components/ui/alt-table";
 import { Loader2, Lock } from "lucide-react";
-import { SubAccount } from "@/app/lib/hooks/api/useSubAccounts";
+import { ApiKey } from "@/app/lib/hooks/api/useApiKeys";
 import { Icons } from "@/app/components/ui";
 import { ShieldSecurity } from "@/app/components/ui/icons";
 import { saveSubAccountSeed } from "@/app/lib/helpers/subAccountSeedsDb";
@@ -30,7 +30,7 @@ import CustomTooltip from "@/app/components/ui/CustomTooltip";
 import { cn } from "@/app/lib/utils";
 
 type Props = {
-  subs: SubAccount[];
+  subs: ApiKey[];
   loading: boolean;
   onDelete: (addr: string) => void;
   hasSeed: (addr: string) => boolean;
@@ -38,10 +38,64 @@ type Props = {
   isDisabled?: (address: string) => boolean;
 };
 
-const columnHelper = createColumnHelper<SubAccount>();
+const columnHelper = createColumnHelper<ApiKey>();
 const ITEMS_PER_PAGE = 10;
 
-const SubAccountTable: React.FC<Props> = ({
+// Column order for API keys table
+const COLUMN_ORDER = ["address", "role", "seed", "actions"] as const;
+
+// Default column widths for API keys table (percentages)
+const DEFAULT_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
+  address: 50,
+  role: 25,
+  seed: 15,
+  actions: 10,
+};
+
+const MIN_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
+  address: 35,
+  role: 15,
+  seed: 10,
+  actions: 10,
+};
+
+const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
+  const merged: Record<string, number> = { ...DEFAULT_COLUMN_WIDTHS, ...(maybeStored || {}) };
+  const normalized: Record<string, number> = {};
+
+  // Keep only expected keys with numeric values; fall back to defaults
+  COLUMN_ORDER.forEach((key) => {
+    const v = Number(merged[key]);
+    normalized[key] = Number.isFinite(v) ? v : DEFAULT_COLUMN_WIDTHS[key];
+  });
+
+  // Keep total ≈ 100%
+  const total = COLUMN_ORDER.reduce((acc, k) => acc + normalized[k], 0);
+  if (total !== 100) {
+    const factor = 100 / total;
+    COLUMN_ORDER.forEach((k) => {
+      normalized[k] = Math.round(normalized[k] * factor * 100) / 100;
+    });
+  }
+  return normalized as Record<string, number>;
+};
+
+const getStoredColumnWidths = () => {
+  try {
+    const stored = localStorage.getItem("apiKeysTable_columnWidths");
+    return normalizeColumnWidths(stored ? JSON.parse(stored) : undefined);
+  } catch {
+    return normalizeColumnWidths();
+  }
+};
+
+const saveColumnWidths = (columnWidths: Record<string, number>) => {
+  try {
+    localStorage.setItem("apiKeysTable_columnWidths", JSON.stringify(columnWidths));
+  } catch { }
+};
+
+const APIKeysTable: React.FC<Props> = ({
   subs,
   loading,
   onDelete,
@@ -53,6 +107,120 @@ const SubAccountTable: React.FC<Props> = ({
   const [selectedAddress, setSelectedAddress] = useState("");
   const [isViewSeedModalOpen, setIsViewSeedModalOpen] = useState(false);
   const [isSetSeedModalOpen, setIsSetSeedModalOpen] = useState(false);
+
+  // Column resizing state
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(
+    () => getStoredColumnWidths()
+  );
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizeData, setResizeData] = useState<{
+    columnId: string;
+    startX: number;
+    startWidth: number;
+    nextColumnId?: string;
+    nextStartWidth: number;
+  } | null>(null);
+
+  // Save column widths to localStorage
+  useEffect(() => {
+    saveColumnWidths(columnWidths);
+  }, [columnWidths]);
+
+  // Real visible order derived from the columns
+  const visibleColumnOrder = useMemo<string[]>(
+    () => ["address", "role", "seed", "actions"],
+    []
+  );
+
+  // Column resize handlers
+  const handleResizeStart = useCallback(
+    (columnId: string, startX: number) => {
+      const columnIds = visibleColumnOrder;
+      const currentIndex = columnIds.indexOf(columnId);
+      if (currentIndex === -1) return;
+
+      const nextColumnId = columnIds[currentIndex + 1] ?? columnIds[currentIndex - 1];
+      if (!nextColumnId) return;
+
+      setIsResizing(true);
+      setResizeData({
+        columnId,
+        startX,
+        startWidth:
+          columnWidths[columnId] ?? DEFAULT_COLUMN_WIDTHS[columnId as (typeof COLUMN_ORDER)[number]],
+        nextColumnId,
+        nextStartWidth:
+          columnWidths[nextColumnId] ??
+          DEFAULT_COLUMN_WIDTHS[nextColumnId as (typeof COLUMN_ORDER)[number]],
+      });
+    },
+    [columnWidths, visibleColumnOrder]
+  );
+
+  const handleResizeMove = useCallback(
+    (clientX: number) => {
+      if (!resizeData || !isResizing) return;
+
+      requestAnimationFrame(() => {
+        const diff = clientX - resizeData.startX;
+        const tableWidth = 1200;
+        const sensitivity = 2.2;
+        const diffPercent = (diff / tableWidth) * 100 * sensitivity;
+
+        // push/pull against the neighbor (right by default)
+        const proposedCurrentWidth = resizeData.startWidth + diffPercent;
+        const proposedNextWidth = resizeData.nextStartWidth - diffPercent;
+
+        const currentMin =
+          MIN_COLUMN_WIDTHS[resizeData.columnId as (typeof COLUMN_ORDER)[number]] ?? 5;
+        const nextMin =
+          MIN_COLUMN_WIDTHS[resizeData.nextColumnId as (typeof COLUMN_ORDER)[number]] ?? 5;
+
+        const newCurrent = Math.max(currentMin, Math.min(80, proposedCurrentWidth));
+        const newNext = Math.max(nextMin, Math.min(80, proposedNextWidth));
+
+        if (newCurrent >= currentMin && newNext >= nextMin && resizeData.nextColumnId) {
+          setColumnWidths((prev) => {
+            const updated = {
+              ...prev,
+              [resizeData.columnId]: newCurrent,
+              [resizeData.nextColumnId!]: newNext,
+            };
+            // Normalize to keep total at 100%
+            const total = COLUMN_ORDER.reduce((sum, key) => sum + updated[key], 0);
+            if (total !== 100) {
+              const factor = 100 / total;
+              COLUMN_ORDER.forEach(key => {
+                updated[key] = Math.round(updated[key] * factor * 100) / 100;
+              });
+            }
+            return updated;
+          });
+        }
+      });
+    },
+    [resizeData, isResizing]
+  );
+
+  const handleResizeEnd = useCallback(() => {
+    setIsResizing(false);
+    setResizeData(null);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => handleResizeMove(e.clientX);
+    const handleMouseUp = () => handleResizeEnd();
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing, handleResizeMove, handleResizeEnd]);
   const totalPages = useMemo(
     () => Math.ceil(subs.length / ITEMS_PER_PAGE),
     [subs.length]
@@ -240,7 +408,12 @@ const SubAccountTable: React.FC<Props> = ({
                 {table.getHeaderGroups().map((hg) => (
                   <Tr key={hg.id}>
                     {hg.headers.map((header) => (
-                      <Th key={header.id} header={header} />
+                      <Th
+                        key={header.id}
+                        header={header}
+                        align={header.id === "seed" ? "center" : "left"}
+                        onResizeStart={handleResizeStart}
+                      />
                     ))}
                   </Tr>
                 ))}
@@ -253,7 +426,7 @@ const SubAccountTable: React.FC<Props> = ({
                       className="border-t border-grey-80"
                     >
                       {row.getVisibleCells().map((cell) => (
-                        <Td key={cell.id} cell={cell} />
+                        <Td key={cell.id} cell={cell} columnWidth={columnWidths[cell.column.id]} />
                       ))}
                     </Tr>
                   );
@@ -295,4 +468,4 @@ const SubAccountTable: React.FC<Props> = ({
   );
 };
 
-export default SubAccountTable;
+export default APIKeysTable;

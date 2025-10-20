@@ -6,12 +6,12 @@ import { useEffect, useState, useCallback } from "react";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
-export type SubAccount = { address: string; role: string, seed?: string };
+export type ApiKey = { address: string; role: string, seed?: string };
 
-export function useSubAccounts() {
+export function useApiKeys() {
   const { api, isConnected } = usePolkadotApi();
   const { walletManager } = useWalletAuth();
-  const [subs, setSubs] = useState<SubAccount[]>([]);
+  const [subs, setSubs] = useState<ApiKey[]>([]);
   const [loading, setLoading] = useState(true);
 
   const reload = useCallback(async () => {

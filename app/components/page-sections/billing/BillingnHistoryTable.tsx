@@ -4,7 +4,7 @@ import {
   useReactTable,
   getSortedRowModel,
 } from "@tanstack/react-table";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import {
   TableWrapper,
   Table,
@@ -61,22 +61,88 @@ export const formatDate = (
 const columnHelper = createColumnHelper<TransactionObject>();
 const ITEMS_PER_PAGE = 10;
 
+// Visible column order (single source of truth)
+const COLUMN_ORDER = ["id", "amount", "transaction_type", "status", "date"] as const;
+
+// Default column widths for billing history table (percentages)
+const DEFAULT_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
+  id: 25,
+  amount: 15,
+  transaction_type: 20,
+  status: 15,
+  date: 25,
+};
+
+const MIN_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
+  id: 25,
+  amount: 20,
+  transaction_type: 20,
+  status: 15,
+  date: 20,
+};
+
+const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
+  const merged: Record<string, number> = { ...DEFAULT_COLUMN_WIDTHS, ...(maybeStored || {}) };
+  const normalized: Record<string, number> = {};
+
+  // Keep only expected keys with numeric values; fall back to defaults
+  COLUMN_ORDER.forEach((key) => {
+    const v = Number(merged[key]);
+    normalized[key] = Number.isFinite(v) ? v : DEFAULT_COLUMN_WIDTHS[key];
+  });
+
+  // Keep total ≈ 100%
+  const total = COLUMN_ORDER.reduce((acc, k) => acc + normalized[k], 0);
+  if (total !== 100) {
+    const factor = 100 / total;
+    COLUMN_ORDER.forEach((k) => {
+      normalized[k] = Math.round(normalized[k] * factor * 100) / 100;
+    });
+  }
+  return normalized as Record<string, number>;
+};
+
+const getStoredColumnWidths = () => {
+  try {
+    const stored = localStorage.getItem("billingTable_columnWidths");
+    return normalizeColumnWidths(stored ? JSON.parse(stored) : undefined);
+  } catch {
+    return normalizeColumnWidths();
+  }
+};
+
+const saveColumnWidths = (columnWidths: Record<string, number>) => {
+  try {
+    localStorage.setItem("billingTable_columnWidths", JSON.stringify(columnWidths));
+  } catch { }
+};
+
 const BillingHistoryTable: React.FC = () => {
   const { data: transactions, isPending, error } = useBillingTransactions();
   const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
 
+  const tableRef = useRef<HTMLDivElement>(null);
+
   const [currentPage, setCurrentPage] = useState(1);
 
-  const totalPages = useMemo(
-    () => Math.ceil((transactions?.length || 0) / ITEMS_PER_PAGE),
-    [transactions?.length]
+  // Column resizing state
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(
+    () => getStoredColumnWidths()
   );
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizeData, setResizeData] = useState<{
+    columnId: string;
+    startX: number;
+    startWidth: number;
+    nextColumnId?: string;
+    nextStartWidth: number;
+  } | null>(null);
+  const [justResized, setJustResized] = useState(false);
 
-  const paginatedData = useMemo(() => {
-    if (!transactions) return [];
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
-    return transactions.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-  }, [transactions, currentPage]);
+  // Save column widths to localStorage (debounced)
+  useEffect(() => {
+    saveColumnWidths(columnWidths);
+  }, [columnWidths]);
 
   const baseColumns = useMemo(
     () => [
@@ -126,9 +192,9 @@ const BillingHistoryTable: React.FC = () => {
           const status = d.getValue();
           const validStatus =
             status === "failed" ||
-            status === "success" ||
-            status === "completed" ||
-            status === "pending"
+              status === "success" ||
+              status === "completed" ||
+              status === "pending"
               ? status
               : null;
           return <StatusTypeBadge type={validStatus} />;
@@ -137,12 +203,125 @@ const BillingHistoryTable: React.FC = () => {
       columnHelper.accessor("transaction_date", {
         id: "date",
         header: "TRANSACTION DATE",
+        minSize: 200,
+        maxSize: 1000,
         cell: (d) => formatDate(new Date(d.getValue())),
         enableSorting: true,
       }),
     ],
     []
   );
+
+  // Real visible order derived from the columns (never drifts)
+  const visibleColumnOrder = useMemo<string[]>(
+    () => baseColumns.map((c) => c.id!),
+    [baseColumns]
+  );
+
+  // Column resize handlers (use visible order)
+  const handleResizeStart = useCallback(
+    (columnId: string, startX: number) => {
+      const columnIds = visibleColumnOrder;
+      const currentIndex = columnIds.indexOf(columnId);
+      if (currentIndex === -1) return;
+
+      const nextColumnId = columnIds[currentIndex + 1] ?? columnIds[currentIndex - 1];
+      if (!nextColumnId) return;
+
+      setIsResizing(true);
+      setResizeData({
+        columnId,
+        startX,
+        startWidth:
+          columnWidths[columnId] ?? DEFAULT_COLUMN_WIDTHS[columnId as (typeof COLUMN_ORDER)[number]],
+        nextColumnId,
+        nextStartWidth:
+          columnWidths[nextColumnId] ??
+          DEFAULT_COLUMN_WIDTHS[nextColumnId as (typeof COLUMN_ORDER)[number]],
+      });
+    },
+    [columnWidths, visibleColumnOrder]
+  );
+
+  const handleResizeMove = useCallback(
+    (clientX: number) => {
+      if (!resizeData || !isResizing) return;
+
+      requestAnimationFrame(() => {
+        const diff = clientX - resizeData.startX;
+        const tableWidth = tableRef.current?.getBoundingClientRect().width || 1200;
+        const sensitivity = 2.2;
+        const diffPercent = (diff / tableWidth) * 100 * sensitivity;
+
+        // push/pull against the neighbor (right by default)
+        const proposedCurrentWidth = resizeData.startWidth + diffPercent;
+        const proposedNextWidth = resizeData.nextStartWidth - diffPercent;
+
+        const currentMin =
+          MIN_COLUMN_WIDTHS[resizeData.columnId as (typeof COLUMN_ORDER)[number]] ?? 5;
+        const nextMin =
+          MIN_COLUMN_WIDTHS[resizeData.nextColumnId as (typeof COLUMN_ORDER)[number]] ?? 5;
+
+        const newCurrent = Math.max(currentMin, Math.min(80, proposedCurrentWidth));
+        const newNext = Math.max(nextMin, Math.min(80, proposedNextWidth));
+
+        if (newCurrent >= currentMin && newNext >= nextMin && resizeData.nextColumnId) {
+          setColumnWidths((prev) => {
+            const updated = {
+              ...prev,
+              [resizeData.columnId]: newCurrent,
+              [resizeData.nextColumnId!]: newNext,
+            };
+            // Normalize to keep total at 100%
+            const total = COLUMN_ORDER.reduce((sum, key) => sum + updated[key], 0);
+            if (total !== 100) {
+              const factor = 100 / total;
+              COLUMN_ORDER.forEach(key => {
+                updated[key] = Math.round(updated[key] * factor * 100) / 100;
+              });
+            }
+            return updated;
+          });
+        }
+      });
+    },
+    [resizeData, isResizing]
+  );
+
+  const handleResizeEnd = useCallback(() => {
+    setIsResizing(false);
+    setResizeData(null);
+    setJustResized(true);
+    setTimeout(() => {
+      setJustResized(false);
+    }, 100);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => handleResizeMove(e.clientX);
+    const handleMouseUp = () => handleResizeEnd();
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing, handleResizeMove, handleResizeEnd]);
+
+  const totalPages = useMemo(
+    () => Math.ceil((transactions?.length || 0) / ITEMS_PER_PAGE),
+    [transactions?.length]
+  );
+
+  const paginatedData = useMemo(() => {
+    if (!transactions) return [];
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return transactions.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [transactions, currentPage]);
 
   const columns = baseColumns;
 
@@ -157,32 +336,43 @@ const BillingHistoryTable: React.FC = () => {
     <>
       <TableWrapper
         className={cn(
-          isUnpinnedOpen && transactions && transactions.length > 0
-            ? "mb-[90px]"
-            : "",
-          "mt-5"
+          isUnpinnedOpen && transactions && transactions.length > 0 ? "mb-[90px]" : "",
+          "mt-5 overflow-x-hidden"
         )}
       >
-        <Table>
-          <THead>
-            {table.getHeaderGroups().map((hg) => (
-              <Tr key={hg.id}>
-                {hg.headers.map((h) => (
-                  <Th key={h.id} header={h} />
-                ))}
-              </Tr>
-            ))}
-          </THead>
-          <TBody>
-            {table.getRowModel().rows.map((row) => (
-              <Tr key={row.id} transparent>
-                {row.getVisibleCells().map((cell) => (
-                  <Td className="text-grey-20" key={cell.id} cell={cell} />
-                ))}
-              </Tr>
-            ))}
-          </TBody>
-        </Table>
+        <div ref={tableRef}>
+          <Table>
+            <THead>
+              {table.getHeaderGroups().map((hg) => (
+                <Tr key={hg.id}>
+                  {hg.headers.map((h) => (
+                    <Th
+                      key={h.id}
+                      header={h}
+                      columnWidth={columnWidths[h.id]}
+                      onResizeStart={handleResizeStart}
+                      preventSort={justResized}
+                    />
+                  ))}
+                </Tr>
+              ))}
+            </THead>
+            <TBody>
+              {table.getRowModel().rows.map((row) => (
+                <Tr key={row.id} transparent>
+                  {row.getVisibleCells().map((cell) => (
+                    <Td
+                      className="text-grey-20"
+                      key={cell.id}
+                      cell={cell}
+                      columnWidth={columnWidths[cell.column.id]}
+                    />
+                  ))}
+                </Tr>
+              ))}
+            </TBody>
+          </Table>
+        </div>
 
         {isPending && !error && (
           <div className="w-full h-[350px] flex items-center justify-center p-6 animate-fade-in-0.3">

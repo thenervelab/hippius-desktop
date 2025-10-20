@@ -3,7 +3,7 @@
 
 import React, { useState, useCallback, useEffect } from "react";
 import { Keyring } from "@polkadot/keyring";
-import SubAccountTable from "./SubAccountTable";
+import APIKeysTable from "./APIKeysTable";
 import SubAccountModal from "./SubAccountModal";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
@@ -12,7 +12,7 @@ import { PlusCircle, RefreshCw, AlertCircle } from "lucide-react";
 import GenerateNewAccountModal from "./GenerateNewAccountModal";
 
 import { ConfirmModal, Icons, RevealTextLine } from "@/app/components/ui";
-import { useSubAccounts } from "@/app/lib/hooks/api/useSubAccounts";
+import { useApiKeys } from "@/app/lib/hooks/api/useApiKeys";
 import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import {
   saveSubAccountSeed,
@@ -30,7 +30,7 @@ import { invoke } from "@tauri-apps/api/core";
 type BackendSubAccountTuple = [string, string]; // [accountId, address]
 
 const SubAccounts: React.FC = () => {
-  const { subs, loading: tableLoading, reload } = useSubAccounts();
+  const { subs, loading: tableLoading, reload } = useApiKeys();
   const { api, isConnected } = usePolkadotApi();
   const { walletManager } = useWalletAuth();
   const main = walletManager?.polkadotPair.address;
@@ -435,7 +435,7 @@ const SubAccounts: React.FC = () => {
             </div>
           </div>
 
-          <SubAccountTable
+          <APIKeysTable
             subs={subs}
             loading={tableLoading || fetchingBackendData}
             onDelete={onDelete}

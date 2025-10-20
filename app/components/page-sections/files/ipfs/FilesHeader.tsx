@@ -303,7 +303,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               <StartSyncingButton className="h-9" onClick={onStartSyncing} />
             )}
           </>
-
         </div>
       </div>
 

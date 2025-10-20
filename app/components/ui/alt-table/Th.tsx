@@ -1,24 +1,36 @@
 import { cn } from "@/lib/utils";
 import { Header, flexRender } from "@tanstack/react-table";
 import { ChevronDown } from "@/components/ui/icons";
+import React from "react";
 
 export interface ThProps<TData, TValue>
   extends React.ThHTMLAttributes<HTMLTableCellElement> {
   header: Header<TData, TValue>;
   align?: "center" | "left" | "right";
   activeSortClassName?: string;
-  columnWidth?: number;
+  columnWidth?: number; // percentage
   onResizeStart?: (columnId: string, startX: number) => void;
   preventSort?: boolean;
 }
 
 export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
-  const { onClick, header, className, activeSortClassName, align, columnWidth, onResizeStart, preventSort, ...rest } =
-    props;
+  const {
+    onClick,
+    header,
+    className,
+    activeSortClassName,
+    align,
+    columnWidth,
+    onResizeStart,
+    preventSort,
+    ...rest
+  } = props;
+
   const sortOrder = header.column.getIsSorted();
   const canSort = header.column.getCanSort();
 
-  const canResize = header.id !== 'actions';
+  // Allow resizing all except an "actions" column (if you use one)
+  const canResize = header.id !== "actions";
 
   return (
     <th
@@ -29,29 +41,21 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
         className
       )}
       style={{
-        width: columnWidth ? `${columnWidth}%` : 'auto',
+        width: columnWidth ? `${columnWidth}%` : undefined,
       }}
       onClick={(event) => {
         const target = event.target as HTMLElement;
-        if (target.closest('.resize-handle')) {
-          return;
+        if (target.closest(".resize-handle")) {
+          return; // ignore clicks on the resize handle
         }
-
-        // Prevent sorting if we just finished resizing
-        if (preventSort) {
-          return;
-        }
-
+        if (preventSort) return;
         if (canSort) {
           header.column.toggleSorting();
         }
-        if (onClick) {
-          onClick(event);
-        }
+        if (onClick) onClick(event);
       }}
       {...rest}
     >
-      {/* <div className="absolute bottom-0 left-0 right-0 h-px bg-[#696969]" /> */}
       <div
         className={cn(
           "flex w-full",
@@ -61,7 +65,12 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
         )}
       >
         {canSort ? (
-          <button className={cn("relative flex h-fit w-fit whitespace-nowrap", header.column.columnDef.header !== "hALPHA EARNED" && "uppercase")}>
+          <button
+            className={cn(
+              "relative flex h-fit w-fit whitespace-nowrap",
+              header.column.columnDef.header !== "hALPHA EARNED" && "uppercase"
+            )}
+          >
             {flexRender(header.column.columnDef.header, header.getContext())}
             {sortOrder && canSort && (
               <ChevronDown
@@ -81,9 +90,10 @@ export function Th<TData, TValue>(props: ThProps<TData, TValue>) {
 
       {canResize && (
         <div
-          className="resize-handle absolute top-0 right-0 w-1 h-full cursor-col-resize"
+          className="resize-handle absolute top-0 right-0 h-full w-2 -mr-1 cursor-col-resize z-10 select-none"
           onMouseDown={(e) => {
             e.preventDefault();
+            e.stopPropagation(); // avoid toggling sort
             onResizeStart?.(header.id, e.clientX);
           }}
         />
