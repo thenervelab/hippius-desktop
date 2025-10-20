@@ -68,21 +68,21 @@ const NameCell: FC<NameCellProps> = ({
 
 
   return (
-    <div className={className} draggable={false}>
+    <div className={cn("w-full min-w-0", className)} draggable={false}>
       {isFolder ? (
         <Link href={folderUrl} prefetch={false} draggable={false}>
-          <div className="flex items-center">
-            <Icon className={cn("size-5 mr-2", color)} />
-            <span className="text-grey-20 hover:text-primary-40 hover:underline transition">
+          <div className="flex items-center min-w-0">
+            <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
+            <span className="text-grey-20 hover:text-primary-40 hover:underline transition truncate">
               {name}
             </span>
           </div>
         </Link>
       ) : (
-        <div className="flex items-center">
-          <Icon className={cn("size-5 mr-2", color)} />
+        <div className="flex items-center min-w-0">
+          <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
           <span className={cn(
-            "text-grey-20",
+            "text-grey-20 truncate",
             isPreviewable && "group-hover:text-primary-50 group-hover:underline"
           )}>
             {name}

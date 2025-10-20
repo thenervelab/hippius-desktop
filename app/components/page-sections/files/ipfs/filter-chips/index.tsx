@@ -14,7 +14,6 @@ export interface ActiveFilter {
 interface FilterChipsProps {
     filters: ActiveFilter[];
     onRemoveFilter: (filter: ActiveFilter) => void;
-    onOpenFilterDialog?: () => void;
     className?: string;
     maxVisible?: number;
 }
@@ -22,14 +21,16 @@ interface FilterChipsProps {
 const FilterChips: React.FC<FilterChipsProps> = ({
     filters,
     onRemoveFilter,
-    onOpenFilterDialog,
     className,
     maxVisible = 5,
 }) => {
+    const [isExpanded, setIsExpanded] = React.useState(false);
+
     if (filters.length === 0) return null;
 
-    const visibleFilters = filters.slice(0, maxVisible);
-    const hiddenCount = Math.max(0, filters.length - maxVisible);
+    const visibleFilters = isExpanded ? filters : filters.slice(0, maxVisible);
+    const hiddenCount = isExpanded ? 0 : Math.max(0, filters.length - maxVisible);
+
 
     return (
         <div className={cn('flex flex-wrap gap-2 items-center', className)}>
@@ -49,13 +50,22 @@ const FilterChips: React.FC<FilterChipsProps> = ({
                 </div>
             ))}
 
-            {hiddenCount > 0 && onOpenFilterDialog && (
+            {hiddenCount > 0 && (
                 <div
                     className="flex items-center gap-1 px-2 py-1 bg-grey-90 border border-grey-80 rounded text-sm text-primary-50 cursor-pointer hover:bg-grey-80"
-                    onClick={onOpenFilterDialog}
+                    onClick={() => setIsExpanded(true)}
                 >
                     <span>+{hiddenCount} more</span>
                 </div>
+            )}
+
+            {isExpanded && filters.length > maxVisible && (
+                <button
+                    onClick={() => setIsExpanded(false)}
+                    className="flex items-center gap-1 px-2 py-1 bg-grey-90 border border-grey-80 rounded text-sm text-primary-50 cursor-pointer hover:bg-grey-80"
+                >
+                    <span>Show less</span>
+                </button>
             )}
         </div>
     );
