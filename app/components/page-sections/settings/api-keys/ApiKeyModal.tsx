@@ -76,30 +76,30 @@ export default function ApiKeyModal({
             </button>
           </Dialog.Close>
 
-          <div className="flex items-center sm:justify-center mb-4 mt-3 sm:mt-0">
-            <div className="flex items-center sm:justify-center h-[56px] w-[56px] relative">
+          <div className="text-2xl font-medium text-grey-10 hidden md:flex flex-col items-center justify-center pb-2 pt-4 gap-4">
+            <div className="size-14 flex justify-center items-center relative">
               <Graphsheet
                 majorCell={{
-                  lineColor: [31, 80, 189, 1],
+                  lineColor: [31, 80, 189, 1.0],
                   lineWidth: 2,
-                  cellDim: 40,
+                  cellDim: 200,
                 }}
                 minorCell={{
-                  lineColor: [31, 80, 189, 1],
-                  lineWidth: 2,
-                  cellDim: 40,
+                  lineColor: [49, 103, 211, 1.0],
+                  lineWidth: 1,
+                  cellDim: 20,
                 }}
-                className="absolute w-full h-full top-0 bottom-0 left-0 duration-300 opacity-10 hidden sm:block"
+                className="absolute w-full h-full duration-500 opacity-30 z-0"
               />
-              <div className="flex items-center justify-center size-8 bg-primary-50 rounded-[8px] relative">
-                <HippiusLogo className="size-5 text-white" />
+              <div className="bg-white-cloud-gradient-lg absolute w-full h-full z-10" />
+              <div className="h-8 w-8 rounded-lg flex items-center justify-center z-20 bg-primary-50">
+                <HippiusLogo className="size-8 text-grey-100 rounded-lg" />
               </div>
             </div>
+            <span className="text-center text-2xl text-grey-10 font-medium">
+              Add API Key
+            </span>
           </div>
-
-          <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center mb-4">
-            Add API Key
-          </Dialog.Title>
 
           <div className="space-y-4">
             <div>

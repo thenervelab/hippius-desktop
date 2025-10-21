@@ -481,6 +481,8 @@ const SubAccounts: React.FC = () => {
                 }
               }}
               variant={pending.title.startsWith("Delete") ? "delete" : "create"}
+              confirmText={txLoading ? "Processing..." : "Yes Proceed"}
+              cancelText="No, Go Back"
             />
           )}
 

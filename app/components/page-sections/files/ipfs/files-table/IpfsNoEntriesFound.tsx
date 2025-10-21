@@ -141,7 +141,7 @@ const IPFSNoEntriesFound: React.FC<IPFSNoEntriesFoundProps> = ({
                 }}
                 className="absolute w-full h-full top-0 left-0 duration-300 opacity-10 hidden sm:block"
               />
-              <div className="bg-large-white-cloud-gradient absolute inset-0" />
+              <div className="bg-white-cloud-gradient-lg absolute inset-0" />
               <div className="flex items-center justify-center h-8 w-8 bg-primary-50 rounded-[8px] relative">
                 <HippiusLogo className="size-9 text-white" />
               </div>
