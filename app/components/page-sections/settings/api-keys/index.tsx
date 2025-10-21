@@ -4,7 +4,7 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { Keyring } from "@polkadot/keyring";
 import APIKeysTable from "./APIKeysTable";
-import SubAccountModal from "./SubAccountModal";
+import ApiKeyModal from "./ApiKeyModal";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { toast } from "sonner";
@@ -15,10 +15,10 @@ import { ConfirmModal, Icons, RevealTextLine } from "@/app/components/ui";
 import { useApiKeys } from "@/app/lib/hooks/api/useApiKeys";
 import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import {
-  saveSubAccountSeed,
-  hasSubAccountSeed,
-  deleteSubAccountSeed,
-} from "@/app/lib/helpers/subAccountSeedsDb";
+  saveApiKeySeed,
+  hasApiKeySeed,
+  deleteApiKeySeed,
+} from "@/app/lib/helpers/apiKeySeedsDb";
 import { getWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import SeedPasscodeModal from "./SeedPasscodeModal";
@@ -60,7 +60,7 @@ const SubAccounts: React.FC = () => {
   const [isSeedEntryModalOpen, setIsSeedEntryModalOpen] = useState(false);
   const [isFromDirectCreation, setIsFromDirectCreation] = useState(false);
 
-  // Track sub-accounts with seeds
+  // Track api-keys with seeds
   const [accountsWithSeeds, setAccountsWithSeeds] = useState<Set<string>>(
     new Set()
   );
@@ -112,7 +112,7 @@ const SubAccounts: React.FC = () => {
     try {
       const addresses = await Promise.all(
         subs.map(async (sub) => {
-          const hasSeed = await hasSubAccountSeed(sub.address);
+          const hasSeed = await hasApiKeySeed(sub.address);
           return hasSeed ? sub.address : null;
         })
       );
@@ -216,7 +216,7 @@ const SubAccounts: React.FC = () => {
           return { success: false, error: "Incorrect passcode" };
         }
 
-        await saveSubAccountSeed(addressForSeed, seedToSave, passcode);
+        await saveApiKeySeed(addressForSeed, seedToSave, passcode);
         setAccountsWithSeeds((prev) => new Set([...prev, addressForSeed]));
 
         return { success: true };
@@ -242,7 +242,7 @@ const SubAccounts: React.FC = () => {
           return { success: false, error: "Incorrect passcode" };
         }
 
-        await saveSubAccountSeed(addressForSeed, seed, passcode);
+        await saveApiKeySeed(addressForSeed, seed, passcode);
         setAccountsWithSeeds((prev) => new Set([...prev, addressForSeed]));
 
         return { success: true };
@@ -274,7 +274,7 @@ const SubAccounts: React.FC = () => {
     async (addr: string) => {
       if (accountsWithSeeds.has(addr)) {
         try {
-          await deleteSubAccountSeed(addr);
+          await deleteApiKeySeed(addr);
           setAccountsWithSeeds((prev) => {
             const updated = new Set(prev);
             updated.delete(addr);
@@ -444,7 +444,7 @@ const SubAccounts: React.FC = () => {
             isDisabled={isAccountDisabled}
           />
 
-          <SubAccountModal
+          <ApiKeyModal
             open={formOpen && !confirmOpen}
             address={draftAddress}
             role={draftRole}
@@ -481,6 +481,8 @@ const SubAccounts: React.FC = () => {
                 }
               }}
               variant={pending.title.startsWith("Delete") ? "delete" : "create"}
+              confirmText={txLoading ? "Processing..." : "Yes Proceed"}
+              cancelText="No, Go Back"
             />
           )}
 

@@ -74,7 +74,7 @@ export function useReferralLinks() {
 
   const query = useQuery<ReferralLink[], Error>({
     queryKey: ["referralLinks", main],
-
+    refetchOnWindowFocus: false,
     queryFn: () => {
       if (!api || !main) throw new Error("API or wallet not ready");
 

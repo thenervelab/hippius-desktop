@@ -72,7 +72,7 @@ const ResourceDetailsError: React.FC<ResourceDetailsErrorProps> = ({
                 cellDim: 15,
               }}
             />
-            <div className="bg-large-white-cloud-gradient absolute w-full h-full" />
+            <div className="bg-white-cloud-gradient-lg absolute w-full h-full" />
           </div>
           <AbstractIconWrapper className="size-8 relative">
             {errorType === "not-found" && (

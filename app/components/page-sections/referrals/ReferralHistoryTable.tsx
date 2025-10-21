@@ -243,7 +243,7 @@ const ReferralHistoryTable: React.FC = () => {
       </div>
       {/* <TransactionHistory /> */}
 
-      <TableWrapper className="mt-5">
+      <TableWrapper className="mt-5 overflow-x-hidden">
         <Table>
           <THead>
             {table.getHeaderGroups().map((headerGroup) => (

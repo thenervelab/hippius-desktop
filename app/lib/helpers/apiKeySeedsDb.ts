@@ -2,15 +2,15 @@ import { initHippiusDesktopDB, saveBytes, getWalletRecord } from "./hippiusDeskt
 import { encryptMnemonic, decryptMnemonic, hashPasscode } from "./crypto";
 
 const TABLE_SCHEMA = `
-  CREATE TABLE IF NOT EXISTS sub_account_seeds (
+  CREATE TABLE IF NOT EXISTS api_key_seeds (
     address TEXT PRIMARY KEY,
     encrypted_seed TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
 `;
 
-// Ensure the sub_account_seeds table exists in the wallet database
-async function ensureSubAccountSeedsTable() {
+// Ensure the api_key_seeds table exists in the wallet database
+async function ensureApiKeySeedsTable() {
     const db = await initHippiusDesktopDB();
     db.run(TABLE_SCHEMA);
     await saveBytes(db.export());
@@ -20,7 +20,7 @@ async function ensureSubAccountSeedsTable() {
 /**
  * Save a api key's seed phrase, encrypted with the user's passcode
  */
-export async function saveSubAccountSeed(address: string, seed: string, passcode: string) {
+export async function saveApiKeySeed(address: string, seed: string, passcode: string) {
     // Validate that the passcode matches the user's stored passcode
     const walletRecord = await getWalletRecord();
     if (!walletRecord) {
@@ -33,16 +33,16 @@ export async function saveSubAccountSeed(address: string, seed: string, passcode
 
     const encryptedSeed = encryptMnemonic(seed, passcode);
 
-    const db = await ensureSubAccountSeedsTable();
+    const db = await ensureApiKeySeedsTable();
 
-    const existing = db.exec(`SELECT address FROM sub_account_seeds WHERE address = '${address}'`);
+    const existing = db.exec(`SELECT address FROM api_key_seeds WHERE address = '${address}'`);
 
     if (existing.length > 0 && existing[0]?.values.length > 0) {
-        db.run(`UPDATE sub_account_seeds SET encrypted_seed = ? WHERE address = ?`, [
+        db.run(`UPDATE api_key_seeds SET encrypted_seed = ? WHERE address = ?`, [
             encryptedSeed, address
         ]);
     } else {
-        db.run(`INSERT INTO sub_account_seeds (address, encrypted_seed, created_at) VALUES (?, ?, ?)`, [
+        db.run(`INSERT INTO api_key_seeds (address, encrypted_seed, created_at) VALUES (?, ?, ?)`, [
             address, encryptedSeed, Date.now()
         ]);
     }
@@ -53,7 +53,7 @@ export async function saveSubAccountSeed(address: string, seed: string, passcode
 /**
  * Retrieve and decrypt a api key's seed phrase
  */
-export async function getSubAccountSeed(address: string, passcode: string): Promise<string> {
+export async function getApiKeySeed(address: string, passcode: string): Promise<string> {
     const walletRecord = await getWalletRecord();
     if (!walletRecord) {
         throw new Error("No wallet record found");
@@ -63,9 +63,9 @@ export async function getSubAccountSeed(address: string, passcode: string): Prom
         throw new Error("Incorrect passcode");
     }
 
-    const db = await ensureSubAccountSeedsTable();
+    const db = await ensureApiKeySeedsTable();
 
-    const result = db.exec(`SELECT encrypted_seed FROM sub_account_seeds WHERE address = '${address}'`);
+    const result = db.exec(`SELECT encrypted_seed FROM api_key_seeds WHERE address = '${address}'`);
 
     if (!result.length || !result[0]?.values.length) {
         throw new Error("No seed found for this api key");
@@ -83,10 +83,10 @@ export async function getSubAccountSeed(address: string, passcode: string): Prom
 /**
  * Check if a seed exists for the given api key address
  */
-export async function hasSubAccountSeed(address: string): Promise<boolean> {
-    const db = await ensureSubAccountSeedsTable();
+export async function hasApiKeySeed(address: string): Promise<boolean> {
+    const db = await ensureApiKeySeedsTable();
 
-    const result = db.exec(`SELECT address FROM sub_account_seeds WHERE address = '${address}'`);
+    const result = db.exec(`SELECT address FROM api_key_seeds WHERE address = '${address}'`);
 
     return result.length > 0 && result[0]?.values.length > 0;
 }
@@ -94,10 +94,10 @@ export async function hasSubAccountSeed(address: string): Promise<boolean> {
 /**
  * Delete a api key's seed
  */
-export async function deleteSubAccountSeed(address: string): Promise<void> {
-    const db = await ensureSubAccountSeedsTable();
+export async function deleteApiKeySeed(address: string): Promise<void> {
+    const db = await ensureApiKeySeedsTable();
 
-    db.run(`DELETE FROM sub_account_seeds WHERE address = ?`, [address]);
+    db.run(`DELETE FROM api_key_seeds WHERE address = ?`, [address]);
 
     await saveBytes(db.export());
 }
@@ -105,10 +105,10 @@ export async function deleteSubAccountSeed(address: string): Promise<void> {
 /**
  * List all api key addresses that have seeds
  */
-export async function listSubAccountsWithSeeds(): Promise<string[]> {
-    const db = await ensureSubAccountSeedsTable();
+export async function listApiKeysWithSeeds(): Promise<string[]> {
+    const db = await ensureApiKeySeedsTable();
 
-    const result = db.exec(`SELECT address FROM sub_account_seeds ORDER BY created_at DESC`);
+    const result = db.exec(`SELECT address FROM api_key_seeds ORDER BY created_at DESC`);
 
     if (!result.length || !result[0]?.values.length) {
         return [];

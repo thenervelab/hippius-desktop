@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Copy, Check } from "lucide-react";
-import { getSubAccountSeed } from "@/app/lib/helpers/subAccountSeedsDb";
+import { getApiKeySeed } from "@/app/lib/helpers/apiKeySeedsDb";
 import { ShieldSecurity } from "@/components/ui/icons";
 
 type Props = {
@@ -41,7 +41,7 @@ export default function ViewSeedModal({
         setError(null);
 
         try {
-            const result = await getSubAccountSeed(address, passcode);
+            const result = await getApiKeySeed(address, passcode);
             setSeed(result);
         } catch (error) {
             console.error("Failed to retrieve seed:", error);
