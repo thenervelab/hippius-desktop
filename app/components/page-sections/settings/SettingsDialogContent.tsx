@@ -6,7 +6,7 @@ import BackupAppData from "./BackupAppData";
 import { InView } from "react-intersection-observer";
 import ResetAppData from "./ResetAppData";
 import UpdateSyncFolder from "./UpdateSyncFolder";
-import SubAccounts from "./sub-accounts";
+import ApiKeys from "./api-keys";
 import NotificationSettings from "./NotificationSettings";
 import { useAtom } from "jotai";
 import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
@@ -105,7 +105,7 @@ const SettingsDialogContent: React.FC = () => {
                 reveal={inView}
                 className="delay-300 w-full"
               >
-                <SubAccounts />
+                <ApiKeys />
               </RevealTextLine>
             )}
 

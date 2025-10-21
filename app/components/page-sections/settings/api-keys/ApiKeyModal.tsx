@@ -39,7 +39,7 @@ const formatRoleDisplay = (role: string): string => {
   return role === "UploadDelete" ? "Upload/Delete" : role;
 };
 
-export default function SubAccountModal({
+export default function ApiKeyModal({
   open,
   address,
   role,

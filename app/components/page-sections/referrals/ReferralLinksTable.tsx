@@ -235,13 +235,17 @@ export default function ReferralLinksTable() {
           const code = row.original.code;
           const url = `${REFERRAL_CODE_CONFIG.link}${code}`;
           return (
-            <CopyableCell
-              buttonClass="!text-grey-70"
-              title="Copy Referral Code"
-              toastMessage="Referral Code Copied Successfully!"
-              copyAbleText={url}
-              showCopyAbleText={false}
-            />
+            <div className="w-full flex justify-center">
+              <CopyableCell
+                className="justify-center"
+                buttonClass="!text-grey-70"
+                title="Copy Referral Code"
+                toastMessage="Referral Code Copied Successfully!"
+                copyAbleText={url}
+                showCopyAbleText={false}
+                isJustifyCenter={true}
+              />
+            </div>
           );
         }
       })

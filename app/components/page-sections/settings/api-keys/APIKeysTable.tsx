@@ -21,7 +21,7 @@ import { Loader2, Lock } from "lucide-react";
 import { ApiKey } from "@/app/lib/hooks/api/useApiKeys";
 import { Icons } from "@/app/components/ui";
 import { ShieldSecurity } from "@/app/components/ui/icons";
-import { saveSubAccountSeed } from "@/app/lib/helpers/subAccountSeedsDb";
+import { saveApiKeySeed } from "@/app/lib/helpers/apiKeySeedsDb";
 import { getWalletRecord } from "@/app/lib/helpers/hippiusDesktopDB";
 import { hashPasscode } from "@/app/lib/helpers/crypto";
 import SeedPasscodeModal from "./SeedPasscodeModal";
@@ -53,10 +53,10 @@ const DEFAULT_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
 };
 
 const MIN_COLUMN_WIDTHS: Record<(typeof COLUMN_ORDER)[number], number> = {
-  address: 35,
-  role: 15,
-  seed: 10,
-  actions: 10,
+  address: 40,
+  role: 20,
+  seed: 20,
+  actions: 20,
 };
 
 const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
@@ -260,7 +260,7 @@ const APIKeysTable: React.FC<Props> = ({
         return { success: false, error: "Incorrect passcode" };
       }
 
-      await saveSubAccountSeed(selectedAddress, seed, passcode);
+      await saveApiKeySeed(selectedAddress, seed, passcode);
 
       if (onSeedUpdated) {
         onSeedUpdated();
@@ -276,6 +276,7 @@ const APIKeysTable: React.FC<Props> = ({
   const columns = React.useMemo(
     () => [
       columnHelper.accessor("address", {
+        id: "address",
         header: "Address",
         cell: (cell) => {
           const value = cell.getValue();
@@ -290,17 +291,22 @@ const APIKeysTable: React.FC<Props> = ({
                   copyAbleText={value}
                 />
                 {disabled && (
-                  <CustomTooltip
-                    tooltip={
-                      <div className="max-w-[220px]">
-                        This API key is being used to store and sync files to S3 from our backend.
-                        It cannot be deleted to ensure secure synchronization of your files.
-                      </div>
-                    }
-                    className="cursor-pointer mt-1"
+                  <div
+                    className="absolute right-10 z-20 cursor-pointer"
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    <Lock className="size-4 ml-1" />
-                  </CustomTooltip>
+                    <CustomTooltip
+                      tooltip={
+                        <div className="max-w-[220px]">
+                          This API key is being used to store and sync files to S3 from our backend.
+                          It cannot be deleted to ensure secure synchronization of your files.
+                        </div>
+                      }
+                      className="cursor-pointer mt-1"
+                    >
+                      <Lock className="size-4 ml-1" />
+                    </CustomTooltip>
+                  </div>
                 )}
               </div>
             </div>
@@ -309,6 +315,7 @@ const APIKeysTable: React.FC<Props> = ({
       }),
 
       columnHelper.accessor("role", {
+        id: "role",
         header: "Permission",
         cell: (info) => {
           const role = info.getValue();
@@ -322,6 +329,7 @@ const APIKeysTable: React.FC<Props> = ({
       }),
 
       columnHelper.accessor("seed", {
+        id: "seed",
         header: () => (
           <div className="w-full flex justify-center text-center">Seed</div>
         ),
@@ -365,7 +373,7 @@ const APIKeysTable: React.FC<Props> = ({
           const s = row.original;
           const disabled = isDisabled(s.address);
           return (
-            <div className="flex justify-center items-center">
+            <div className="flex justify-center items-center min-w-16">
               <button
                 onClick={() => onDelete(s.address)}
                 title={disabled ? "Cannot delete disabled account" : "Delete"}
@@ -426,7 +434,14 @@ const APIKeysTable: React.FC<Props> = ({
                       className="border-t border-grey-80"
                     >
                       {row.getVisibleCells().map((cell) => (
-                        <Td key={cell.id} cell={cell} columnWidth={columnWidths[cell.column.id]} />
+                        <Td
+                          key={cell.id}
+                          className={cn(
+                            cell.column.id === "address" && "relative",
+                          )}
+                          cell={cell}
+                          columnWidth={columnWidths[cell.column.id]}
+                        />
                       ))}
                     </Tr>
                   );
