@@ -239,8 +239,8 @@ pub async fn get_sync_activity(
         uploading.extend(pub_state.uploading_items.iter().cloned());
 
         // Determine if we need to check sync completion
-        let should_check_public = pub_state.uploading_items.is_empty() && !pub_state.recent_items.is_empty();
-        let should_check_private = p_state.uploading_items.is_empty() && !p_state.recent_items.is_empty();
+        let should_check_public = (pub_state.uploading_items.is_empty() && !pub_state.recent_items.is_empty()) || (pub_state.uploading_items.is_empty() && pub_state.recent_items.is_empty());
+        let should_check_private = (p_state.uploading_items.is_empty() && !p_state.recent_items.is_empty()) || (p_state.uploading_items.is_empty() && p_state.recent_items.is_empty());
 
         (recent, uploading, should_check_public, should_check_private)
     };
@@ -262,7 +262,7 @@ pub async fn get_sync_activity(
                 // Sync already marked as completed, do nothing
             }
             Err(e) => {
-                eprintln!("Failed to check sync completion status: {}", e);
+                // 
             }
         }
     } 
@@ -283,27 +283,10 @@ pub async fn get_sync_activity(
                 // Sync already marked as completed, do nothing
             }
             Err(e) => {
-                eprintln!("Failed to check sync completion status: {}", e);
+                // 
             }
         }
     }
-
-    // if !pub_state.uploading_items.is_empty() {
-    //     match crate::utils::sync::is_first_run("public").await {
-    //         Ok(true) => {
-    //             if let Err(e) = app.emit("started_syncing", ()).map_err(|e| e.to_string()) {
-    //                 eprintln!("Failed to emit started_syncing event: {}", e);
-    //             }
-    //             println!("[Sync] Sync started with {} items uploading", uploading.len());
-    //         }
-    //         Ok(false) => {
-    //             // Not the first run → do nothing
-    //         }
-    //         Err(err) => {
-    //             eprintln!("Failed to determine if first run: {}", err);
-    //         }
-    //     }
-    // }
 
     // Convert to unified format with account_id as owner
     let recent_unified = recent
