@@ -153,26 +153,19 @@ pub async fn reset_sync_event_state(scope: &str) -> Result<(), String> {
         .get()
         .ok_or_else(|| "Database pool not initialized".to_string())?;
 
-    // Start a transaction to ensure atomicity
     let mut tx = pool.begin().await.map_err(|e| format!("Failed to begin transaction: {}", e))?;
 
-    // Delete all existing entries for this scope
-    sqlx::query("DELETE FROM is_first_run WHERE scope = ?")
-        .bind(scope)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to delete existing sync state: {}", e))?;
-
-    // Insert a fresh record for this scope
     sqlx::query(
-        "INSERT INTO is_first_run (id, is_started, is_completed, scope) VALUES (1, TRUE, FALSE, ?)"
+        "INSERT INTO is_first_run (scope, is_started, is_completed)
+         VALUES (?, TRUE, FALSE)
+         ON CONFLICT(scope)
+         DO UPDATE SET is_started = TRUE, is_completed = FALSE"
     )
     .bind(scope)
     .execute(&mut *tx)
     .await
-    .map_err(|e| format!("Failed to insert new sync state: {}", e))?;
+    .map_err(|e| format!("Failed to update sync state: {}", e))?;
 
-    // Commit the transaction
     tx.commit().await.map_err(|e| format!("Failed to commit transaction: {}", e))?;
 
     Ok(())
