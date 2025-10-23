@@ -60,7 +60,7 @@ const CardView: FC<CardViewProps> = ({
   handleFileDownload,
   currentPage,
   totalPages,
-  setCurrentPage
+  setCurrentPage,
 }) => {
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
