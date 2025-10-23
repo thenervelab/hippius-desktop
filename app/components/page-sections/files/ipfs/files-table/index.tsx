@@ -54,7 +54,6 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteIpfsFile from "@/lib/hooks/use-delete-ipfs-file";
-import SyncingLoader from "../SyncingLoader";
 import { useAtomValue } from "jotai";
 import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
@@ -143,7 +142,6 @@ interface FilesTableProps {
   currentPage: number;
   totalPages: number;
   setCurrentPage: (page: number) => void;
-  isSyncing?: boolean;
 }
 
 // Component to wrap NameCell with checkmark positioned outside dialog triggers
@@ -209,7 +207,6 @@ const FilesTable: FC<FilesTableProps> = memo(
     currentPage,
     totalPages,
     setCurrentPage,
-    isSyncing = false,
   }) => {
     const { polkadotAddress } = useWalletAuth();
     const [sorting, setSorting] = useState<SortingState>([]);
@@ -1007,14 +1004,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       );
     }, [sharedState, localIsFileDetailsOpen, localFileDetailsFile]);
 
-    if (isSyncing) {
-      return (
-        <SyncingLoader
-          isRecentFiles={isRecentFiles}
-          message="Syncing has started"
-        />
-      );
-    }
     return (
       <div className="flex flex-col gap-y-8 relative">
         <div
