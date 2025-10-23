@@ -253,7 +253,7 @@ pub async fn get_sync_activity(
                 if let Err(e) = crate::utils::sync::mark_first_run_complete("public").await {
                     eprintln!("Failed to mark sync as completed: {}", e);
                 }
-                if let Err(e) = app.emit("sync_completed", ()).map_err(|e| e.to_string()) {
+                if let Err(e) = app.emit("sync_completed", serde_json::json!({"type": "public"})).map_err(|e| e.to_string()) {
                     eprintln!("Failed to emit sync_completed event: {}", e);
                 }
                 println!("[Sync] public Sync completed with {} recent items", recent.len());
@@ -274,7 +274,7 @@ pub async fn get_sync_activity(
                 if let Err(e) = crate::utils::sync::mark_first_run_complete("private").await {
                     eprintln!("Failed to mark sync as completed: {}", e);
                 }
-                if let Err(e) = app.emit("sync_completed", ()).map_err(|e| e.to_string()) {
+                if let Err(e) = app.emit("sync_completed", serde_json::json!({"type": "private"})).map_err(|e| e.to_string()) {
                     eprintln!("Failed to emit sync_completed event: {}", e);
                 }
                 println!("[Sync] private Sync completed with {} recent items", recent.len());

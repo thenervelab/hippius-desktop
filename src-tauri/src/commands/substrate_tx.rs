@@ -190,7 +190,7 @@ pub async fn set_sync_path(
                     // emit sync started event
                     match crate::utils::sync::reset_sync_event_state("public").await {
                         Ok(_) => {
-                            if let Err(e) = app_handle.emit("started_syncing", ()).map_err(|e| e.to_string()) {
+                            if let Err(e) = app_handle.emit("started_syncing", serde_json::json!({"type": "public"})).map_err(|e| e.to_string()) {
                                 eprintln!("Failed to emit started_syncing event: {}", e);
                             }
                             println!("[Sync] public Sync started event emitted");
@@ -255,7 +255,7 @@ pub async fn set_sync_path(
                     // emit sync started event
                     match crate::utils::sync::reset_sync_event_state("private").await {
                         Ok(_) => {
-                            if let Err(e) = app_handle.emit("started_syncing", ()).map_err(|e| e.to_string()) {
+                            if let Err(e) = app_handle.emit("started_syncing", serde_json::json!({"type": "private"})).map_err(|e| e.to_string()) {
                                 eprintln!("Failed to emit started_syncing event: {}", e);
                             }
                             println!("[Sync] private Sync started event emitted");
