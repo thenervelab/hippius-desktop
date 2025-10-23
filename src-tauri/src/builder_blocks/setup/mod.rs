@@ -5,6 +5,12 @@ use sqlx::Row;
 use tauri::{Builder, Manager, Wry};
 
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // Drop faulty is_first_run table if it exists (old schema with CHECK (id = 1))
+    let drop_faulty_table = r#"
+    DROP TABLE IF EXISTS is_first_run;
+    "#;
+    sqlx::query(drop_faulty_table).execute(pool).await?;
+
     // Define the expected table schemas
     const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
         (
@@ -35,10 +41,10 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         (
             "is_first_run",
             &[
-                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+                ("scope", "TEXT UNIQUE NOT NULL DEFAULT 'private'"),
                 ("is_started", "BOOLEAN NOT NULL DEFAULT TRUE"),
                 ("is_completed", "BOOLEAN NOT NULL DEFAULT FALSE"),
-                ("scope", "TEXT NOT NULL DEFAULT 'private'"),
                 ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),

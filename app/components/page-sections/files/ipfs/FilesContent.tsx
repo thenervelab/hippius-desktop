@@ -32,6 +32,8 @@ import { cn } from "@/lib/utils";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import NoMatchingResults from "./NoMatchingResults";
+import { listen } from "@tauri-apps/api/event";
+import SyncingLoader from "./SyncingLoader";
 
 interface FilesContentProps {
   isRecentFiles?: boolean;
@@ -52,6 +54,7 @@ interface FilesContentProps {
   setCurrentPage: (page: number) => void;
   isSyncPathEmpty?: boolean;
   onSyncPathConfigured?: () => void;
+  onSyncCompleted?: () => void;
 }
 
 const FilesContent: FC<FilesContentProps> = ({
@@ -73,11 +76,46 @@ const FilesContent: FC<FilesContentProps> = ({
   setCurrentPage,
   isSyncPathEmpty = false,
   onSyncPathConfigured,
+  onSyncCompleted,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
   const dragCounterRef = useRef(0);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isSyncing, setIsSyncing] = useState(() => {
+    try {
+      const stored = sessionStorage.getItem('hippius-syncing-state');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Handle migration from old boolean format to new object format
+        if (typeof parsed === 'boolean') {
+          return { public: parsed, private: parsed };
+        }
+        return parsed;
+      }
+      return { public: false, private: false };
+    } catch {
+      return { public: false, private: false };
+    }
+  });
+
+  // Custom setter that updates both state and sessionStorage
+  const setSyncingState = useCallback((scope: 'public' | 'private', value: boolean) => {
+    setIsSyncing((prev: { public: boolean; private: boolean }) => {
+      const newState = { ...prev, [scope]: value };
+      try {
+        // Only store in sessionStorage if at least one sync is active
+        if (newState.public || newState.private) {
+          sessionStorage.setItem('hippius-syncing-state', JSON.stringify(newState));
+        } else {
+          sessionStorage.removeItem('hippius-syncing-state');
+        }
+      } catch (error) {
+        console.warn('Failed to save sync state to sessionStorage:', error);
+      }
+      return newState;
+    });
+  }, []);
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -193,6 +231,69 @@ const FilesContent: FC<FilesContentProps> = ({
     [addButtonRef, isSyncPathEmpty, isRecentFiles]
   );
 
+  // Listen to sync events from Tauri backend
+  useEffect(() => {
+    let startUnlisten: (() => void) | null = null;
+    let completeUnlisten: (() => void) | null = null;
+
+    const setupListeners = async () => {
+      try {
+        startUnlisten = await listen("started_syncing", (event) => {
+          try {
+            const payload = event.payload;
+
+            // Handle both old format (no payload) and new format (with payload)
+            let syncType: 'public' | 'private' = 'public'; // default
+
+            if (payload && typeof payload === 'object' && 'type' in payload) {
+              syncType = payload.type as 'public' | 'private';
+            }
+
+            setSyncingState(syncType, true);
+          } catch (error) {
+            console.error("[FilesContent] Error processing started_syncing event:", error);
+          }
+        });
+
+        completeUnlisten = await listen("sync_completed", (event) => {
+          try {
+            const payload = event.payload;
+
+            // Handle both old format (no payload) and new format (with payload)
+            let syncScope: 'public' | 'private' = 'public'; // default
+
+            if (payload && typeof payload === 'object' && 'scope' in payload) {
+              syncScope = payload.scope as 'public' | 'private';
+            }
+
+            // Keep syncing state true for 5 seconds to allow backend to finish processing
+            setTimeout(() => {
+              setSyncingState(syncScope, false);
+              // Notify parent component that sync is fully completed
+              onSyncCompleted?.();
+            }, 5000);
+          } catch (error) {
+            console.error("[FilesContent] Error processing sync_completed event:", error);
+          }
+        });
+
+      } catch (error) {
+        console.error("[FilesContent] Failed to set up sync listeners:", error);
+      }
+    };
+
+    setupListeners();
+
+    return () => {
+      if (startUnlisten) {
+        startUnlisten();
+      }
+      if (completeUnlisten) {
+        completeUnlisten();
+      }
+    };
+  }, [onSyncCompleted]);
+
   // Add global event listeners to clean up dragging state when dragging ends outside
   useEffect(() => {
     const handleDragEnd = () => {
@@ -248,6 +349,18 @@ const FilesContent: FC<FilesContentProps> = ({
   };
 
   const renderContent = () => {
+    const currentSyncType = isPrivateView ? 'private' : 'public';
+    const isCurrentlySyncing = isSyncing[currentSyncType];
+
+    if (isCurrentlySyncing) {
+      return (
+        <SyncingLoader
+          isRecentFiles={isRecentFiles}
+          message={`${currentSyncType.charAt(0).toUpperCase() + currentSyncType.slice(1)} syncing has started`}
+        />
+      );
+    }
+
     if (isLoading || isFetching) {
       return <WaitAMoment isRecentFiles={isRecentFiles} />;
     }
@@ -311,7 +424,6 @@ const FilesContent: FC<FilesContentProps> = ({
       );
     }
   };
-
   return (
     <>
       <div

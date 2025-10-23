@@ -371,6 +371,16 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
   }, [refetchRecentFiles, setTriggerUnpinnedFilesRefetch]);
 
+  // Handle sync completion with delayed refetch
+  const handleSyncCompleted = useCallback(() => {
+    console.log("[Ipfs] Sync fully completed, refetching files");
+    if (isRecentFiles) {
+      refreshRecentFilesWithPinningQueue();
+    } else {
+      refreshUserFilesWithPinningQueue();
+    }
+  }, [isRecentFiles, refreshRecentFilesWithPinningQueue, refreshUserFilesWithPinningQueue]);
+
   // Handle folder selection from SyncFolderSelector
   const handleFolderSelected = useCallback(
     async (path: string) => {
@@ -704,6 +714,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             setCurrentPage={setCurrentPage}
             isSyncPathEmpty={isCurrentSyncPathEmpty}
             onSyncPathConfigured={handleStartSyncing}
+            onSyncCompleted={handleSyncCompleted}
           />
         </div>
       </FileSelectionProvider>

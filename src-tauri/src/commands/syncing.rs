@@ -178,11 +178,7 @@ pub async fn initialize_sync(
         };
 
         // Only perform AWS credentials setup if at least one sync is enabled
-        if public_enabled || private_enabled {
-            ensure_aws_env(account_for_bg.clone(), mnemonic_for_bg.clone()).await;
-        } else {
-            println!("[SyncInit] Both public and private sync are disabled; skipping AWS credentials setup");
-        }
+        ensure_aws_env(account_for_bg.clone(), mnemonic_for_bg.clone()).await;
 
         let folder_task = if private_enabled {
             Some(tokio::spawn(async move {

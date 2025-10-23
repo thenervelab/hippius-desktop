@@ -215,7 +215,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
           </div>
         </div>
       )}
-      <div className="flex justify-between items-center w-full gap-6 flex-wrap mt-5">
+      <div className="flex justify-between items-center w-full gap-6 flex-wrap mt-4">
         {isRecentFiles ? (
           <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
         ) : (
