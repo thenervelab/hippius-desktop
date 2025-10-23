@@ -101,7 +101,7 @@ const FilesContent: FC<FilesContentProps> = ({
 
   // Custom setter that updates both state and sessionStorage
   const setSyncingState = useCallback((scope: 'public' | 'private', value: boolean) => {
-    setIsSyncing(prev => {
+    setIsSyncing((prev: { public: boolean; private: boolean }) => {
       const newState = { ...prev, [scope]: value };
       try {
         // Only store in sessionStorage if at least one sync is active
@@ -116,12 +116,6 @@ const FilesContent: FC<FilesContentProps> = ({
       return newState;
     });
   }, []);
-
-  // Debug logging for isSyncing state changes
-  useEffect(() => {
-    console.log("[FilesContent] isSyncing state changed to:", isSyncing);
-    console.log("[FilesContent] Forcing re-render check");
-  }, [isSyncing]);
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -245,10 +239,8 @@ const FilesContent: FC<FilesContentProps> = ({
     const setupListeners = async () => {
       try {
         startUnlisten = await listen("started_syncing", (event) => {
-          console.log("[FilesContent] Raw started_syncing event received:", event);
           try {
             const payload = event.payload;
-            console.log("[FilesContent] Event payload:", payload);
 
             // Handle both old format (no payload) and new format (with payload)
             let syncType: 'public' | 'private' = 'public'; // default
@@ -257,8 +249,6 @@ const FilesContent: FC<FilesContentProps> = ({
               syncType = payload.type as 'public' | 'private';
             }
 
-            console.log("[FilesContent] Determined sync type:", syncType);
-            console.log("[FilesContent] Setting isSyncing to true for:", syncType);
             setSyncingState(syncType, true);
           } catch (error) {
             console.error("[FilesContent] Error processing started_syncing event:", error);
@@ -266,10 +256,8 @@ const FilesContent: FC<FilesContentProps> = ({
         });
 
         completeUnlisten = await listen("sync_completed", (event) => {
-          console.log("[FilesContent] Raw sync_completed event received:", event);
           try {
             const payload = event.payload;
-            console.log("[FilesContent] Event payload:", payload);
 
             // Handle both old format (no payload) and new format (with payload)
             let syncScope: 'public' | 'private' = 'public'; // default
@@ -278,12 +266,8 @@ const FilesContent: FC<FilesContentProps> = ({
               syncScope = payload.scope as 'public' | 'private';
             }
 
-            console.log("[FilesContent] Determined sync scope:", syncScope);
-            console.log("[FilesContent] Keeping isSyncing true for 5 seconds before completing for:", syncScope);
-
             // Keep syncing state true for 5 seconds to allow backend to finish processing
             setTimeout(() => {
-              console.log("[FilesContent] 5 seconds elapsed, completing sync for:", syncScope);
               setSyncingState(syncScope, false);
               // Notify parent component that sync is fully completed
               onSyncCompleted?.();
@@ -293,7 +277,6 @@ const FilesContent: FC<FilesContentProps> = ({
           }
         });
 
-        console.log("[FilesContent] Sync event listeners set up");
       } catch (error) {
         console.error("[FilesContent] Failed to set up sync listeners:", error);
       }
@@ -308,7 +291,6 @@ const FilesContent: FC<FilesContentProps> = ({
       if (completeUnlisten) {
         completeUnlisten();
       }
-      console.log("[FilesContent] Sync event listeners cleaned up");
     };
   }, [onSyncCompleted]);
 
@@ -370,10 +352,7 @@ const FilesContent: FC<FilesContentProps> = ({
     const currentSyncType = isPrivateView ? 'private' : 'public';
     const isCurrentlySyncing = isSyncing[currentSyncType];
 
-    console.log(`[FilesContent] renderContent called - currentSyncType: ${currentSyncType}, isCurrentlySyncing: ${isCurrentlySyncing}, isPrivateView: ${isPrivateView}, isSyncing:`, JSON.stringify(isSyncing));
-
     if (isCurrentlySyncing) {
-      console.log(`[FilesContent] ${currentSyncType} is syncing, rendering SyncingLoader`);
       return (
         <SyncingLoader
           isRecentFiles={isRecentFiles}
