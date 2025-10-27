@@ -7,7 +7,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { InView } from "react-intersection-observer";
 
-type DeletionBehaviour = "remote-backup" | "mirror-delete" | "restore-files";
+type DeletionBehaviour = "upload-only" | "remote-backup" | "mirror-delete" | "restore-files";
 
 interface ConfirmationDialog {
     type: DeletionBehaviour;
@@ -15,10 +15,10 @@ interface ConfirmationDialog {
 }
 
 const FileDeletionBehaviour: React.FC = () => {
-    const [selectedBehaviour, setSelectedBehaviour] = useState<DeletionBehaviour>("remote-backup");
-    const [originalBehaviour, setOriginalBehaviour] = useState<DeletionBehaviour>("remote-backup");
+    const [selectedBehaviour, setSelectedBehaviour] = useState<DeletionBehaviour>("upload-only");
+    const [originalBehaviour, setOriginalBehaviour] = useState<DeletionBehaviour>("upload-only");
     const [confirmationDialog, setConfirmationDialog] = useState<ConfirmationDialog>({
-        type: "remote-backup",
+        type: "upload-only",
         isOpen: false
     });
     const [isSaving, setIsSaving] = useState(false);
@@ -45,12 +45,17 @@ const FileDeletionBehaviour: React.FC = () => {
 
     const behaviourOptions = [
         {
-            id: "remote-backup" as DeletionBehaviour,
-            title: "Remote Backup",
-            description: "Keep a copy in the cloud. Your deleted local files will stay safe as backups",
+            id: "upload-only" as DeletionBehaviour,
+            title: "Upload only",
+            description: "Never download files from the cloud, only upload local files and keep remote backup even after local files are deleted",
             isDefault: true
         },
         {
+            id: "remote-backup" as DeletionBehaviour,
+            title: "Remote Backup",
+            description: "Keep a copy in the cloud. Your deleted local files will stay safe as backups",
+            isDefault: false
+        }, {
             id: "mirror-delete" as DeletionBehaviour,
             title: "Mirror Local Delete",
             description: "Automatically delete the file from the cloud if it's removed from your local computer",
@@ -66,6 +71,12 @@ const FileDeletionBehaviour: React.FC = () => {
 
     const getConfirmationContent = (type: DeletionBehaviour) => {
         switch (type) {
+            case "upload-only":
+                return {
+                    title: "Upload Only",
+                    message: "This will never download files from the cloud, only upload local files and keep remote backup even after local files are deleted. Do you want to proceed?",
+                    icon: <Icons.Trash className="size-6 text-white" />
+                };
             case "remote-backup":
                 return {
                     title: "Remote Backup",
@@ -106,7 +117,7 @@ const FileDeletionBehaviour: React.FC = () => {
             // await invoke("set_file_deletion_behaviour", { behaviour: selectedBehaviour });
 
             // Simulate API call delay
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // await new Promise(resolve => setTimeout(resolve, 1000));
 
             toast.success("File deletion behaviour updated successfully");
             setConfirmationDialog({ type: selectedBehaviour, isOpen: false });
