@@ -23,7 +23,7 @@ export default function ResponsiveContent({
       >
         <div className=" bg-white z-10 justify-between flex ">
           <HeaderText />
-          <div className="flex gap-5 items-center justify-center">
+          <div className="flex gap-4 items-center justify-center">
             <BlockChainStats />
             <ProfileCard />
           </div>

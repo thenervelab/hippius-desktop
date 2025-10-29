@@ -1,20 +1,10 @@
 import { IconComponent } from "@/app/lib/types";
 
 export const Refresh: IconComponent = (props) => (
-  <svg
-    xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 16 16"
-    fill="none"
-    {...props}
-  >
-    <path
-      d="M14.6667 7.99998C14.6667 11.68 11.68 14.6666 8.00004 14.6666C4.32004 14.6666 2.07337 10.96 2.07337 10.96M2.07337 10.96H5.08671M2.07337 10.96V14.2933M1.33337 7.99998C1.33337 4.31998 4.29337 1.33331 8.00004 1.33331C12.4467 1.33331 14.6667 5.03998 14.6667 5.03998M14.6667 5.03998V1.70665M14.6667 5.03998H11.7067"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
+    <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
+        <path d="M9.69967 14.4468C12.5597 13.6935 14.6663 11.0935 14.6663 8.00016C14.6663 4.32016 11.7063 1.3335 7.99967 1.3335C3.55301 1.3335 1.33301 5.04016 1.33301 5.04016M1.33301 5.04016V2.00016M1.33301 5.04016H2.67301H4.29301" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M1.33301 8C1.33301 11.68 4.31967 14.6667 7.99967 14.6667" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="3 3" />
+    </svg>
 );
 
 export default Refresh;
