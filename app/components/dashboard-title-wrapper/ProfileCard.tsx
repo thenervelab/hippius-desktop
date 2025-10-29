@@ -36,10 +36,10 @@ const ProfileCard: React.FC = () => {
 
   if (polkadotAddress) {
     return (
-      <div className="flex animate-fade-in-0.3 gap-2">
+      <div className="flex animate-fade-in-0.3">
         <button
           onClick={handleCopyAddress}
-          className="flex items-center gap-x-2 bg-white hover:bg-primary-100/60 duration-300 rounded-full"
+          className="flex items-center gap-x-2 bg-white hover:bg-primary-100/60 duration-300 px-3 py-2 rounded-full"
         >
           <div className="size-10 font-medium flex items-center justify-center">
             <Avatar
@@ -50,9 +50,19 @@ const ProfileCard: React.FC = () => {
             />
           </div>
           <div>
-            <div className="font-semibold">
-              {polkadotAddress.slice(0, 6)}...
-              {polkadotAddress.slice(polkadotAddress.length - 5)}
+            <div className="flex gap-2">
+
+              <div className="font-semibold">
+                {polkadotAddress.slice(0, 6)}...
+                {polkadotAddress.slice(polkadotAddress.length - 5)}
+              </div>
+              <button
+                onClick={handleSendIconClick}
+                className="mt-1 size-4 text-primary-10 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110 shadow-md hover:shadow-lg"
+                title="View Account on Hipstats"
+              >
+                <Icons.Send className="size-4" />
+              </button>
             </div>
             <div className="flex gap-x-1 items-center">
               <BoxSimple className="size-4" />
@@ -63,17 +73,11 @@ const ProfileCard: React.FC = () => {
               )}
             </div>
           </div>
-        </button>
-        <button
-          onClick={handleSendIconClick}
-          className="mt-1 size-4 text-primary-10 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110 shadow-md hover:shadow-lg"
-          title="View Account on Hipstats"
-        >
-          <Icons.Send className="size-4" />
-        </button>
+        </button >
 
 
-      </div>
+
+      </div >
     );
   }
 };

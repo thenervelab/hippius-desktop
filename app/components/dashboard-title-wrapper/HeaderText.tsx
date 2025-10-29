@@ -24,7 +24,7 @@ const HeaderText = () => {
           }}
           size="md"
           key={headerTextKey}
-          className="mt-0.5 text-grey-60 animate-fade-in-from-b-0.3 opacity-0"
+          className="mt-0.5 text-grey-50 animate-fade-in-from-b-0.3 opacity-0"
         >
           {dashHeader.subText}
         </P>

@@ -17,13 +17,13 @@ export default function ResponsiveContent({
     <div className="grid w-full">
       <main
         className={cn(
-          " p-4 transition-all duration-300 ease-in-out",
+          "p-4 transition-all duration-300 ease-in-out",
           collapsed ? "ml-[60px]" : "ml-[186px]"
         )}
       >
-        <div className=" bg-white z-10 justify-between flex ">
+        <div className="bg-white z-10 justify-between flex">
           <HeaderText />
-          <div className="flex gap-4 items-center justify-center">
+          <div className="flex -mt-2 gap-2 items-center justify-center">
             <BlockChainStats />
             <ProfileCard />
           </div>
