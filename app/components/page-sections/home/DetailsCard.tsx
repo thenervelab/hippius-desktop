@@ -6,6 +6,13 @@ import { useState } from "react";
 import { toast } from "sonner";
 import InfoTooltip from "@/components/ui/InfoTooltip";
 
+interface StorageUsage {
+  display: string;
+  percentage: number;
+  used: string;
+  total: string;
+}
+
 interface DetailsCardProps {
   icon: IconComponent;
   title: string;
@@ -17,6 +24,10 @@ interface DetailsCardProps {
   info?: string;
   speed?: string;
   isIncrease?: boolean;
+  showRefresh?: boolean;
+  onRefresh?: () => void;
+  isLoading?: boolean;
+  storageUsage?: StorageUsage | null;
 }
 
 export default function DetailsCard({
@@ -30,6 +41,10 @@ export default function DetailsCard({
   info = "",
   speed,
   isIncrease = false,
+  showRefresh = false,
+  onRefresh,
+  isLoading = false,
+  storageUsage,
 }: DetailsCardProps) {
   const [copied, setCopied] = useState(false);
 
@@ -51,11 +66,30 @@ export default function DetailsCard({
         <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
           <Icon className="absolute text-primary-40 size-4 sm:size-5" />
         </AbstractIconWrapper>
-        {info && (
+        {showRefresh ? (
+          <button
+            onClick={onRefresh}
+            disabled={isLoading}
+            className={cn(
+              "size-6 rounded border border-grey-80 bg-grey-90 flex items-center justify-center transition-all duration-200",
+              isLoading
+                ? "cursor-not-allowed opacity-50"
+                : "hover:bg-grey-80 hover:border-grey-70"
+            )}
+            title="Refresh Credits"
+          >
+            <Icons.Refresh
+              className={cn(
+                "size-4 text-grey-60",
+                isLoading && "animate-spin"
+              )}
+            />
+          </button>
+        ) : info ? (
           <div className="size-6 rounded border border-grey-80 bg-grey-90 flex items-center justify-center">
             <InfoTooltip iconColor="text-grey-60">{info}</InfoTooltip>
           </div>
-        )}
+        ) : null}
       </div>
       <div className="mt-4">
         <p className="text-base font-medium text-grey-60 mb-2">{title}</p>
@@ -80,10 +114,25 @@ export default function DetailsCard({
             </>
           )}
           <span className="text-2xl text-grey-10 font-medium">{value}</span>
-          {subtitle && (
+          {subtitle && !storageUsage && (
             <span className={` text-xs font-medium text-grey-60 leading-5 `}>
               {subtitle}
             </span>
+          )}
+          {/* Storage Usage Display - Inline on right side */}
+          {storageUsage && (
+            <div className="ml-auto flex items-center gap-1">
+              <span className="text-xs font-medium text-grey-60 whitespace-nowrap">
+                <span className="text-grey-10 font-bold">{storageUsage.used}</span> of {storageUsage.total}
+              </span>
+              {/* Progress Bar */}
+              <div className="w-16 bg-grey-80 rounded-full h-1.5">
+                <div
+                  className="h-1.5 rounded-full transition-all duration-300 ease-in-out bg-primary-50"
+                  style={{ width: `${Math.min(storageUsage.percentage, 100)}%` }}
+                />
+              </div>
+            </div>
           )}
           {peerId && (
             <div
