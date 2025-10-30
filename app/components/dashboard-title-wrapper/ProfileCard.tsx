@@ -2,7 +2,7 @@
 import React from "react";
 import { toast } from "sonner";
 import BoxSimple from "@/components/ui/icons/BoxSimple";
-import { Icons } from "@/components/ui";
+import { CustomTooltip, Icons } from "@/components/ui";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { openAppLink } from "@/lib/utils/links";
@@ -36,48 +36,54 @@ const ProfileCard: React.FC = () => {
 
   if (polkadotAddress) {
     return (
-      <div className="flex animate-fade-in-0.3">
-        <button
-          onClick={handleCopyAddress}
-          className="flex items-center gap-x-2 bg-white hover:bg-primary-100/60 duration-300 px-3 py-2 rounded-full"
-        >
-          <div className="size-10 font-medium flex items-center justify-center">
+      <div className="animate-fade-in-0.3 flex items-center gap-x-2 duration-300 rounded-full">
+        <div className="size-10 font-medium flex items-center justify-center cursor-pointer" onClick={handleCopyAddress}>
+          <CustomTooltip
+            tooltip="Copy Address"
+            tooltipClassName="z-[9999]"
+          >
             <Avatar
               colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]}
               name={polkadotAddress}
               size={40}
               variant="pixel"
             />
-          </div>
-          <div>
-            <div className="flex gap-2">
-
-              <div className="font-semibold">
+          </CustomTooltip>
+        </div>
+        <div>
+          <div className="flex gap-2">
+            <div className="font-semibold cursor-pointer" onClick={handleCopyAddress}>
+              <CustomTooltip
+                tooltip="Copy Address"
+                tooltipClassName="z-[9999] bg-white"
+              >
                 {polkadotAddress.slice(0, 6)}...
                 {polkadotAddress.slice(polkadotAddress.length - 5)}
-              </div>
+              </CustomTooltip>
+            </div>
+            <CustomTooltip
+              tooltip="View Account on HipStats"
+              tooltipClassName="z-[9999] mr-1.5 translate-y-0.5"
+
+            >
               <button
                 onClick={handleSendIconClick}
-                className="mt-1 size-4 text-primary-10 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110 shadow-md hover:shadow-lg"
-                title="View Account on Hipstats"
+                className="mt-1 size-4 text-primary-10 rounded-full flex items-center justify-center transition-all duration-200 hover:scale-110"
               >
                 <Icons.Send className="size-4" />
               </button>
-            </div>
-            <div className="flex gap-x-1 items-center">
-              <BoxSimple className="size-4" />
-              {isConnected && (
-                <span className="text-success-40 text-xs font-semibold">
-                  # {blockNumber}
-                </span>
-              )}
-            </div>
+            </CustomTooltip>
           </div>
-        </button >
-
-
-
-      </div >
+          <div className="flex gap-x-1 items-center">
+            <BoxSimple className="size-4" />
+            {isConnected && (
+              <span className="text-success-40 text-xs font-semibold">
+                # {blockNumber}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
     );
   }
 };
