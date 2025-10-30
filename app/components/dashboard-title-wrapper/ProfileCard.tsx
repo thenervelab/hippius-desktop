@@ -37,18 +37,13 @@ const ProfileCard: React.FC = () => {
   if (polkadotAddress) {
     return (
       <div className="animate-fade-in-0.3 flex items-center gap-x-2 duration-300 rounded-full">
-        <div className="size-10 font-medium flex items-center justify-center cursor-pointer" onClick={handleCopyAddress}>
-          <CustomTooltip
-            tooltip="Copy Address"
-            tooltipClassName="z-[9999]"
-          >
-            <Avatar
-              colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]}
-              name={polkadotAddress}
-              size={40}
-              variant="pixel"
-            />
-          </CustomTooltip>
+        <div className="size-10 font-medium flex items-center justify-center cursor-pointer">
+          <Avatar
+            colors={["#D3DFF8", "#183E91", "#3167DE", "#A6F4C5"]}
+            name={polkadotAddress}
+            size={40}
+            variant="pixel"
+          />
         </div>
         <div>
           <div className="flex gap-2">
