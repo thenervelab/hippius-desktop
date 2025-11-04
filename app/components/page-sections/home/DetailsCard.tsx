@@ -6,13 +6,6 @@ import { useState } from "react";
 import { toast } from "sonner";
 import InfoTooltip from "@/components/ui/InfoTooltip";
 
-interface StorageUsage {
-  display: string;
-  percentage: number;
-  used: string;
-  total: string;
-}
-
 interface DetailsCardProps {
   icon: IconComponent;
   title: string;
@@ -27,7 +20,6 @@ interface DetailsCardProps {
   showRefresh?: boolean;
   onRefresh?: () => void;
   isLoading?: boolean;
-  storageUsage?: StorageUsage | null;
 }
 
 export default function DetailsCard({
@@ -44,7 +36,6 @@ export default function DetailsCard({
   showRefresh = false,
   onRefresh,
   isLoading = false,
-  storageUsage,
 }: DetailsCardProps) {
   const [copied, setCopied] = useState(false);
 
@@ -114,26 +105,12 @@ export default function DetailsCard({
             </>
           )}
           <span className="text-2xl text-grey-10 font-medium">{value}</span>
-          {subtitle && !storageUsage && (
+          {subtitle && (
             <span className={` text-xs font-medium text-grey-60 leading-5 `}>
               {subtitle}
             </span>
           )}
-          {/* Storage Usage Display - Inline on right side */}
-          {storageUsage && (
-            <div className="ml-auto flex items-center gap-1">
-              <span className="text-xs font-medium text-grey-60 whitespace-nowrap">
-                <span className="text-grey-10 font-bold">{storageUsage.used}</span> of {storageUsage.total}
-              </span>
-              {/* Progress Bar */}
-              <div className="w-16 bg-grey-80 rounded-full h-1.5">
-                <div
-                  className="h-1.5 rounded-full transition-all duration-300 ease-in-out bg-primary-50"
-                  style={{ width: `${Math.min(storageUsage.percentage, 100)}%` }}
-                />
-              </div>
-            </div>
-          )}
+
           {peerId && (
             <div
               className={` text-xs font-medium text-grey-60 flex gap-1 items-center leading-5 ml-auto p-1 bg-grey-90 rounded`}

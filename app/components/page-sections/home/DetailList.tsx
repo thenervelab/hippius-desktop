@@ -11,7 +11,6 @@ import {
 } from "@/lib/utils/storageCostUtils";
 import pricingJson from "@/app/utils/data/pricing-cfg.json";
 import { useUserIpfsFiles } from "@/app/lib/hooks/use-user-ipfs-files";
-import { formatBytesFromBigInt } from "@/lib/utils";
 
 export default function DetailList() {
   const {
@@ -124,41 +123,7 @@ export default function DetailList() {
     return filesData?.files.filter(f => f.type?.toLowerCase() === "public").length || 0;
   };
 
-  // Calculate total available storage from credits
-  const getTotalAvailableStorage = (): bigint => {
-    if (credits !== undefined) {
-      const numCredits = getCreditsAsNumber(credits);
-      if (numCredits > 0) {
-        const storageGB = calculateStorageFromCredits(numCredits);
-        // Convert GB to bytes (1 GB = 1000^3 bytes)
-        return BigInt(storageGB) * BigInt(1000) * BigInt(1000) * BigInt(1000);
-      }
-    }
-    return BigInt(0);
-  };
 
-  // Calculate usage percentage
-  const getUsagePercentage = (usedStorage: bigint, totalAvailable: bigint): number => {
-    if (totalAvailable === BigInt(0)) return 0;
-    const percentage = Number((usedStorage * BigInt(100)) / totalAvailable);
-    return Math.min(percentage, 100); // Cap at 100%
-  };
-
-  // Get storage usage display for file cards
-  const getStorageUsageDisplay = (usedStorage: bigint) => {
-    const totalAvailable = getTotalAvailableStorage();
-    const totalStorage = totalAvailable + usedStorage; // Total = Available + Used
-    const usedFormatted = formatBytesFromBigInt(usedStorage);
-    const totalFormatted = formatBytesFromBigInt(totalStorage);
-    const percentage = getUsagePercentage(usedStorage, totalStorage);
-
-    return {
-      display: `${usedFormatted} of ${totalFormatted}`,
-      percentage: percentage,
-      used: usedFormatted,
-      total: totalFormatted
-    };
-  };
 
   const detailCards = [
     {
@@ -178,9 +143,6 @@ export default function DetailList() {
       value: getTotalFiles(),
       showRefresh: false,
       isLoading: isFilesLoading,
-      storageUsage: filesData
-        ? getStorageUsageDisplay(filesData.privateStorageSize + filesData.publicStorageSize)
-        : null,
     },
     {
       id: "private-files",
@@ -189,9 +151,6 @@ export default function DetailList() {
       value: getPrivateFiles(),
       showRefresh: false,
       isLoading: isFilesLoading,
-      storageUsage: filesData
-        ? getStorageUsageDisplay(filesData.privateStorageSize)
-        : null,
     },
     {
       id: "public-files",
@@ -200,9 +159,6 @@ export default function DetailList() {
       value: getPublicFiles(),
       showRefresh: false,
       isLoading: isFilesLoading,
-      storageUsage: filesData
-        ? getStorageUsageDisplay(filesData.publicStorageSize)
-        : null,
     },
   ];
 
@@ -218,7 +174,6 @@ export default function DetailList() {
           showRefresh={card.showRefresh}
           onRefresh={card.onRefresh}
           isLoading={card.isLoading}
-          storageUsage={card.storageUsage}
         />
       ))}
     </div>
