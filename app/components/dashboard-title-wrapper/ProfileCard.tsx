@@ -2,7 +2,7 @@
 import React from "react";
 import { toast } from "sonner";
 import BoxSimple from "@/components/ui/icons/BoxSimple";
-import { CustomTooltip, Icons } from "@/components/ui";
+import { Icons } from "@/components/ui";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { openAppLink } from "@/lib/utils/links";

@@ -120,7 +120,7 @@ const IPFSNoEntriesFound: React.FC<IPFSNoEntriesFoundProps> = ({
           </div>
           <CardButton
             onClick={handleOpenModal}
-            className="flex gap-x-2 items-center w-full h-14 max-w-[320px] mt-3"
+            className="flex gap-x-2 items-center w-full h-14 max-w-[280px] mt-3"
             disabled={isCheckingSyncPath}
           >
             {isCheckingSyncPath

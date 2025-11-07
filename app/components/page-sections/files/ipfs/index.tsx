@@ -10,7 +10,7 @@ import React, {
 } from "react";
 import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
-import { WaitAMoment, Icons } from "@/components/ui";
+import { WaitAMoment } from "@/components/ui";
 import SyncFolderSelector from "./SyncFolderSelector";
 import {
   getPrivateSyncPath,
@@ -663,10 +663,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     return true;
   }, [isRecentFiles, isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath]);
 
-  // Check if recent files should show empty state
-  const shouldShowRecentFilesEmptyState = useMemo(() => {
-    return isRecentFiles && hasNoSyncPaths && allData.length === 0;
-  }, [isRecentFiles, hasNoSyncPaths, allData.length]);
 
   // Determine what content to render
   let content;
