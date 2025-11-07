@@ -44,6 +44,9 @@ interface FilesHeaderProps {
   syncFolderPath?: string;
   isSyncPathEmpty?: boolean;
   onStartSyncing?: () => void;
+  hasNoSyncPaths?: boolean;
+  onNavigateToSettings?: () => void;
+  isPrivateView?: boolean; // For recent files to determine upload type
   // New filter props
   selectedFileTypes: FileTypes[];
   selectedDate: string;
@@ -70,6 +73,9 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   syncFolderPath,
   isSyncPathEmpty = false,
   onStartSyncing,
+  hasNoSyncPaths = false,
+  onNavigateToSettings,
+  isPrivateView,
   // New filter props
   selectedFileTypes,
   selectedDate,
@@ -274,9 +280,8 @@ const FilesHeader: FC<FilesHeaderProps> = ({
 
 
           <>
-
-            {/* Folder Upload button */}
-            {!isSyncPathEmpty && (
+            {/* Folder Upload button - disabled for recent files with no sync paths */}
+            {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
               <button
                 onClick={() => setIsFolderUploadOpen(true)}
                 className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
@@ -285,22 +290,52 @@ const FilesHeader: FC<FilesHeaderProps> = ({
                 <span className="ml-1">Add Folder</span>
               </button>
             )}
+            {isRecentFiles && hasNoSyncPaths && (
+              <button
+                disabled
+                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 opacity-50 cursor-not-allowed text-sm font-medium"
+              >
+                <Icons.FolderAdd className="size-4" />
+                <span className="ml-1">Add Folder</span>
+              </button>
+            )}
 
-            {/* Open Sync Folder button */}
+            {/* Open Sync Folder button - disabled for recent files with no sync paths */}
             <button
-              onClick={handleOpenSyncFolder}
-              disabled={!syncFolderPath || isSyncPathEmpty}
+              onClick={isRecentFiles && hasNoSyncPaths ? onNavigateToSettings : handleOpenSyncFolder}
+              disabled={isRecentFiles && hasNoSyncPaths ? false : (!syncFolderPath || isSyncPathEmpty)}
               className="flex items-center justify-between gap-1 h-9 px-2 py-2 bg-grey-100 text-sm font-meidum text-grey-10 border border-grey-80 rounded disabled:opacity-50 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50 disabled:hover:bg-grey-100 disabled:hover:text-grey-10"
-              title={syncFolderPath || "Sync folder not configured"}
+              title={isRecentFiles && hasNoSyncPaths ? "Configure sync folders" : (syncFolderPath || "Sync folder not configured")}
             >
               <Icons.Folder className="size-4" />
               <span className="ml-1">Open Sync Folder</span>
             </button>
 
-            {!isSyncPathEmpty && <AddButton ref={addButtonRef} className="h-9" />}
-            {isSyncPathEmpty && (
-              // Show Start Syncing button when sync path is empty (user skipped)
-              <StartSyncingButton className="h-9" onClick={onStartSyncing} />
+            {/* Add File button - disabled for recent files with no sync paths */}
+            {isRecentFiles && hasNoSyncPaths ? (
+              <button
+                disabled
+                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 opacity-50 cursor-not-allowed text-sm font-medium"
+              >
+                <Icons.AddCircle className="size-4" />
+                <span className="ml-1">Add Files</span>
+              </button>
+            ) : (
+              !isSyncPathEmpty && (
+                <AddButton
+                  ref={addButtonRef}
+                  className="h-9"
+                  isPrivateView={isPrivateView}
+                />
+              )
+            )}
+
+            {/* Start Syncing button - show for empty sync paths or no sync paths */}
+            {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
+              <StartSyncingButton
+                className="h-9"
+                onClick={isRecentFiles && hasNoSyncPaths ? onNavigateToSettings : onStartSyncing}
+              />
             )}
           </>
         </div>

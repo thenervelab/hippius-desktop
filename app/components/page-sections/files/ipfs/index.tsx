@@ -10,7 +10,7 @@ import React, {
 } from "react";
 import useUserIpfsFiles from "@/lib/hooks/use-user-ipfs-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
-import { WaitAMoment } from "@/components/ui";
+import { WaitAMoment, Icons } from "@/components/ui";
 import SyncFolderSelector from "./SyncFolderSelector";
 import {
   getPrivateSyncPath,
@@ -29,7 +29,11 @@ import { toast } from "sonner";
 import FilesHeader from "./FilesHeader";
 import FilesContent from "./FilesContent";
 import { useAtomValue, useSetAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import {
+  activeSubMenuItemAtom,
+  settingsDialogOpenAtom,
+  activeSettingsTabAtom,
+} from "@/app/components/sidebar/sideBarAtoms";
 import {
   getViewModePreference,
   saveViewModePreference,
@@ -115,6 +119,8 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     triggerUnpinnedFilesRefetchAtom
   );
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
+  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
+  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
     if (isRecentFiles) {
@@ -473,6 +479,12 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     }
   }, [isPrivateView, polkadotAddress, mnemonic]);
 
+  // Navigation to settings
+  const handleNavigateToSettings = useCallback(() => {
+    setActiveSettingsTab("File Settings");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
   // Handle start syncing button click
   const handleStartSyncing = useCallback(() => {
     if (isPrivateView) {
@@ -610,6 +622,52 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     ? showPrivateStartSyncingSelector
     : showPublicStartSyncingSelector;
 
+  // Recent files specific logic
+  const hasNoSyncPaths = useMemo(() => {
+    if (!isRecentFiles) return false;
+    return (
+      (selectedPrivateFolderPath === null || selectedPrivateFolderPath === undefined) &&
+      (selectedPublicFolderPath === null || selectedPublicFolderPath === undefined)
+    );
+  }, [isRecentFiles, selectedPrivateFolderPath, selectedPublicFolderPath]);
+
+  // For recent files, check if ANY sync path is available (not empty)
+  const hasAnySyncPath = useMemo(() => {
+    if (!isRecentFiles) return false;
+    const hasPrivate = selectedPrivateFolderPath !== null &&
+      selectedPrivateFolderPath !== undefined &&
+      selectedPrivateFolderPath !== "";
+    const hasPublic = selectedPublicFolderPath !== null &&
+      selectedPublicFolderPath !== undefined &&
+      selectedPublicFolderPath !== "";
+    return hasPrivate || hasPublic;
+  }, [isRecentFiles, selectedPrivateFolderPath, selectedPublicFolderPath]);
+
+  // Determine effective isPrivateView for recent files based on configured sync paths
+  // Prioritize private if set, fallback to public if only public is set
+  const effectiveIsPrivateView = useMemo(() => {
+    if (!isRecentFiles) return isPrivateView;
+
+    const hasPrivatePath = selectedPrivateFolderPath !== null &&
+      selectedPrivateFolderPath !== undefined &&
+      selectedPrivateFolderPath !== "";
+    const hasPublicPath = selectedPublicFolderPath !== null &&
+      selectedPublicFolderPath !== undefined &&
+      selectedPublicFolderPath !== "";
+
+    // If both are set or only private is set, use private
+    if (hasPrivatePath) return true;
+    // If only public is set, use public
+    if (hasPublicPath) return false;
+    // Default to private if neither is set (though this shouldn't happen in normal flow)
+    return true;
+  }, [isRecentFiles, isPrivateView, selectedPrivateFolderPath, selectedPublicFolderPath]);
+
+  // Check if recent files should show empty state
+  const shouldShowRecentFilesEmptyState = useMemo(() => {
+    return isRecentFiles && hasNoSyncPaths && allData.length === 0;
+  }, [isRecentFiles, hasNoSyncPaths, allData.length]);
+
   // Determine what content to render
   let content;
 
@@ -639,19 +697,32 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       />
     );
   } else {
-    // Compute active sync folder path - for recent files, prioritize private path
+    // Compute active sync folder path
     let syncFolderPath = "";
+    let effectiveSyncPathEmpty = false;
 
     if (isRecentFiles) {
       // For recent files, prioritize private path, then fall back to public
-      syncFolderPath =
-        selectedPrivateFolderPath || selectedPublicFolderPath || "";
+      const privatePath = selectedPrivateFolderPath !== null &&
+        selectedPrivateFolderPath !== undefined &&
+        selectedPrivateFolderPath !== ""
+        ? selectedPrivateFolderPath
+        : null;
+      const publicPath = selectedPublicFolderPath !== null &&
+        selectedPublicFolderPath !== undefined &&
+        selectedPublicFolderPath !== ""
+        ? selectedPublicFolderPath
+        : null;
+
+      syncFolderPath = privatePath || publicPath || "";
+      effectiveSyncPathEmpty = !hasAnySyncPath;
     } else {
       // For regular files view, use the path matching the current view
       syncFolderPath =
         (isPrivateView
           ? selectedPrivateFolderPath
           : selectedPublicFolderPath) || "";
+      effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
     }
 
     // Get file counts for view all button
@@ -686,8 +757,11 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             syncFolderPath={syncFolderPath}
             privateFileCount={privateFileCount}
             publicFileCount={publicFileCount}
-            isSyncPathEmpty={isCurrentSyncPathEmpty}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
             onStartSyncing={handleStartSyncing}
+            hasNoSyncPaths={hasNoSyncPaths}
+            onNavigateToSettings={handleNavigateToSettings}
+            isPrivateView={effectiveIsPrivateView}
             selectedFileTypes={filterState.fileTypes}
             selectedDate={filterState.date}
             selectedFileSizes={filterState.fileSizes}
@@ -700,7 +774,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             isRecentFiles={isRecentFiles}
             isLoading={isLoading}
             isFetching={isFetching}
-            isPrivateView={isPrivateView}
+            isPrivateView={effectiveIsPrivateView}
             filteredData={filteredData}
             displayedData={paginatedData}
             searchTerm={searchTerm}
@@ -712,8 +786,8 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             currentPage={currentPage}
             totalPages={totalPages}
             setCurrentPage={setCurrentPage}
-            isSyncPathEmpty={isCurrentSyncPathEmpty}
-            onSyncPathConfigured={handleStartSyncing}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onSyncPathConfigured={isRecentFiles ? handleNavigateToSettings : handleStartSyncing}
             onSyncCompleted={handleSyncCompleted}
           />
         </div>

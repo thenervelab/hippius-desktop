@@ -33,6 +33,7 @@ const HIPPIUS_OPEN_MODAL_EVENT = "hippius:open-modal";
 
 type AddButtonProps = {
   className?: string;
+  isPrivateView?: boolean; // Optional override for private/public view
 };
 
 // Add ref interface for parent components to trigger the dialog
@@ -41,7 +42,7 @@ export interface AddButtonRef {
 }
 
 const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
-  ({ className }, ref) => {
+  ({ className, isPrivateView: isPrivateViewProp }, ref) => {
     // Keep state simple and isolated
     const [isOpen, setIsOpen] = useState(false);
 
@@ -51,7 +52,10 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
     );
     const isLoading = uploadingState !== "idle";
-    const isPrivateView = useIsPrivateView();
+    const isPrivateViewFromHook = useIsPrivateView();
+
+    // Use prop if provided, otherwise use hook
+    const isPrivateView = isPrivateViewProp ?? isPrivateViewFromHook;
 
     // Expose methods to parent components
     useImperativeHandle(
