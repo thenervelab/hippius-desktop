@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import useAddCreditEvent from "@/app/lib/hooks/api/useAddCreditEvent";
 import {
   addNotification,
@@ -9,7 +9,8 @@ import {
   updateIsAboveHalfCredit,
   isAboveHalfCredit as getIsAboveHalfCredit,
   markFirstTimeSeen,
-  lowCreditSubtypeExists,
+  hasActiveLowCreditNotification,
+  getLastDeletedLowCreditNotification,
 } from "@/app/lib/helpers/notificationsDb";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
@@ -18,15 +19,25 @@ import {
   refreshUnreadCountAtom,
   enabledNotificationTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
+import { usePathname } from "next/navigation";
+
 const TEST_OFFSET = 0;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000; // 1 day in milliseconds
 
 export function useCreditsNotification() {
   const { data: creditEvents, isSuccess } = useAddCreditEvent({ limit: 50 });
   const { data: credits, isLoading: isCreditsLoading } = useUserCredits();
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
+  const pathname = usePathname(); // Track route changes
+  const [routeChangeKey, setRouteChangeKey] = useState(0);
 
   const areCreditsNotificationsEnabled = enabledTypes.includes("Credits");
+
+  // Trigger refetch on route change
+  useEffect(() => {
+    setRouteChangeKey(prev => prev + 1);
+  }, [pathname]);
 
   // Handle low credit notifications based on balance
   useEffect(() => {
@@ -42,38 +53,65 @@ export function useCreditsNotification() {
         const creditValue =
           typeof credits === "bigint" ? credits : BigInt(credits || 0);
         const rawNumber = parseFloat(formatCreditBalance(creditValue));
-
         const creditNumber = rawNumber + TEST_OFFSET;
 
         const firstTime = await isFirstTime();
         const aboveHalfCredit = await getIsAboveHalfCredit();
-        const timestamp = new Date().toISOString();
-        const warningSubtype = `LowCreditWarning-${timestamp}`;
 
-        // ── Case 1 ─────────────────────────────────────────────
-        if (creditNumber < 0.5 && firstTime) return;
-
-        // ── Case 2 ─────────────────────────────────────────────
+        // Mark as not first time and update state if credits >= 0.5
         if (creditNumber >= 0.5) {
-          await markFirstTimeSeen();
-          await updateIsAboveHalfCredit(true);
+          if (firstTime) {
+            await markFirstTimeSeen();
+          }
+          if (!aboveHalfCredit) {
+            await updateIsAboveHalfCredit(true);
+          }
           return;
         }
 
-        // ── Case 3 ─────────────────────────────────────────────
-        if (creditNumber < 0.5 && !firstTime && aboveHalfCredit) {
-          if (!(await lowCreditSubtypeExists(warningSubtype))) {
-            await addNotification({
-              notificationType: "Credits",
-              notificationSubtype: warningSubtype,
-              notificationTitleText: "You're running low on credits.",
-              notificationDescription: `Your credit balance is running low. You've only got ${creditNumber.toFixed(4)} credit left. Add more credits or buy a subscription plan to continue using all features without interruption.`,
-              notificationLinkText: "Add Credits",
-              notificationLink: "BILLING",
-            });
+        // Credits are below 0.5 - check if we should show notification
+        if (creditNumber < 0.5) {
+          // Mark as not first time if needed
+          if (firstTime) {
+            await markFirstTimeSeen();
           }
-          await updateIsAboveHalfCredit(false);
-          await refreshUnread();
+
+          // Check if there's already an active (non-deleted) low credit notification
+          const hasActiveNotification = await hasActiveLowCreditNotification();
+
+          if (!hasActiveNotification) {
+            // No active notification - check if we can add a new one
+            const lastDeleted = await getLastDeletedLowCreditNotification();
+            const now = Date.now();
+
+            // Add notification if:
+            // 1. No notification was ever deleted, OR
+            // 2. Last deletion was more than 1 day ago
+            const canAddNotification =
+              !lastDeleted ||
+              (now - lastDeleted.deletedAt) > ONE_DAY_MS;
+
+            if (canAddNotification) {
+              const timestamp = new Date().toISOString();
+              const warningSubtype = `LowCreditWarning-${timestamp}`;
+
+              await addNotification({
+                notificationType: "Credits",
+                notificationSubtype: warningSubtype,
+                notificationTitleText: "You're running low on credits.",
+                notificationDescription: `Your credit balance is running low. You've only got ${creditNumber.toFixed(4)} credit left. Add more credits or buy a subscription plan to continue using all features without interruption.`,
+                notificationLinkText: "Add Credits",
+                notificationLink: "/billing"
+              });
+
+              await refreshUnread();
+            }
+          }
+
+          // Update state to reflect we're below half credit
+          if (aboveHalfCredit) {
+            await updateIsAboveHalfCredit(false);
+          }
         }
       } catch (err) {
         console.error("Credit balance check failed:", err);
@@ -86,6 +124,7 @@ export function useCreditsNotification() {
     isCreditsLoading,
     refreshUnread,
     areCreditsNotificationsEnabled,
+    routeChangeKey, // Refetch when route changes
   ]);
 
   // Process credit events and add as notifications
@@ -128,9 +167,8 @@ export function useCreditsNotification() {
           await addNotification({
             notificationType: "Credits",
             notificationSubtype: subtype,
-            notificationTitleText: `🎁 Woo-hoo! ${amount} credit${
-              +amount > 1 ? "s" : ""
-            } just landed.`,
+            notificationTitleText: `🎁 Woo-hoo! ${amount} credit${+amount > 1 ? "s" : ""
+              } just landed.`,
             notificationDescription: `Fresh ${+amount > 1 ? "credits" : "credit"} are in your wallet. Use them right away to upload or  sync files with zero delay. Hit Jump to 'Files' and make something awesome.`,
             notificationLinkText: "Jump to Files",
             notificationLink: "/files",

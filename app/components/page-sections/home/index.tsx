@@ -12,7 +12,7 @@ import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transform
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import Ipfs from "@/components/page-sections/files/ipfs";
-import { getPrivateSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { getPrivateSyncPath, getPublicSyncPath } from "@/app/lib/utils/syncPathUtils";
 import { Icons } from "@/components/ui";
 
 
@@ -42,7 +42,8 @@ const Home: React.FC = () => {
       try {
         setIsCheckingSyncPath(true);
         const privateSyncPath = await getPrivateSyncPath();
-        setIsSyncPathConfigured(!!privateSyncPath);
+        const publicSyncPath = await getPublicSyncPath();
+        setIsSyncPathConfigured(!!privateSyncPath || !!publicSyncPath);
       } catch (error) {
         console.error("Failed to check sync path:", error);
         setIsSyncPathConfigured(false);
@@ -56,7 +57,7 @@ const Home: React.FC = () => {
 
   // Set active submenu item to "Private" when showing recent files
   useEffect(() => {
-    if (!isCheckingSyncPath && isSyncPathConfigured) {
+    if (!isCheckingSyncPath) {
       setActiveSubMenuItem("Private");
       setIsViewingRecentFiles(true);
     }
@@ -67,7 +68,6 @@ const Home: React.FC = () => {
     };
   }, [
     isCheckingSyncPath,
-    isSyncPathConfigured,
     setActiveSubMenuItem,
     setIsViewingRecentFiles,
   ]);
@@ -96,11 +96,9 @@ const Home: React.FC = () => {
               <Icons.Loader className="size-8 animate-spin text-primary-60" />
             </div>
           ) : (
-            isSyncPathConfigured && (
-              <div id="recent-files">
-                <Ipfs isRecentFiles />{" "}
-              </div>
-            )
+            <div id="recent-files">
+              <Ipfs isRecentFiles />
+            </div>
           )}
         </div>
       </DashboardTitleWrapper>

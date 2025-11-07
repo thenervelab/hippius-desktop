@@ -13,7 +13,9 @@ const NOTIFICATION_SCHEMA = `
     notificationLinkText     TEXT,
     notificationLink         TEXT,
     isUnread                 INTEGER DEFAULT 1,
-    notificationCreationTime INTEGER
+    notificationCreationTime INTEGER,
+    isDeleted                INTEGER DEFAULT 0,
+    deletedAt                INTEGER
   );
 `;
 
@@ -42,6 +44,15 @@ async function getDb(): Promise<initSqlJsType.Database> {
   db.run(NOTIFICATION_SCHEMA);
   db.run(APP_STATE_SCHEMA);
   db.run(NOTIFICATION_PREFERENCES_SCHEMA);
+
+  // Migration: Add isDeleted and deletedAt columns if they don't exist
+  try {
+    db.run(`ALTER TABLE notifications ADD COLUMN isDeleted INTEGER DEFAULT 0`);
+    db.run(`ALTER TABLE notifications ADD COLUMN deletedAt INTEGER`);
+    await saveBytes(db.export());
+  } catch (e) {
+    // Columns already exist, ignore error
+  }
 
   const exists = db.exec(`SELECT 1 FROM app_state WHERE id = 1`);
   if (!exists.length) {
@@ -190,7 +201,8 @@ export async function creditAlreadyNotified(ts: string): Promise<boolean> {
   const res = db.exec(
     `SELECT COUNT(*) FROM notifications
        WHERE notificationType = 'Credits'
-         AND notificationSubtype = ?`,
+         AND notificationSubtype = ?
+         AND (isDeleted IS NULL OR isDeleted = 0)`,
     [`MintedAccountCredits-${ts}`]
   );
   return (res[0]?.values[0][0] as number) > 0;
@@ -203,8 +215,41 @@ export async function lowCreditSubtypeExists(
   const res = db.exec(
     `SELECT COUNT(*) FROM notifications
        WHERE notificationType = 'Credits'
-         AND notificationSubtype = ?`,
+         AND notificationSubtype = ?
+         AND (isDeleted IS NULL OR isDeleted = 0)`,
     [subtype]
+  );
+  return (res[0]?.values[0][0] as number) > 0;
+}
+
+export async function getLastDeletedLowCreditNotification(): Promise<{
+  deletedAt: number;
+} | null> {
+  const db = await getDb();
+  const res = db.exec(
+    `SELECT deletedAt FROM notifications
+       WHERE notificationType = 'Credits'
+         AND notificationSubtype LIKE 'LowCreditWarning-%'
+         AND isDeleted = 1
+         AND deletedAt IS NOT NULL
+       ORDER BY deletedAt DESC
+       LIMIT 1`
+  );
+
+  if (!res.length || !res[0].values.length) return null;
+
+  return {
+    deletedAt: res[0].values[0][0] as number
+  };
+}
+
+export async function hasActiveLowCreditNotification(): Promise<boolean> {
+  const db = await getDb();
+  const res = db.exec(
+    `SELECT COUNT(*) FROM notifications
+       WHERE notificationType = 'Credits'
+         AND notificationSubtype LIKE 'LowCreditWarning-%'
+         AND (isDeleted IS NULL OR isDeleted = 0)`
   );
   return (res[0]?.values[0][0] as number) > 0;
 }
@@ -226,6 +271,7 @@ export async function listNotifications(limit = 50) {
   const res = db.exec(
     `SELECT *
        FROM notifications
+      WHERE (isDeleted IS NULL OR isDeleted = 0)
       ORDER BY notificationCreationTime DESC
       LIMIT ?`,
     [limit]
@@ -247,14 +293,14 @@ export async function markUnread(id: number) {
 
 export async function markAllRead() {
   const db = await getDb();
-  db.run(`UPDATE notifications SET isUnread = 0 WHERE isUnread = 1`);
+  db.run(`UPDATE notifications SET isUnread = 0 WHERE isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`);
   await saveBytes(db.export());
   return true;
 }
 
 export async function unreadCount(): Promise<number> {
   const db = await getDb();
-  const res = db.exec(`SELECT COUNT(*) FROM notifications WHERE isUnread = 1`);
+  const res = db.exec(`SELECT COUNT(*) FROM notifications WHERE isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`);
   return res[0]?.values[0][0] as number;
 }
 
@@ -271,24 +317,33 @@ export async function hippusVersionNotificationExists(
   const res = db.exec(
     `SELECT COUNT(*) FROM notifications
        WHERE notificationType = 'Hippius'
-         AND notificationSubtype = ?`,
+         AND notificationSubtype = ?
+         AND (isDeleted IS NULL OR isDeleted = 0)`,
     [version]
   );
   return (res[0]?.values[0][0] as number) > 0;
 }
 
-// New: delete a single notification
+// Soft delete a single notification
 export async function deleteNotification(id: number) {
   const db = await getDb();
-  db.run(`DELETE FROM notifications WHERE id = ?`, [id]);
+  const now = Date.now();
+  db.run(
+    `UPDATE notifications SET isDeleted = 1, deletedAt = ? WHERE id = ?`,
+    [now, id]
+  );
   await saveBytes(db.export());
   return true;
 }
 
-// New: delete all notifications
+// Soft delete all notifications
 export async function deleteAllNotifications() {
   const db = await getDb();
-  db.run(`DELETE FROM notifications`);
+  const now = Date.now();
+  db.run(
+    `UPDATE notifications SET isDeleted = 1, deletedAt = ? WHERE (isDeleted IS NULL OR isDeleted = 0)`,
+    [now]
+  );
   await saveBytes(db.export());
   return true;
 }

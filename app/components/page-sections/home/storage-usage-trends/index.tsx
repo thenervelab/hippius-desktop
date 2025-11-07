@@ -66,6 +66,16 @@ const StorageUsageTrends: React.FC<{
     return getXLabelsForTimeRange(formattedChartData, chartData, timeRange);
   }, [formattedChartData, chartData, timeRange]);
 
+  // Calculate total storage used based on the selected time range
+  const totalStorageUsed = useMemo(() => {
+    if (!formattedChartData || formattedChartData.length === 0) return "0 B";
+    // Sum up all the storage usage values for the selected time period
+    const total = formattedChartData.reduce((sum, point) => {
+      return sum + (point.balance || 0);
+    }, 0);
+    return formatBytes(total, 2);
+  }, [formattedChartData]);
+
   return (
     <InView triggerOnce threshold={0.2}>
       {({ ref, inView }) => (
@@ -119,6 +129,15 @@ const StorageUsageTrends: React.FC<{
                 </div>
               ) : (
                 <div className="relative w-full h-full  pr-4">
+                  {/* Total Storage Used Display */}
+                  <div className="absolute top-4 left-[72px] border border-grey-80 rounded bg-white px-2 py-1 z-10">
+                    <div className="text-grey-60 text-base mb-1 font-medium">
+                      Total Storage Used
+                    </div>
+                    <div className="text-2xl font-medium text-grey-10">
+                      {totalStorageUsed}
+                    </div>
+                  </div>
                   <ChartGridOverlay marginClasses="mt-[0px] ml-[60px] mb-[30px] mr-[21px]" />
 
                   <BarChart

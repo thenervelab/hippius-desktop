@@ -59,12 +59,13 @@ const IPFSNoEntriesFound: React.FC<IPFSNoEntriesFoundProps> = ({
     e?.preventDefault();
     e?.stopPropagation();
 
-    // If sync path is not configured and not recent files, trigger start syncing
-    if (!isRecentFiles && !isSyncPathConfigured) {
+    // If sync path is not configured (for both recent files and regular files), trigger start syncing
+    if (!isSyncPathConfigured) {
       onStartSyncing?.();
       return;
     }
 
+    // Otherwise, open the upload modal
     if (typeof window !== "undefined") {
       const event = new CustomEvent(HIPPIUS_OPEN_MODAL_EVENT, {
         bubbles: true,
@@ -72,7 +73,7 @@ const IPFSNoEntriesFound: React.FC<IPFSNoEntriesFoundProps> = ({
       });
       window.dispatchEvent(event);
     }
-  }, [isRecentFiles, isSyncPathConfigured, onStartSyncing]);
+  }, [isSyncPathConfigured, onStartSyncing]);
 
   const handleOnChange = (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -105,17 +106,31 @@ const IPFSNoEntriesFound: React.FC<IPFSNoEntriesFoundProps> = ({
   return (
     <>
       {isRecentFiles ? (
-        <div className="flex flex-col items-center justify-center py-4 min-h-[150px]">
+        <div className="flex flex-col items-center justify-center py-4 min-h-[300px]">
           <div className="w-12 h-12 rounded-full bg-primary-90 flex items-center justify-center mb-2">
             <Icons.File className="size-7 text-primary-50" />
           </div>
           <h3 className="text-lg font-medium text-grey-10 mb-1">
             No Recent files yet
           </h3>
-          <p className="text-grey-50 text-sm  text-center">
-            Start by uploading or creating a file to see it here.
-          </p>
+          <div className="text-grey-50 text-sm text-center">
+            {!isSyncPathConfigured
+              ? "Please set up sync path first"
+              : "Start by uploading a file to see it here."}
+          </div>
+          <CardButton
+            onClick={handleOpenModal}
+            className="flex gap-x-2 items-center w-full h-14 max-w-[320px] mt-3"
+            disabled={isCheckingSyncPath}
+          >
+            {isCheckingSyncPath
+              ? "Checking sync path..."
+              : !isSyncPathConfigured
+                ? "Start Syncing"
+                : "Upload a File"}
+          </CardButton>
         </div>
+
       ) : (
         <div
           className={cn(
