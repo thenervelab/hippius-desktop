@@ -12,7 +12,6 @@ import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transform
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import Ipfs from "@/components/page-sections/files/ipfs";
-import { getPrivateSyncPath, getPublicSyncPath } from "@/app/lib/utils/syncPathUtils";
 import { Icons } from "@/components/ui";
 
 
@@ -20,9 +19,6 @@ const Home: React.FC = () => {
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const setIsViewingRecentFiles = useSetAtom(isViewingRecentFilesAtom);
 
-  const [isSyncPathConfigured, setIsSyncPathConfigured] = useState<
-    boolean | null
-  >(null);
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
 
   // Fetch marketplace credits with a higher limit to get good chart data
@@ -41,12 +37,8 @@ const Home: React.FC = () => {
     const checkSyncPath = async () => {
       try {
         setIsCheckingSyncPath(true);
-        const privateSyncPath = await getPrivateSyncPath();
-        const publicSyncPath = await getPublicSyncPath();
-        setIsSyncPathConfigured(!!privateSyncPath || !!publicSyncPath);
       } catch (error) {
         console.error("Failed to check sync path:", error);
-        setIsSyncPathConfigured(false);
       } finally {
         setIsCheckingSyncPath(false);
       }

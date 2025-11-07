@@ -51,7 +51,7 @@ async function getDb(): Promise<initSqlJsType.Database> {
     db.run(`ALTER TABLE notifications ADD COLUMN deletedAt INTEGER`);
     await saveBytes(db.export());
   } catch (e) {
-    // Columns already exist, ignore error
+    console.log("error", e)
   }
 
   const exists = db.exec(`SELECT 1 FROM app_state WHERE id = 1`);

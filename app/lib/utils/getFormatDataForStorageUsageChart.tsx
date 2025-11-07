@@ -110,21 +110,6 @@ export function mapBytesToDateRange(
   });
 }
 
-// Helper function to find the last available cumulative value before a given date
-function findLastCumulativeValue(sortedEntries: [string, number][], currentDateKey: string): number {
-  let lastCumulative = 0;
-
-  for (const [dateKey, cumulative] of sortedEntries) {
-    if (dateKey < currentDateKey) {
-      lastCumulative = cumulative;
-    } else {
-      break;
-    }
-  }
-
-  return lastCumulative;
-}
-
 // New function to aggregate bytes by month for year view with usage calculation
 // This calculates monthly usage consumption instead of monthly deltas
 export function aggregateBytesByMonth(chartPoints: ChartPoint[]): ChartPoint[] {
