@@ -40,11 +40,13 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    Promise.all([desktopDir(), documentDir(), downloadDir()])
-      .then(([d, docs, dl]) =>
-        setSuggested({ desktop: d, documents: docs, downloads: dl })
-      )
-      .catch(() => toast.error("Could not retrieve system folder paths"));
+    // Don't pre-fetch system directories as they trigger permission prompts
+    // Only fetch when user explicitly clicks to use them
+    // Promise.all([desktopDir(), documentDir(), downloadDir()])
+    //   .then(([d, docs, dl]) =>
+    //     setSuggested({ desktop: d, documents: docs, downloads: dl })
+    //   )
+    //   .catch(() => toast.error("Could not retrieve system folder paths"));
   }, []);
 
   useEffect(() => {
@@ -65,8 +67,24 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
     }
   }, [initialPath, suggested]);
 
-  const pickOption = (opt: string) => {
-    setSelected((prev) => (prev === opt ? null : opt));
+  const pickOption = async (opt: string) => {
+    // Fetch the directory path only when user clicks on it to avoid premature permission prompts
+    try {
+      let path = "";
+      if (opt === "desktop" && !suggested.desktop) {
+        path = await desktopDir();
+        setSuggested((prev) => ({ ...prev, desktop: path }));
+      } else if (opt === "documents" && !suggested.documents) {
+        path = await documentDir();
+        setSuggested((prev) => ({ ...prev, documents: path }));
+      } else if (opt === "downloads" && !suggested.downloads) {
+        path = await downloadDir();
+        setSuggested((prev) => ({ ...prev, downloads: path }));
+      }
+      setSelected((prev) => (prev === opt ? null : opt));
+    } catch {
+      toast.error(`Could not access ${opt} folder. Please use a custom folder instead.`);
+    }
   };
 
   const pickCustom = async () => {
@@ -233,7 +251,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
                       ? "border-primary-50 bg-primary-100"
                       : "border-grey-80 hover:border-primary-70 hover:bg-grey-95"
                   )}
-                  onClick={() => pickOption(custom)}
+                  onClick={() => setSelected(custom)}
                 >
                   <div className="flex-shrink-0 mr-4">
                     <div
