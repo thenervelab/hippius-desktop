@@ -4,3 +4,4 @@ pub mod file_operations;
 pub mod fs_watcher;
 pub mod ipfs;
 pub mod sync;
+pub mod s3_client;

@@ -24,7 +24,7 @@ const NotificationOptionSelect: React.FC<NotificationOptionSelectProps> = ({
     <Menubar.Root>
       <Menubar.Menu>
         <Menubar.Trigger asChild>
-          <button className="relative min-w-[121px] h-[40px] px-3 flex items-center justify-between gap-2 t bg-transparent rounded-lg border-none cursor-pointer">
+          <button className="relative min-w-[121px] h-10 px-3 flex items-center justify-between gap-2 t bg-transparent rounded-lg border-none cursor-pointer">
             {/* Active background */}
             <div className="absolute inset-0 pointer-events-none">
               <ActiveTabBg mainGroup={true} />

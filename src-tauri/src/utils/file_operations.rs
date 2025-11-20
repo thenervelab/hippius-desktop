@@ -1,16 +1,19 @@
+use crate::DB_POOL;
 use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 use crate::sync_shared::collect_files_recursively;
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
-use crate::DB_POOL;
 use hex;
+use sp_core::Pair;
 use sp_core::crypto::Ss58Codec;
 use sp_core::sr25519;
-use sp_core::Pair;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use crate::utils::s3_client::make_s3_client;
+use aws_sdk_s3::Client;
 
 // Helper to generate all possible file name variations
+#[allow(dead_code)]
 pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
     let variations = vec![
         base_name.to_string(),
@@ -32,6 +35,7 @@ pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub async fn unpin_user_file_by_name(file_name: &str, _seed_phrase: &str) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
         let variations = get_file_name_variations(file_name);
@@ -76,7 +80,7 @@ pub async fn unpin_user_file_by_name(file_name: &str, _seed_phrase: &str) -> Res
 
 pub async fn delete_and_unpin_user_file_records_by_name(
     file_name: &str,
-    seed_phrase: &str,
+    _seed_phrase: &str,
     is_public: bool,
     should_delete_folder: bool,
 ) -> Result<u64, String> {
@@ -90,7 +94,7 @@ pub async fn delete_and_unpin_user_file_records_by_name(
         .map_err(|e| format!("DB error (fetch is_folder): {e}"))?
         .unwrap_or(false);
         // Remove from sync folder
-        remove_file_from_sync_and_db(&file_name, is_public, is_folder, should_delete_folder).await;
+        remove_file_from_sync_and_db(file_name, is_public, is_folder, should_delete_folder).await;
 
         Ok(1)
     } else {
@@ -236,7 +240,7 @@ pub async fn copy_to_sync_and_add_to_db(
             "SELECT file_name FROM user_profiles WHERE owner = ? AND file_name = ? LIMIT 1",
         )
         .bind(account_id)
-        .bind(&requested_file_name)
+        .bind(requested_file_name)
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
@@ -254,7 +258,7 @@ pub async fn copy_to_sync_and_add_to_db(
                 .bind(account_id)
                 .bind(metadata_cid)
                 .bind(&file_hash)
-                .bind(&requested_file_name)
+                .bind(requested_file_name)
                 .bind(file_size_in_bytes)
                 .bind(false)
                 .bind("s3")  
@@ -269,7 +273,7 @@ pub async fn copy_to_sync_and_add_to_db(
             let _ = sqlx::query(
                     "INSERT INTO file_paths (file_name, file_hash, timestamp, path) VALUES (?, ?, ?, ?)"
                 )
-                .bind(&requested_file_name)
+                .bind(requested_file_name)
                 .bind(&file_hash)
                 .bind(chrono::Utc::now().timestamp())
                 .bind(&dest_path_str_clone)
@@ -288,12 +292,9 @@ pub async fn copy_to_sync_and_add_to_db(
                 }
             }
             copy_dir(original_path, &dest_path);
-        } else {
-            if !dest_path.exists() {
-                if let Err(e) = fs::copy(original_path, &dest_path) {
-                    eprintln!("Failed to copy file to sync folder: {}", e);
-                    return;
-                }
+        } else if !dest_path.exists() {
+            if let Err(e) = fs::copy(original_path, &dest_path) {
+                eprintln!("Failed to copy file to sync folder: {}", e);
             }
         }
     }
@@ -362,7 +363,7 @@ pub async fn remove_file_from_sync_and_db(
         let source = get_source_from_user_profiles(file_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
-        let bucket_name = get_bucket_from_user_profiles(file_name, is_public)
+        let _bucket_name = get_bucket_from_user_profiles(file_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
         if source.starts_with("s3://") {
@@ -458,7 +459,7 @@ pub async fn copy_to_sync_folder(
         let source = get_source_from_user_profiles(meta_folder_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
-        let bucket_name = get_bucket_from_user_profiles(meta_folder_name, is_public)
+        let _bucket_name = get_bucket_from_user_profiles(meta_folder_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
         // Try S3 removal as fallback
@@ -479,7 +480,7 @@ pub async fn copy_to_sync_folder(
             };
             let _ = execute_aws_s3_cp(
                 &target_source,
-                &original_path.to_string_lossy().to_string(),
+                original_path.to_string_lossy().as_ref(),
                 is_folder,
             )
             .await;
@@ -569,7 +570,7 @@ pub async fn copy_to_sync_folder(
             .await
             .unwrap_or(None);
 
-            if let Some(_) = exists {
+            if exists.is_some() {
                 // Update existing record
                 let _ = sqlx::query(
                     "UPDATE user_profiles SET 
@@ -628,12 +629,9 @@ pub async fn copy_to_sync_folder(
                 }
             }
             copy_dir(original_path, &dest_path);
-        } else {
-            if !dest_path.exists() {
-                if let Err(e) = fs::copy(original_path, &dest_path) {
-                    eprintln!("Failed to copy file to sync folder: {}", e);
-                    return;
-                }
+        } else if !dest_path.exists() {
+            if let Err(e) = fs::copy(original_path, &dest_path) {
+                eprintln!("Failed to copy file to sync folder: {}", e);
             }
         }
     }
@@ -644,9 +642,9 @@ pub async fn remove_from_sync_folder(
     folder_name: &str,
     is_public: bool,
     is_folder: bool,
-    meta_folder_name: &str,
-    folder_manifest_cid: &str,
-    account_id: &str,
+    _meta_folder_name: &str,
+    _folder_manifest_cid: &str,
+    _account_id: &str,
     _requested_cid: &str,
     subfolder_path: Option<String>,
 ) {
@@ -690,7 +688,7 @@ pub async fn remove_from_sync_folder(
         let source = get_source_from_user_profiles(folder_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
-        let bucket_name = get_bucket_from_user_profiles(folder_name, is_public)
+        let _bucket_name = get_bucket_from_user_profiles(folder_name, is_public)
             .await
             .unwrap_or_else(|| "Hippius".to_string());
         println!("s3_path : {}", s3_path);
@@ -731,7 +729,7 @@ pub async fn remove_from_sync_folder(
                 for file in &files {
                     if let Err(e) = fs::remove_file(file) {
                         eprintln!("Failed to remove file from sync folder: {}", e);
-                    }                    
+                    }
                 }
 
                 let folder_relative_path = PathBuf::from(folder_name).join(file_name);
@@ -772,100 +770,75 @@ pub async fn remove_from_sync_folder(
 }
 
 async fn execute_aws_s3_rm(path: &str, is_folder: bool) -> Result<(), String> {
-    // Get AWS binary path
-    let aws_binary_path = match crate::commands::node::get_aws_binary_path().await {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("[execute_aws_s3_rm] Failed to get AWS binary path: {}", e);
-            return Err("Failed to locate AWS CLI".to_string());
-        }
-    };
-
-    // Construct dynamic PATH with OS-appropriate separator
-    let path_separator = if cfg!(windows) { ";" } else { ":" };
-    let dynamic_path = format!(
-        "{}{}{}",
-        aws_binary_path.parent().unwrap().to_string_lossy(),
-        path_separator,
-        std::env::var("PATH").unwrap_or_default()
-    );
-
-    let endpoint_url = "https://s3.hippius.com";
-
-    let mut cmd = Command::new(&aws_binary_path);
-    cmd.env("PATH", &dynamic_path);
+    let client = make_s3_client().await;
+    
+    // Parse the S3 path (format: s3://bucket-name/path/to/object)
+    let (bucket, key) = parse_s3_path(path).map_err(|e| format!("Invalid S3 path: {}", e))?;
 
     if is_folder {
-        cmd.args([
-            "s3",
-            "rm",
-            "--recursive",
-            "--endpoint-url",
-            endpoint_url,
-            path,
-        ]);
+        // For folders, we need to list and delete all objects with the prefix
+        let mut continuation_token: Option<String> = None;
+        
+        loop {
+            let mut req = client.list_objects_v2().bucket(&bucket).prefix(&key);
+            
+            if let Some(token) = &continuation_token {
+                req = req.continuation_token(token);
+            }
+            
+            let resp = req.send().await.map_err(|e| format!("Failed to list objects: {}", e))?;
+            
+            // Delete all objects in this batch
+            if let Some(contents) = resp.contents {
+                for object in contents {
+                    if let Some(object_key) = object.key() {
+                        client.delete_object()
+                            .bucket(&bucket)
+                            .key(object_key)
+                            .send()
+                            .await
+                            .map_err(|e| format!("Failed to delete object {}: {}", object_key, e))?;
+                    }
+                }
+            }
+            
+            // Check if there are more objects to delete
+            if resp.is_truncated.unwrap_or(false) {
+                continuation_token = resp.next_continuation_token.map(|s| s.to_string());
+            } else {
+                break;
+            }
+        }
     } else {
-        cmd.args(["s3", "rm", "--endpoint-url", endpoint_url, path]);
+        // For single file
+        client.delete_object()
+            .bucket(&bucket)
+            .key(&key)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to delete object {}: {}", key, e))?;
     }
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-
-    let output = cmd.output().map_err(|e| e.to_string())?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    println!("[AWS CLI] Command status: {}", output.status);
-    if !stdout.is_empty() {
-        println!("[AWS CLI] Output: {}", stdout);
-    }
-    if !stderr.is_empty() {
-        println!("[AWS CLI] Error: {}", stderr);
-    }
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!("Failed to delete from S3: {}", stderr))
-    }
+    
+    Ok(())
 }
 
 async fn execute_aws_s3_cp(source: &str, local_path: &str, is_folder: bool) -> Result<(), String> {
-    // Get AWS binary path
-    let aws_binary_path = match crate::commands::node::get_aws_binary_path().await {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("[execute_aws_s3_cp] Failed to get AWS binary path: {}", e);
-            return Err("Failed to locate AWS CLI".to_string());
-        }
-    };
+    let client = make_s3_client().await;
+    
+    // Parse the destination S3 path
+    let (bucket, key) = parse_s3_path(source).map_err(|e| format!("Invalid S3 path: {}", e))?;
 
-    // Construct dynamic PATH with OS-appropriate separator
-    let path_separator = if cfg!(windows) { ";" } else { ":" };
-    let dynamic_path = format!(
-        "{}{}{}",
-        aws_binary_path.parent().unwrap().to_string_lossy(),
-        path_separator,
-        std::env::var("PATH").unwrap_or_default()
-    );
-    println!("[execute_aws_s3_cp] Dynamic PATH: {}", dynamic_path);
-    let endpoint_url = "https://s3.hippius.com";
-
-    let destination = if is_folder {
+    let destination_key = if is_folder {
         // For folders: source + folder_name + /
-        let mut dest = source.to_string();
+        let mut dest = key.to_string();
 
-        // Remove trailing slashes from source
+        // Remove trailing slashes from key
         while dest.ends_with('/') {
             dest.pop();
         }
 
         // Get the folder name from the local path
-        let local_trimmed = local_path.trim_end_matches(|c| c == '/' || c == '\\');
+        let local_trimmed = local_path.trim_end_matches(['/', '\\']);
         if let Some(folder_name_os) = Path::new(local_trimmed).file_name() {
             let folder_name = folder_name_os.to_string_lossy();
             dest.push('/');
@@ -880,7 +853,7 @@ async fn execute_aws_s3_cp(source: &str, local_path: &str, is_folder: bool) -> R
         dest
     } else {
         // For files: source + filename
-        let mut dest = source.to_string();
+        let mut dest = key.to_string();
         if !dest.ends_with('/') {
             dest.push('/');
         }
@@ -890,59 +863,91 @@ async fn execute_aws_s3_cp(source: &str, local_path: &str, is_folder: bool) -> R
         dest
     };
 
-    let mut cmd = Command::new(&aws_binary_path);
-    cmd.env("PATH", &dynamic_path);
-
     println!(
-        "[AWS CLI] Uploading {} to {} (is_folder: {})",
-        local_path, destination, is_folder
+        "[AWS SDK] Uploading {} to s3://{}/{} (is_folder: {})",
+        local_path, bucket, destination_key, is_folder
     );
 
     if is_folder {
-        cmd.args([
-            "s3",
-            "cp",
-            local_path,
-            &destination,
-            "--recursive",
-            "--endpoint-url",
-            endpoint_url,
-        ]);
+        // For folders, recursively upload all files
+        upload_folder_recursive(&client, &bucket, &destination_key, local_path).await?;
     } else {
-        cmd.args([
-            "s3",
-            "cp",
-            local_path,
-            &destination,
-            "--endpoint-url",
-            endpoint_url,
-        ]);
+        // For single file
+        upload_single_file(&client, &bucket, &destination_key, local_path).await?;
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+    Ok(())
+}
 
-    let output = cmd.output().map_err(|e| e.to_string())?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    println!("[AWS CLI] Command status: {}", output.status);
-    if !stdout.is_empty() {
-        println!("[AWS CLI] Output: {}", stdout);
+// Helper function to parse S3 paths (s3://bucket-name/path/to/object)
+fn parse_s3_path(s3_path: &str) -> Result<(String, String), String> {
+    if !s3_path.starts_with("s3://") {
+        return Err("S3 path must start with s3://".to_string());
     }
-    if !stderr.is_empty() {
-        println!("[AWS CLI] Error: {}", stderr);
+    
+    let path_without_prefix = &s3_path[5..]; // Remove "s3://"
+    let parts: Vec<&str> = path_without_prefix.splitn(2, '/').collect();
+    
+    if parts.is_empty() || parts[0].is_empty() {
+        return Err("Invalid S3 path: missing bucket name".to_string());
     }
+    
+    let bucket = parts[0].to_string();
+    let key = if parts.len() > 1 { parts[1] } else { "" }.to_string();
+    
+    Ok((bucket, key))
+}
 
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!("Failed to upload to S3: {}", stderr))
+// Helper function to upload a single file
+async fn upload_single_file(client: &Client, bucket: &str, key: &str, local_path: &str) -> Result<(), String> {
+    let body = aws_sdk_s3::primitives::ByteStream::from_path(local_path)
+        .await
+        .map_err(|e| format!("Failed to read file {}: {}", local_path, e))?;
+    
+    client.put_object()
+        .bucket(bucket)
+        .key(key)
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to upload file to s3://{}/{}: {}", bucket, key, e))?;
+    
+    Ok(())
+}
+
+// Helper function to recursively upload a folder
+// Helper function to recursively upload a folder using a queue (non-recursive)
+async fn upload_folder_recursive(client: &Client, bucket: &str, prefix: &str, local_folder: &str) -> Result<(), String> {
+    use std::collections::VecDeque;
+    
+    let mut queue = VecDeque::new();
+    queue.push_back((prefix.to_string(), local_folder.to_string()));
+    
+    while let Some((current_prefix, current_folder)) = queue.pop_front() {
+        let entries = std::fs::read_dir(&current_folder)
+            .map_err(|e| format!("Failed to read directory {}: {}", current_folder, e))?;
+        
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+            let path = entry.path();
+            let file_name = path.file_name()
+                .ok_or_else(|| "Invalid file name".to_string())?
+                .to_string_lossy();
+            
+            let s3_key = format!("{}{}", current_prefix, file_name);
+            
+            if path.is_dir() {
+                // Add subdirectory to queue for processing
+                let subdir_prefix = format!("{}{}/", current_prefix, file_name);
+                queue.push_back((subdir_prefix, path.to_string_lossy().to_string()));
+            } else {
+                // Upload file
+                upload_single_file(client, bucket, &s3_key, &path.to_string_lossy()).await?;
+            }
+        }
     }
+    
+    Ok(())
 }
 
 async fn get_source_from_user_profiles(file_name: &str, is_public: bool) -> Option<String> {

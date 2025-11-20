@@ -1,6 +1,5 @@
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use serde_json::json;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct IpfsInfo {
@@ -14,98 +13,49 @@ pub struct IpfsInfo {
     pub protocol_version: Option<String>,
 }
 
+// returning haedcoded values for now untils graph is removed from frontend
 #[tauri::command]
 pub async fn get_ipfs_node_info() -> Result<IpfsInfo, String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    // Get the IPFS node URL from environment or config
-    let ipfs_url =
-        std::env::var("IPFS_NODE_URL").unwrap_or_else(|_| "http://127.0.0.1:5001".to_string());
-
-    let url = format!("{}/api/v0/id", ipfs_url);
-
-    // Make the POST request
-    let response = client
-        .post(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("HTTP error: {}", response.status()));
-    }
-
-    let ipfs_info: IpfsInfo = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    Ok(ipfs_info)
+    // Return hardcoded node info
+    Ok(IpfsInfo {
+        id: Some("QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN".to_string()),
+        addresses: Some(vec![
+            "/ip4/127.0.0.1/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN".to_string(),
+            "/ip4/192.168.1.100/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN".to_string(),
+        ]),
+        agent_version: Some("kubo/0.35.0/8d00929".to_string()),
+        protocol_version: Some("ipfs/0.1.0".to_string()),
+    })
 }
 
 #[tauri::command]
 pub async fn get_ipfs_bandwidth() -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    // Get the IPFS node URL from environment or config
-    let ipfs_url =
-        std::env::var("IPFS_NODE_URL").unwrap_or_else(|_| "http://127.0.0.1:5001".to_string());
-
-    let url = format!("{}/api/v0/stats/bw", ipfs_url);
-
-    // Make the POST request
-    let response = client
-        .post(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("HTTP error: {}", response.status()));
-    }
-
-    let data = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    Ok(data)
+    // Return hardcoded bandwidth stats
+    Ok(json!({
+        "TotalIn": 123456789,
+        "TotalOut": 987654321,
+        "RateIn": 1234.56,
+        "RateOut": 5678.90
+    }))
 }
 
 #[tauri::command]
 pub async fn get_ipfs_peers() -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    // Get the IPFS node URL from environment or config
-    let ipfs_url =
-        std::env::var("IPFS_NODE_URL").unwrap_or_else(|_| "http://127.0.0.1:5001".to_string());
-
-    let url = format!("{}/api/v0/swarm/peers", ipfs_url);
-
-    // Make the POST request
-    let response = client
-        .post(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("HTTP error: {}", response.status()));
-    }
-
-    let data = response
-        .json::<serde_json::Value>()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    Ok(data)
+    // Return hardcoded peers list
+    Ok(json!([
+        {
+            "Addr": "/ip4/1.2.3.4/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+            "Peer": "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+            "Latency": "35.2ms",
+            "Muxer": "/mplex/6.7.0",
+            "Streams": null
+        },
+        {
+            "Addr": "/ip4/5.6.7.8/tcp/4001/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+            "Peer": "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+            "Latency": "42.1ms",
+            "Muxer": "/mplex/6.7.0",
+            "Streams": null
+        }
+    ]))
 }

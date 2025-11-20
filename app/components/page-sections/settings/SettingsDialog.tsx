@@ -36,7 +36,7 @@ const SettingsWidthDialog: React.FC<SettingsWidthDialogProps> = ({
         )}
       >
         {/* Header */}
-        <div className="flex items-center justify-between py-1.5  ml-[223px] mt-2 mr-8 mb-[18px] ">
+        <div className="flex items-center justify-between py-1.5  ml-[223px] mt-2 mr-8 ">
           <Dialog.Title className="text-2xl text-grey-10  font-medium">
             {heading}
           </Dialog.Title>

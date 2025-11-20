@@ -9,7 +9,7 @@ import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { toast } from "sonner";
 import { PlusCircle, RefreshCw, AlertCircle } from "lucide-react";
-import GenerateNewAccountModal from "./GenerateNewAccountModal";
+import GenerateNewAccountModal from "./GenerateNewApiKeyModal";
 
 import { ConfirmModal, Icons, RevealTextLine } from "@/app/components/ui";
 import { useApiKeys } from "@/app/lib/hooks/api/useApiKeys";

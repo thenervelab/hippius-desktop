@@ -6,7 +6,7 @@ import BackupAppData from "./BackupAppData";
 import { InView } from "react-intersection-observer";
 import ResetAppData from "./ResetAppData";
 import UpdateSyncFolder from "./UpdateSyncFolder";
-import ApiKeys from "./api-keys";
+import APIKeys from "./api-keys";
 import NotificationSettings from "./NotificationSettings";
 import { useAtom } from "jotai";
 import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
@@ -16,6 +16,7 @@ import { refreshEnabledTypesAtom } from "@/components/page-sections/notification
 import CustomizeRPC from "./CustomizeRPC";
 import { Clock } from "lucide-react";
 import SessionTimeoutSettings from "./SessionTimeoutSettings";
+import FileDeletionBehaviour from "./FileDeletionBehaviour";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -70,7 +71,7 @@ const SettingsDialogContent: React.FC = () => {
 
   return (
     <div className="flex h-full w-full">
-      <div className=" mr-8">
+      <div className="mt-[18px] mr-8">
         <TabList
           tabs={tabs}
           activeTab={activeTab}
@@ -84,70 +85,92 @@ const SettingsDialogContent: React.FC = () => {
       <InView triggerOnce>
         {({ inView, ref }) => (
           <div
-            className="flex flex-col  animate-in fade-in duration-300 gap-8 w-full shadow-menu rounded-lg bg-white p-4 h-max mb-4"
+            className="flex flex-col animate-in fade-in duration-300 gap-8 w-full h-max mb-4 pt-[18px]"
             ref={ref}
           >
             {activeTab === "Change Passcode" && (
-              <>
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
                   rotate
                   reveal={inView}
                   className="delay-300 w-full"
+                  parentClassName="w-full"
                 >
                   <ChangePasscode />
                 </RevealTextLine>
-              </>
+              </div>
             )}
 
             {activeTab === "API Keys" && (
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                className="delay-300 w-full"
-              >
-                <ApiKeys />
-              </RevealTextLine>
-            )}
-
-            {activeTab === "Notifications" && (
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                className="delay-300 w-full"
-              >
-                <NotificationSettings />
-              </RevealTextLine>
-            )}
-
-            {activeTab === "Reset App" && (
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                className="delay-300 w-full"
-              >
-                <ResetAppData />
-              </RevealTextLine>
-            )}
-
-            {activeTab === "File Settings" && (
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                className="delay-300 w-full flex"
-              >
-                <UpdateSyncFolder />
-              </RevealTextLine>
-            )}
-            {activeTab === "Backup App Data" && (
-              <>
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
                   rotate
                   reveal={inView}
                   className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <APIKeys />
+                </RevealTextLine>
+              </div>
+            )}            {activeTab === "Notifications" && (
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <NotificationSettings />
+                </RevealTextLine>
+              </div>
+            )}            {activeTab === "Reset App" && (
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <ResetAppData />
+                </RevealTextLine>
+              </div>
+            )}
+
+            {activeTab === "File Settings" && (
+              <div className="flex flex-col gap-4 w-full">
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                  <RevealTextLine
+                    rotate
+                    reveal={inView}
+                    className="delay-300 w-full"
+                    parentClassName="w-full"
+                  >
+                    <UpdateSyncFolder />
+                  </RevealTextLine>
+                </div>
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                  <RevealTextLine
+                    rotate
+                    reveal={inView}
+                    className="delay-500 w-full"
+                    parentClassName="w-full"
+                  >
+                    <FileDeletionBehaviour />
+                  </RevealTextLine>
+                </div>
+              </div>
+            )}
+            {activeTab === "Backup App Data" && (
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
                 >
                   <BackupAppData />
                 </RevealTextLine>
-              </>
+              </div>
             )}
             {/* 
             {activeTab === "Encryption Key" && (
@@ -161,22 +184,28 @@ const SettingsDialogContent: React.FC = () => {
             )} */}
 
             {activeTab === "Customize RPC" && (
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                className="delay-300 w-full flex"
-              >
-                <CustomizeRPC />
-              </RevealTextLine>
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <CustomizeRPC />
+                </RevealTextLine>
+              </div>
             )}
             {activeTab === "Session Timeout" && (
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                className="delay-300 w-full flex"
-              >
-                <SessionTimeoutSettings />
-              </RevealTextLine>
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <SessionTimeoutSettings />
+                </RevealTextLine>
+              </div>
             )}
           </div>
         )}

@@ -1,25 +1,24 @@
-use crate::commands::syncing::ensure_aws_env;
+use crate::DB_POOL;
 use crate::substrate_client::{
     get_current_wss_endpoint, get_substrate_client, test_wss_endpoint, update_wss_endpoint,
 };
+use crate::sync_engine::DeletePolicy;
 use crate::sync_shared::{
-    S3SyncState, GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, SYNCING_ACCOUNTS,
+    GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, S3SyncState, SYNCING_ACCOUNTS,
 };
-use crate::DB_POOL;
 use crate::{start_private_folder_sync_tauri, start_public_folder_sync_tauri};
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
-use sp_core::{sr25519, Pair};
+use sp_core::{Pair, sr25519};
 use sqlx::Row;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use subxt::tx::PairSigner;
-use tauri::AppHandle;
-use tauri::Manager;
-use tokio::sync::Mutex;
+// use crate::commands::syncing::ensure_aws_env;
 use tauri::Emitter;
+use tokio::sync::Mutex;
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -79,6 +78,8 @@ pub struct SyncPathResult {
 }
 
 pub static SUBSTRATE_TX_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+use crate::commands::syncing::get_sync_policy_from_db;
 
 #[tauri::command]
 pub async fn set_sync_path(
@@ -179,18 +180,37 @@ pub async fn set_sync_path(
                     // Always start sync when path is set/changed
                     let handle = tokio::spawn(async move {
                         println!("[set_sync_path] Starting PUBLIC sync task...");
-                        start_public_folder_sync_tauri(
-                            app_handle_public,
-                            account.clone(),
-                            mnemonic,
-                        )
-                        .await;
+                        match get_sync_policy_from_db().await {
+                            Ok(delete_policy) => {
+                                start_public_folder_sync_tauri(
+                                    app_handle_public,
+                                    account.clone(),
+                                    mnemonic,
+                                    delete_policy,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                eprintln!("[set_sync_path] Failed to get delete policy: {}", e);
+                                // Fallback to default policy if DB lookup fails
+                                start_public_folder_sync_tauri(
+                                    app_handle_public,
+                                    account.clone(),
+                                    mnemonic,
+                                    DeletePolicy::UploadOnly,
+                                )
+                                .await;
+                            }
+                        }
                     });
                     crate::commands::syncing::register_task(app_handle.clone(), handle).await;
                     // emit sync started event
                     match crate::utils::sync::reset_sync_event_state("public").await {
                         Ok(_) => {
-                            if let Err(e) = app_handle.emit("started_syncing", serde_json::json!({"type": "public"})).map_err(|e| e.to_string()) {
+                            if let Err(e) = app_handle
+                                .emit("started_syncing", serde_json::json!({"type": "public"}))
+                                .map_err(|e| e.to_string())
+                            {
                                 eprintln!("Failed to emit started_syncing event: {}", e);
                             }
                             println!("[Sync] public Sync started event emitted");
@@ -223,7 +243,10 @@ pub async fn set_sync_path(
                                             )
                                             .await
                                         {
-                                            eprintln!("[set_sync_path][S3InventoryCron][public] Failed storing listing: {}", e);
+                                            eprintln!(
+                                                "[set_sync_path][S3InventoryCron][public] Failed storing listing: {}",
+                                                e
+                                            );
                                         }
                                     }
                                     Err(e) => eprintln!(
@@ -244,18 +267,37 @@ pub async fn set_sync_path(
 
                     let handle = tokio::spawn(async move {
                         println!("[set_sync_path] Starting PRIVATE sync task...");
-                        start_private_folder_sync_tauri(
-                            app_handle_private,
-                            account.clone(),
-                            mnemonic,
-                        )
-                        .await;
+                        match get_sync_policy_from_db().await {
+                            Ok(delete_policy) => {
+                                start_private_folder_sync_tauri(
+                                    app_handle_private,
+                                    account.clone(),
+                                    mnemonic,
+                                    delete_policy,
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                eprintln!("[set_sync_path] Failed to get delete policy: {}", e);
+                                // Fallback to default policy if DB lookup fails
+                                start_private_folder_sync_tauri(
+                                    app_handle_private,
+                                    account.clone(),
+                                    mnemonic,
+                                    DeletePolicy::UploadOnly,
+                                )
+                                .await;
+                            }
+                        }
                     });
                     crate::commands::syncing::register_task(app_handle.clone(), handle).await;
                     // emit sync started event
                     match crate::utils::sync::reset_sync_event_state("private").await {
                         Ok(_) => {
-                            if let Err(e) = app_handle.emit("started_syncing", serde_json::json!({"type": "private"})).map_err(|e| e.to_string()) {
+                            if let Err(e) = app_handle
+                                .emit("started_syncing", serde_json::json!({"type": "private"}))
+                                .map_err(|e| e.to_string())
+                            {
                                 eprintln!("Failed to emit started_syncing event: {}", e);
                             }
                             println!("[Sync] private Sync started event emitted");
@@ -288,7 +330,10 @@ pub async fn set_sync_path(
                                             )
                                             .await
                                         {
-                                            eprintln!("[S3InventoryCron][private] Failed storing listing: {}", e);
+                                            eprintln!(
+                                                "[S3InventoryCron][private] Failed storing listing: {}",
+                                                e
+                                            );
                                         }
                                     }
                                     Err(e) => {
@@ -318,7 +363,7 @@ pub async fn transfer_balance_tauri(
     amount: String,
 ) -> Result<String, String> {
     use crate::substrate_client::get_substrate_client;
-    use sp_core::{crypto::Ss58Codec, sr25519, Pair};
+    use sp_core::{Pair, crypto::Ss58Codec, sr25519};
     use subxt::tx::PairSigner;
 
     // Parse the string to u128
@@ -423,14 +468,17 @@ pub async fn add_sub_account_tauri(main_seed: String, sub_seed: String) -> Resul
                 if e.contains("MainCannotBeSubAccount") {
                     return Err(e); // Special case - don't retry
                 }
-                
+
                 retry_count += 1;
                 if retry_count >= max_retries {
                     return Err(format!("Failed after {} retries: {}", max_retries, e));
                 }
-                
+
                 let delay = base_delay * 2_u32.pow(retry_count - 1);
-                eprintln!("[Substrate] Attempt {} failed: {}. Retrying in {:?}", retry_count, e, delay);
+                eprintln!(
+                    "[Substrate] Attempt {} failed: {}. Retrying in {:?}",
+                    retry_count, e, delay
+                );
                 tokio::time::sleep(delay).await;
             }
         }

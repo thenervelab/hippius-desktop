@@ -128,7 +128,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     return (
       <>
         <CardButton
-          className={cn("h-[40px] w-fit p-1", className)}
+          className={cn("h-10 w-fit p-1", className)}
           onClick={() => {
             setDroppedFiles(null);
             setIsOpen(true);

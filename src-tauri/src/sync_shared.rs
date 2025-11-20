@@ -1,106 +1,49 @@
-use crate::commands::node::get_aws_binary_path;
 use crate::constants::folder_sync::SyncStatusResponse;
+use crate::sync_engine::{MANIFEST_FOLDER, MANIFEST_ROOT};
 use crate::user_profile_sync::UserProfileFileWithType;
 use crate::utils::file_operations::calculate_local_size;
-use hex;
+use crate::utils::s3_client::make_s3_client;
+use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
+use aws_sdk_s3::error::SdkError;
+use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashSet, VecDeque};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Wry, Emitter};
+use tauri::{AppHandle, Emitter, Wry};
 
-/// Parses a line from the `aws s3 sync` output to create a RecentItem.
-pub fn parse_s3_sync_line(line: &str, scope: &str) -> Option<RecentItem> {
-    // Normalize and strip optional dryrun prefix
-    let mut s = line.trim();
-    if s.starts_with("(dryrun)") {
-        s = s.trim_start_matches("(dryrun)").trim();
-    }
-
-    // Helper to resolve absolute path for local filesystem entries
-    let abs_path = |p: &str| -> String {
-        let pth = std::path::Path::new(p);
-        // Try canonicalize first (resolves symlinks). If it fails, fall back to CWD join for relative paths
-        if let Ok(canon) = std::fs::canonicalize(pth) {
-            canon.to_string_lossy().to_string()
-        } else if pth.is_relative() {
-            if let Ok(cwd) = std::env::current_dir() {
-                cwd.join(pth).to_string_lossy().to_string()
-            } else {
-                p.to_string()
-            }
-        } else {
-            p.to_string()
-        }
+/// Gets the bucket name and path hash for a given account ID and scope ("public" or "private")
+/// Returns a tuple of (bucket_name, path_hash)
+pub fn get_bucket_name(
+    account_id: &str,
+    scope: &str,
+    sync_path: &Path,
+) -> Result<(String, String), String> {
+    // Compute path hash
+    let path_hash = {
+        let mut hasher = DefaultHasher::new();
+        sync_path.hash(&mut hasher);
+        format!("{:x}", hasher.finish())[..8].to_string()
     };
 
-    // Helper to build item
-    let mk_item = |name: &str, action: &str, path: String| -> Option<RecentItem> {
-        if name.is_empty() {
-            return None;
-        }
-        let now_ms: i64 = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-        Some(RecentItem {
-            name: name.to_string(),
-            scope: scope.to_string(),
-            action: action.to_string(),
-            kind: "file".to_string(),
-            path,
-            timestamp: now_ms,
-        })
-    };
-
-    // Handle 'upload:' lines: "upload: <src> to s3://..."
-    if let Some(rest) = s.strip_prefix("upload:") {
-        let rest = rest.trim_start();
-        let src = if let Some(idx) = rest.find(" to ") {
-            &rest[..idx]
-        } else {
-            rest
-        };
-        let file_name = Path::new(src)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        let path_abs = abs_path(src);
-        return mk_item(file_name, "uploaded", path_abs);
+    // Validate scope
+    if scope != "public" && scope != "private" {
+        return Err("Invalid scope. Must be 'public' or 'private'.".to_string());
     }
 
-    // Handle 'copy:' lines similarly to upload (ACL/metadata changes)
-    if let Some(rest) = s.strip_prefix("copy:") {
-        let rest = rest.trim_start();
-        let src = if let Some(idx) = rest.find(" to ") {
-            &rest[..idx]
-        } else {
-            rest
-        };
-        let file_name = Path::new(src)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        let path_abs = abs_path(src);
-        return mk_item(file_name, "uploaded", path_abs);
-    }
+    // Format the bucket name
+    let bucket_name = format!("{}-{}", account_id, scope);
 
-    // Handle 'delete:' lines: "delete: s3://bucket/key"
-    if let Some(rest) = s.strip_prefix("delete:") {
-        let s3path = rest.trim();
-        let file_name = s3path.rsplit('/').next().unwrap_or("");
-        return mk_item(file_name, "deleted", s3path.to_string());
-    }
-
-    None
+    Ok((bucket_name, path_hash))
 }
 
 pub static SYNCING_ACCOUNTS: Lazy<Arc<Mutex<HashSet<(String, &'static str)>>>> =
@@ -182,6 +125,7 @@ pub struct SyncActivityResponse {
 
 // --- Update Tauri Commands to Aggregate Data ---
 #[tauri::command]
+#[allow(dead_code)]
 pub fn get_sync_status() -> SyncStatusResponse {
     let private_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
     let public_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
@@ -215,12 +159,12 @@ pub async fn get_sync_activity(
     limit: Option<usize>,
 ) -> SyncActivityResponse {
     let limit = limit.unwrap_or(100);
-    
+
     // Collect all the data we need while holding the locks
     let (recent, uploading, should_check_public, should_check_private) = {
         let p_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
         let pub_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-        
+
         // Combine and sort recent items
         let mut recent: Vec<RecentItem> = p_state
             .recent_items
@@ -239,8 +183,12 @@ pub async fn get_sync_activity(
         uploading.extend(pub_state.uploading_items.iter().cloned());
 
         // Determine if we need to check sync completion
-        let should_check_public = (pub_state.uploading_items.is_empty() && !pub_state.recent_items.is_empty()) || (pub_state.uploading_items.is_empty() && pub_state.recent_items.is_empty());
-        let should_check_private = (p_state.uploading_items.is_empty() && !p_state.recent_items.is_empty()) || (p_state.uploading_items.is_empty() && p_state.recent_items.is_empty());
+        let should_check_public = (pub_state.uploading_items.is_empty()
+            && !pub_state.recent_items.is_empty())
+            || (pub_state.uploading_items.is_empty() && pub_state.recent_items.is_empty());
+        let should_check_private = (p_state.uploading_items.is_empty()
+            && !p_state.recent_items.is_empty())
+            || (p_state.uploading_items.is_empty() && p_state.recent_items.is_empty());
 
         (recent, uploading, should_check_public, should_check_private)
     };
@@ -253,19 +201,25 @@ pub async fn get_sync_activity(
                 if let Err(e) = crate::utils::sync::mark_first_run_complete("public").await {
                     eprintln!("Failed to mark sync as completed: {}", e);
                 }
-                if let Err(e) = app.emit("sync_completed", serde_json::json!({"type": "public"})).map_err(|e| e.to_string()) {
+                if let Err(e) = app
+                    .emit("sync_completed", serde_json::json!({"type": "public"}))
+                    .map_err(|e| e.to_string())
+                {
                     eprintln!("Failed to emit sync_completed event: {}", e);
                 }
-                println!("[Sync] public Sync completed with {} recent items", recent.len());
+                println!(
+                    "[Sync] public Sync completed with {} recent items inside get sync activity",
+                    recent.len()
+                );
             }
             Ok(true) => {
                 // Sync already marked as completed, do nothing
             }
-            Err(e) => {
-                // 
+            Err(_e) => {
+                //
             }
         }
-    } 
+    }
 
     if should_check_private {
         match crate::utils::sync::is_sync_completed("private").await {
@@ -274,16 +228,22 @@ pub async fn get_sync_activity(
                 if let Err(e) = crate::utils::sync::mark_first_run_complete("private").await {
                     eprintln!("Failed to mark sync as completed: {}", e);
                 }
-                if let Err(e) = app.emit("sync_completed", serde_json::json!({"type": "private"})).map_err(|e| e.to_string()) {
+                if let Err(e) = app
+                    .emit("sync_completed", serde_json::json!({"type": "private"}))
+                    .map_err(|e| e.to_string())
+                {
                     eprintln!("Failed to emit sync_completed event: {}", e);
                 }
-                println!("[Sync] private Sync completed with {} recent items", recent.len());
+                println!(
+                    "[Sync] private Sync completed with {} recent items inside get sync activity",
+                    recent.len()
+                );
             }
             Ok(true) => {
                 // Sync already marked as completed, do nothing
             }
-            Err(e) => {
-                // 
+            Err(_e) => {
+                //
             }
         }
     }
@@ -334,8 +294,6 @@ pub fn stop_all_sync_processes() {
         *public_status = S3SyncState::default();
     }
 
-    // Reset cancellation token to allow new syncs
-    GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
     println!("[Sync] All sync processes stopped and states reset");
 }
 
@@ -382,8 +340,6 @@ pub fn stop_sync_for_scope(scope: &str) {
         }
     }
 
-    // Reset cancellation token to allow new syncs
-    GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
     println!("[Sync] Sync processes stopped for scope: {}", scope);
 }
 
@@ -398,6 +354,7 @@ pub fn prepare_for_new_sync() {
 
 /// Updates the sync state when a file transitions from uploading to uploaded
 /// Removes any existing "uploading" entry for the same file and adds a new "uploaded" entry
+#[allow(dead_code)]
 pub fn update_uploaded_file(scope: &str, file_path: &str) -> Option<RecentItem> {
     let state = if scope == "public" {
         S3_PUBLIC_SYNC_STATE.lock().unwrap()
@@ -483,106 +440,77 @@ pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::i
     Ok(())
 }
 
-/// Helper function to list all S3 buckets
-pub async fn list_all_buckets(
-    aws_binary_path: &std::path::Path,
-    dynamic_path: &str,
-) -> Result<Vec<String>, String> {
-    let endpoint_url = "https://s3.hippius.com";
+/// List all buckets using SDK (no CLI)
+pub async fn list_all_buckets() -> Result<Vec<String>, String> {
+    let client = make_s3_client().await;
 
-    let mut command = Command::new(aws_binary_path);
-    command
-        .env("AWS_PAGER", "")
-        .env("PATH", dynamic_path)
-        .arg("s3api")
-        .arg("list-buckets")
-        .arg("--endpoint-url")
-        .arg(endpoint_url);
-
-    // Add Windows-specific flags to suppress terminal window
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    match client.list_buckets().send().await {
+        Ok(resp) => {
+            let buckets = resp
+                .buckets
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|b| b.name)
+                .collect::<Vec<_>>();
+            Ok(buckets)
+        }
+        Err(e) => Err(format!("Failed to list buckets: {}", e)),
     }
-
-    let output = command
-        .output()
-        .map_err(|e| format!("Failed to execute aws command: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to list buckets: {}", stderr));
-    }
-
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let result: serde_json::Value = serde_json::from_str(&output_str)
-        .map_err(|e| format!("Failed to parse AWS CLI output: {}", e))?;
-
-    let buckets = result["Buckets"]
-        .as_array()
-        .ok_or_else(|| "No buckets found in response".to_string())?
-        .iter()
-        .filter_map(|b| b["Name"].as_str().map(String::from))
-        .collect::<Vec<_>>();
-
-    Ok(buckets)
 }
 
 /// Lists all files and folders across all S3 buckets
 pub async fn list_bucket_contents(
-    _account_id: String,
+    account_id: String,
     scope: String,
 ) -> Result<Vec<BucketItem>, String> {
     println!("[ListAllBuckets] Listing contents for all buckets");
-
-    // Dynamically get the AWS binary path
-    let aws_binary_path = match get_aws_binary_path().await {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!(
-                "[ListAllBuckets] Failed to get AWS binary path: {}, falling back to system PATH",
-                e
-            );
-            which::which(if cfg!(windows) { "aws.exe" } else { "aws" })
-                .map_err(|_| "AWS CLI not found in system PATH".to_string())?
-        }
-    };
-
-    // Construct dynamic PATH with OS-appropriate separator
-    let path_separator = if cfg!(windows) { ";" } else { ":" };
-    let dynamic_path = format!(
-        "{}{}{}",
-        aws_binary_path.parent().unwrap().to_string_lossy(),
-        path_separator,
-        std::env::var("PATH").unwrap_or_default()
-    );
-
-    // Get all bucket names and filter based on scope
-    let mut bucket_names = list_all_buckets(&aws_binary_path, &dynamic_path).await?;
+    // // Get all bucket names and filter based on scope
+    // let mut bucket_names = list_all_buckets().await?;
 
     // Filter buckets based on scope and format
     if scope != "private" && scope != "public" {
         return Err("Invalid scope. Must be 'public' or 'private'.".to_string());
     }
 
-    // Look for either -{scope}- in the middle or -{scope} at the end
-    let scope_pattern = format!("-{scope}-");
-    let scope_suffix = format!("-{scope}");
-    bucket_names.retain(|name| name.contains(&scope_pattern) || name.ends_with(&scope_suffix));
+    // // Look for either -{scope}- in the middle or -{scope} at the end
+    // let scope_pattern = format!("-{scope}-");
+    // let scope_suffix = format!("-{scope}");
+    // bucket_names.retain(|name| name.contains(&scope_pattern) || name.ends_with(&scope_suffix));
 
     let mut all_items = Vec::new();
     let mut errors = Vec::new();
+
+    // Only include buckets for which we have a valid sync path
+    let mut bucket_names = Vec::new();
+
+    if scope == "public" {
+        // Check and add public bucket if path exists
+        if let Ok(public_path) = get_public_sync_path().await {
+            if let Ok((bucket_name, _)) =
+                get_bucket_name(&account_id, "public", std::path::Path::new(&public_path))
+            {
+                bucket_names.push(bucket_name);
+            }
+        }
+    } else {
+        // Check and add private bucket if path exists
+        if let Ok(private_path) = get_private_sync_path().await {
+            if let Ok((bucket_name, _)) =
+                get_bucket_name(&account_id, "private", std::path::Path::new(&private_path))
+            {
+                bucket_names.push(bucket_name);
+            }
+        }
+    }
+
+    println!("[ListAllBuckets] Found {} buckets", bucket_names.len());
 
     // Process each bucket in parallel
     let handles: Vec<_> = bucket_names
         .into_iter()
         .map(|bucket_name| {
-            let aws_path = aws_binary_path.clone();
-            let path_clone = dynamic_path.clone();
-
             tokio::spawn(async move {
-                match list_single_bucket_contents(&aws_path, &path_clone, &bucket_name).await {
+                match list_single_bucket_contents(&bucket_name).await {
                     Ok(items) => Ok(items),
                     Err(e) => {
                         eprintln!(
@@ -626,75 +554,59 @@ pub async fn list_bucket_contents(
         }
         is_new
     });
-
+    println!("[ListAllBuckets] Found {} unique items", seen.len());
     Ok(all_items)
 }
 
-/// Lists contents of a single bucket
-async fn list_single_bucket_contents(
-    aws_binary_path: &std::path::Path,
-    dynamic_path: &str,
-    bucket_name: &str,
-) -> Result<Vec<BucketItem>, String> {
-    let endpoint_url = "https://s3.hippius.com";
+pub async fn list_single_bucket_contents(bucket_name: &str) -> Result<Vec<BucketItem>, String> {
+    let client = make_s3_client().await;
     let mut all_objects = Vec::new();
     let mut continuation_token: Option<String> = None;
-    let mut is_truncated = true;
 
-    // Handle pagination
-    while is_truncated {
-        let mut command = Command::new(aws_binary_path);
-        command
-            .env("AWS_PAGER", "")
-            .env("PATH", dynamic_path)
-            .arg("s3api")
-            .arg("list-objects-v2")
-            .arg("--bucket")
-            .arg(bucket_name)
-            .arg("--endpoint-url")
-            .arg(endpoint_url);
+    loop {
+        let mut req = client.list_objects_v2().bucket(bucket_name);
 
         if let Some(token) = &continuation_token {
-            command.arg("--continuation-token").arg(token);
+            req = req.continuation_token(token);
         }
 
-        // Add Windows-specific flags to suppress terminal window
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
+        let resp = req.send().await;
 
-        let output = command
-            .output()
-            .map_err(|e| format!("Failed to execute aws command: {}", e))?;
+        match resp {
+            Ok(output) => {
+                // contents() returns Option<&[Object]>, so we need to handle it correctly
+                if let Some(contents) = output.contents {
+                    all_objects.extend(contents);
+                }
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // Skip non-existent buckets instead of failing
-            if stderr.contains("NoSuchBucket") {
-                println!(
-                    "[ListBucket] Bucket {} does not exist, skipping",
-                    bucket_name
-                );
-                return Ok(Vec::new());
+                // is_truncated is Option<bool>, so we need to unwrap or default to false
+                if output.is_truncated.unwrap_or(false) {
+                    continuation_token = output.next_continuation_token.map(|s| s.to_string());
+                } else {
+                    break;
+                }
             }
-            return Err(format!("Failed to list bucket contents: {}", stderr));
+            Err(SdkError::ServiceError(service_error)) => {
+                // Handle NoSuchBucket error
+                if service_error.err().is_no_such_bucket() {
+                    println!(
+                        "[ListBucket] Bucket {} does not exist, skipping",
+                        bucket_name
+                    );
+                    return Ok(Vec::new());
+                }
+                return Err(format!(
+                    "Failed to list bucket contents: {}",
+                    service_error.err()
+                ));
+            }
+            Err(e) => {
+                return Err(format!("Failed to list bucket contents: {}", e));
+            }
         }
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let result: serde_json::Value = serde_json::from_str(&output_str)
-            .map_err(|e| format!("Failed to parse AWS CLI output: {}", e))?;
-
-        if let Some(contents) = result["Contents"].as_array() {
-            all_objects.extend(contents.iter().cloned());
-        }
-
-        is_truncated = result["IsTruncated"].as_bool().unwrap_or(false);
-        continuation_token = result["NextContinuationToken"].as_str().map(String::from);
     }
 
-    // Process the collected objects
+    // === Post-process object metadata ===
     let mut root_files: Vec<BucketItem> = Vec::new();
     let mut folder_sizes: HashMap<String, u64> = HashMap::new();
     let mut folder_last_modified: HashMap<String, String> = HashMap::new();
@@ -702,60 +614,73 @@ async fn list_single_bucket_contents(
     let mut folder_ipfs_hash: HashMap<String, String> = HashMap::new();
 
     for item in all_objects {
-        let storage_class = item["StorageClass"]
-            .as_str()
-            .unwrap_or("STANDARD")
-            .to_string();
-        let ipfs_hash = item["Owner"]
-            .as_object()
-            .and_then(|o| o.get("ID"))
-            .and_then(|id| id.as_str())
-            .unwrap_or("")
+        let key = match item.key() {
+            Some(k) => k,
+            None => continue,
+        };
+
+        if key.starts_with(MANIFEST_FOLDER) || *key == *MANIFEST_ROOT {
+            continue;
+        }
+
+        let size_val = item.size().unwrap_or(0) as u64;
+        let storage_class = item
+            .storage_class()
+            .map(|s| s.as_str().to_string())
+            .unwrap_or_else(|| "STANDARD".to_string());
+
+        // The "Owner" field is not included in list_objects_v2 by default
+        let ipfs_hash = item.owner().and_then(|o| o.id()).unwrap_or("").to_string();
+
+        let last_modified_fmt = item
+            .last_modified()
+            .and_then(|dt| {
+                let secs = dt.secs();
+                let nsecs = dt.subsec_nanos();
+                DateTime::from_timestamp(secs, nsecs)
+
+                // DateTime::<Utc>::from_timestamp(secs, nsecs)
+            })
+            .unwrap_or_else(|| Utc::now())
+            .format("%Y-%m-%d %H:%M:%S")
             .to_string();
 
-        if let (Some(key), Some(size_val), Some(last_modified)) = (
-            item["Key"].as_str(),
-            item["Size"].as_u64(),
-            item["LastModified"].as_str(),
-        ) {
-            let last_modified_dt = chrono::DateTime::parse_from_rfc3339(last_modified)
-                .map_err(|_| "Failed to parse last modified date")?;
-            let last_modified_fmt = last_modified_dt.format("%Y-%m-%d %H:%M:%S").to_string();
-
-            if key.ends_with('/') {
-                let folder_name = key.trim_end_matches('/').to_string();
-                if let Some(slash_pos) = folder_name.find('/') {
-                    let root_folder = folder_name[..slash_pos].to_string();
-                    *folder_sizes.entry(root_folder.clone()).or_insert(0) += size_val;
-                    folder_last_modified.insert(root_folder.clone(), last_modified_fmt.clone());
-                    folder_storage_class.insert(root_folder.clone(), storage_class.clone());
-                    folder_ipfs_hash.insert(root_folder, ipfs_hash);
-                } else {
-                    *folder_sizes.entry(folder_name.clone()).or_insert(0) += size_val;
-                    folder_last_modified.insert(folder_name.clone(), last_modified_fmt.clone());
-                    folder_storage_class.insert(folder_name.clone(), storage_class.clone());
-                    folder_ipfs_hash.insert(folder_name, ipfs_hash);
-                }
-            } else if let Some(slash_pos) = key.find('/') {
-                let folder_name = key[..slash_pos].to_string();
+        if key.ends_with('/') {
+            // Handle folders explicitly ending in '/'
+            let folder_name = key.trim_end_matches('/').to_string();
+            if let Some(slash_pos) = folder_name.find('/') {
+                let root_folder = folder_name[..slash_pos].to_string();
+                *folder_sizes.entry(root_folder.clone()).or_insert(0) += size_val;
+                folder_last_modified.insert(root_folder.clone(), last_modified_fmt.clone());
+                folder_storage_class.insert(root_folder.clone(), storage_class.clone());
+                folder_ipfs_hash.insert(root_folder, ipfs_hash);
+            } else {
                 *folder_sizes.entry(folder_name.clone()).or_insert(0) += size_val;
                 folder_last_modified.insert(folder_name.clone(), last_modified_fmt.clone());
-                folder_storage_class.insert(folder_name, storage_class);
-            } else {
-                root_files.push(BucketItem {
-                    path: key.to_string(),
-                    size: size_val,
-                    last_modified: last_modified_fmt,
-                    is_folder: false,
-                    storage_class: storage_class.clone(),
-                    ipfs_hash,
-                    bucket_name: bucket_name.to_string(),
-                });
+                folder_storage_class.insert(folder_name.clone(), storage_class.clone());
+                folder_ipfs_hash.insert(folder_name, ipfs_hash);
             }
+        } else if let Some(slash_pos) = key.find('/') {
+            // Object inside a folder
+            let folder_name = key[..slash_pos].to_string();
+            *folder_sizes.entry(folder_name.clone()).or_insert(0) += size_val;
+            folder_last_modified.insert(folder_name.clone(), last_modified_fmt.clone());
+            folder_storage_class.insert(folder_name, storage_class);
+        } else {
+            // Root-level file
+            root_files.push(BucketItem {
+                path: key.to_string(),
+                size: size_val,
+                last_modified: last_modified_fmt,
+                is_folder: false,
+                storage_class: storage_class.clone(),
+                ipfs_hash,
+                bucket_name: bucket_name.to_string(),
+            });
         }
     }
 
-    // Convert folder information to BucketItem
+    // === Convert folder metadata into BucketItem ===
     let mut root_folders: Vec<BucketItem> = folder_sizes
         .into_iter()
         .map(|(path, size)| {
@@ -778,9 +703,7 @@ async fn list_single_bucket_contents(
         })
         .collect();
 
-    // Combine root files and folders
     root_files.append(&mut root_folders);
-
     Ok(root_files)
 }
 
@@ -815,15 +738,11 @@ pub async fn store_bucket_listing_in_db(
     };
 
     // Extract file names of items that are currently being uploaded (exclude these from deletion)
+    // but only if they don't exist in the items parameter
+    let item_names: HashSet<&str> = items.iter().map(|item| item.path.as_str()).collect();
     let uploading_file_names: Vec<&str> = recent_items
         .iter()
-        .filter(|item| item.action != "deleted")
-        .map(|item| item.name.as_str())
-        .collect();
-
-    let deleted_file_names: Vec<&str> = recent_items
-        .iter()
-        .filter(|item| item.action == "deleted")
+        .filter(|item| item.action != "deleted" && !item_names.contains(item.name.as_str()))
         .map(|item| item.name.as_str())
         .collect();
 
@@ -852,11 +771,14 @@ pub async fn store_bucket_listing_in_db(
     // Get the list of deleted file names from recent items
     let deleted_files: HashSet<&str> = recent_items
         .iter()
-        .filter(|item| item.action == "deleted")
+        .filter(|item| item.action == "deleted" && !item_names.contains(item.name.as_str()))
         .map(|item| item.name.as_str())
         .collect();
 
     for it in items {
+        if it.path.starts_with(MANIFEST_FOLDER) || it.path == MANIFEST_ROOT {
+            continue;
+        }
         // Skip files that are marked for deletion
         if deleted_files.contains(it.path.as_str()) {
             continue;
@@ -899,7 +821,7 @@ pub async fn store_bucket_listing_in_db(
         .bind(
             chrono::DateTime::parse_from_rfc3339(&it.last_modified)
                 .unwrap_or_else(|_| chrono::Utc::now().into())
-                .timestamp() as i64,
+                .timestamp(),
         )
         .bind(&it.bucket_name)
         // WHERE NOT EXISTS conditions
@@ -970,7 +892,7 @@ pub async fn insert_bucket_items_if_absent(
             .bind(it.is_folder)
             .bind(chrono::DateTime::parse_from_rfc3339(&it.last_modified)
                 .unwrap_or_else(|_| chrono::Utc::now().into())
-                .timestamp() as i64)
+                .timestamp())
             .bind(&it.bucket_name)
             .execute(pool)
             .await?;

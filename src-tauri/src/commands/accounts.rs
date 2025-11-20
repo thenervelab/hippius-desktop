@@ -4,9 +4,9 @@ use crate::utils::accounts::{
     create_and_store_encryption_key, import_encryption_key, list_encryption_keys,
 };
 use chrono::Utc;
+use sp_core::Pair;
 use sp_core::crypto::Ss58Codec;
 use sp_core::sr25519;
-use sp_core::Pair;
 use sqlx::Row;
 
 #[tauri::command]
@@ -103,7 +103,7 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
                     .map_err(|e| format!("Failed to check existing public sync path: {}", e))?;
 
             if existing_path.map(|p| p.0) != Some(public_path.clone()) {
-                let result = sqlx::query(
+                let _result = sqlx::query(
                     "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
                      ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
                 )
@@ -135,7 +135,7 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
                     .map_err(|e| format!("Failed to check existing private sync path: {}", e))?;
 
             if existing_path.map(|p| p.0) != Some(private_path.clone()) {
-                let result = sqlx::query(
+                let _result = sqlx::query(
                     "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
                      ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
                 )
@@ -227,7 +227,7 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
 
     // Import sub-accounts with deduplication
     if let Some(sub_accounts) = params.sub_accounts {
-        let mut imported_count = 0;
+        let imported_count = 0;
         for account in sub_accounts {
             // First, delete all existing sub-accounts
             sqlx::query("DELETE FROM sub_accounts")
@@ -237,7 +237,7 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
 
             println!("[Import] Cleared all existing sub-accounts from database");
 
-            let mut imported_count = 0;
+            let mut _imported_count = 0;
             // Validate sub-account seed phrase
             if account.sub_account_seed_phrase.trim().is_empty() {
                 eprintln!(
@@ -265,7 +265,7 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
                 continue;
             }
 
-            let result = sqlx::query(
+            let _result = sqlx::query(
                 "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase, created_at) 
                  VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))",
             )
@@ -281,7 +281,7 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
                 )
             })?;
 
-            imported_count += 1;
+            _imported_count += 1;
             println!(
                 "[Import] Imported sub-account for account ID: {}",
                 account.account_id
