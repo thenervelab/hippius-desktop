@@ -158,6 +158,22 @@ pub async fn start_private_folder_sync(
         }
     };
 
+    // Activate security-scoped bookmark for macOS
+    #[cfg(target_os = "macos")]
+    {
+        use crate::utils::bookmark_db::activate_bookmark;
+        match activate_bookmark(&sync_path).await {
+            Ok(true) => {
+                println!("[PrivateFolderSync] Successfully activated bookmark for: {}", sync_path);
+            }
+            Ok(false) | Err(_) => {
+                eprintln!(
+                    "[PrivateFolderSync] Warning: No bookmark found for path, may need permissions"
+                );
+            }
+        }
+    }
+
     // Resolve sub-account SS58 from DB (unchanged logic)
     let sub_account = loop {
         match DB_POOL.get() {
