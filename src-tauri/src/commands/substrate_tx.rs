@@ -1,4 +1,5 @@
 use crate::DB_POOL;
+use crate::commands::syncing::ensure_aws_env;
 use crate::substrate_client::{
     get_current_wss_endpoint, get_substrate_client, test_wss_endpoint, update_wss_endpoint,
 };
@@ -16,7 +17,6 @@ use sqlx::Row;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use subxt::tx::PairSigner;
-// use crate::commands::syncing::ensure_aws_env;
 use tauri::Emitter;
 use tokio::sync::Mutex;
 
@@ -190,8 +190,15 @@ pub async fn set_sync_path(
                     let account = params.account_id.clone();
                     let mnemonic = params.mnemonic.clone();
 
-                    // Always start sync when path is set/changed
                     let handle = tokio::spawn(async move {
+                        let _ = crate::commands::syncing::resolve_or_create_subaccount_seed(
+                            account.clone(),
+                            mnemonic.clone(),
+                        )
+                        .await;
+
+                        ensure_aws_env(account.clone(), mnemonic.clone()).await;
+
                         println!("[set_sync_path] Starting PUBLIC sync task...");
                         match get_sync_policy_from_db().await {
                             Ok(delete_policy) => {
@@ -279,6 +286,13 @@ pub async fn set_sync_path(
                     let mnemonic = params.mnemonic.clone();
 
                     let handle = tokio::spawn(async move {
+                        let _ = crate::commands::syncing::resolve_or_create_subaccount_seed(
+                            account.clone(),
+                            mnemonic.clone(),
+                        )
+                        .await;
+                        ensure_aws_env(account.clone(), mnemonic.clone()).await;
+
                         println!("[set_sync_path] Starting PRIVATE sync task...");
                         match get_sync_policy_from_db().await {
                             Ok(delete_policy) => {
