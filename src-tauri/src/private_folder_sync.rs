@@ -186,7 +186,12 @@ pub async fn start_private_folder_sync(
                                 sync_path
                             );
                         }
-                        Ok(false) | Err(e) => {
+                        Ok(false) => {
+                            eprintln!(
+                                "[PrivateFolderSync] Failed to activate newly created bookmark: returned false"
+                            );
+                        }
+                        Err(e) => {
                             eprintln!(
                                 "[PrivateFolderSync] Failed to activate newly created bookmark: {}",
                                 e

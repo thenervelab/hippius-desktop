@@ -225,7 +225,12 @@ pub async fn start_public_folder_sync(
                                 sync_path
                             );
                         }
-                        Ok(false) | Err(e) => {
+                        Ok(false) => {
+                            eprintln!(
+                                "[PublicFolderSync] Failed to activate newly created bookmark: returned false"
+                            );
+                        }
+                        Err(e) => {
                             eprintln!(
                                 "[PublicFolderSync] Failed to activate newly created bookmark: {}",
                                 e
