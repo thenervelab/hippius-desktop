@@ -4,6 +4,7 @@ use crate::sync_engine::DeletePolicy;
 use crate::sync_shared::{prepare_for_new_sync, reset_all_sync_state, stop_sync_for_scope};
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use base64 as b64;
+use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
 use sp_core::Pair;
@@ -12,7 +13,6 @@ use sqlx;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
-use serde::{Deserialize, Serialize};
 
 #[tauri::command]
 pub async fn stop_sync_for_scope_command(scope: String) -> Result<(), String> {
@@ -124,11 +124,14 @@ pub async fn initialize_sync(
             let delete_policy = match get_sync_policy_from_db().await {
                 Ok(policy) => policy,
                 Err(e) => {
-                    eprintln!("[SyncInit] Failed to get delete policy: {}. Using default UploadOnly.", e);
+                    eprintln!(
+                        "[SyncInit] Failed to get delete policy: {}. Using default UploadOnly.",
+                        e
+                    );
                     DeletePolicy::UploadOnly
                 }
             };
-            
+
             Some(tokio::spawn(async move {
                 start_private_folder_sync_tauri(
                     app_handle_folder_sync,
@@ -146,11 +149,14 @@ pub async fn initialize_sync(
             let delete_policy = match get_sync_policy_from_db().await {
                 Ok(policy) => policy,
                 Err(e) => {
-                    eprintln!("[SyncInit] Failed to get delete policy: {}. Using default UploadOnly.", e);
+                    eprintln!(
+                        "[SyncInit] Failed to get delete policy: {}. Using default UploadOnly.",
+                        e
+                    );
                     DeletePolicy::UploadOnly
                 }
             };
-            
+
             Some(tokio::spawn(async move {
                 start_public_folder_sync_tauri(
                     app_handle_public_folder_sync,
@@ -350,7 +356,7 @@ pub fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
 }
 
 // Helper: heavy logic to resolve or create subaccount seed (non-blocking to UI)
-async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String) -> String {
+pub async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String) -> String {
     // Ensure sodiumoxide is initialized
     let _ = sodiumoxide::init();
 
@@ -366,6 +372,7 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
         .await
         {
             Ok(Some((stored_str,))) => {
+                eprintln!("[SyncInit] X0");
                 if let Some(key) = &maybe_key {
                     // Try decrypt; if fails, treat as legacy plaintext and migrate
                     if let Some(decrypted) = decrypt_phrase(&stored_str, key) {
@@ -378,6 +385,7 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 }
             }
             Ok(None) => {
+                eprintln!("[SyncInit] X1");
                 // Create a new subaccount (sr25519) and store it encrypted
                 let (_pair, phrase, _seed) = sr25519::Pair::generate_with_phrase(None);
                 let to_store = if let Some(key) = &maybe_key {
@@ -385,24 +393,6 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 } else {
                     phrase.clone()
                 };
-                if let Err(e) = sqlx::query(
-                    "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase) VALUES (?, ?)",
-                )
-                .bind(&account_id)
-                .bind(&to_store)
-                .execute(pool)
-                .await
-                {
-                    eprintln!(
-                        "[SyncInit] Failed to insert new subaccount for {}: {}",
-                        account_id, e
-                    );
-                } else {
-                    println!(
-                        "[SyncInit] Stored new subaccount seed phrase for account_id={}",
-                        account_id
-                    );
-                }
 
                 // Try to register subaccount on-chain; if we get the specific
                 // "MainCannotBeSubAccount" error, we will fallback to using the
@@ -418,6 +408,25 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                     .await
                     {
                         Ok(msg) => {
+                            if let Err(e) = sqlx::query(
+                                "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase) VALUES (?, ?)",
+                            )
+                            .bind(&account_id)
+                            .bind(&to_store)
+                            .execute(pool)
+                            .await
+                            {
+                                eprintln!(
+                                    "[SyncInit] Failed to insert new subaccount for {}: {}",
+                                    account_id, e
+                                );
+                            } else {
+                                println!(
+                                    "[SyncInit] Stored new subaccount seed phrase for account_id={}",
+                                    account_id
+                                );
+                            };
+
                             println!("[SyncInit] add_sub_account submitted successfully: {}", msg)
                         }
                         Err(err) => {
@@ -497,7 +506,9 @@ pub async fn set_bucket_policy(
         _ => Err("Invalid sync_policy value. Must be one of: 'mirror_local_deletes', 'restore_from_remote', 'local_only_deletes', 'upload_only'"),
     }.map_err(|e| e.to_string())?;
 
-    let pool = crate::DB_POOL.get().ok_or("Database pool not initialized")?;
+    let pool = crate::DB_POOL
+        .get()
+        .ok_or("Database pool not initialized")?;
 
     sqlx::query(
         r#"
@@ -507,36 +518,38 @@ pub async fn set_bucket_policy(
         WHERE id = 1
         "#,
     )
-    .bind(sync_policy)  
+    .bind(sync_policy)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to update bucket policy: {}", e))?;
 
-    println!("[BucketPolicy] Updated bucket policy - sync_policy: {}", 
-             policy.sync_policy);
-    
+    println!(
+        "[BucketPolicy] Updated bucket policy - sync_policy: {}",
+        policy.sync_policy
+    );
+
     // 2. Stop all running sync processes
     println!("[BucketPolicy] Stopping all sync processes...");
     cleanup_sync(app.clone()).await?;
-    
+
     // 3. Restart sync processes with the new policy
     println!("[BucketPolicy] Restarting sync processes with new policy...");
     initialize_sync(app, account_id, mnemonic).await?;
-    
+
     println!("[BucketPolicy] Sync processes restarted with new policy");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_bucket_policy() -> Result<UpdateBucketPolicyRequest, String> {
-    let pool = crate::DB_POOL.get().ok_or("Database pool not initialized")?;
-    
-    let policy: (String,) = sqlx::query_as(
-        "SELECT sync_policy FROM bucket_policies WHERE id = 1"
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch bucket policy: {}", e))?;
+    let pool = crate::DB_POOL
+        .get()
+        .ok_or("Database pool not initialized")?;
+
+    let policy: (String,) = sqlx::query_as("SELECT sync_policy FROM bucket_policies WHERE id = 1")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch bucket policy: {}", e))?;
 
     Ok(UpdateBucketPolicyRequest {
         sync_policy: policy.0,
@@ -544,7 +557,9 @@ pub async fn get_bucket_policy() -> Result<UpdateBucketPolicyRequest, String> {
 }
 
 // Helper to convert string to DeletePolicy
-fn get_delete_policy_from_str(policy_str: &str) -> Result<crate::sync_engine::DeletePolicy, String> {
+fn get_delete_policy_from_str(
+    policy_str: &str,
+) -> Result<crate::sync_engine::DeletePolicy, String> {
     match policy_str {
         "mirror_local_deletes" => Ok(crate::sync_engine::DeletePolicy::MirrorLocalDeletes),
         "restore_from_remote" => Ok(crate::sync_engine::DeletePolicy::RestoreFromRemote),
@@ -556,14 +571,15 @@ fn get_delete_policy_from_str(policy_str: &str) -> Result<crate::sync_engine::De
 
 // Helper to get delete policy from database
 pub async fn get_sync_policy_from_db() -> Result<crate::sync_engine::DeletePolicy, String> {
-    let pool = crate::DB_POOL.get().ok_or("Database pool not initialized")?;
-    
-    let policy_str: (String,) = sqlx::query_as(
-        "SELECT sync_policy FROM bucket_policies WHERE id = 1"
-    )
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch sync policy: {}", e))?;
-    
+    let pool = crate::DB_POOL
+        .get()
+        .ok_or("Database pool not initialized")?;
+
+    let policy_str: (String,) =
+        sqlx::query_as("SELECT sync_policy FROM bucket_policies WHERE id = 1")
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("Failed to fetch sync policy: {}", e))?;
+
     get_delete_policy_from_str(&policy_str.0)
 }

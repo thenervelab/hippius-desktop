@@ -191,7 +191,18 @@ pub async fn set_sync_path(
                     let mnemonic = params.mnemonic.clone();
 
                     // Always start sync when path is set/changed
+                    let account0 = params.account_id.clone();
+                    let mnemonic0 = params.mnemonic.clone();
+
                     let handle = tokio::spawn(async move {
+                        println!("[set_sync_path] X0");
+
+                        let resolve0 = crate::commands::syncing::resolve_or_create_subaccount_seed(
+                            account0, mnemonic0,
+                        );
+
+                        println!("[set_sync_path] X0 result: {:#?}", resolve0);
+
                         println!("[set_sync_path] Starting PUBLIC sync task...");
                         match get_sync_policy_from_db().await {
                             Ok(delete_policy) => {
@@ -278,7 +289,13 @@ pub async fn set_sync_path(
                     let account = params.account_id.clone();
                     let mnemonic = params.mnemonic.clone();
 
+                    let account0 = params.account_id.clone();
+                    let mnemonic0 = params.mnemonic.clone();
                     let handle = tokio::spawn(async move {
+                        let _ = crate::commands::syncing::resolve_or_create_subaccount_seed(
+                            account0, mnemonic0,
+                        );
+
                         println!("[set_sync_path] Starting PRIVATE sync task...");
                         match get_sync_policy_from_db().await {
                             Ok(delete_policy) => {
