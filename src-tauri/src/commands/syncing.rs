@@ -13,6 +13,7 @@ use sqlx;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
+use tokio::time::{Duration, sleep};
 
 #[tauri::command]
 pub async fn stop_sync_for_scope_command(scope: String) -> Result<(), String> {
@@ -372,7 +373,6 @@ pub async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: Str
         .await
         {
             Ok(Some((stored_str,))) => {
-                eprintln!("[SyncInit] X0");
                 if let Some(key) = &maybe_key {
                     // Try decrypt; if fails, treat as legacy plaintext and migrate
                     if let Some(decrypted) = decrypt_phrase(&stored_str, key) {
@@ -385,7 +385,6 @@ pub async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: Str
                 }
             }
             Ok(None) => {
-                eprintln!("[SyncInit] X1");
                 // Create a new subaccount (sr25519) and store it encrypted
                 let (_pair, phrase, _seed) = sr25519::Pair::generate_with_phrase(None);
                 let to_store = if let Some(key) = &maybe_key {
@@ -425,6 +424,18 @@ pub async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: Str
                                     "[SyncInit] Stored new subaccount seed phrase for account_id={}",
                                     account_id
                                 );
+                            };
+
+                            sleep(Duration::from_secs(12)).await;
+                            if let Some(key) = &maybe_key {
+                                // Try decrypt; if fails, treat as legacy plaintext and migrate
+                                if let Some(decrypted) = decrypt_phrase(&to_store, key) {
+                                    return decrypted;
+                                } else {
+                                    return to_store;
+                                }
+                            } else {
+                                return to_store;
                             };
 
                             println!("[SyncInit] add_sub_account submitted successfully: {}", msg)
