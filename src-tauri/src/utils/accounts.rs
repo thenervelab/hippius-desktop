@@ -1,6 +1,6 @@
 use crate::DB_POOL;
 use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use sodiumoxide::crypto::secretbox;
 use sqlx::Row;
 
@@ -67,6 +67,7 @@ pub async fn import_encryption_key(key_bytes: Vec<u8>) -> Result<String, String>
 }
 
 /// Fetch the encryption key from the DB
+#[allow(dead_code)]
 async fn get_latest_encryption_key_from_db() -> Result<secretbox::Key, String> {
     if let Some(pool) = DB_POOL.get() {
         let row = sqlx::query("SELECT key FROM encryption_keys ORDER BY id DESC LIMIT 1")
@@ -81,6 +82,7 @@ async fn get_latest_encryption_key_from_db() -> Result<secretbox::Key, String> {
 }
 
 /// Decrypts file data using the key from the DB, extracting the nonce.
+#[allow(dead_code)]
 pub async fn decrypt_file(
     encrypted_data: &[u8],
     encryption_key: Option<Vec<u8>>,

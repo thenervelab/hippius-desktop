@@ -1,0 +1,3 @@
+[submodule "src-tauri/tests/fixtures/hippius-s3"]
+	path = src-tauri/tests/fixtures/hippius-s3
+	url = https://github.com/thenervelab/hippius-s3

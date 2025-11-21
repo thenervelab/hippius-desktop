@@ -1,5 +1,6 @@
 use reqwest::blocking::Client;
 
+#[allow(dead_code)]
 pub fn download_from_ipfs(
     api_url: &str,
     cid: &str,
@@ -7,7 +8,7 @@ pub fn download_from_ipfs(
     let client = Client::new();
 
     let res = client
-        .post(&format!("{}/api/v0/cat?arg={}", api_url, cid))
+        .post(format!("{}/api/v0/cat?arg={}", api_url, cid))
         .send()?
         .error_for_status()?;
 
@@ -15,6 +16,7 @@ pub fn download_from_ipfs(
     Ok(bytes)
 }
 
+#[allow(dead_code)]
 pub async fn download_from_ipfs_async(
     api_url: &str,
     cid: &str,
@@ -22,7 +24,7 @@ pub async fn download_from_ipfs_async(
     let client = reqwest::Client::new();
 
     let res = client
-        .post(&format!("{}/api/v0/cat?arg={}", api_url, cid))
+        .post(format!("{}/api/v0/cat?arg={}", api_url, cid))
         .send()
         .await?
         .error_for_status()?;

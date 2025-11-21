@@ -212,13 +212,13 @@ const UpdateSyncFolder: React.FC = () => {
                       {selectedPrivateFolderPath && (
                         <button
                           onClick={() => setStopSyncTarget("private")}
-                          className="h-[40px] border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
+                          className="h-10 border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
                         >
                           Stop Syncing
                         </button>
                       )}
                       <CardButton
-                        className="max-w-[160px] h-[40px]"
+                        className="max-w-[160px] h-10"
                         variant="primary"
                         onClick={() => openFolderSelection(false)}
                       >
@@ -257,14 +257,14 @@ const UpdateSyncFolder: React.FC = () => {
                       {selectedPublicFolderPath && (
                         <button
                           onClick={() => setStopSyncTarget("public")}
-                          className="h-[40px] border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
+                          className="h-10 border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
                         >
                           Stop Syncing
                         </button>
 
                       )}
                       <CardButton
-                        className="max-w-[160px] h-[40px]"
+                        className="max-w-[160px] h-10"
                         variant="primary"
                         onClick={() => openFolderSelection(true)}
                       >

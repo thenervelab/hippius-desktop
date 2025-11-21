@@ -130,7 +130,7 @@ export default function Wallet() {
             />
             {activeTab === "Address Book" && (
               <CardButton
-                className={"h-[40px] w-fit p-1"}
+                className={"h-10 w-fit p-1"}
                 onClick={() => setShowAddDialog(true)}
               >
                 <div className="flex items-center gap-2 text-grey-100 text-base font-medium p-2">

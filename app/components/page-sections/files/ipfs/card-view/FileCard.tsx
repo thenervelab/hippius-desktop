@@ -262,7 +262,7 @@ const FileCard: React.FC<FileCardProps> = ({
         />
       )}
 
-      <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-[40px] w-full">
+      <div className="p-2 flex items-center justify-between relative bg-white bg-opacity-80 border-b border-grey-80 h-10 w-full">
         {file.isFolder ? (
           <div className="flex items-center">
             {/* Selection checkbox - inline with filename */}

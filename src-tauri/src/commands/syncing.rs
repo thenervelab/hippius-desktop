@@ -1,22 +1,19 @@
 use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
-use crate::sync_shared::{
-    prepare_for_new_sync, reset_all_sync_state, stop_sync_for_scope, S3_PRIVATE_SYNC_STATE,
-    S3_PUBLIC_SYNC_STATE,
-};
-use crate::utils::sync::{get_private_sync_path, get_public_sync_path, is_first_run};
+use crate::sync_engine::DeletePolicy;
+use crate::sync_shared::{prepare_for_new_sync, reset_all_sync_state, stop_sync_for_scope};
+use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use base64 as b64;
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
-use sp_core::sr25519;
 use sp_core::Pair;
+use sp_core::sr25519;
 use sqlx;
 use std::sync::Arc;
 use tauri::Manager;
-use tauri::Emitter;
 use tokio::sync::Mutex;
+use serde::{Deserialize, Serialize};
 
-/// Stops sync processes for a specific scope ("public" or "private")
 #[tauri::command]
 pub async fn stop_sync_for_scope_command(scope: String) -> Result<(), String> {
     println!("[StopSync] Stopping sync for scope: {}", scope);
@@ -53,66 +50,11 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
 
     // Configure AWS env
     let encoded_seed = b64::encode(&seed_to_use);
-    std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
-    std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
-
-    // Get AWS binary path
-    let aws_binary_path = match crate::commands::node::get_aws_binary_path().await {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("[ensure_aws_env] Failed to get AWS binary path: {}", e);
-            return;
-        }
-    };
-
-    // Construct dynamic PATH with OS-appropriate separator
-    let path_separator = if cfg!(windows) { ";" } else { ":" };
-    let dynamic_path = format!(
-        "{}{}{}",
-        aws_binary_path.parent().unwrap().to_string_lossy(),
-        path_separator,
-        std::env::var("PATH").unwrap_or_default()
-    );
-
-    // Helper function to run aws configure commands
-    fn run_aws_configure(aws_binary_path: &std::path::Path, dynamic_path: &str, args: &[&str]) {
-        use std::process::Command;
-
-        let mut cmd = Command::new(aws_binary_path);
-        cmd.env("PATH", dynamic_path).args(args);
-
-        // Add Windows-specific flags to suppress terminal window
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-
-        let _ = cmd.status();
+    unsafe {
+        std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
+        std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
     }
-
-    // Configure AWS S3 multipart upload settings
-    run_aws_configure(
-        &aws_binary_path,
-        &dynamic_path,
-        &[
-            "configure",
-            "set",
-            "default.s3.multipart_chunksize",
-            "134217728",
-        ],
-    );
-    run_aws_configure(
-        &aws_binary_path,
-        &dynamic_path,
-        &[
-            "configure",
-            "set",
-            "default.s3.multipart_threshold",
-            "134217728",
-        ],
-    );
 }
 
 #[tauri::command]
@@ -144,10 +86,8 @@ pub async fn initialize_sync(
     let mnemonic_for_bg = mnemonic.clone();
     let parent_task = tokio::spawn(async move {
         // Spawn sync tasks
-        let app_handle_clone = app_for_bg.clone();
         let app_handle_folder_sync = app_for_bg.clone();
         let app_handle_public_folder_sync = app_for_bg.clone();
-        let account_clone = account_for_bg.clone();
         let account_clone2 = account_for_bg.clone();
         let account_clone3 = account_for_bg.clone();
         let mnemonic_clone = mnemonic_for_bg.clone();
@@ -181,11 +121,20 @@ pub async fn initialize_sync(
         ensure_aws_env(account_for_bg.clone(), mnemonic_for_bg.clone()).await;
 
         let folder_task = if private_enabled {
+            let delete_policy = match get_sync_policy_from_db().await {
+                Ok(policy) => policy,
+                Err(e) => {
+                    eprintln!("[SyncInit] Failed to get delete policy: {}. Using default UploadOnly.", e);
+                    DeletePolicy::UploadOnly
+                }
+            };
+            
             Some(tokio::spawn(async move {
                 start_private_folder_sync_tauri(
                     app_handle_folder_sync,
                     account_for_bg,
                     mnemonic_for_bg,
+                    delete_policy,
                 )
                 .await;
             }))
@@ -194,11 +143,20 @@ pub async fn initialize_sync(
         };
 
         let public_folder_task = if public_enabled {
+            let delete_policy = match get_sync_policy_from_db().await {
+                Ok(policy) => policy,
+                Err(e) => {
+                    eprintln!("[SyncInit] Failed to get delete policy: {}. Using default UploadOnly.", e);
+                    DeletePolicy::UploadOnly
+                }
+            };
+            
             Some(tokio::spawn(async move {
                 start_public_folder_sync_tauri(
                     app_handle_public_folder_sync,
                     account_clone2,
                     mnemonic_clone,
+                    delete_policy,
                 )
                 .await;
             }))
@@ -411,20 +369,19 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                 if let Some(key) = &maybe_key {
                     // Try decrypt; if fails, treat as legacy plaintext and migrate
                     if let Some(decrypted) = decrypt_phrase(&stored_str, key) {
-                        return decrypted;
+                        decrypted
                     } else {
-                        return stored_str;
+                        stored_str
                     }
                 } else {
-                    return stored_str;
+                    stored_str
                 }
             }
             Ok(None) => {
                 // Create a new subaccount (sr25519) and store it encrypted
                 let (_pair, phrase, _seed) = sr25519::Pair::generate_with_phrase(None);
                 let to_store = if let Some(key) = &maybe_key {
-                    let enc = encrypt_phrase(&phrase, key);
-                    enc
+                    encrypt_phrase(&phrase, key)
                 } else {
                     phrase.clone()
                 };
@@ -470,7 +427,10 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                                 err_str
                             );
                             if err_str.contains("MainCannotBeSubAccount") {
-                                println!("[SyncInit] Detected MainCannotBeSubAccount; storing provided mnemonic as subaccount for account_id={}", account_id);
+                                println!(
+                                    "[SyncInit] Detected MainCannotBeSubAccount; storing provided mnemonic as subaccount for account_id={}",
+                                    account_id
+                                );
                                 // Encrypt mnemonic if key available, otherwise store plaintext
                                 let to_store = if let Some(key) = &maybe_key {
                                     encrypt_phrase(&mnemonic, key)
@@ -495,11 +455,14 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
                     }
                 }
 
-                return chosen_seed_for_session;
+                chosen_seed_for_session
             }
             Err(e) => {
-                eprintln!("[SyncInit] DB query error for sub_accounts ({}), falling back to provided mnemonic", e);
-                return mnemonic.clone();
+                eprintln!(
+                    "[SyncInit] DB query error for sub_accounts ({}), falling back to provided mnemonic",
+                    e
+                );
+                mnemonic.clone()
             }
         }
     } else {
@@ -507,6 +470,100 @@ async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String)
             "[SyncInit] DB pool unavailable; falling back to provided mnemonic for account_id={}",
             account_id
         );
-        return mnemonic.clone();
+        mnemonic.clone()
     }
+}
+
+/// Request payload for updating bucket policy
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UpdateBucketPolicyRequest {
+    pub sync_policy: String,
+}
+
+/// Tauri command to update the bucket policy
+#[tauri::command]
+pub async fn set_bucket_policy(
+    app: tauri::AppHandle,
+    account_id: String,
+    mnemonic: String,
+    policy: UpdateBucketPolicyRequest,
+) -> Result<(), String> {
+    // Validate sync_policy
+    let sync_policy = match policy.sync_policy.as_str() {
+        "mirror_local_deletes" => Ok("mirror_local_deletes"),
+        "restore_from_remote" => Ok("restore_from_remote"),
+        "local_only_deletes" => Ok("local_only_deletes"),
+        "upload_only" => Ok("upload_only"),
+        _ => Err("Invalid sync_policy value. Must be one of: 'mirror_local_deletes', 'restore_from_remote', 'local_only_deletes', 'upload_only'"),
+    }.map_err(|e| e.to_string())?;
+
+    let pool = crate::DB_POOL.get().ok_or("Database pool not initialized")?;
+
+    sqlx::query(
+        r#"
+        UPDATE bucket_policies 
+        SET sync_policy = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = 1
+        "#,
+    )
+    .bind(sync_policy)  
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update bucket policy: {}", e))?;
+
+    println!("[BucketPolicy] Updated bucket policy - sync_policy: {}", 
+             policy.sync_policy);
+    
+    // 2. Stop all running sync processes
+    println!("[BucketPolicy] Stopping all sync processes...");
+    cleanup_sync(app.clone()).await?;
+    
+    // 3. Restart sync processes with the new policy
+    println!("[BucketPolicy] Restarting sync processes with new policy...");
+    initialize_sync(app, account_id, mnemonic).await?;
+    
+    println!("[BucketPolicy] Sync processes restarted with new policy");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_bucket_policy() -> Result<UpdateBucketPolicyRequest, String> {
+    let pool = crate::DB_POOL.get().ok_or("Database pool not initialized")?;
+    
+    let policy: (String,) = sqlx::query_as(
+        "SELECT sync_policy FROM bucket_policies WHERE id = 1"
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch bucket policy: {}", e))?;
+
+    Ok(UpdateBucketPolicyRequest {
+        sync_policy: policy.0,
+    })
+}
+
+// Helper to convert string to DeletePolicy
+fn get_delete_policy_from_str(policy_str: &str) -> Result<crate::sync_engine::DeletePolicy, String> {
+    match policy_str {
+        "mirror_local_deletes" => Ok(crate::sync_engine::DeletePolicy::MirrorLocalDeletes),
+        "restore_from_remote" => Ok(crate::sync_engine::DeletePolicy::RestoreFromRemote),
+        "local_only_deletes" => Ok(crate::sync_engine::DeletePolicy::LocalOnlyDeletes),
+        "upload_only" => Ok(crate::sync_engine::DeletePolicy::UploadOnly),
+        _ => Err(format!("Invalid delete policy: {}", policy_str)),
+    }
+}
+
+// Helper to get delete policy from database
+pub async fn get_sync_policy_from_db() -> Result<crate::sync_engine::DeletePolicy, String> {
+    let pool = crate::DB_POOL.get().ok_or("Database pool not initialized")?;
+    
+    let policy_str: (String,) = sqlx::query_as(
+        "SELECT sync_policy FROM bucket_policies WHERE id = 1"
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("Failed to fetch sync policy: {}", e))?;
+    
+    get_delete_policy_from_str(&policy_str.0)
 }
