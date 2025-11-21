@@ -171,6 +171,19 @@ pub async fn set_sync_path(
                     path_type
                 );
 
+                // Create security-scoped bookmark for macOS
+                #[cfg(target_os = "macos")]
+                {
+                    use crate::utils::bookmark_db::store_bookmark;
+                    if let Err(e) = store_bookmark(&params.path, path_type).await {
+                        eprintln!(
+                            "[set_sync_path] Warning: Failed to create security-scoped bookmark: {}",
+                            e
+                        );
+                        // Don't fail the entire operation if bookmark creation fails
+                    }
+                }
+
                 // Now spawn the appropriate sync task depending on type
                 if params.is_public {
                     let app_handle_public = app_handle.clone();

@@ -6,6 +6,7 @@ mod commands;
 mod constants;
 mod events;
 mod ipfs;
+mod macos_bookmarks;
 mod private_folder_sync;
 mod public_folder_sync;
 mod substrate_client;

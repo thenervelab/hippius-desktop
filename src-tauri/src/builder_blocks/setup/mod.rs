@@ -182,6 +182,20 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Create security_scoped_bookmarks table for macOS file access persistence
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS security_scoped_bookmarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            bookmark_data BLOB NOT NULL,
+            scope_type TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     sqlx::query(
         "INSERT OR IGNORE INTO bucket_policies (id, sync_policy) 
          VALUES (1, 'upload_only')"
