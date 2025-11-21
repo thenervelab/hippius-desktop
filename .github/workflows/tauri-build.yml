@@ -3,7 +3,7 @@ name: publish
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: write
@@ -27,6 +27,8 @@ jobs:
             args: ''
 
     runs-on: ${{ matrix.platform }}
+    # Only build macOS on dev branch, all platforms on main
+    if: github.ref == 'refs/heads/main' || matrix.platform == 'macos-latest'
 
     steps:
       - name: Checkout
