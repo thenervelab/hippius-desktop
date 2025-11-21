@@ -1392,15 +1392,12 @@ pub async fn sync_once_cas(
                 let pe = prune.entry(path.clone()).or_default();
                 let pe_etag = pe.adopted_remote_etag.clone();
 
-                eprintln!("[Sync] X00 {:#?} {:#?}", r0, pe_etag);
-
                 if (r0.is_some() && pe_etag.is_none())
                     || (r0.is_some() && pe_etag.is_some() && r0 != pe_etag)
                 {
                     // preemptive conflict resolution
                     // skip upload and handle conflict in download
                     ops_adopt.push(Op::Download { path: path.clone() });
-                    eprintln!("[Sync] X0");
                     continue;
                 }
 
@@ -1438,7 +1435,6 @@ pub async fn sync_once_cas(
                                     if equal {
                                         break Some(final_et);
                                     } else {
-                                        eprintln!("[Sync] X1");
                                         if let Err(e) = execute_conflict_flow(
                                             client,
                                             bucket,
@@ -1470,7 +1466,6 @@ pub async fn sync_once_cas(
                         {
                             // CAS miss => conflict depending on policy (handled as before)
                             if matches!(delete_policy, DeletePolicy::UploadOnly) {
-                                eprintln!("[Sync] X2");
                                 if let Err(e) = execute_conflict_flow(
                                     client,
                                     bucket,
@@ -1495,7 +1490,6 @@ pub async fn sync_once_cas(
                                         if equal {
                                             break Some(remote_et.unwrap_or_default());
                                         } else {
-                                            eprintln!("[Sync] X3");
                                             if let Err(e) = execute_conflict_flow(
                                                 client,
                                                 bucket,
@@ -1522,7 +1516,6 @@ pub async fn sync_once_cas(
                                             attempt += 1;
                                             continue;
                                         } else {
-                                            eprintln!("[Sync] X4");
                                             if let Err(e2) = execute_conflict_flow(
                                                 client,
                                                 bucket,
@@ -2019,22 +2012,9 @@ pub async fn sync_once_cas(
 
                                 let me_last_cid = remote_prev_cid.clone();
 
-                                eprintln!(
-                                    "[Sync] X004 {:#?} :: {:#?} :: {:#?} :: {:#?} || {:#?} :: {:#?} :: {:#?} (meta_prev={:#?})",
-                                    remote_etag,
-                                    r0,
-                                    pe_etag,
-                                    pe_o_etag,
-                                    adopted_base,
-                                    local_cid_now,
-                                    remote_cid_now,
-                                    me_last_cid,
-                                );
-
                                 if !adopted_base.is_empty() {
                                     let local_diverged = local_cid_now != adopted_base;
                                     let remote_diverged = remote_cid_now != adopted_base;
-                                    eprintln!("[Sync] X05");
 
                                     if local_diverged && remote_diverged
                                         || (((((r0.is_some() && pe_etag.is_none())
@@ -2052,7 +2032,7 @@ pub async fn sync_once_cas(
                                     {
                                         // TRUE CONFLICT against the last adopted base
                                         let local_cid_for_tag = local_cid_now.clone();
-                                        eprintln!("[Sync] X5");
+
                                         if let Err(e) = execute_conflict_flow(
                                             client,
                                             bucket,
@@ -2095,12 +2075,11 @@ pub async fn sync_once_cas(
                                     }
                                 } else {
                                     // No adopted base recorded (first-time adopter on this client)
-                                    eprintln!("[Sync] X06");
 
                                     if local_cid_now != remote_cid_now {
                                         // Conservative conflict: avoid data loss
                                         let local_cid_for_tag = local_cid_now.clone();
-                                        eprintln!("[Sync] X6");
+
                                         if let Err(e) = execute_conflict_flow(
                                             client,
                                             bucket,
