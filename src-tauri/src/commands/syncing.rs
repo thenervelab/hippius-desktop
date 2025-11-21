@@ -426,7 +426,7 @@ pub async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: Str
                                 );
                             };
 
-                            sleep(Duration::from_secs(12)).await;
+                            sleep(Duration::from_secs(60)).await;
                             if let Some(key) = &maybe_key {
                                 // Try decrypt; if fails, treat as legacy plaintext and migrate
                                 if let Some(decrypted) = decrypt_phrase(&to_store, key) {
