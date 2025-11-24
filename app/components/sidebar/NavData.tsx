@@ -1,5 +1,6 @@
 import { Icons } from "@/components/ui";
 import { LockKeyhole, LockKeyholeOpen, Share2Icon } from "lucide-react";
+import Support from "../ui/icons/Support";
 
 export interface SubMenuItemData {
   label: string;
@@ -27,7 +28,7 @@ export const navItems: NavItemData[] = [
     label: "Home",
     path: "/",
     icon: <Icons.Home />,
-    isActive: true
+    isActive: true,
   },
   {
     label: "Files",
@@ -37,14 +38,14 @@ export const navItems: NavItemData[] = [
       {
         label: "Private",
         path: "/files",
-        icon: <LockKeyhole className="size-4" />
+        icon: <LockKeyhole className="size-4" />,
       },
       {
         label: "Public",
         path: "/files",
-        icon: <LockKeyholeOpen className="size-4" />
-      }
-    ]
+        icon: <LockKeyholeOpen className="size-4" />,
+      },
+    ],
   },
   // {
   //   label: "Wallet",
@@ -54,23 +55,28 @@ export const navItems: NavItemData[] = [
   {
     label: "Billing",
     path: "/billing",
-    icon: <Icons.CreditCard />
+    icon: <Icons.CreditCard />,
   },
   {
     label: "Referrals",
     path: "/referrals",
-    icon: <Share2Icon className="size-4" />
+    icon: <Share2Icon className="size-4" />,
+  },
+  {
+    label: "Help & Support",
+    path: "/support",
+    icon: <Support className="size-4" />,
   },
   {
     label: "Settings",
     path: "/settings",
-    icon: <Icons.Setting />
-  }
+    icon: <Icons.Setting />,
+  },
 ];
 
 export const footerNavItems: FooterNavItemData[] = [
   {
     label: "Logout",
-    icon: <Icons.Logout />
-  }
+    icon: <Icons.Logout />,
+  },
 ];
