@@ -15,7 +15,8 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
         let ns_data_class = class!(NSData);
         
         // Create NSString from path
-        let path_str: id = msg_send![ns_string_class, stringWithUTF8String: path.as_ptr()];
+        let c_path = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+        let path_str: id = msg_send![ns_string_class, stringWithUTF8String: c_path.as_ptr()];
         
         // Create NSURL from path
         let url: id = msg_send![ns_url_class, fileURLWithPath: path_str];
@@ -86,35 +87,18 @@ pub fn resolve_security_scoped_bookmark(bookmark_data: &[u8]) -> Result<(String,
         println!("[Bookmark] NSData created successfully");
         
         // Resolve bookmark
-        let mut is_stale: bool = false;
-        let mut error: id = std::ptr::null_mut();
         let url: id = msg_send![
             ns_url_class,
             URLByResolvingBookmarkData: data
             options: 0x400  // NSURLBookmarkResolutionWithSecurityScope
             relativeToURL: std::ptr::null::<id>()
-            bookmarkDataIsStale: &mut is_stale
-            error: &mut error
+            bookmarkDataIsStale: std::ptr::null_mut::<i8>()
+            error: std::ptr::null_mut::<id>()
         ];
         
-        if url.is_null() || !error.is_null() {
-            if !error.is_null() {
-                let error_desc: id = msg_send![error, localizedDescription];
-                let error_cstr: *const i8 = msg_send![error_desc, UTF8String];
-                if !error_cstr.is_null() {
-                    let error_str = std::ffi::CStr::from_ptr(error_cstr)
-                        .to_string_lossy()
-                        .into_owned();
-                    eprintln!("[Bookmark] ERROR: Failed to resolve bookmark: {}", error_str);
-                    return Err(format!("Failed to resolve security-scoped bookmark: {}", error_str));
-                }
-            }
-            eprintln!("[Bookmark] ERROR: Failed to resolve security-scoped bookmark (unknown error)");
+        if url.is_null() {
+            eprintln!("[Bookmark] ERROR: Failed to resolve security-scoped bookmark");
             return Err("Failed to resolve security-scoped bookmark".to_string());
-        }
-        
-        if is_stale {
-            println!("[Bookmark] WARNING: Bookmark is stale");
         }
         
         println!("[Bookmark] Bookmark resolved successfully");
@@ -136,6 +120,12 @@ pub fn resolve_security_scoped_bookmark(bookmark_data: &[u8]) -> Result<(String,
             .into_owned();
         
         println!("[Bookmark] Resolved path: {}", path_str);
+
+        // NOTE: We intentionally do NOT call stopAccessingSecurityScopedResource here.
+        // For a sync app, we need persistent access to the folder for the app's lifetime.
+        // The security scope will remain active and be automatically cleaned up when the app terminates.
+        // Calling stopAccessing here would immediately revoke permissions, causing sync operations to fail.
+        
         Ok((path_str, url))
     }
 }

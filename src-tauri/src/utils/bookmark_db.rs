@@ -47,8 +47,11 @@ pub async fn activate_bookmark(path: &str) -> Result<bool, String> {
     .map_err(|e| format!("Failed to fetch bookmark: {}", e))?;
     
     if let Some((bookmark_data,)) = row {
-        // Resolve and start accessing in a synchronous block
-        // The URL handle is intentionally leaked to maintain access for the app's lifetime
+        // Resolve and start accessing the security-scoped resource.
+        // The URL handle is intentionally discarded here because resolve_security_scoped_bookmark
+        // starts accessing but does NOT stop accessing - the security scope remains active
+        // for the app's lifetime, allowing sync operations to work continuously.
+        // macOS will automatically clean up when the app terminates.
         let _ = resolve_security_scoped_bookmark(&bookmark_data)?;
         
         // Update last_accessed timestamp

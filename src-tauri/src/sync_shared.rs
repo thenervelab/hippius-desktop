@@ -628,7 +628,7 @@ pub async fn list_single_bucket_contents(bucket_name: &str) -> Result<Vec<Bucket
             .storage_class()
             .map(|s| s.as_str().to_string())
             .unwrap_or_else(|| "STANDARD".to_string());
-
+        println!("[ListBucket] Processing item: {:?}", item);
         // The "Owner" field is not included in list_objects_v2 by default
         let ipfs_hash = item.owner().and_then(|o| o.id()).unwrap_or("").to_string();
 
