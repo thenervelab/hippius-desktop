@@ -23,6 +23,12 @@
                 "https://github.com/thenervelab/hippius-desktop/releases/latest/download/latest.json"
             ],
             "dangerousInsecureTransportProtocol": false
+        },
+        "deepLink": {
+            "mobile": [],
+            "desktop": {
+                "protocols": ["hippius"]
+            }
         }
     },
     "app": {
@@ -36,6 +42,7 @@
             "resizable": true,
             "devtools": true
         }],
+        "withGlobalTauri": true,
         "security": {
             "capabilities": ["default"],
             "csp": null,

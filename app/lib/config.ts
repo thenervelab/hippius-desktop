@@ -1,9 +1,17 @@
 export const API_CONFIG = {
+  baseUrl: "https://api.hippius.com",
   auth: {
     mnemonic: "/api/auth/mnemonic/",
     verify: "/api/auth/verify/",
     csrf: "/api/csrf/",
-    userProfile: "/api/user-profile/"
+    userProfile: "/api/user-profile/",
+    // OAuth endpoints
+    oauth: {
+      google: "/accounts/google/login/",
+      github: "/accounts/github/login/",
+      apple: "/accounts/apple/login/",
+      exchange: "/api/auth/exchange/",
+    },
   },
   sshKeys: {
     list: "/api/ssh-keys/",

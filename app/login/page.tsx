@@ -1,7 +1,15 @@
 "use client";
 
-import Login from "@/components/auth/Login";
+import { useState } from "react";
+import { LoginForm } from "@/app/components/auth/LoginForm";
+import AuthLayout from "@/components/auth/AuthLayout";
 
 export default function LoginPage() {
-  return <Login />;
+  const [hideHeader, setHideHeader] = useState(false);
+
+  return (
+    <AuthLayout hideHeader={hideHeader}>
+      <LoginForm onHideHeaderChange={setHideHeader} />
+    </AuthLayout>
+  );
 }

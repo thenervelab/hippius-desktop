@@ -13,6 +13,7 @@ import PageLoader from "@/app/components/PageLoader";
 import SplashWrapper from "./components/splash-screen";
 import { NavigationLoaderProvider } from "./lib/hooks/useNavigationLoader";
 import UpdateChecker from "@/components/updater/UpdateChecker";
+import { useOAuthDeepLink } from "@/app/lib/hooks/useOAuthDeepLink";
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
@@ -23,6 +24,13 @@ const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
 });
+
+function LayoutContent({ children }: { children: React.ReactNode }) {
+  // Listen for OAuth deep links from Tauri
+  useOAuthDeepLink();
+
+  return children;
+}
 
 export default function RootLayout({
   children,
@@ -37,26 +45,28 @@ export default function RootLayout({
         <Providers>
           <UpdateChecker>
             <WalletAuthProvider>
-              <PreAuthProvider>
-                <NextTopLoader color="#3167DD" showSpinner={false} />
-                <NavigationLoaderProvider>
-                  <Suspense fallback={<PageLoader />}>
-                    <SplashWrapper skipSplash={false}>
-                      <div className="flex min-h-screen h-screen">
-                        {children}
-                      </div>
-                    </SplashWrapper>
-                  </Suspense>
+              <LayoutContent>
+                <PreAuthProvider>
+                  <NextTopLoader color="#3167DD" showSpinner={false} />
+                  <NavigationLoaderProvider>
+                    <Suspense fallback={<PageLoader />}>
+                      <SplashWrapper skipSplash={false}>
+                        <div className="flex min-h-screen h-screen">
+                          {children}
+                        </div>
+                      </SplashWrapper>
+                    </Suspense>
 
-                  <Toaster
-                    position="bottom-right"
-                    className="toaster-auth-aware"
-                    toastOptions={{
-                      style: { fontFamily: "var(--font-geist-sans)" },
-                    }}
-                  />
-                </NavigationLoaderProvider>
-              </PreAuthProvider>
+                    <Toaster
+                      position="bottom-right"
+                      className="toaster-auth-aware"
+                      toastOptions={{
+                        style: { fontFamily: "var(--font-geist-sans)" },
+                      }}
+                    />
+                  </NavigationLoaderProvider>
+                </PreAuthProvider>
+              </LayoutContent>
             </WalletAuthProvider>
           </UpdateChecker>
         </Providers>

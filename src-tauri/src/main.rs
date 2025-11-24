@@ -46,12 +46,34 @@ use commands::substrate_tx::{
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
-use tauri::{Builder, Manager};
+use tauri::{Builder, Manager, Emitter, Listener};
 use tokio::sync::Mutex;
 use utils::file_operations::delete_and_unpin_file_by_name;
 
 // Register the new  Tauri command so the frontend can invoke it.
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
+
+// Deep link handler for OAuth callbacks
+fn handle_deep_link(app: &tauri::AppHandle, url: String) {
+    println!("[DeepLink] Received: {}", url);
+    
+    // Parse the deep link URL
+    if url.starts_with("hippius://auth/callback") {
+        println!("[DeepLink] OAuth callback detected");
+        
+        // Emit event to frontend with the full URL
+        if let Err(e) = app.emit("oauth-callback", url.clone()) {
+            eprintln!("[DeepLink] Failed to emit oauth-callback event: {}", e);
+        }
+        
+        // Show and focus the main window
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
+}
 
 fn main() {
     sodiumoxide::init().unwrap();
@@ -83,6 +105,22 @@ fn main() {
                 let _ = window.set_focus();
             }
         }))
+        .setup(|app| {
+            // Deep link handler for OAuth callbacks
+            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            {
+                let app_handle = app.handle().clone();
+                
+                // Listen for deep link events from the plugin
+                app.listen("deep-link://new-url", move |event| {
+                    println!("[DeepLink] Event received: {:?}", event);
+                    let url = event.payload();
+                    handle_deep_link(&app_handle, url.to_string());
+                });
+            }
+            Ok(())
+        })
+        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             encrypt_and_upload_file,
             download_and_decrypt_file,

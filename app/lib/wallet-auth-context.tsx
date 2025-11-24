@@ -26,12 +26,17 @@ import { cryptoWaitReady } from "@polkadot/util-crypto";
 
 interface WalletContextType {
   isAuthenticated: boolean;
+  address: string | null;
   polkadotAddress: string | null;
   mnemonic: string | null;
   isLoading: boolean;
   walletManager: {
     polkadotPair: any;
   } | null;
+  authType: "mnemonic" | "oauth" | null;
+  oauthSession: import("@/app/lib/types/oAuth").OAuthSession | null;
+  login: (mnemonic: string) => Promise<void>;
+  setOAuthSession: (session: import("@/app/lib/types/oAuth").OAuthSession) => void;
   setSession: (
     mnemonic: string,
     logoutTimeInMinutes?: number
@@ -40,7 +45,7 @@ interface WalletContextType {
     passcode: string,
     logoutTimeInMinutes?: number
   ) => Promise<boolean>;
-  logout: () => Promise<void>;
+  logout: (redirectPath?: string) => Promise<void>;
   resetHippiusDesktop: () => Promise<void>;
   sessionTimeRemaining: number | null;
 }
@@ -56,12 +61,15 @@ export function WalletAuthProvider({
   const router = useRouter();
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [address, setAddress] = useState<string | null>(null);
   const [polkadotAddress, setPolkadotAddress] = useState<string | null>(null);
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [walletManager, setWalletManager] = useState<{
     polkadotPair: any;
   } | null>(null);
+  const [authType, setAuthType] = useState<"mnemonic" | "oauth" | null>(null);
+  const [oauthSession, setOAuthSessionState] = useState<import("@/app/lib/types/oAuth").OAuthSession | null>(null);
   const [sessionTimeRemaining, setSessionTimeRemaining] = useState<
     number | null
   >(null);
@@ -69,7 +77,7 @@ export function WalletAuthProvider({
   const syncInitialized = useRef(false);
   const logoutTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const logout = useCallback(async () => {
+  const logout = useCallback(async (redirectPath?: string) => {
     try {
       console.log("[WalletAuth] Starting sync cleanup...");
       invoke("cleanup_sync");
@@ -77,6 +85,12 @@ export function WalletAuthProvider({
 
       await clearSession();
       await clearApiAuth();
+
+      // Clear OAuth session if present
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("hippius_oauth_session");
+        localStorage.removeItem("hippius_oauth_session_expiry");
+      }
     } catch (error) {
       console.error("Failed to cleanup sync on logout:", error);
     }
@@ -88,12 +102,20 @@ export function WalletAuthProvider({
     }
 
     setMnemonic(null);
+    setAddress(null);
     setPolkadotAddress(null);
     setWalletManager(null);
+    setAuthType(null);
+    setOAuthSessionState(null);
     setIsAuthenticated(false);
     setSessionTimeRemaining(null);
     syncInitialized.current = false; // Reset sync flag for next login
-  }, []);
+
+    // Optionally redirect after logout
+    if (redirectPath && typeof window !== "undefined") {
+      router.push(redirectPath);
+    }
+  }, [router]);
 
   function scheduleLogout(ms: number) {
     if (ms === Infinity) return; // keep me logged in
@@ -242,6 +264,29 @@ export function WalletAuthProvider({
     }
   };
 
+  // OAuth login method (simplified - calls setSession internally)
+  const login = async (inputMnemonic: string): Promise<void> => {
+    setIsLoading(true);
+    try {
+      const success = await setSession(inputMnemonic, 1440); // Default 24 hours
+      if (!success) {
+        throw new Error("Failed to create session");
+      }
+      setAuthType("mnemonic");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Set OAuth session from external OAuth flow
+  const setOAuthSession = (session: import("@/app/lib/types/oAuth").OAuthSession) => {
+    console.log("[WalletAuth] Setting OAuth session");
+    setOAuthSessionState(session);
+    setPolkadotAddress(session.substrateAddress || null);
+    setAuthType("oauth");
+    setIsAuthenticated(true);
+  };
+
   // Full reset: clear session + wallet storage
   const resetHippiusDesktop = async () => {
     await clearHippiusDesktopDB();
@@ -254,10 +299,15 @@ export function WalletAuthProvider({
     <WalletContext.Provider
       value={{
         isAuthenticated,
+        address,
         polkadotAddress,
         mnemonic,
         isLoading,
         walletManager,
+        authType,
+        oauthSession,
+        login,
+        setOAuthSession,
         setSession,
         unlockWithPasscode,
         logout,
