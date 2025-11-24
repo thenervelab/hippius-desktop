@@ -144,5 +144,6 @@ jobs:
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
+          makeLatest: true
           overwrite: true
           args: ${{ matrix.args }}

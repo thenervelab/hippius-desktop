@@ -119,5 +119,6 @@ jobs:
             ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: true
+          makeLatest: false
           overwrite: true
           args: '--target universal-apple-darwin'
