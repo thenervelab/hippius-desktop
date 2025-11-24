@@ -160,45 +160,43 @@ pub async fn start_private_folder_sync(
 
     // Activate security-scoped bookmark for macOS
     #[cfg(target_os = "macos")]
+    let mut needs_bookmark_creation = false;
+
+    #[cfg(target_os = "macos")]
     {
-        use crate::utils::bookmark_db::{activate_bookmark, store_bookmark};
+        use crate::utils::bookmark_db::activate_bookmark;
         match activate_bookmark(&sync_path).await {
             Ok(true) => {
                 println!("[PrivateFolderSync] Successfully activated bookmark for: {}", sync_path);
             }
             Ok(false) | Err(_) => {
                 eprintln!(
-                    "[PrivateFolderSync] No bookmark found, creating one now for: {}",
-                    sync_path
+                    "[PrivateFolderSync] No bookmark found. Will attempt to create one after filesystem access."
                 );
-                // Create bookmark for existing sync path
-                if let Err(e) = store_bookmark(&sync_path, "private").await {
-                    eprintln!(
-                        "[PrivateFolderSync] Failed to create bookmark: {}. Permission popup may appear.",
-                        e
-                    );
-                } else {
-                    // Try activating the newly created bookmark
-                    match activate_bookmark(&sync_path).await {
-                        Ok(true) => {
-                            println!(
-                                "[PrivateFolderSync] Successfully created and activated bookmark for: {}",
-                                sync_path
-                            );
-                        }
-                        Ok(false) => {
-                            eprintln!(
-                                "[PrivateFolderSync] Failed to activate newly created bookmark: returned false"
-                            );
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "[PrivateFolderSync] Failed to activate newly created bookmark: {}",
-                                e
-                            );
-                        }
-                    }
-                }
+                needs_bookmark_creation = true;
+            }
+        }
+    }
+
+    // Ensure directory exists and we have access (triggers permission prompt on macOS if needed)
+    // We do this EARLY to ensure we capture the permission in a bookmark as soon as possible,
+    // before potentially long-running operations like sub-account resolution.
+    if let Err(e) = std::fs::create_dir_all(&sync_path) {
+        eprintln!("[PrivateFolderSync] Failed to create sync directory: {}", e);
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    if needs_bookmark_creation {
+        use crate::utils::bookmark_db::{activate_bookmark, store_bookmark};
+        println!("[PrivateFolderSync] Attempting to create bookmark after successful FS access...");
+        if let Err(e) = store_bookmark(&sync_path, "private").await {
+            eprintln!("[PrivateFolderSync] Failed to create bookmark: {}", e);
+        } else {
+             // Try activating the newly created bookmark to ensure it works
+            match activate_bookmark(&sync_path).await {
+                Ok(true) => println!("[PrivateFolderSync] Successfully created and activated bookmark"),
+                _ => eprintln!("[PrivateFolderSync] Failed to activate newly created bookmark"),
             }
         }
     }
@@ -270,12 +268,6 @@ pub async fn start_private_folder_sync(
     };
 
     let prunefile_id = prunefile_id(&sub_account, &path_hash, "private");
-
-    // Create directory if it doesn't exist
-    if let Err(e) = std::fs::create_dir_all(&sync_path) {
-        eprintln!("[PrivateFolderSync] Failed to create sync directory: {}", e);
-        return;
-    }
 
     // Build client
     let s3 = make_s3_client().await;
