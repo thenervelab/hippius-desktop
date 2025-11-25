@@ -54,6 +54,21 @@ pub fn get_nebula_binary_path() -> Result<PathBuf> {
     }
 }
 
+/// Get the path to the Nebula-cert binary
+fn get_nebula_cert_binary_path() -> Result<PathBuf> {
+    let nebula_dir = get_nebula_dir()?;
+    
+    #[cfg(target_os = "windows")]
+    {
+        Ok(nebula_dir.join("nebula-cert.exe"))
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(nebula_dir.join("nebula-cert"))
+    }
+}
+
 /// Determine the correct asset name based on OS and architecture
 fn get_asset_name() -> Result<String> {
     let os = std::env::consts::OS;
@@ -163,7 +178,7 @@ async fn download_and_install_nebula(download_url: &str, version: &str) -> Resul
         return Err(anyhow!("Unsupported archive format"));
     }
     
-    // Make binary executable on Unix
+    // Make binaries executable on Unix
     #[cfg(unix)]
     {
         let binary_path = get_nebula_binary_path()?;
@@ -171,6 +186,13 @@ async fn download_and_install_nebula(download_url: &str, version: &str) -> Resul
             let mut perms = fs::metadata(&binary_path).await?.permissions();
             perms.set_mode(0o755);
             fs::set_permissions(&binary_path, perms).await?;
+        }
+        
+        let cert_binary_path = get_nebula_cert_binary_path()?;
+        if cert_binary_path.exists() {
+            let mut perms = fs::metadata(&cert_binary_path).await?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&cert_binary_path, perms).await?;
         }
     }
     
@@ -191,14 +213,14 @@ async fn extract_zip(bytes: &[u8], target_dir: &Path) -> Result<()> {
     
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
-        let filename = file.name().to_string(); // Clone the filename
+        let filename = file.name().to_string();
         
-        // Only extract the nebula binary (or nebula.exe on Windows)
+        // Extract nebula and nebula-cert binaries
         #[cfg(target_os = "windows")]
-        let is_binary = filename == "nebula.exe";
+        let is_binary = filename == "nebula.exe" || filename == "nebula-cert.exe";
         
         #[cfg(not(target_os = "windows"))]
-        let is_binary = filename == "nebula";
+        let is_binary = filename == "nebula" || filename == "nebula-cert";
         
         if is_binary {
             let outpath = target_dir.join(&filename);
@@ -227,10 +249,10 @@ async fn extract_tar_gz(bytes: &[u8], target_dir: &Path) -> Result<()> {
         let filename = path.file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| anyhow!("Invalid filename in archive"))?
-            .to_string(); // Clone the filename
+            .to_string();
         
-        // Only extract the nebula binary
-        if filename == "nebula" {
+        // Extract nebula and nebula-cert binaries
+        if filename == "nebula" || filename == "nebula-cert" {
             let outpath = target_dir.join(&filename);
             entry.unpack(&outpath)?;
             println!("[Nebula] Extracted: {}", filename);
@@ -264,8 +286,15 @@ pub async fn ensure_nebula_installed(app: AppHandle) -> Result<()> {
             true
         }
         Some(ref installed) => {
+            let cert_binary_exists = get_nebula_cert_binary_path()
+                .map(|p| p.exists())
+                .unwrap_or(false);
+
             if installed != &latest_version {
                 println!("[Nebula] Update available: {} -> {}", installed, latest_version);
+                true
+            } else if !cert_binary_exists {
+                println!("[Nebula] nebula-cert binary missing, will reinstall");
                 true
             } else {
                 println!("[Nebula] Already up-to-date: {}", installed);
@@ -301,6 +330,54 @@ pub async fn ensure_nebula_installed(app: AppHandle) -> Result<()> {
         }
         
         println!("[Nebula] Installation verified successfully");
+        
+        // Verify nebula-cert was also extracted
+        let cert_binary_path = get_nebula_cert_binary_path()?;
+        if !cert_binary_path.exists() {
+            eprintln!("[Nebula] Warning: nebula-cert binary not found at: {}", cert_binary_path.display());
+            eprintln!("[Nebula] Certificate generation will not be available");
+        } else {
+            println!("[Nebula] nebula-cert binary verified: {}", cert_binary_path.display());
+        }
+    }
+    
+    // Generate certificates if they don't exist
+    let config_dir = get_nebula_config_dir()?;
+    let ca_crt = config_dir.join("ca.crt");
+    
+    if !ca_crt.exists() {
+        println!("[Nebula] No CA certificate found, generating certificates...");
+        
+        // Generate CA certificate
+        if let Err(e) = generate_ca_certificate("Hippius Network", 3650).await {
+            eprintln!("[Nebula] Failed to generate CA certificate: {}", e);
+            eprintln!("[Nebula] You can generate certificates manually later");
+        } else {
+            println!("[Nebula] CA certificate generated successfully");
+            
+            // Get hostname for node name
+            let hostname = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "node".to_string());
+            
+            // Generate node certificate
+            let node_ip = "192.168.100.2/24"; // Default IP, can be customized later
+            if let Err(e) = generate_node_certificate(&hostname, node_ip, vec![], 365).await {
+                eprintln!("[Nebula] Failed to generate node certificate: {}", e);
+            } else {
+                println!("[Nebula] Node certificate generated for: {}", hostname);
+                
+                // Generate config file
+                if let Err(e) = generate_config_file(&hostname, None, false).await {
+                    eprintln!("[Nebula] Failed to generate config file: {}", e);
+                } else {
+                    println!("[Nebula] Config file generated: {}.yml", hostname);
+                }
+            }
+        }
+    } else {
+        println!("[Nebula] Certificates already exist, skipping generation");
     }
     
     // Emit ready phase
@@ -316,6 +393,276 @@ pub async fn get_nebula_version() -> Result<String, String> {
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Nebula not installed".to_string())
 }
+
+/// Get the Nebula config directory
+fn get_nebula_config_dir() -> Result<PathBuf> {
+    // Use ~/.hippius/nebula/config on all platforms to avoid permission issues
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
+    Ok(home.join(".hippius").join("nebula").join("config"))
+}
+
+/// Generate a Nebula CA certificate
+pub async fn generate_ca_certificate(
+    name: &str,
+    duration_days: u32,
+) -> Result<()> {
+    let nebula_cert_binary = get_nebula_cert_binary_path()?;
+    
+    // Check if nebula-cert binary exists
+    if !nebula_cert_binary.exists() {
+        return Err(anyhow!(
+            "nebula-cert binary not found at: {}. Please restart the app to download it.",
+            nebula_cert_binary.display()
+        ));
+    }
+    
+    let config_dir = get_nebula_config_dir()?;
+    
+    // Ensure config directory exists
+    println!("[Nebula] Creating config directory: {}", config_dir.display());
+    fs::create_dir_all(&config_dir).await?;
+    
+    let ca_crt = config_dir.join("ca.crt");
+    let ca_key = config_dir.join("ca.key");
+    
+    println!("[Nebula] Generating CA certificate: {}", name);
+    println!("[Nebula] Using binary: {}", nebula_cert_binary.display());
+    
+    let output = tokio::process::Command::new(&nebula_cert_binary)
+        .args(&[
+            "ca",
+            "-name",
+            name,
+            "-duration",
+            &format!("{}h", duration_days * 24),
+            "-out-crt",
+            ca_crt.to_str().unwrap(),
+            "-out-key",
+            ca_key.to_str().unwrap(),
+        ])
+        .output()
+        .await?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(anyhow!(
+            "CA generation failed.\nStderr: {}\nStdout: {}", 
+            stderr,
+            stdout
+        ));
+    }
+    
+    println!("[Nebula] CA certificate generated successfully");
+    println!("[Nebula]   Certificate: {}", ca_crt.display());
+    println!("[Nebula]   Key: {}", ca_key.display());
+    
+    Ok(())
+}
+
+/// Generate a Nebula node certificate
+pub async fn generate_node_certificate(
+    name: &str,
+    ip: &str,
+    groups: Vec<String>,
+    duration_days: u32,
+) -> Result<()> {
+    let nebula_cert_binary = get_nebula_cert_binary_path()?;
+    let config_dir = get_nebula_config_dir()?;
+    
+    let ca_crt = config_dir.join("ca.crt");
+    let ca_key = config_dir.join("ca.key");
+    let node_crt = config_dir.join(format!("{}.crt", name));
+    let node_key = config_dir.join(format!("{}.key", name));
+    
+    if !ca_crt.exists() || !ca_key.exists() {
+        return Err(anyhow!("CA certificate not found. Generate CA first."));
+    }
+    
+    println!("[Nebula] Generating node certificate: {}", name);
+    
+    let duration_str = format!("{}h", duration_days * 24);
+    let ca_crt_str = ca_crt.to_str().unwrap();
+    let ca_key_str = ca_key.to_str().unwrap();
+    let node_crt_str = node_crt.to_str().unwrap();
+    let node_key_str = node_key.to_str().unwrap();
+    
+    let mut cmd = tokio::process::Command::new(&nebula_cert_binary);
+    let mut args: Vec<&str> = vec![
+        "sign",
+        "-name",
+        name,
+        "-ip",
+        ip,
+        "-duration",
+        &duration_str,
+        "-ca-crt",
+        ca_crt_str,
+        "-ca-key",
+        ca_key_str,
+        "-out-crt",
+        node_crt_str,
+        "-out-key",
+        node_key_str,
+    ];
+    
+    // Add groups
+    let group_strs: Vec<String> = groups.iter().map(|g| g.as_str().to_string()).collect();
+    for group in &group_strs {
+        args.push("-groups");
+        args.push(group);
+    }
+    
+    cmd.args(&args);
+    
+    let output = cmd.output().await?;
+    
+    if !output.status.success() {
+        return Err(anyhow!("Node certificate generation failed: {}", 
+            String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    println!("[Nebula] Node certificate generated successfully");
+    println!("[Nebula]   Certificate: {}", node_crt.display());
+    println!("[Nebula]   Key: {}", node_key.display());
+    
+    Ok(())
+}
+
+/// Generate a basic Nebula config file
+pub async fn generate_config_file(
+    node_name: &str,
+    lighthouse_ip: Option<&str>,
+    is_lighthouse: bool,
+) -> Result<()> {
+    let config_dir = get_nebula_config_dir()?;
+    let config_file = config_dir.join(format!("{}.yml", node_name));
+    
+    let ca_crt = config_dir.join("ca.crt");
+    let node_crt = config_dir.join(format!("{}.crt", node_name));
+    let node_key = config_dir.join(format!("{}.key", node_name));
+    
+    let config_content = if is_lighthouse {
+        format!(r#"# Nebula Lighthouse Configuration
+pki:
+  ca: {}
+  cert: {}
+  key: {}
+
+static_host_map:
+  # Add your public IP here if this lighthouse is behind NAT
+  # "192.168.100.1": ["public.ip.address:4242"]
+
+lighthouse:
+  am_lighthouse: true
+  interval: 60
+
+listen:
+  host: 0.0.0.0
+  port: 4242
+
+punchy:
+  punch: true
+  respond: true
+
+tun:
+  dev: nebula1
+  drop_local_broadcast: false
+  drop_multicast: false
+
+logging:
+  level: info
+  format: text
+
+firewall:
+  conntrack:
+    tcp_timeout: 12m
+    udp_timeout: 3m
+    default_timeout: 10m
+
+  outbound:
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    - port: any
+      proto: any
+      host: any
+"#,
+            ca_crt.display(),
+            node_crt.display(),
+            node_key.display()
+        )
+    } else {
+        let lighthouse_hosts = lighthouse_ip
+            .map(|ip| format!("  - \"{}\"", ip))
+            .unwrap_or_else(|| "  # - \"192.168.100.1\"".to_string());
+        
+        format!(r#"# Nebula Node Configuration
+pki:
+  ca: {}
+  cert: {}
+  key: {}
+
+static_host_map:
+  # Map lighthouse nebula IP to its public address
+  # "192.168.100.1": ["lighthouse.public.ip:4242"]
+
+lighthouse:
+  am_lighthouse: false
+  interval: 60
+  hosts:
+{}
+
+listen:
+  host: 0.0.0.0
+  port: 4242
+
+punchy:
+  punch: true
+  respond: true
+
+tun:
+  dev: nebula1
+  drop_local_broadcast: false
+  drop_multicast: false
+
+logging:
+  level: info
+  format: text
+
+firewall:
+  conntrack:
+    tcp_timeout: 12m
+    udp_timeout: 3m
+    default_timeout: 10m
+
+  outbound:
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    - port: any
+      proto: any
+      host: any
+"#,
+            ca_crt.display(),
+            node_crt.display(),
+            node_key.display(),
+            lighthouse_hosts
+        )
+    };
+    
+    fs::write(&config_file, config_content.as_bytes()).await?;
+    
+    println!("[Nebula] Config file generated: {}", config_file.display());
+    
+    Ok(())
+}
+
+
 
 #[tauri::command]
 pub async fn check_nebula_update() -> Result<Option<String>, String> {
