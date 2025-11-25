@@ -1207,6 +1207,17 @@ pub async fn sync_once_cas(
     let local = scan_local(local_root).await?;
     let remote0 = list_remote(client, bucket).await?;
 
+    // Diagnostic logging to detect prune state issues
+    println!("[Sync] Phase 0 snapshot complete:");
+    println!("  - Prune state entries: {}", prune.len());
+    println!("  - Local files scanned: {}", local.len());
+    println!("  - Remote files listed: {}", remote0.len());
+    println!("  - Manifest entries: {}", manifest.entries.len());
+    println!("  - Prunefile ID: {}", prunefile_id);
+    if prune.is_empty() && !local.is_empty() {
+        eprintln!("[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!", local.len());
+    }
+
     /* ---- Phase 3 Preamble: REMOTE -> LOCAL (diff vs remote) --------------------------- */
 
     let mut ops_adopt: Vec<Op> = Vec::new();
