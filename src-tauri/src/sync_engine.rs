@@ -1256,14 +1256,28 @@ pub async fn sync_once_cas(
             continue;
         }
         match prune.get(lk) {
-            None => schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk),
+            None => {
+                println!("[Sync] Scheduling upload for '{}': not in prune state", lk);
+                schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
+            }
             Some(pe) => {
                 if !pe.present {
+                    println!("[Sync] Scheduling upload for '{}': marked as not present in prune", lk);
                     schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
                 } else if (!pe.cid.is_empty() && pe.cid != lm.cid)
                     || (pe.cid.is_empty() && !lm.cid.is_empty())
                 {
+                    println!(
+                        "[Sync] Scheduling upload for '{}': CID mismatch (prune: '{}', local: '{}')",
+                        lk,
+                        &pe.cid.chars().take(16).collect::<String>(),
+                        &lm.cid.chars().take(16).collect::<String>()
+                    );
                     schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
+                } else {
+                    // File is already synced - CID matches and present=true
+                    // This log confirms we're NOT re-uploading unchanged files
+                    println!("[Sync] Skipping '{}': already synced (CID matches)", lk);
                 }
             }
         }
@@ -1328,6 +1342,11 @@ pub async fn sync_once_cas(
         }
     }
 
+    // Early-exit optimization: skip sync if no operations needed
+    // Check this BEFORE executing ops to avoid unnecessary S3 API calls
+    let ops_l2r_count = ops_l2r.len();
+    println!("[Sync] Phase 1 operations queued: {} uploads/deletes", ops_l2r_count);
+    
     // === Execute Phase 1 ops ===
     for op in ops_l2r {
         match op {
@@ -1644,8 +1663,12 @@ pub async fn sync_once_cas(
 
     match save_pruned_remote_cas(client, bucket, prunefile_id, &prune, prune_etag.as_deref()).await
     {
-        Ok((true, new_etag)) => prune_etag = new_etag,
+        Ok((true, new_etag)) => {
+            println!("[Sync] Prune state saved successfully (Phase 1)");
+            prune_etag = new_etag;
+        }
         Ok((false, _)) => {
+            eprintln!("[Sync] WARNING: Prune save conflicted (Phase 1) - merging remote state");
             if let Ok((cur, etag2)) = load_pruned_remote(client, bucket, prunefile_id).await {
                 let mut merged = prune.clone();
                 for (k, v) in cur {
@@ -1919,6 +1942,15 @@ pub async fn sync_once_cas(
                 }
             }
         }
+    }
+
+    // Early-exit if no operations needed (both phases)
+    let ops_adopt_count = ops_adopt.len();
+    println!("[Sync] Phase 3 operations queued: {} downloads/renames/deletes", ops_adopt_count);
+    
+    if ops_l2r_count == 0 && ops_adopt_count == 0 {
+        println!("[Sync] No changes detected, skipping sync cycle");
+        return Ok(());
     }
 
     // === Execute ADOPT ops ===
