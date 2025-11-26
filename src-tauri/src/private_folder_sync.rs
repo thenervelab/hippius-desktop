@@ -384,7 +384,7 @@ pub async fn start_private_folder_sync(
             state.uploading_items.retain(|_| false);
             state.total_files = 0; // we don't have per-file progress when delegating to sync_once_cas
         }
-
+        println!("calling sync_once_cas from private_folder_sync");
         // Run reconcile with retries
         let max_retries = 6; // preserve existing behavior
         let result = sync_once_cas(

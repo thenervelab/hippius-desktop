@@ -415,7 +415,7 @@ pub async fn start_public_folder_sync(
         }
 
         let max_retries = 5;
-
+        println!("calling sync_once_cas from public_folder_sync");
         let result = sync_once_cas(
             &s3,
             &bucket_name,
