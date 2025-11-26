@@ -1,15 +1,10 @@
 import { ReactNode } from "react";
 
 export const APP_SETUP_PHASES = [
-  // "checking_binary",
-  // "installing_cli",
-  // // "downloading_binary",
-  // "initializing_repo",
-  // "configuring_cors",
-  // // "starting_daemon",
-  // "connecting_to_network",
-  // "initialising_database",
-  // "syncing_data",
+  "checking_binary",
+  "downloading_nebula",
+  "installing_nebula",
+  "verifying_installation",
   "ready",
 ] as const;
 

@@ -311,9 +311,9 @@ pub async fn start_private_folder_sync(
     // Immediately request an initial sync
     signal.trigger();
 
-    // 3s minimum interval; 5s heartbeat tick when idle.
+    // 3s minimum interval; 30s heartbeat tick when idle (reduced from 5s to prevent excessive syncs)
     const MIN_INTERVAL: Duration = Duration::from_secs(3);
-    const HEARTBEAT: Duration = Duration::from_secs(5);
+    const HEARTBEAT: Duration = Duration::from_secs(30);
 
     let mut last_run_end = Instant::now() - HEARTBEAT;
     let mut running = false;
@@ -368,7 +368,11 @@ pub async fn start_private_folder_sync(
             tokio::time::sleep(small_jitter_delay()).await;
         }
 
-        println!("[PrivateFolderSync] Starting reconcile...");
+        println!(
+            "[PrivateFolderSync] Starting reconcile (trigger: {}, elapsed: {:?})...",
+            if explicit_pending { "FS_EVENT" } else { "HEARTBEAT" },
+            last_run_end.elapsed()
+        );
 
         running = true;
 
@@ -380,7 +384,7 @@ pub async fn start_private_folder_sync(
             state.uploading_items.retain(|_| false);
             state.total_files = 0; // we don't have per-file progress when delegating to sync_once_cas
         }
-
+        println!("calling sync_once_cas from private_folder_sync");
         // Run reconcile with retries
         let max_retries = 6; // preserve existing behavior
         let result = sync_once_cas(
