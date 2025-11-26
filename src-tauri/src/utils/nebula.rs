@@ -33,6 +33,22 @@ struct GitHubAsset {
     browser_download_url: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct NebulaCert {
+    details: NebulaCertDetails,
+}
+
+#[derive(Debug, Deserialize)]
+struct NebulaCertDetails {
+    ips: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NebulaStats {
+    udp_tx_bytes: u64,
+    udp_rx_bytes: u64,
+}
+
 /// Get the Nebula binary directory in user's home
 fn get_nebula_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
@@ -345,6 +361,12 @@ pub async fn ensure_nebula_installed(app: AppHandle) -> Result<()> {
     let config_dir = get_nebula_config_dir()?;
     let ca_crt = config_dir.join("ca.crt");
     
+    // Get hostname for node name
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "node".to_string());
+
     if !ca_crt.exists() {
         println!("[Nebula] No CA certificate found, generating certificates...");
         
@@ -354,12 +376,6 @@ pub async fn ensure_nebula_installed(app: AppHandle) -> Result<()> {
             eprintln!("[Nebula] You can generate certificates manually later");
         } else {
             println!("[Nebula] CA certificate generated successfully");
-            
-            // Get hostname for node name
-            let hostname = hostname::get()
-                .ok()
-                .and_then(|h| h.into_string().ok())
-                .unwrap_or_else(|| "node".to_string());
             
             // Generate node certificate
             let node_ip = "192.168.100.2/24"; // Default IP, can be customized later
@@ -378,6 +394,11 @@ pub async fn ensure_nebula_installed(app: AppHandle) -> Result<()> {
         }
     } else {
         println!("[Nebula] Certificates already exist, skipping generation");
+        
+        // Ensure stats are enabled in config for existing installations
+        if let Err(e) = ensure_stats_in_config(&hostname).await {
+            eprintln!("[Nebula] Failed to ensure stats in config: {}", e);
+        }
     }
     
     // Emit ready phase
@@ -392,6 +413,119 @@ pub async fn get_nebula_version() -> Result<String, String> {
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Nebula not installed".to_string())
+}
+
+#[tauri::command]
+pub async fn get_nebula_ip() -> Result<String, String> {
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "node".to_string());
+        
+    let config_dir = get_nebula_config_dir().map_err(|e| e.to_string())?;
+    let crt_path = config_dir.join(format!("{}.crt", hostname));
+    
+    if !crt_path.exists() {
+        return Err("Nebula certificate not found".to_string());
+    }
+    
+    let nebula_cert_binary = get_nebula_cert_binary_path().map_err(|e| e.to_string())?;
+    
+    let output = tokio::process::Command::new(&nebula_cert_binary)
+        .args(&[
+            "print",
+            "-json",
+            "-path",
+            crt_path.to_str().unwrap(),
+        ])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+        
+    if !output.status.success() {
+        return Err(format!("Failed to read certificate: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    
+    let cert: NebulaCert = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Failed to parse certificate JSON: {}", e))?;
+        
+    cert.details.ips.first()
+        .cloned()
+        .ok_or_else(|| "No IP found in certificate".to_string())
+}
+
+#[tauri::command]
+pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .map_err(|e| e.to_string())?;
+        
+    let response = client
+        .get("http://127.0.0.1:4243/metrics")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch stats: {}", e))?;
+        
+    if !response.status().is_success() {
+        return Err(format!("Failed to fetch stats: HTTP {}", response.status()));
+    }
+    
+    let text = response.text().await.map_err(|e| e.to_string())?;
+    
+    let mut tx_bytes = 0;
+    let mut rx_bytes = 0;
+    
+    for line in text.lines() {
+        if line.starts_with("nebula_udp_tx_bytes_total") {
+            if let Some(val) = line.split_whitespace().last() {
+                tx_bytes = val.parse().unwrap_or(0);
+            }
+        } else if line.starts_with("nebula_udp_rx_bytes_total") {
+            if let Some(val) = line.split_whitespace().last() {
+                rx_bytes = val.parse().unwrap_or(0);
+            }
+        }
+    }
+    
+    Ok(NebulaStats {
+        udp_tx_bytes: tx_bytes,
+        udp_rx_bytes: rx_bytes,
+    })
+}
+
+/// Ensure stats are enabled in the config file
+async fn ensure_stats_in_config(node_name: &str) -> Result<()> {
+    let config_dir = get_nebula_config_dir()?;
+    let config_file = config_dir.join(format!("{}.yml", node_name));
+    
+    if !config_file.exists() {
+        return Ok(());
+    }
+    
+    let content = fs::read_to_string(&config_file).await?;
+    
+    if !content.contains("stats:") {
+        println!("[Nebula] Enabling stats in config: {}", config_file.display());
+        
+        let stats_config = r#"
+stats:
+  listen: 127.0.0.1:4243
+  path: /metrics
+  namespace: nebula
+  interval: 10s
+"#;
+        
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&config_file)
+            .await?;
+            
+        use tokio::io::AsyncWriteExt;
+        file.write_all(stats_config.as_bytes()).await?;
+    }
+    
+    Ok(())
 }
 
 /// Get the Nebula config directory
@@ -589,6 +723,12 @@ firewall:
     - port: any
       proto: any
       host: any
+
+stats:
+  listen: 127.0.0.1:4243
+  path: /metrics
+  namespace: nebula
+  interval: 10s
 "#,
             ca_crt.display(),
             node_crt.display(),
@@ -647,6 +787,12 @@ firewall:
     - port: any
       proto: any
       host: any
+
+stats:
+  listen: 127.0.0.1:4243
+  path: /metrics
+  namespace: nebula
+  interval: 10s
 "#,
             ca_crt.display(),
             node_crt.display(),

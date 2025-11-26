@@ -133,7 +133,9 @@ fn main() {
             set_bucket_policy,
             get_bucket_policy,
             utils::nebula::get_nebula_version,
-            utils::nebula::check_nebula_update
+            utils::nebula::check_nebula_update,
+            utils::nebula::get_nebula_ip,
+            utils::nebula::get_nebula_stats
         ]);
 
     let builder = setup(builder);

@@ -1,102 +1,99 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-export default function DirectStorageRequestDemo({
-  seedPhrase,
-  accountId
-}: {
-  seedPhrase: string;
-  accountId: string
-}) {
-  const [file, setFile] = useState<File | null>(null);
-  const [metadataCid, setMetadataCid] = useState<string>("");
-  const [downloadedUrl, setDownloadedUrl] = useState<string>("");
-  const [status, setStatus] = useState<string>("");
+interface NebulaStats {
+  udp_tx_bytes: number;
+  udp_rx_bytes: number;
+}
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFile(e.target.files?.[0] || null);
-  };
+export default function NebulaTest() {
+  const [ip, setIp] = useState<string>("");
+  const [stats, setStats] = useState<NebulaStats | null>(null);
+  const [error, setError] = useState<string>("");
 
-  const handleUpload = async () => {
-    if (!file) return;
-    setStatus("Uploading...");
+  const fetchIp = async () => {
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const tempPath = `/tmp/${file.name}`;
-      // Write file to disk using Rust command
-      await invoke("write_file", {
-        path: tempPath,
-        data: Array.from(new Uint8Array(arrayBuffer)),
-      });
-      // Call the Rust erasure coding upload command
-      const result = await invoke<string>("encrypt_and_upload_file", {
-        accountId: accountId,
-        filePath: tempPath,
-        seedPhrase: seedPhrase,
-        encryptionKey: null, // so it uses lated encryption key by default 
-      });
-      setMetadataCid(result);
-      setStatus("Upload successful! Metadata CID: " + result);
+      const result = await invoke<string>("get_nebula_ip");
+      setIp(result);
+      setError("");
     } catch (e: any) {
-      setStatus("Upload failed: " + e.toString());
+      console.error("Failed to get IP:", e);
+      setError("Failed to get IP: " + e.toString());
     }
   };
 
-  const handleDownload = async () => {
-    if (!metadataCid || !file) return;
-    setStatus("Downloading...");
+  const fetchStats = async () => {
     try {
-      const outputPath = `/tmp/dec_${file.name}`;
-      console.log({
-        accountId: accountId,
-        metadataCid: metadataCid,
-        outputFile: outputPath,
-      })
-      await invoke("download_and_decrypt_file", {
-        accountId: accountId,
-        metadataCid: metadataCid,
-        outputFile: outputPath,
-        encryptionKey: null, // so it uses lated encryption key by default 
-      });
-
-
-      // Read the file from disk using Rust command
-      const data: number[] = await invoke("read_file", { path: outputPath });
-      const blob = new Blob([new Uint8Array(data)]);
-      const url = URL.createObjectURL(blob);
-      // console.log("Decrypted file URL:", url);
-      setDownloadedUrl(url);
-      setStatus("Download successful!");
+      const result = await invoke<NebulaStats>("get_nebula_stats");
+      setStats(result);
+      setError("");
     } catch (e: any) {
-      setStatus("Download failed: " + e.toString());
+      console.error("Failed to get stats:", e);
+      // Don't set error for stats to avoid flickering if it fails occasionally or on startup
     }
   };
+
+  useEffect(() => {
+    fetchIp();
+    const interval = setInterval(fetchStats, 2000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
-    <div>
-      <h2>IPFS Encrypted Upload/Download (Erasure Coding Test)</h2>
-      <input type="file" onChange={handleFileChange} />
-      <button onClick={handleUpload} disabled={!file}>
-        Upload & Encrypt
-      </button>
-      {metadataCid && (
-        <>
-          <div>
-            <strong>Metadata CID:</strong> {metadataCid}
-          </div>
-          <button onClick={handleDownload}>Download & Decrypt</button>
-        </>
-      )}
-      {downloadedUrl && (
-        <div>
-          <a href={downloadedUrl} download={file ? `dec_${file.name}` : "file"}>
-            Download Decrypted File
-          </a>
+    <div className="p-6 border rounded-lg shadow-lg bg-white dark:bg-gray-800 text-black dark:text-white max-w-md mx-auto mt-10">
+      <h2 className="text-2xl font-bold mb-6 border-b pb-2">Nebula Network Status</h2>
+
+      {error && (
+        <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6 rounded" role="alert">
+          <p className="font-bold">Error</p>
+          <p>{error}</p>
         </div>
       )}
-      <div>{status}</div>
+
+      <div className="mb-6">
+        <div className="text-sm uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-1">Nebula IP Address</div>
+        <div className="text-xl font-mono bg-gray-100 dark:bg-gray-900 p-3 rounded border dark:border-gray-700">
+          {ip || "Loading..."}
+        </div>
+      </div>
+
+      <div className="mb-6">
+        <h3 className="text-sm uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold mb-2">Traffic Statistics</h3>
+        {stats ? (
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded border border-blue-100 dark:border-blue-800">
+              <div className="text-xs text-blue-500 dark:text-blue-400 font-bold mb-1">UDP TX (Sent)</div>
+              <div className="text-2xl font-mono text-blue-700 dark:text-blue-300">
+                {(stats.udp_tx_bytes / 1024 / 1024).toFixed(2)} <span className="text-sm font-sans text-gray-500">MB</span>
+              </div>
+            </div>
+            <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded border border-green-100 dark:border-green-800">
+              <div className="text-xs text-green-500 dark:text-green-400 font-bold mb-1">UDP RX (Received)</div>
+              <div className="text-2xl font-mono text-green-700 dark:text-green-300">
+                {(stats.udp_rx_bytes / 1024 / 1024).toFixed(2)} <span className="text-sm font-sans text-gray-500">MB</span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="text-gray-500 italic">Waiting for stats...</div>
+        )}
+      </div>
+
+      <div className="flex gap-3">
+        <button
+          onClick={fetchIp}
+          className="flex-1 bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-white font-semibold py-2 px-4 rounded transition duration-200"
+        >
+          Refresh IP
+        </button>
+        <button
+          onClick={fetchStats}
+          className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-4 rounded transition duration-200"
+        >
+          Refresh Stats
+        </button>
+      </div>
     </div>
   );
 }
