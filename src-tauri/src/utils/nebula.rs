@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 use tokio::fs;
 use std::time::Duration;
+use sysinfo::Networks;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -394,17 +395,163 @@ pub async fn ensure_nebula_installed(app: AppHandle) -> Result<()> {
         }
     } else {
         println!("[Nebula] Certificates already exist, skipping generation");
-        
-        // Ensure stats are enabled in config for existing installations
-        if let Err(e) = ensure_stats_in_config(&hostname).await {
-            eprintln!("[Nebula] Failed to ensure stats in config: {}", e);
-        }
+    }
+    
+    // Start Nebula
+    if let Err(e) = start_nebula().await {
+        eprintln!("[Nebula] Failed to start Nebula: {}", e);
     }
     
     // Emit ready phase
     let _ = app.emit("app_setup_event", NebulaSetupPhase::Ready);
     
     Ok(())
+}
+
+/// Start the Nebula process
+pub async fn start_nebula() -> Result<()> {
+    // Check if already running
+    if check_nebula_running().await? {
+        println!("[Nebula] Already running");
+        return Ok(());
+    }
+
+    let binary_path = get_nebula_binary_path()?;
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "node".to_string());
+        
+    let config_dir = get_nebula_config_dir()?;
+    let config_path = config_dir.join(format!("{}.yml", hostname));
+    
+    if !binary_path.exists() || !config_path.exists() {
+        return Err(anyhow!("Nebula binary or config not found"));
+    }
+
+    // Check and grant permissions if needed
+    if !check_permissions(&binary_path).await? {
+        println!("[Nebula] Permissions missing, attempting to grant...");
+        if let Err(e) = grant_permissions(&binary_path).await {
+            eprintln!("[Nebula] Failed to grant permissions: {}", e);
+            // Try to start anyway, might fail
+        }
+    }
+    
+    println!("[Nebula] Starting Nebula with config: {}", config_path.display());
+    
+    // Run directly
+    std::thread::spawn(move || {
+        let status = std::process::Command::new(binary_path)
+            .arg("-config")
+            .arg(config_path)
+            .status();
+            
+        match status {
+            Ok(s) => println!("[Nebula] Process exited with: {}", s),
+            Err(e) => eprintln!("[Nebula] Failed to start: {}", e),
+        }
+    });
+    
+    Ok(())
+}
+
+/// Check if the binary has required permissions
+async fn check_permissions(binary_path: &Path) -> Result<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        // Check for cap_net_admin using getcap
+        let output = tokio::process::Command::new("getcap")
+            .arg(binary_path)
+            .output()
+            .await;
+            
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                Ok(stdout.contains("cap_net_admin"))
+            }
+            Err(_) => {
+                // getcap might not be installed, assume false
+                Ok(false)
+            }
+        }
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        // Check if owned by root and has setuid bit
+        let metadata = fs::metadata(binary_path).await?;
+        let mode = metadata.permissions().mode();
+        let uid = metadata.uid();
+        
+        // 0 is root, 0o4000 is setuid
+        Ok(uid == 0 && (mode & 0o4000) != 0)
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Windows handling is complex, assume true for now or implement check
+        Ok(true)
+    }
+}
+
+/// Grant required permissions to the binary
+async fn grant_permissions(binary_path: &Path) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        println!("[Nebula] Requesting cap_net_admin via pkexec...");
+        let status = std::process::Command::new("pkexec")
+            .arg("setcap")
+            .arg("cap_net_admin+ep")
+            .arg(binary_path)
+            .status()?;
+            
+        if !status.success() {
+            return Err(anyhow!("Failed to set capabilities via pkexec"));
+        }
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        println!("[Nebula] Requesting setuid via osascript...");
+        let path_str = binary_path.to_str().ok_or_else(|| anyhow!("Invalid path"))?;
+        let script = format!(
+            "do shell script \"chown root '{0}' && chmod u+s '{0}'\" with administrator privileges",
+            path_str
+        );
+        
+        let status = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .status()?;
+            
+        if !status.success() {
+            return Err(anyhow!("Failed to set setuid via osascript"));
+        }
+    }
+    
+    Ok(())
+}
+
+/// Check if Nebula is running
+pub async fn check_nebula_running() -> Result<bool> {
+    // Simple check using pgrep (linux/mac)
+    #[cfg(unix)]
+    {
+        let output = tokio::process::Command::new("pgrep")
+            .arg("-f")
+            .arg("nebula")
+            .output()
+            .await?;
+            
+        Ok(output.status.success())
+    }
+    
+    #[cfg(windows)]
+    {
+        Ok(false)
+    }
 }
 
 #[tauri::command]
@@ -456,35 +603,17 @@ pub async fn get_nebula_ip() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|e| e.to_string())?;
-        
-    let response = client
-        .get("http://127.0.0.1:4243/metrics")
-        .send()
-        .await
-        .map_err(|e| format!("Failed to fetch stats: {}", e))?;
-        
-    if !response.status().is_success() {
-        return Err(format!("Failed to fetch stats: HTTP {}", response.status()));
-    }
-    
-    let text = response.text().await.map_err(|e| e.to_string())?;
+    // Monitor the nebula network interface directly
+    let networks = Networks::new_with_refreshed_list();
     
     let mut tx_bytes = 0;
     let mut rx_bytes = 0;
     
-    for line in text.lines() {
-        if line.starts_with("nebula_udp_tx_bytes_total") {
-            if let Some(val) = line.split_whitespace().last() {
-                tx_bytes = val.parse().unwrap_or(0);
-            }
-        } else if line.starts_with("nebula_udp_rx_bytes_total") {
-            if let Some(val) = line.split_whitespace().last() {
-                rx_bytes = val.parse().unwrap_or(0);
-            }
+    // Look for nebula interface (usually nebula1, nebula0, etc.)
+    for (interface_name, data) in &networks {
+        if interface_name.contains("nebula") {
+            tx_bytes += data.transmitted();
+            rx_bytes += data.received();
         }
     }
     
@@ -494,39 +623,6 @@ pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
     })
 }
 
-/// Ensure stats are enabled in the config file
-async fn ensure_stats_in_config(node_name: &str) -> Result<()> {
-    let config_dir = get_nebula_config_dir()?;
-    let config_file = config_dir.join(format!("{}.yml", node_name));
-    
-    if !config_file.exists() {
-        return Ok(());
-    }
-    
-    let content = fs::read_to_string(&config_file).await?;
-    
-    if !content.contains("stats:") {
-        println!("[Nebula] Enabling stats in config: {}", config_file.display());
-        
-        let stats_config = r#"
-stats:
-  listen: 127.0.0.1:4243
-  path: /metrics
-  namespace: nebula
-  interval: 10s
-"#;
-        
-        let mut file = fs::OpenOptions::new()
-            .append(true)
-            .open(&config_file)
-            .await?;
-            
-        use tokio::io::AsyncWriteExt;
-        file.write_all(stats_config.as_bytes()).await?;
-    }
-    
-    Ok(())
-}
 
 /// Get the Nebula config directory
 fn get_nebula_config_dir() -> Result<PathBuf> {

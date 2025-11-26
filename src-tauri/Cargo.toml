@@ -48,6 +48,7 @@ sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-native-tls"] }
 hex = "0.4"
 parity-scale-codec = "3.6"
 tauri-plugin-fs = "2"
+sysinfo = "0.32"
 notify = "6.1"
 tauri-plugin-dialog = "2"
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
