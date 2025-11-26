@@ -345,6 +345,7 @@ pub async fn one_sync_round(c: &ClientCtx) -> Result<()> {
     let mut delay_ms = 150u64;
     let max_attempts = 5usize;
     for attempt in 1..=max_attempts {
+        println!("calling sync_once_cas from one_sync_round");
         let res = sync_once_cas(
             &c.s3,
             &c.bucket,
