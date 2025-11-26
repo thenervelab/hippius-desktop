@@ -6,6 +6,7 @@ mod commands;
 mod constants;
 mod events;
 mod ipfs;
+mod macos_bookmarks;
 mod private_folder_sync;
 mod public_folder_sync;
 mod substrate_client;
@@ -130,7 +131,9 @@ fn main() {
             get_sync_activity,
             stop_sync_for_scope_command,
             set_bucket_policy,
-            get_bucket_policy
+            get_bucket_policy,
+            utils::nebula::get_nebula_version,
+            utils::nebula::check_nebula_update
         ]);
 
     let builder = setup(builder);

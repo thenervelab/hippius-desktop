@@ -158,6 +158,49 @@ pub async fn start_private_folder_sync(
         }
     };
 
+    // Activate security-scoped bookmark for macOS
+    #[cfg(target_os = "macos")]
+    let mut needs_bookmark_creation = false;
+
+    #[cfg(target_os = "macos")]
+    {
+        use crate::utils::bookmark_db::activate_bookmark;
+        match activate_bookmark(&sync_path).await {
+            Ok(true) => {
+                println!("[PrivateFolderSync] Successfully activated bookmark for: {}", sync_path);
+            }
+            Ok(false) | Err(_) => {
+                eprintln!(
+                    "[PrivateFolderSync] No bookmark found. Will attempt to create one after filesystem access."
+                );
+                needs_bookmark_creation = true;
+            }
+        }
+    }
+
+    // Ensure directory exists and we have access (triggers permission prompt on macOS if needed)
+    // We do this EARLY to ensure we capture the permission in a bookmark as soon as possible,
+    // before potentially long-running operations like sub-account resolution.
+    if let Err(e) = std::fs::create_dir_all(&sync_path) {
+        eprintln!("[PrivateFolderSync] Failed to create sync directory: {}", e);
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    if needs_bookmark_creation {
+        use crate::utils::bookmark_db::{activate_bookmark, store_bookmark};
+        println!("[PrivateFolderSync] Attempting to create bookmark after successful FS access...");
+        if let Err(e) = store_bookmark(&sync_path, "private").await {
+            eprintln!("[PrivateFolderSync] Failed to create bookmark: {}", e);
+        } else {
+             // Try activating the newly created bookmark to ensure it works
+            match activate_bookmark(&sync_path).await {
+                Ok(true) => println!("[PrivateFolderSync] Successfully created and activated bookmark"),
+                _ => eprintln!("[PrivateFolderSync] Failed to activate newly created bookmark"),
+            }
+        }
+    }
+
     // Resolve sub-account SS58 from DB (unchanged logic)
     let sub_account = loop {
         match DB_POOL.get() {
@@ -226,12 +269,6 @@ pub async fn start_private_folder_sync(
 
     let prunefile_id = prunefile_id(&sub_account, &path_hash, "private");
 
-    // Create directory if it doesn't exist
-    if let Err(e) = std::fs::create_dir_all(&sync_path) {
-        eprintln!("[PrivateFolderSync] Failed to create sync directory: {}", e);
-        return;
-    }
-
     // Build client
     let s3 = make_s3_client().await;
 
@@ -274,9 +311,9 @@ pub async fn start_private_folder_sync(
     // Immediately request an initial sync
     signal.trigger();
 
-    // 3s minimum interval; 5s heartbeat tick when idle.
+    // 3s minimum interval; 30s heartbeat tick when idle (reduced from 5s to prevent excessive syncs)
     const MIN_INTERVAL: Duration = Duration::from_secs(3);
-    const HEARTBEAT: Duration = Duration::from_secs(5);
+    const HEARTBEAT: Duration = Duration::from_secs(30);
 
     let mut last_run_end = Instant::now() - HEARTBEAT;
     let mut running = false;
@@ -331,7 +368,11 @@ pub async fn start_private_folder_sync(
             tokio::time::sleep(small_jitter_delay()).await;
         }
 
-        println!("[PrivateFolderSync] Starting reconcile...");
+        println!(
+            "[PrivateFolderSync] Starting reconcile (trigger: {}, elapsed: {:?})...",
+            if explicit_pending { "FS_EVENT" } else { "HEARTBEAT" },
+            last_run_end.elapsed()
+        );
 
         running = true;
 
@@ -343,7 +384,7 @@ pub async fn start_private_folder_sync(
             state.uploading_items.retain(|_| false);
             state.total_files = 0; // we don't have per-file progress when delegating to sync_once_cas
         }
-
+        println!("calling sync_once_cas from private_folder_sync");
         // Run reconcile with retries
         let max_retries = 6; // preserve existing behavior
         let result = sync_once_cas(

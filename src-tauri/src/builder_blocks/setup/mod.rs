@@ -182,6 +182,20 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Create security_scoped_bookmarks table for macOS file access persistence
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS security_scoped_bookmarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            bookmark_data BLOB NOT NULL,
+            scope_type TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     sqlx::query(
         "INSERT OR IGNORE INTO bucket_policies (id, sync_policy) 
          VALUES (1, 'upload_only')"
@@ -223,9 +237,17 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: pos_x, y: pos_y }))?;
                 win.show()?;
             }
-            // Spawn async task for database initialization and IPFS daemon
+            // Spawn async task for Nebula installation, database initialization and IPFS daemon
             tauri::async_runtime::spawn(async move {
                 println!("[Setup] async block started in setup.rs");
+                
+                // Ensure Nebula is installed and up-to-date
+                println!("[Setup] Checking Nebula installation...");
+                if let Err(e) = crate::utils::nebula::ensure_nebula_installed(_handle.clone()).await {
+                    eprintln!("[Setup] Nebula installation failed: {}", e);
+                    // Continue with app setup even if Nebula fails
+                }
+                
                 // Database initialization
                 let home_dir = dirs::home_dir().expect("Failed to get home directory");
                 let db_dir = home_dir.join(".hippius");
