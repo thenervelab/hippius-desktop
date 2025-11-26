@@ -4,5 +4,6 @@ pub mod bookmark_db;
 pub mod file_operations;
 pub mod fs_watcher;
 pub mod ipfs;
-pub mod sync;
+pub mod nebula;
 pub mod s3_client;
+pub mod sync;

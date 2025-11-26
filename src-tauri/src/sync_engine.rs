@@ -293,6 +293,7 @@ async fn save_manifest_cas(
     manifest: &Manifest,
     previous_etag: Option<&str>,
 ) -> Result<(bool, Option<String>)> {
+    println!("[Sync] trying to upload manifest to S3");
     let body_bytes = serde_json::to_vec_pretty(manifest)?;
     let mut req = client
         .put_object()
@@ -599,7 +600,7 @@ async fn publish_conflict_object_with_bumps(
     let mut used_key = desired_key.to_string();
     let mut bump_idx: u32 = 2;
     let mut attempt = 0usize;
-
+    println!("[Sync] trying to upload conflict object with bumps: {}", used_key);
     loop {
         let res = client
             .put_object()
@@ -809,6 +810,7 @@ async fn save_pruned_remote_cas(
     map: &PrunedMap,
     previous_etag: Option<&str>,
 ) -> Result<(bool, Option<String>)> {
+    println!("[Sync] trying to upload prunefile to S3");
     let key = pruned_key_for(prunefile_id);
     let body = serde_json::to_vec_pretty(map)?;
     let mut req = client
@@ -880,6 +882,7 @@ async fn execute_conflict_flow(
     prune: &mut PrunedMap,
     strategy: ConflictStrategy,
 ) -> Result<()> {
+    println!("[Sync] trying to execute conflict flow");
     match strategy {
         ConflictStrategy::RenameLocalOnly => {
             let conflict_name_base = make_conflict_name_deterministic(
@@ -1198,6 +1201,7 @@ pub async fn sync_once_cas(
     max_retries: usize,
     prunefile_id: &str,
 ) -> Result<()> {
+    println!("[Sync] sync_once_cas beimg called");
     let client_tag8 = client_tag8_from(prunefile_id);
 
     /* ---- Phase 0: Snapshot ---- */
@@ -1206,6 +1210,17 @@ pub async fn sync_once_cas(
     let (mut manifest, mut manifest_etag) = load_manifest(client, bucket).await?;
     let local = scan_local(local_root).await?;
     let remote0 = list_remote(client, bucket).await?;
+
+    // Diagnostic logging to detect prune state issues
+    println!("[Sync] Phase 0 snapshot complete:");
+    println!("  - Prune state entries: {}", prune.len());
+    println!("  - Local files scanned: {}", local.len());
+    println!("  - Remote files listed: {}", remote0.len());
+    println!("  - Manifest entries: {}", manifest.entries.len());
+    println!("  - Prunefile ID: {}", prunefile_id);
+    if prune.is_empty() && !local.is_empty() {
+        eprintln!("[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!", local.len());
+    }
 
     /* ---- Phase 3 Preamble: REMOTE -> LOCAL (diff vs remote) --------------------------- */
 
@@ -1231,6 +1246,7 @@ pub async fn sync_once_cas(
     let mut uploaded_new_etags: HashMap<String, String> = HashMap::new();
 
     fn schedule_upload(ops: &mut Vec<Op>, scheduled: &mut HashSet<String>, path: &str) {
+        println!("[Sync] trying to scheduling upload for {}", path);
         if is_ignored_key(path) {
             return;
         }
@@ -1256,14 +1272,28 @@ pub async fn sync_once_cas(
             continue;
         }
         match prune.get(lk) {
-            None => schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk),
+            None => {
+                println!("[Sync] Scheduling upload for '{}': not in prune state", lk);
+                schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
+            }
             Some(pe) => {
                 if !pe.present {
+                    println!("[Sync] Scheduling upload for '{}': marked as not present in prune", lk);
                     schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
                 } else if (!pe.cid.is_empty() && pe.cid != lm.cid)
                     || (pe.cid.is_empty() && !lm.cid.is_empty())
                 {
+                    println!(
+                        "[Sync] Scheduling upload for '{}': CID mismatch (prune: '{}', local: '{}')",
+                        lk,
+                        &pe.cid.chars().take(16).collect::<String>(),
+                        &lm.cid.chars().take(16).collect::<String>()
+                    );
                     schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
+                } else {
+                    // File is already synced - CID matches and present=true
+                    // This log confirms we're NOT re-uploading unchanged files
+                    println!("[Sync] Skipping '{}': already synced (CID matches)", lk);
                 }
             }
         }
@@ -1328,6 +1358,11 @@ pub async fn sync_once_cas(
         }
     }
 
+    // Early-exit optimization: skip sync if no operations needed
+    // Check this BEFORE executing ops to avoid unnecessary S3 API calls
+    let ops_l2r_count = ops_l2r.len();
+    println!("[Sync] Phase 1 operations queued: {} uploads/deletes", ops_l2r_count);
+    
     // === Execute Phase 1 ops ===
     for op in ops_l2r {
         match op {
@@ -1642,39 +1677,53 @@ pub async fn sync_once_cas(
         }
     }
 
-    match save_pruned_remote_cas(client, bucket, prunefile_id, &prune, prune_etag.as_deref()).await
-    {
-        Ok((true, new_etag)) => prune_etag = new_etag,
-        Ok((false, _)) => {
-            if let Ok((cur, etag2)) = load_pruned_remote(client, bucket, prunefile_id).await {
-                let mut merged = prune.clone();
-                for (k, v) in cur {
-                    let me = merged.entry(k).or_default();
-                    me.deletion_count = me.deletion_count.max(v.deletion_count);
-                    me.resurrection_count = me.resurrection_count.max(v.resurrection_count);
-                    me.present = me.present || v.present;
-                    me.locally_deleted = me.locally_deleted || v.locally_deleted;
-                    if me.adopted_remote_etag.is_none() {
-                        me.adopted_remote_etag = v.adopted_remote_etag;
-                    }
-                    if me.cid.is_empty() && !v.cid.is_empty() {
-                        me.cid = v.cid;
-                    }
-                    if me.last_adopted_cid.is_empty() && !v.last_adopted_cid.is_empty() {
-                        me.last_adopted_cid = v.last_adopted_cid;
-                    }
-                    if me.file_deletion_policy.is_none() && v.file_deletion_policy.is_some() {
-                        me.file_deletion_policy = v.file_deletion_policy;
-                    }
-                }
-                let _ =
-                    save_pruned_remote_cas(client, bucket, prunefile_id, &merged, etag2.as_deref())
-                        .await;
-                prune = merged;
-                prune_etag = etag2;
+    if prune != prune_origin {
+        match save_pruned_remote_cas(client, bucket, prunefile_id, &prune, prune_etag.as_deref())
+            .await
+        {
+            Ok((true, new_etag)) => {
+                println!("[Sync] Prune state saved successfully (Phase 1)");
+                prune_etag = new_etag;
             }
+            Ok((false, _)) => {
+                eprintln!("[Sync] WARNING: Prune save conflicted (Phase 1) - merging remote state");
+                if let Ok((cur, etag2)) = load_pruned_remote(client, bucket, prunefile_id).await {
+                    let mut merged = prune.clone();
+                    for (k, v) in cur {
+                        let me = merged.entry(k).or_default();
+                        me.deletion_count = me.deletion_count.max(v.deletion_count);
+                        me.resurrection_count = me.resurrection_count.max(v.resurrection_count);
+                        me.present = me.present || v.present;
+                        me.locally_deleted = me.locally_deleted || v.locally_deleted;
+                        if me.adopted_remote_etag.is_none() {
+                            me.adopted_remote_etag = v.adopted_remote_etag;
+                        }
+                        if me.cid.is_empty() && !v.cid.is_empty() {
+                            me.cid = v.cid;
+                        }
+                        if me.last_adopted_cid.is_empty() && !v.last_adopted_cid.is_empty() {
+                            me.last_adopted_cid = v.last_adopted_cid;
+                        }
+                        if me.file_deletion_policy.is_none() && v.file_deletion_policy.is_some() {
+                            me.file_deletion_policy = v.file_deletion_policy;
+                        }
+                    }
+                    let _ = save_pruned_remote_cas(
+                        client,
+                        bucket,
+                        prunefile_id,
+                        &merged,
+                        etag2.as_deref(),
+                    )
+                    .await;
+                    prune = merged;
+                    prune_etag = etag2;
+                }
+            }
+            Err(e) => eprintln!("[Sync] warning: save prunefile (phase1) failed: {e:?}"),
         }
-        Err(e) => eprintln!("[Sync] warning: save prunefile (phase1) failed: {e:?}"),
+    } else {
+        println!("[Sync] Prune state unchanged, skipping Phase 1 save");
     }
 
     /* ---- Phase 2: Remote → Manifest --------------------------------------- */
@@ -1919,6 +1968,15 @@ pub async fn sync_once_cas(
                 }
             }
         }
+    }
+
+    // Early-exit if no operations needed (both phases)
+    let ops_adopt_count = ops_adopt.len();
+    println!("[Sync] Phase 3 operations queued: {} downloads/renames/deletes", ops_adopt_count);
+    
+    if ops_l2r_count == 0 && ops_adopt_count == 0 {
+        println!("[Sync] No changes detected, skipping sync cycle");
+        return Ok(());
     }
 
     // === Execute ADOPT ops ===
@@ -2202,3 +2260,4 @@ pub async fn sync_once_cas(
 
     Ok(())
 }
+
