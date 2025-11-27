@@ -1,18 +1,16 @@
 "use client";
 
 import React, { useState } from "react";
-import * as Switch from "@radix-ui/react-switch";
 import { Lock } from "lucide-react";
-import { motion } from "framer-motion";
+import Image from "next/image";
 import GraphSheetContainer from "@/app/components/ui/graphsheet";
-import { Globe } from "@/app/components/ui/icons/Globe";
-import cn from "@/app/lib/utils/cn";
+import VPNSwitch from "./VPNSwitch";
 
 const VPNMenuContent = () => {
   const [isConnected, setIsConnected] = useState(false);
 
   return (
-    <div className="w-[400px] bg-white rounded-lg overflow-hidden flex flex-col">
+    <div className="w-full bg-white rounded-lg overflow-hidden flex flex-col">
       {/* Header / Visual Area */}
       <div className="relative h-[184px] bg-primary-100 m-4 mb-0 rounded-lg overflow-hidden shrink-0">
         {/* Grid Background */}
@@ -33,14 +31,17 @@ const VPNMenuContent = () => {
         </div>
 
         {/* Globe */}
-        <div className="absolute left-1/2 top-[80px] -translate-x-1/2 w-[437px] h-[400px] pointer-events-none">
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ repeat: Infinity, duration: 60, ease: "linear" }}
-            className="w-full h-full"
-          >
-            <Globe className="w-full h-full" />
-          </motion.div>
+        <div className="absolute left-1/2 top-[80px] -translate-x-1/2 w-[437px] h-[400px] pointer-events-none z-20">
+          <Image
+            src="/globe.png"
+            alt="Globe"
+            width={437}
+            height={400}
+            className="object-contain object-top"
+            priority
+            quality={100}
+            loading="eager"
+          />
         </div>
 
         {/* Title */}
@@ -70,36 +71,7 @@ const VPNMenuContent = () => {
             {isConnected ? "Your VPN is On" : "Your VPN is Off"}
           </span>
 
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-sm leading-5 text-grey-50 tracking-[-0.28px]">
-              OFF
-            </span>
-            <Switch.Root
-              className={cn(
-                "w-[40px] h-[24px] rounded-full relative shadow-none outline-none cursor-pointer transition-colors duration-200 ease-in-out",
-                isConnected
-                  ? "bg-primary-50 border border-primary-80"
-                  : "bg-grey-90"
-              )}
-              checked={isConnected}
-              onCheckedChange={setIsConnected}
-            >
-              <Switch.Thumb
-                className={cn(
-                  "block w-[20px] h-[20px] bg-white rounded-full shadow-[0_2px_4px_0_rgba(0,0,0,0.2)] transition-transform duration-200 ease-in-out translate-x-0.5 will-change-transform",
-                  isConnected ? "translate-x-[17.5px]" : "translate-x-0.5"
-                )}
-              />
-            </Switch.Root>
-            <span
-              className={cn(
-                "font-semibold text-sm leading-5 tracking-[-0.28px]",
-                isConnected ? "text-primary-50" : "text-grey-50"
-              )}
-            >
-              ON
-            </span>
-          </div>
+          <VPNSwitch checked={isConnected} onCheckedChange={setIsConnected} />
         </div>
 
         {/* Connected Status Details (Only when connected) */}
