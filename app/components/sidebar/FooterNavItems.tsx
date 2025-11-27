@@ -17,7 +17,7 @@ const FooterNavItem: React.FC<FooterNavItemProps> = ({
   label,
   collapsed,
   className,
-  inView
+  inView,
 }) => {
   const { logout } = useWalletAuth();
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
@@ -37,7 +37,7 @@ const FooterNavItem: React.FC<FooterNavItemProps> = ({
       <RevealTextLine
         reveal={inView}
         parentClassName="block"
-        className="flex items-center py-1.5 px-3.5 h-8"
+        className="flex items-center px-3.5"
       >
         <span className="size-4 flex-shrink-0">{icon}</span>
         {!collapsed && (
