@@ -8,7 +8,7 @@
 
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { OAuthButtonsGroup } from "./OAuthButtons";
 import { AccessKeyLoginForm } from "./AccessKeyLoginForm";
 import * as Typography from "@/components/ui/typography";
@@ -26,28 +26,28 @@ export function LoginForm({
     const router = useRouter();
 
     // ✅ Deep link debug state (temporary)
-    const [dlRaw, setDlRaw] = useState<string | null>(null);
-    const [dlLogs, setDlLogs] = useState<string[]>([]);
+    // const [dlRaw, setDlRaw] = useState<string | null>(null);
+    // const [dlLogs, setDlLogs] = useState<string[]>([]);
 
-    const addDlLog = (msg: string) => {
-        const t = new Date().toISOString().split("T")[1].slice(0, 12);
-        setDlLogs((p) => [...p, `[${t}] ${msg}`]);
-    };
+    // const addDlLog = (msg: string) => {
+    //     const t = new Date().toISOString().split("T")[1].slice(0, 12);
+    //     setDlLogs((p) => [...p, `[${t}] ${msg}`]);
+    // };
 
-    const dlParsed = useMemo(() => {
-        if (!dlRaw) return null;
-        try {
-            const u = new URL(dlRaw);
-            return {
-                scheme: u.protocol.replace(":", ""),
-                host: u.host,
-                path: u.pathname,
-                params: Object.fromEntries(u.searchParams.entries()),
-            };
-        } catch {
-            return { raw: dlRaw };
-        }
-    }, [dlRaw]);
+    // const dlParsed = useMemo(() => {
+    //     if (!dlRaw) return null;
+    //     try {
+    //         const u = new URL(dlRaw);
+    //         return {
+    //             scheme: u.protocol.replace(":", ""),
+    //             host: u.host,
+    //             path: u.pathname,
+    //             params: Object.fromEntries(u.searchParams.entries()),
+    //         };
+    //     } catch {
+    //         return { raw: dlRaw };
+    //     }
+    // }, [dlRaw]);
 
     useEffect(() => {
         getVersion().then((v) => setVersion(v));
@@ -64,8 +64,8 @@ export function LoginForm({
     useEffect(() => {
         return () => {
             // Cleanup when leaving login page
-            setDlRaw(null);
-            setDlLogs([]);
+            // setDlRaw(null);
+            // setDlLogs([]);
             console.log("[LoginForm] Deep link state cleared on unmount");
         };
     }, []);
@@ -78,14 +78,14 @@ export function LoginForm({
         let initialDeepLinkProcessed = false;
 
         const handleDeepLink = (url: string, isInitial = false) => {
-            addDlLog(`Received URL: ${url}`);
-            setDlRaw(url);
+            // addDlLog(`Received URL: ${url}`);
+            // setDlRaw(url);
 
             try {
                 // Check if this deep link has already been processed
                 const lastProcessedUrl = sessionStorage.getItem("last_processed_deep_link");
                 if (lastProcessedUrl === url) {
-                    addDlLog("⚠️ This deep link was already processed, skipping");
+                    // addDlLog("⚠️ This deep link was already processed, skipping");
                     console.log("[LoginForm] Deep link already processed, skipping:", url);
                     return;
                 }
@@ -93,18 +93,18 @@ export function LoginForm({
                 // If user manually navigated to login, don't process old deep links
                 const manualNavigation = sessionStorage.getItem("manual_navigation");
                 if (manualNavigation === "true" && isInitial) {
-                    addDlLog("⚠️ Manual navigation detected, skipping initial deep link");
+                    // addDlLog("⚠️ Manual navigation detected, skipping initial deep link");
                     console.log("[LoginForm] Skipping initial deep link due to manual navigation");
                     sessionStorage.removeItem("manual_navigation");
                     return;
                 }
 
                 const urlObj = new URL(url);
-                addDlLog(`Parsed - scheme: ${urlObj.protocol}, path: ${urlObj.pathname}`);
+                // addDlLog(`Parsed - scheme: ${urlObj.protocol}, path: ${urlObj.pathname}`);
 
                 // Check if this is an OAuth callback
                 if (urlObj.pathname.includes("/auth/callback")) {
-                    addDlLog("✅ OAuth callback detected, extracting parameters...");
+                    // addDlLog("✅ OAuth callback detected, extracting parameters...");
 
                     // Extract all query parameters
                     const params = new URLSearchParams(urlObj.search);
@@ -122,17 +122,18 @@ export function LoginForm({
                     if (sessionParam) {
                         try {
                             const sessionData = JSON.parse(decodeURIComponent(sessionParam));
-                            addDlLog(`Session parameter found: ${JSON.stringify(sessionData)}`);
+                            // addDlLog(`Session parameter found: ${JSON.stringify(sessionData)}`);
                             // Extract data from session object
                             if (sessionData.code && !code) params.set("code", sessionData.code);
                             if (sessionData.username && !username) params.set("username", sessionData.username);
                             if (sessionData.id && !userId) params.set("user_id", sessionData.id);
                         } catch (e) {
-                            addDlLog(`Failed to parse session parameter: ${e}`);
+                            console.log("[LoginForm] Failed to parse session parameter:", e);
+                            // addDlLog(`Failed to parse session parameter: ${e}`);
                         }
                     }
 
-                    addDlLog(`Parameters - token: ${token ? "present" : "missing"}, code: ${code || params.get("code") ? "present" : "missing"}, username: ${username || params.get("username") || "missing"}`);
+                    // addDlLog(`Parameters - token: ${token ? "present" : "missing"}, code: ${code || params.get("code") ? "present" : "missing"}, username: ${username || params.get("username") || "missing"}`);
 
                     // Build callback URL with parameters
                     const callbackParams = new URLSearchParams();
@@ -146,7 +147,7 @@ export function LoginForm({
                     if (errorDescription) callbackParams.set("error_description", errorDescription);
 
                     const callbackUrl = `/auth/callback?${callbackParams.toString()}`;
-                    addDlLog(`✅ Redirecting to: ${callbackUrl}`);
+                    // addDlLog(`✅ Redirecting to: ${callbackUrl}`);
                     console.log("[LoginForm] Redirecting to callback page:", callbackUrl);
 
                     // Mark this deep link as processed BEFORE redirecting
@@ -159,15 +160,15 @@ export function LoginForm({
                     // Clear deep link state after initiating redirect
                     // This ensures state is clean when user returns to login
                     setTimeout(() => {
-                        setDlRaw(null);
-                        setDlLogs([]);
+                        // setDlRaw(null);
+                        // setDlLogs([]);
                         console.log("[LoginForm] Deep link state cleared after redirect");
                     }, 500);
                 } else {
-                    addDlLog(`ℹ️ Non-callback deep link: ${urlObj.pathname}`);
+                    // addDlLog(`ℹ️ Non-callback deep link: ${urlObj.pathname}`);
                 }
             } catch (e: any) {
-                addDlLog(`Failed to parse URL: ${e?.message || String(e)}`);
+                // addDlLog(`Failed to parse URL: ${e?.message || String(e)}`);
                 console.error("[LoginForm] Failed to parse deep link:", e);
             }
         };
@@ -178,11 +179,11 @@ export function LoginForm({
                     "@tauri-apps/plugin-deep-link"
                 );
 
-                addDlLog("Deep link listener starting...");
+                // addDlLog("Deep link listener starting...");
 
                 // 1) If app started via deep link - only process once
                 const current = await getCurrent();
-                addDlLog(`getCurrent(): ${JSON.stringify(current)}`);
+                // addDlLog(`getCurrent(): ${JSON.stringify(current)}`);
                 if (current?.length && !initialDeepLinkProcessed) {
                     initialDeepLinkProcessed = true;
                     handleDeepLink(current[current.length - 1], true);
@@ -190,7 +191,7 @@ export function LoginForm({
 
                 // 2) If deep link arrives while app is open - these are NEW deep links
                 unlisten = await onOpenUrl((urls) => {
-                    addDlLog(`onOpenUrl(): ${JSON.stringify(urls)}`);
+                    // addDlLog(`onOpenUrl(): ${JSON.stringify(urls)}`);
                     if (urls?.length) {
                         // Clear manual navigation flag since this is a new deep link
                         sessionStorage.removeItem("manual_navigation");
@@ -198,9 +199,9 @@ export function LoginForm({
                     }
                 });
 
-                addDlLog("Deep link listener registered ✅");
+                // addDlLog("Deep link listener registered ✅");
             } catch (e: any) {
-                addDlLog(`Deep link setup failed: ${e?.message || String(e)}`);
+                // addDlLog(`Deep link setup failed: ${e?.message || String(e)}`);
                 console.error("[LoginForm deep link] setup failed:", e);
             }
         })();
@@ -227,7 +228,7 @@ export function LoginForm({
             </div>
 
             {/* ✅ Deep link debug panel (remove later) */}
-            <div className="mt-4 rounded-lg border border-grey-90 bg-grey-95 p-3">
+            {/* <div className="mt-4 rounded-lg border border-grey-90 bg-grey-95 p-3">
                 <div className="flex items-center justify-between">
                     <p className="text-xs font-semibold text-grey-20">Deep link debug</p>
 
@@ -282,7 +283,7 @@ export function LoginForm({
                 className="mt-4 block w-full text-center text-sm text-primary-50 hover:text-primary-60 font-medium hover:underline"
             >
                 🧪 Test Callback (Dev Only)
-            </button>
+            </button> */}
 
             <div className="text-center mt-4">
                 <p className="text-xs text-grey-60 font-semibold">

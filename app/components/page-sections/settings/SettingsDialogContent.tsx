@@ -14,9 +14,10 @@ import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
 // import EncryptionKey from "./encryption-key";
 import CustomizeRPC from "./CustomizeRPC";
-import { Clock } from "lucide-react";
+// import { Clock } from "lucide-react";
 import SessionTimeoutSettings from "./SessionTimeoutSettings";
 import FileDeletionBehaviour from "./FileDeletionBehaviour";
+import OAuthTokenSection from "./OAuthTokenSection";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -35,9 +36,13 @@ const SettingsDialogContent: React.FC = () => {
       icon: <Icons.File2 className="size-4" />,
     },
     {
-      tabName: "Change Passcode",
-      icon: <Icons.WalletAdd className="size-4" />,
+      tabName: "Master Token",
+      icon: <Icons.Key className="size-4" />,
     },
+    // {
+    //   tabName: "Change Passcode",
+    //   icon: <Icons.WalletAdd className="size-4" />,
+    // },
     {
       tabName: "API Keys",
       icon: <Icons.KeySquare className="size-4" />,
@@ -55,18 +60,18 @@ const SettingsDialogContent: React.FC = () => {
       tabName: "Customize RPC",
       icon: <Icons.Box className="size-4" />,
     },
-    {
-      tabName: "Session Timeout",
-      icon: <Clock className="size-4" />,
-    },
-    {
-      tabName: "Backup App Data",
-      icon: <Icons.Wallet className="size-4" />,
-    },
-    {
-      tabName: "Reset App",
-      icon: <Icons.Trash className="size-4" />,
-    },
+    // {
+    //   tabName: "Session Timeout",
+    //   icon: <Clock className="size-4" />,
+    // },
+    // {
+    //   tabName: "Backup App Data",
+    //   icon: <Icons.Wallet className="size-4" />,
+    // },
+    // {
+    //   tabName: "Reset App",
+    //   icon: <Icons.Trash className="size-4" />,
+    // },
   ];
 
   return (
@@ -112,7 +117,8 @@ const SettingsDialogContent: React.FC = () => {
                   <APIKeys />
                 </RevealTextLine>
               </div>
-            )}            {activeTab === "Notifications" && (
+            )}
+            {activeTab === "Notifications" && (
               <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
                   rotate
@@ -123,7 +129,8 @@ const SettingsDialogContent: React.FC = () => {
                   <NotificationSettings />
                 </RevealTextLine>
               </div>
-            )}            {activeTab === "Reset App" && (
+            )}
+            {activeTab === "Reset App" && (
               <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
                   rotate
@@ -158,6 +165,18 @@ const SettingsDialogContent: React.FC = () => {
                     <FileDeletionBehaviour />
                   </RevealTextLine>
                 </div>
+              </div>
+            )}
+            {activeTab === "Master Token" && (
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <OAuthTokenSection />
+                </RevealTextLine>
               </div>
             )}
             {activeTab === "Backup App Data" && (
