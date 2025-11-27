@@ -14,6 +14,14 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas
     const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
         (
+            "vpn_status",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("is_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
+        (
             "user_profiles",
             &[
                 ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -332,6 +340,31 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                         }
                     } else {
                         println!("[Setup] WSS endpoint already exists");
+                    }
+                }
+
+                // Initialize VPN status if it doesn't exist
+                let vpn_status_exists: Option<(i64,)> = sqlx::query_as(
+                    "SELECT COUNT(*) as count FROM vpn_status"
+                )
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+                if let Some((count,)) = vpn_status_exists {
+                    if count == 0 {
+                        println!("[Setup] No VPN status found, creating default entry...");
+                        if let Err(e) = sqlx::query(
+                            "INSERT INTO vpn_status (id, is_enabled) VALUES (1, FALSE)"
+                        )
+                        .execute(&pool)
+                        .await {
+                            eprintln!("[Setup] Failed to create default VPN status: {}", e);
+                        } else {
+                            println!("[Setup] Default VPN status created successfully");
+                        }
+                    } else {
+                        println!("[Setup] VPN status entry already exists");
                     }
                 }
 
