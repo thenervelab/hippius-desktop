@@ -1,42 +1,47 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useQuery } from "@tanstack/react-query";
+import { API_CONFIG } from "@/lib/config";
 
 /**
- * Read `credits.freeCredits(AccountId32) -> u128`
- * Returns bigint   → on-chain value
- * Returns undefined → api not ready, Option::None, or any error
+ * Fetch user credits from API
+ * Returns bigint   → balance value (scaled to 18 decimals)
+ * Returns undefined → no token or error
  */
 export function useUserCredits() {
-  const { api, isConnected } = usePolkadotApi();
-  const { polkadotAddress } = useWalletAuth();
+  const { oauthSession } = useWalletAuth();
 
   return useQuery<bigint | undefined>({
-    queryKey: ["user-credits", polkadotAddress],
-    enabled: !!polkadotAddress, // don’t run before we have an address
+    queryKey: ["user-credits", oauthSession?.userId],
     refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    enabled: !!oauthSession?.token,
 
     queryFn: async () => {
-      /* ── Guard: API not ready ───────────────────────────── */
-      if (!api || !isConnected || !polkadotAddress) return undefined;
-
-      try {
-        const raw = await api.query.credits.freeCredits(polkadotAddress);
-
-        /* Option<Balance> case (toggle in explorer shows “include option”) */
-        if ("isSome" in raw) {
-          if (!raw.isSome) return undefined; // Option::None → undefined
-          return BigInt((raw as any).unwrap().toString());
-        }
-
-        /* Plain u128 balance */
-        return BigInt(raw.toString());
-      } catch (err) {
-        console.error("freeCredits query failed:", err);
-        /* any error → treat as no data */
-        return undefined;
+      if (!oauthSession?.token) {
+        throw new Error("No authentication token available");
       }
+
+      const response = await fetch(
+        `${API_CONFIG.baseUrl}${API_CONFIG.billing.credits}`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Token ${oauthSession.token}`,
+            Accept: "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch credits balance: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Convert balance string to bigint (scaled to 18 decimals)
+      const balanceStr = data.balance || "0";
+      const balance = parseFloat(balanceStr) * Math.pow(10, 18);
+      return BigInt(Math.floor(balance));
     },
   });
 }

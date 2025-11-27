@@ -90,6 +90,11 @@ export function WalletAuthProvider({
       if (typeof window !== "undefined") {
         localStorage.removeItem("hippius_oauth_session");
         localStorage.removeItem("hippius_oauth_session_expiry");
+        // Clear deep link processing flags to prevent re-triggering
+        sessionStorage.removeItem("last_processed_deep_link");
+        // Mark this as manual navigation so deep link doesn't re-trigger
+        sessionStorage.setItem("manual_navigation", "true");
+        console.log("[WalletAuth] Cleared deep link flags and set manual navigation");
       }
     } catch (error) {
       console.error("Failed to cleanup sync on logout:", error);
@@ -142,6 +147,43 @@ export function WalletAuthProvider({
         logoutTimerRef.current = null;
       }
 
+      // First, check for OAuth session in localStorage
+      if (typeof window !== "undefined") {
+        const storedSession = localStorage.getItem("hippius_oauth_session");
+        const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
+
+        if (storedSession && storedExpiry) {
+          const expiryTime = parseInt(storedExpiry, 10);
+
+          // Check if session is still valid
+          if (Date.now() < expiryTime) {
+            try {
+              const oauthSessionData = JSON.parse(storedSession);
+              console.log("[WalletAuth] Restoring OAuth session:", oauthSessionData.username);
+
+              // Restore OAuth session state
+              setOAuthSessionState(oauthSessionData);
+              setPolkadotAddress(oauthSessionData.substrateAddress || null);
+              setAuthType("oauth");
+              setIsAuthenticated(true);
+
+              console.log("[WalletAuth] ✅ OAuth session restored");
+              return; // Skip mnemonic session check
+            } catch (error) {
+              console.error("[WalletAuth] Failed to restore OAuth session:", error);
+              // Clear invalid session data
+              localStorage.removeItem("hippius_oauth_session");
+              localStorage.removeItem("hippius_oauth_session_expiry");
+            }
+          } else {
+            console.log("[WalletAuth] OAuth session expired, clearing");
+            localStorage.removeItem("hippius_oauth_session");
+            localStorage.removeItem("hippius_oauth_session_expiry");
+          }
+        }
+      }
+
+      // Check for mnemonic session
       const session = await getSession();
       if (!session) {
         setSessionTimeRemaining(null);
@@ -264,15 +306,90 @@ export function WalletAuthProvider({
     }
   };
 
-  // OAuth login method (simplified - calls setSession internally)
+  // Mnemonic login with challenge-based authentication
   const login = async (inputMnemonic: string): Promise<void> => {
     setIsLoading(true);
     try {
-      const success = await setSession(inputMnemonic, 1440); // Default 24 hours
-      if (!success) {
-        throw new Error("Failed to create session");
+      console.log("[WalletAuth] Starting mnemonic login with challenge");
+
+      // Wait for crypto WASM to be ready
+      await cryptoWaitReady();
+
+      // Import viem for Ethereum account
+      const { mnemonicToAccount } = await import("viem/accounts");
+
+      // Create Polkadot account
+      const keyring = new Keyring({ type: "sr25519" });
+      const polkadotPair = keyring.addFromMnemonic(inputMnemonic);
+      const polkadotAddr = polkadotPair.address;
+
+      // Create Ethereum account
+      const ethAccount = mnemonicToAccount(inputMnemonic);
+      const ethAddress = ethAccount.address;
+
+      console.log("[WalletAuth] Derived addresses:", {
+        eth: ethAddress,
+        polkadot: polkadotAddr,
+      });
+
+      // Import auth service dynamically
+      const { authService } = await import("./services/authService");
+
+      // Request challenge
+      const challengeData = await authService.requestChallenge(
+        ethAddress,
+        polkadotAddr
+      );
+      console.log("[WalletAuth] Got challenge:", challengeData.message);
+
+      // Sign challenge
+      const signature = await ethAccount.signMessage({
+        message: challengeData.message,
+      });
+      console.log("[WalletAuth] Generated signature");
+
+      // Verify signature and get session
+      await authService.verifySignature({
+        signature,
+        address: ethAddress,
+        substrateAddress: polkadotAddr,
+        referralCode: null,
+      });
+      console.log("[WalletAuth] Signature verified");
+
+      // Get session from auth service (already stored)
+      const session = authService.getSession();
+      if (!session) {
+        throw new Error("Session not stored properly after verification");
       }
+
+      console.log("[WalletAuth] Mnemonic login successful");
+
+      // Update state
+      setMnemonic(inputMnemonic);
+      setPolkadotAddress(polkadotAddr);
+      setWalletManager({ polkadotPair });
+      setOAuthSessionState(session);
       setAuthType("mnemonic");
+      setIsAuthenticated(true);
+
+      // Initialize sync with the mnemonic
+      if (!syncInitialized.current) {
+        await invoke("initialize_sync", {
+          accountId: polkadotAddr,
+          mnemonic: inputMnemonic,
+        });
+        syncInitialized.current = true;
+      }
+    } catch (error) {
+      console.error("[WalletAuth] Login failed:", error);
+      // Clear sensitive data on error
+      setMnemonic(null);
+      setPolkadotAddress(null);
+      setWalletManager(null);
+      setAuthType(null);
+      setIsAuthenticated(false);
+      throw error;
     } finally {
       setIsLoading(false);
     }
@@ -280,11 +397,23 @@ export function WalletAuthProvider({
 
   // Set OAuth session from external OAuth flow
   const setOAuthSession = (session: import("@/app/lib/types/oAuth").OAuthSession) => {
-    console.log("[WalletAuth] Setting OAuth session");
+    console.log("[WalletAuth] Setting OAuth session:", session.username);
+
+    // Persist to localStorage immediately
+    if (typeof window !== "undefined") {
+      localStorage.setItem("hippius_oauth_session", JSON.stringify(session));
+      // Set expiry to 30 days from now
+      const expiryTime = Date.now() + (30 * 24 * 60 * 60 * 1000);
+      localStorage.setItem("hippius_oauth_session_expiry", expiryTime.toString());
+    }
+
+    // Update state
     setOAuthSessionState(session);
     setPolkadotAddress(session.substrateAddress || null);
     setAuthType("oauth");
     setIsAuthenticated(true);
+
+    console.log("[WalletAuth] ✅ OAuth session persisted and state updated");
   };
 
   // Full reset: clear session + wallet storage

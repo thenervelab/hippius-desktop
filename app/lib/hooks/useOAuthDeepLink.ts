@@ -1,88 +1,93 @@
-/**
- * OAuth Deep Link Hook for Tauri
- * 
- * Listens for OAuth callback deep links from Tauri desktop app
- * and processes them through the OAuth service.
- */
-
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { oauthService } from "@/app/lib/services/oAuthService";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
+
+declare global {
+    interface Window {
+        __HIPPIUS_OAUTH_DL_LISTENER__?: boolean;
+    }
+}
 
 export function useOAuthDeepLink() {
     const router = useRouter();
     const { setOAuthSession } = useWalletAuth();
 
     useEffect(() => {
-        // Only run in Tauri environment
-        if (typeof window === 'undefined' || !('__TAURI__' in window)) {
-            return;
-        }
+        if (typeof window === "undefined" || !("__TAURI__" in window)) return;
 
-        let unlisten: (() => void) | null = null;
+        // Prevent double-register (RootLayout + ProtectedLayout)
+        if (window.__HIPPIUS_OAUTH_DL_LISTENER__) return;
+        window.__HIPPIUS_OAUTH_DL_LISTENER__ = true;
 
-        async function setupListener() {
+        let unlisten: null | (() => void) = null;
+
+        const handleUrl = async (rawUrl: string) => {
+            console.log("[useOAuthDeepLink] URL:", rawUrl);
+
             try {
-                const { listen } = await import("@tauri-apps/api/event");
+                const url = new URL(rawUrl);
 
-                // Listen for OAuth callback events from Rust
-                unlisten = await listen<string>("oauth-callback", async (event) => {
-                    console.log("[useOAuthDeepLink] Received deep link:", event.payload);
+                const params = {
+                    code: url.searchParams.get("code") || undefined,
+                    token: url.searchParams.get("token") || undefined,
+                    state: url.searchParams.get("state") || undefined,
+                    error: url.searchParams.get("error") || undefined,
+                    error_description: url.searchParams.get("error_description") || undefined,
+                    user: url.searchParams.get("user_id")
+                        ? {
+                            id: url.searchParams.get("user_id") || undefined,
+                            username: url.searchParams.get("username") || undefined,
+                            email: url.searchParams.get("email") || undefined,
+                            substrate_address: url.searchParams.get("substrate_address") || undefined,
+                        }
+                        : undefined,
+                };
 
-                    try {
-                        // Parse the deep link URL
-                        const url = new URL(event.payload);
+                console.log("[useOAuthDeepLink] Parsed:", params);
 
-                        // Extract query parameters
-                        const params = {
-                            code: url.searchParams.get("code") || undefined,
-                            token: url.searchParams.get("token") || undefined,
-                            state: url.searchParams.get("state") || undefined,
-                            error: url.searchParams.get("error") || undefined,
-                            error_description: url.searchParams.get("error_description") || undefined,
-                            user: url.searchParams.get("user_id") ? {
-                                id: url.searchParams.get("user_id") || undefined,
-                                username: url.searchParams.get("username") || undefined,
-                                email: url.searchParams.get("email") || undefined,
-                                substrate_address: url.searchParams.get("substrate_address") || undefined,
-                            } : undefined,
-                        };
+                const session = await oauthService.handleCallback(params);
+                setOAuthSession(session);
 
-                        console.log("[useOAuthDeepLink] Parsed params:", params);
+                const redirectPath = sessionStorage.getItem("oauth_redirect") || "/";
+                sessionStorage.removeItem("oauth_redirect");
 
-                        // Handle the OAuth callback
-                        const session = await oauthService.handleCallback(params);
+                console.log("[useOAuthDeepLink] Redirect:", redirectPath);
+                router.push(redirectPath);
+            } catch (e) {
+                console.error("[useOAuthDeepLink] Failed:", e);
+                router.push("/login?error=oauth_failed");
+            }
+        };
 
-                        // Set session in wallet context
-                        setOAuthSession(session);
+        (async () => {
+            try {
+                const { getCurrent, onOpenUrl } = await import("@tauri-apps/plugin-deep-link");
 
-                        // Check for redirect parameter
-                        const redirectPath = sessionStorage.getItem("oauth_redirect") || "/";
-                        sessionStorage.removeItem("oauth_redirect");
+                // If app was launched from a deep link
+                const urlsAtStart = await getCurrent();
+                console.log("[useOAuthDeepLink] getCurrent:", urlsAtStart);
+                if (urlsAtStart?.length) {
+                    await handleUrl(urlsAtStart[urlsAtStart.length - 1]);
+                }
 
-                        console.log("[useOAuthDeepLink] Redirecting to:", redirectPath);
-                        router.push(redirectPath);
-                    } catch (error) {
-                        console.error("[useOAuthDeepLink] Failed to handle callback:", error);
-                        router.push("/login?error=oauth_failed");
+                // If deep link happens while app is running
+                unlisten = await onOpenUrl(async (urls) => {
+                    console.log("[useOAuthDeepLink] onOpenUrl:", urls);
+                    if (urls?.length) {
+                        await handleUrl(urls[urls.length - 1]);
                     }
                 });
 
-                console.log("[useOAuthDeepLink] Deep link listener registered");
-            } catch (error) {
-                console.error("[useOAuthDeepLink] Failed to setup listener:", error);
+                console.log("[useOAuthDeepLink] Listener ready");
+            } catch (e) {
+                console.error("[useOAuthDeepLink] Setup failed:", e);
             }
-        }
+        })();
 
-        setupListener();
-
-        // Cleanup
         return () => {
-            if (unlisten) {
-                unlisten();
-                console.log("[useOAuthDeepLink] Deep link listener cleaned up");
-            }
+            if (unlisten) unlisten();
+            // Don’t reset the global flag (avoid re-register loops on route changes)
         };
     }, [router, setOAuthSession]);
 }

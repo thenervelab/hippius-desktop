@@ -24,11 +24,13 @@
             ],
             "dangerousInsecureTransportProtocol": false
         },
-        "deepLink": {
-            "mobile": [],
+        "deep-link": {
             "desktop": {
-                "protocols": ["hippius"]
+                "schemes": ["hippiusapp"]
             }
+        },
+        "shell": {
+            "open": true
         }
     },
     "app": {

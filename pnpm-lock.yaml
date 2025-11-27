@@ -71,6 +71,9 @@ importers:
       '@tauri-apps/api':
         specifier: ^2.5.0
         version: 2.8.0
+      '@tauri-apps/plugin-deep-link':
+        specifier: ^2.4.5
+        version: 2.4.5
       '@tauri-apps/plugin-dialog':
         specifier: ~2
         version: 2.4.0
@@ -86,6 +89,9 @@ importers:
       '@tauri-apps/plugin-process':
         specifier: ~2
         version: 2.3.0
+      '@tauri-apps/plugin-shell':
+        specifier: ~2
+        version: 2.3.3
       '@tauri-apps/plugin-updater':
         specifier: ~2
         version: 2.9.0
@@ -1698,6 +1704,9 @@ packages:
     engines: {node: '>= 10'}
     hasBin: true
 
+  '@tauri-apps/plugin-deep-link@2.4.5':
+    resolution: {integrity: sha512-Zf2RTj1D9IQQ45/jqW8XTKvql24HqlPjcpv0mV/O2jHQkNe11HOTZBVj6IK37qs+MWV7xZzcmazx/QVZnhAwaQ==}
+
   '@tauri-apps/plugin-dialog@2.4.0':
     resolution: {integrity: sha512-OvXkrEBfWwtd8tzVCEXIvRfNEX87qs2jv6SqmVPiHcJjBhSF/GUvjqUNIDmKByb5N8nvDqVUM7+g1sXwdC/S9w==}
 
@@ -1712,6 +1721,9 @@ packages:
 
   '@tauri-apps/plugin-process@2.3.0':
     resolution: {integrity: sha512-0DNj6u+9csODiV4seSxxRbnLpeGYdojlcctCuLOCgpH9X3+ckVZIEj6H7tRQ7zqWr7kSTEWnrxtAdBb0FbtrmQ==}
+
+  '@tauri-apps/plugin-shell@2.3.3':
+    resolution: {integrity: sha512-Xod+pRcFxmOWFWEnqH5yZcA7qwAMuaaDkMR1Sply+F8VfBj++CGnj2xf5UoialmjZ2Cvd8qrvSCbU+7GgNVsKQ==}
 
   '@tauri-apps/plugin-updater@2.9.0':
     resolution: {integrity: sha512-j++sgY8XpeDvzImTrzWA08OqqGqgkNyxczLD7FjNJJx/uXxMZFz5nDcfkyoI/rCjYuj2101Tci/r/HFmOmoxCg==}
@@ -5843,6 +5855,10 @@ snapshots:
       '@tauri-apps/cli-win32-ia32-msvc': 2.8.4
       '@tauri-apps/cli-win32-x64-msvc': 2.8.4
 
+  '@tauri-apps/plugin-deep-link@2.4.5':
+    dependencies:
+      '@tauri-apps/api': 2.8.0
+
   '@tauri-apps/plugin-dialog@2.4.0':
     dependencies:
       '@tauri-apps/api': 2.8.0
@@ -5860,6 +5876,10 @@ snapshots:
       '@tauri-apps/api': 2.8.0
 
   '@tauri-apps/plugin-process@2.3.0':
+    dependencies:
+      '@tauri-apps/api': 2.8.0
+
+  '@tauri-apps/plugin-shell@2.3.3':
     dependencies:
       '@tauri-apps/api': 2.8.0
 

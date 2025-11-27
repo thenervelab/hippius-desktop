@@ -105,21 +105,6 @@ fn main() {
                 let _ = window.set_focus();
             }
         }))
-        .setup(|app| {
-            // Deep link handler for OAuth callbacks
-            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-            {
-                let app_handle = app.handle().clone();
-                
-                // Listen for deep link events from the plugin
-                app.listen("deep-link://new-url", move |event| {
-                    println!("[DeepLink] Event received: {:?}", event);
-                    let url = event.payload();
-                    handle_deep_link(&app_handle, url.to_string());
-                });
-            }
-            Ok(())
-        })
         .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             encrypt_and_upload_file,

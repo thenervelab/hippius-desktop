@@ -16,6 +16,8 @@ import type {
     OAuthSession,
     OAuthCallbackParams,
 } from "@/app/lib/types/oAuth";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
 
 const OAUTH_STATE_KEY = "hippius_oauth_state";
 const OAUTH_SESSION_KEY = "hippius_oauth_session";
@@ -107,12 +109,11 @@ class OAuthService {
      * Get callback URL based on environment
      */
     private getCallbackUrl(): string {
-        // Use custom protocol for Tauri desktop app
-        if (this.isTauri()) {
-            return 'hippius://auth/callback';
-        }
-        // For web, use console.hippius.com
+        // Always use web callback URL
+        // The web page will detect if user came from desktop and redirect back
         return 'https://console.hippius.com/auth/callback';
+        // return 'https://console.hippius.com/auth/callback';
+
     }
 
     /**
@@ -168,15 +169,29 @@ class OAuthService {
             sessionStorage.setItem("oauth_provider", provider);
 
             // Build authorization URL with backend's expected format:
-            // /accounts/google/login/?next=/get-token/?callback_url='https://console.hippius.com/auth/callback'
+            // /accounts/google/login/?next=/get-token/?callback_url=https://console.hippius.com/auth/callback
             const authUrl = new URL(config.authUrl);
-            const nextParam = `/get-token/?callback_url=${encodeURIComponent(config.redirectUri)}`;
+
+            // Add source=desktop parameter so web callback knows to redirect back to app
+            let callbackUrl = config.redirectUri;
+            if (this.isTauri()) {
+                callbackUrl += (callbackUrl.includes('?') ? '&' : '?') + 'source=desktop';
+            }
+
+            const nextParam = `/get-token/?callback_url=${encodeURIComponent(callbackUrl)}`;
             authUrl.searchParams.set("next", nextParam);
 
-            console.log("[OAuthService] Redirecting to:", authUrl.toString());
+            const finalUrl = authUrl.toString();
+            console.log("[OAuthService] OAuth URL:", finalUrl);
 
-            // Redirect to OAuth provider
-            window.location.href = authUrl.toString();
+            // For desktop app, open in external browser
+            if (this.isTauri()) {
+                console.log("[OAuthService] Opening OAuth in external browser (desktop mode)");
+                await openUrl(finalUrl);
+            } else {
+                // For web, redirect normally
+                window.location.href = finalUrl;
+            }
         } catch (error) {
             console.error(`[OAuthService] Failed to initiate ${provider} login:`, error);
             throw error;
@@ -187,17 +202,25 @@ class OAuthService {
      * Handle OAuth callback and exchange code for token
      */
     public async handleCallback(params: OAuthCallbackParams): Promise<OAuthSession> {
-        console.log("[OAuthService] Handling OAuth callback");
+        console.log("[OAuthService] ========== HANDLING OAUTH CALLBACK ==========");
+        console.log("[OAuthService] Full params object:", JSON.stringify(params, null, 2));
 
         try {
             // Check for errors
             if (params.error) {
+                console.error("[OAuthService] ❌ OAuth error received:", params.error, params.error_description);
                 throw new Error(
                     params.error_description || params.error || "OAuth authentication failed"
                 );
             }
 
-            console.log("[OAuthService] Callback parameters:", params);
+            console.log("[OAuthService] Callback parameters:", {
+                hasToken: !!params.token,
+                hasCode: !!params.code,
+                hasUser: !!params.user,
+                token: params.token ? `${params.token.substring(0, 10)}...` : 'none',
+                code: params.code ? `${params.code.substring(0, 10)}...` : 'none',
+            });
 
             // If we already have a token from backend (direct callback)
             if (params.token) {
@@ -209,7 +232,7 @@ class OAuthService {
                 // Create session directly with the token
                 const session: OAuthSession = {
                     token: params.token,
-                    userId: params.user?.id || "",
+                    userId: params.user?.id ? (typeof params.user.id === 'number' ? params.user.id : parseInt(params.user.id, 10)) : 0,
                     username: params.user?.username || "",
                     email: params.user?.email || "",
                     substrateAddress: params.user?.substrate_address || "",
