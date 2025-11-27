@@ -6,6 +6,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::fs;
 use std::time::Duration;
 use sysinfo::Networks;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -404,10 +406,8 @@ pub async fn ensure_nebula_installed(app: AppHandle) -> Result<()> {
         println!("[Nebula] Certificates already exist, skipping generation");
     }
     
-    // Start Nebula
-    if let Err(e) = start_nebula().await {
-        eprintln!("[Nebula] Failed to start Nebula: {}", e);
-    }
+    // Skip automatic Nebula startup - let user start it manually
+    println!("[Nebula] Skipping automatic startup - Nebula will need to be started manually");
     
     // Emit ready phase
     let _ = app.emit("app_setup_event", NebulaSetupPhase::Ready);
@@ -611,17 +611,60 @@ pub async fn get_nebula_ip() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
-    // Monitor the nebula network interface directly
-    let networks = Networks::new_with_refreshed_list();
+    // First check if Nebula is running
+    let is_running = check_nebula_running()
+        .await
+        .unwrap_or(false);
     
+    // If Nebula is not running, return zeros
+    if !is_running {
+        return Ok(NebulaStats {
+            udp_tx_bytes: 0,
+            udp_rx_bytes: 0,
+        });
+    }
+    
+    // First try reading from /proc/net/dev which is more reliable on Linux
+    if let Ok(stats) = read_interface_stats("nebula1") {
+        return Ok(stats);
+    }
+    
+    // Fallback to sysinfo if the direct method fails
+    let networks = Networks::new_with_refreshed_list();
     let mut tx_bytes = 0;
     let mut rx_bytes = 0;
     
-    // Look for nebula interface (usually nebula1, nebula0, etc.)
     for (interface_name, data) in &networks {
         if interface_name.contains("nebula") {
             tx_bytes += data.transmitted();
             rx_bytes += data.received();
+        }
+    }
+    
+    Ok(NebulaStats {
+        udp_tx_bytes: tx_bytes,
+        udp_rx_bytes: rx_bytes,
+    })
+}
+
+/// Read network interface statistics directly from /proc/net/dev on Linux
+fn read_interface_stats(interface: &str) -> Result<NebulaStats, io::Error> {
+    let file = File::open("/proc/net/dev")?;
+    let reader = BufReader::new(file);
+    
+    let mut tx_bytes = 0;
+    let mut rx_bytes = 0;
+    
+    for line in reader.lines() {
+        let line = line?;
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        
+        if parts.len() >= 10 && parts[0].trim_end_matches(':') == interface {
+            // Format: 
+            // interface:   bytes    packets errs drop fifo frame compressed multicast    bytes    packets errs drop fifo colls carrier compressed
+            rx_bytes = parts[1].parse().unwrap_or(0);
+            tx_bytes = parts[9].parse().unwrap_or(0);
+            break;
         }
     }
     
@@ -637,16 +680,20 @@ pub async fn get_nebula_status() -> Result<NebulaStatus, String> {
         .await
         .unwrap_or(false);
     
-    let networks = Networks::new_with_refreshed_list();
-    let has_interface = networks.iter()
-        .any(|(name, _)| name.contains("nebula"));
+    // Only check for interface if Nebula is actually running
+    let has_interface = if is_running {
+        let networks = Networks::new_with_refreshed_list();
+        networks.iter().any(|(name, _)| name.contains("nebula"))
+    } else {
+        false
+    };
     
     let message = if is_running && has_interface {
         "Connected".to_string()
-    } else if is_running && !has_interface {
+    } else if is_running {
         "Starting...".to_string()
     } else {
-        "Not running - Click to start".to_string()
+        "Not running - Start manually".to_string()
     };
     
     Ok(NebulaStatus {
