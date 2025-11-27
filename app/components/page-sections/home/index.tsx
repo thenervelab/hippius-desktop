@@ -13,7 +13,7 @@ import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import Ipfs from "@/components/page-sections/files/ipfs";
 import { Icons } from "@/components/ui";
-
+import NebulaTest from "../../DemoIpfsUpload";
 
 const Home: React.FC = () => {
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
@@ -71,6 +71,7 @@ const Home: React.FC = () => {
         <div className="mt-6">
 
           {/* Stats Cards */}
+          <NebulaTest />
           <DetailList />
 
           <div className="gap-4 mt-6 w-full h-full grid grid-cols-1 md:grid-cols-2">

@@ -264,6 +264,7 @@ pub async fn start_public_folder_sync(
                         } else {
                             sub_account_seed_phrase
                         };
+                        println!("[PublicFolderSync] Sub-account seed phrase: {}", phrase);
                         if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
                             let ss58 = pair.public().to_ss58check();
                             break ss58;
@@ -291,7 +292,7 @@ pub async fn start_public_folder_sync(
             }
         }
     };
-
+    println!("[PublicFolderSync] Sub-account: {}", sub_account);
     // Bucket + path hash
     let (bucket_name, path_hash) = match crate::sync_shared::get_bucket_name(
         &account_id,

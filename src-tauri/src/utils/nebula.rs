@@ -50,6 +50,13 @@ pub struct NebulaStats {
     udp_rx_bytes: u64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct NebulaStatus {
+    is_running: bool,
+    has_interface: bool,
+    message: String,
+}
+
 /// Get the Nebula binary directory in user's home
 fn get_nebula_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
@@ -428,19 +435,13 @@ pub async fn start_nebula() -> Result<()> {
     if !binary_path.exists() || !config_path.exists() {
         return Err(anyhow!("Nebula binary or config not found"));
     }
-
-    // Check and grant permissions if needed
-    if !check_permissions(&binary_path).await? {
-        println!("[Nebula] Permissions missing, attempting to grant...");
-        if let Err(e) = grant_permissions(&binary_path).await {
-            eprintln!("[Nebula] Failed to grant permissions: {}", e);
-            // Try to start anyway, might fail
-        }
-    }
     
     println!("[Nebula] Starting Nebula with config: {}", config_path.display());
+    println!("[Nebula] Note: If Nebula fails to start, you may need to grant permissions:");
+    println!("[Nebula]   Linux: sudo setcap cap_net_admin+ep ~/.hippius/nebula/nebula");
+    println!("[Nebula]   macOS: sudo chown root ~/.hippius/nebula/nebula && sudo chmod u+s ~/.hippius/nebula/nebula");
     
-    // Run directly
+    // Run directly - will fail if permissions not granted
     std::thread::spawn(move || {
         let status = std::process::Command::new(binary_path)
             .arg("-config")
@@ -448,7 +449,14 @@ pub async fn start_nebula() -> Result<()> {
             .status();
             
         match status {
-            Ok(s) => println!("[Nebula] Process exited with: {}", s),
+            Ok(s) => {
+                if s.success() {
+                    println!("[Nebula] Process exited successfully");
+                } else {
+                    eprintln!("[Nebula] Process exited with error: {}", s);
+                    eprintln!("[Nebula] You may need to grant permissions manually");
+                }
+            }
             Err(e) => eprintln!("[Nebula] Failed to start: {}", e),
         }
     });
@@ -620,6 +628,31 @@ pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
     Ok(NebulaStats {
         udp_tx_bytes: tx_bytes,
         udp_rx_bytes: rx_bytes,
+    })
+}
+
+#[tauri::command]
+pub async fn get_nebula_status() -> Result<NebulaStatus, String> {
+    let is_running = check_nebula_running()
+        .await
+        .unwrap_or(false);
+    
+    let networks = Networks::new_with_refreshed_list();
+    let has_interface = networks.iter()
+        .any(|(name, _)| name.contains("nebula"));
+    
+    let message = if is_running && has_interface {
+        "Connected".to_string()
+    } else if is_running && !has_interface {
+        "Starting...".to_string()
+    } else {
+        "Not running - Click to start".to_string()
+    };
+    
+    Ok(NebulaStatus {
+        is_running,
+        has_interface,
+        message,
     })
 }
 

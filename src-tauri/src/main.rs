@@ -135,7 +135,8 @@ fn main() {
             utils::nebula::get_nebula_version,
             utils::nebula::check_nebula_update,
             utils::nebula::get_nebula_ip,
-            utils::nebula::get_nebula_stats
+            utils::nebula::get_nebula_stats,
+            utils::nebula::get_nebula_status
         ]);
 
     let builder = setup(builder);
