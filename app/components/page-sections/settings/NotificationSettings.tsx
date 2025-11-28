@@ -11,6 +11,7 @@ import {
   refreshEnabledTypesAtom,
   refreshNotificationsAtom,
 } from "@/components/page-sections/notifications/notificationStore";
+import EmailNotificationSection from "./EmailNotificationSection";
 
 const NotificationSettings: React.FC = () => {
   const { preferences, savePreferences } = useNotificationPreferences();
@@ -74,7 +75,7 @@ const NotificationSettings: React.FC = () => {
           <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
             <SectionHeader
               Icon={Icons.Notification}
-              title="Notification Preferences"
+              title="In-App Notification Preferences"
               subtitle="Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you."
               info="Customize which events trigger notifications to stay informed about activity relevant to you. Your preferences can be updated anytime."
             />
@@ -144,6 +145,7 @@ const NotificationSettings: React.FC = () => {
               </CardButton>
             </div>
           </RevealTextLine>
+          <EmailNotificationSection />
         </div>
       )}
     </InView>
