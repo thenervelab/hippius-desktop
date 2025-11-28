@@ -6,21 +6,33 @@ import cn from "@/app/lib/utils/cn";
 type VPNSwitchProps = {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
+  disabled?: boolean;
 };
 
-const VPNSwitch = ({ checked, onCheckedChange }: VPNSwitchProps) => {
+const VPNSwitch = ({
+  checked,
+  onCheckedChange,
+  disabled = false,
+}: VPNSwitchProps) => {
   return (
     <div className="flex items-center gap-2">
-      <span className="font-semibold text-sm leading-5 text-grey-50 tracking-[-0.28px]">
+      <span
+        className={cn(
+          "font-semibold text-sm leading-5 tracking-[-0.28px]",
+          disabled ? "text-grey-70" : "text-grey-50"
+        )}
+      >
         OFF
       </span>
       <Switch.Root
         className={cn(
-          "w-[40px] h-[24px] rounded-full relative shadow-none outline-none cursor-pointer transition-colors duration-200 ease-in-out",
+          "w-[40px] h-[24px] rounded-full relative shadow-none outline-none transition-colors duration-200 ease-in-out",
+          disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
           checked ? "bg-primary-50 border border-primary-80" : "bg-grey-90"
         )}
         checked={checked}
         onCheckedChange={onCheckedChange}
+        disabled={disabled}
       >
         <Switch.Thumb
           className={cn(
@@ -34,7 +46,11 @@ const VPNSwitch = ({ checked, onCheckedChange }: VPNSwitchProps) => {
       <span
         className={cn(
           "font-semibold text-sm leading-5 tracking-[-0.28px]",
-          checked ? "text-primary-50" : "text-grey-50"
+          disabled
+            ? "text-grey-70"
+            : checked
+            ? "text-primary-50"
+            : "text-grey-50"
         )}
       >
         ON

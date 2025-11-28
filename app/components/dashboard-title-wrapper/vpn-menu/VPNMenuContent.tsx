@@ -1,17 +1,37 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import Image from "next/image";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { useAtom } from "jotai";
+import { invoke } from "@tauri-apps/api/core";
 import VPNSwitch from "./VPNSwitch";
 import VPNStatusIndicator from "./VPNStatusIndicator";
-import { vpnConnectedAtom } from "./vpnAtoms";
+import { vpnConnectedAtom, vpnLoadingAtom } from "./vpnAtoms";
 import { RevealTextLine } from "@/app/components/ui";
 import { InView } from "react-intersection-observer";
 
+interface VpnStatus {
+  is_enabled: boolean;
+}
+
 const VPNMenuContent = () => {
   const [isConnected, setIsConnected] = useAtom(vpnConnectedAtom);
+  const [isLoading, setIsLoading] = useAtom(vpnLoadingAtom);
+
+  const handleToggle = async (checked: boolean) => {
+    setIsLoading(true);
+    try {
+      const status = await invoke<VpnStatus>("toggle_vpn_status");
+      setIsConnected(status.is_enabled);
+    } catch (error) {
+      console.error("Failed to toggle VPN status:", error);
+      // Revert on error
+      setIsConnected(!checked);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   return (
     <InView triggerOnce>
@@ -91,12 +111,29 @@ const VPNMenuContent = () => {
 
               <VPNSwitch
                 checked={isConnected}
-                onCheckedChange={setIsConnected}
+                onCheckedChange={handleToggle}
+                disabled={isLoading}
               />
             </div>
 
             {/* Connected Status Details (Only when connected) */}
-            {isConnected && <VPNStatusIndicator />}
+            <AnimatePresence initial={false}>
+              {isConnected && (
+                <motion.div
+                  key="vpn-status"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{
+                    height: { duration: 0.15, ease: "easeInOut" },
+                    opacity: { duration: 0.1, ease: "easeInOut" },
+                  }}
+                  style={{ overflow: "hidden" }}
+                >
+                  <VPNStatusIndicator />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       )}

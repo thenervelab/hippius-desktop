@@ -1,13 +1,39 @@
 "use client";
 
+import { useEffect } from "react";
 import { InView } from "react-intersection-observer";
+import { useAtom } from "jotai";
+import { invoke } from "@tauri-apps/api/core";
 import { RevealTextLine } from "@/app/components/ui";
 import cn from "@/app/lib/utils/cn";
+import { vpnConnectedAtom, vpnLoadingAtom } from "./vpnAtoms";
+
+interface VpnStatus {
+  is_enabled: boolean;
+}
 
 const VPNIconButton: React.FC<{
   className?: string;
-  isConnected?: boolean;
-}> = ({ className, isConnected = false }) => {
+}> = ({ className }) => {
+  const [isConnected, setIsConnected] = useAtom(vpnConnectedAtom);
+  const [, setIsLoading] = useAtom(vpnLoadingAtom);
+
+  // Fetch VPN status on mount
+  useEffect(() => {
+    const fetchVpnStatus = async () => {
+      setIsLoading(true);
+      try {
+        const status = await invoke<VpnStatus>("get_vpn_status");
+        setIsConnected(status.is_enabled);
+      } catch (error) {
+        console.error("Failed to fetch VPN status:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchVpnStatus();
+  }, [setIsConnected, setIsLoading]);
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (

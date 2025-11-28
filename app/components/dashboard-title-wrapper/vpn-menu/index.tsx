@@ -4,8 +4,6 @@ import { useState } from "react";
 import * as Menubar from "@radix-ui/react-menubar";
 import VPNIconButton from "./VPNIconButton";
 import VPNMenuContent from "./VPNMenuContent";
-import { useAtom } from "jotai";
-import { vpnConnectedAtom } from "./vpnAtoms";
 
 type Props = {
   className?: string;
@@ -13,7 +11,6 @@ type Props = {
 
 export default function VPNMenu({ className = "delay-500" }: Props) {
   const [menuValue, setMenuValue] = useState<string>("");
-  const [isConnected] = useAtom(vpnConnectedAtom);
 
   return (
     <Menubar.Root
@@ -24,7 +21,7 @@ export default function VPNMenu({ className = "delay-500" }: Props) {
       <Menubar.Menu value="vpn">
         <Menubar.Trigger asChild>
           <button>
-            <VPNIconButton className={className} isConnected={isConnected} />
+            <VPNIconButton className={className} />
           </button>
         </Menubar.Trigger>
 
