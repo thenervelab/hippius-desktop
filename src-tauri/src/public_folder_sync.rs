@@ -264,7 +264,6 @@ pub async fn start_public_folder_sync(
                         } else {
                             sub_account_seed_phrase
                         };
-                        println!("[PublicFolderSync] Sub-account seed phrase: {}", phrase);
                         if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
                             let ss58 = pair.public().to_ss58check();
                             break ss58;

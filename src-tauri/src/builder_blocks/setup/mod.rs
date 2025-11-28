@@ -249,13 +249,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             tauri::async_runtime::spawn(async move {
                 println!("[Setup] async block started in setup.rs");
                 
-                // Ensure Nebula is installed and up-to-date
-                println!("[Setup] Checking Nebula installation...");
-                if let Err(e) = crate::utils::nebula::ensure_nebula_installed(_handle.clone()).await {
-                    eprintln!("[Setup] Nebula installation failed: {}", e);
-                    // Continue with app setup even if Nebula fails
-                }
-                
                 // Database initialization
                 let home_dir = dirs::home_dir().expect("Failed to get home directory");
                 let db_dir = home_dir.join(".hippius");
@@ -369,6 +362,13 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 }
 
                 println!("[Setup] Database initialized successfully");
+
+                // Ensure Nebula is installed and up-to-date
+                println!("[Setup] Checking Nebula installation...");
+                if let Err(e) = crate::utils::nebula::ensure_nebula_installed(_handle.clone(), &pool).await {
+                    eprintln!("[Setup] Nebula installation failed: {}", e);
+                    // Continue with app setup even if Nebula fails
+                }
             });
             Ok(())
         })

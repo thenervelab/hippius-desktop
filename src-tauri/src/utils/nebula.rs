@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 use tokio::fs;
@@ -287,7 +288,7 @@ async fn extract_tar_gz(bytes: &[u8], target_dir: &Path) -> Result<()> {
 }
 
 /// Main function to ensure Nebula is installed and up-to-date
-pub async fn ensure_nebula_installed(app: AppHandle) -> Result<()> {
+pub async fn ensure_nebula_installed(app: AppHandle, pool: &sqlx::SqlitePool) -> Result<()> {
     // Emit checking phase
     let _ = app.emit("app_setup_event", NebulaSetupPhase::CheckingBinary);
     
@@ -363,6 +364,19 @@ pub async fn ensure_nebula_installed(app: AppHandle) -> Result<()> {
         } else {
             println!("[Nebula] nebula-cert binary verified: {}", cert_binary_path.display());
         }
+    }
+
+    // Check if VPN is enabled in DB
+    let is_enabled: bool = sqlx::query("SELECT is_enabled FROM vpn_status WHERE id = 1")
+        .fetch_optional(pool)
+        .await?
+        .map(|row| row.get("is_enabled"))
+        .unwrap_or(false);
+
+    if !is_enabled {
+        println!("[Nebula] VPN is disabled in settings, skipping certificate generation and startup");
+        let _ = app.emit("app_setup_event", NebulaSetupPhase::Ready);
+        return Ok(());
     }
     
     // Generate certificates if they don't exist
