@@ -418,65 +418,60 @@ pub async fn ensure_nebula_installed(app: AppHandle, pool: &sqlx::SqlitePool) ->
         println!("[Nebula] Certificates already exist, skipping generation");
     }
     
-    // Start Nebula
-    if let Err(e) = start_nebula().await {
-        eprintln!("[Nebula] Failed to start Nebula: {}", e);
-    }
-    
     // Emit ready phase
     let _ = app.emit("app_setup_event", NebulaSetupPhase::Ready);
     
     Ok(())
 }
 
-/// Start the Nebula process
-pub async fn start_nebula() -> Result<()> {
-    // Check if already running
-    if check_nebula_running().await? {
-        println!("[Nebula] Already running");
-        return Ok(());
-    }
+// /// Start the Nebula process
+// pub async fn start_nebula() -> Result<()> {
+//     // Check if already running
+//     if check_nebula_running().await? {
+//         println!("[Nebula] Already running");
+//         return Ok(());
+//     }
 
-    let binary_path = get_nebula_binary_path()?;
-    let hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "node".to_string());
+//     let binary_path = get_nebula_binary_path()?;
+//     let hostname = hostname::get()
+//         .ok()
+//         .and_then(|h| h.into_string().ok())
+//         .unwrap_or_else(|| "node".to_string());
         
-    let config_dir = get_nebula_config_dir()?;
-    let config_path = config_dir.join(format!("{}.yml", hostname));
+//     let config_dir = get_nebula_config_dir()?;
+//     let config_path = config_dir.join(format!("{}.yml", hostname));
     
-    if !binary_path.exists() || !config_path.exists() {
-        return Err(anyhow!("Nebula binary or config not found"));
-    }
+//     if !binary_path.exists() || !config_path.exists() {
+//         return Err(anyhow!("Nebula binary or config not found"));
+//     }
     
-    println!("[Nebula] Starting Nebula with config: {}", config_path.display());
-    println!("[Nebula] Note: If Nebula fails to start, you may need to grant permissions:");
-    println!("[Nebula]   Linux: sudo setcap cap_net_admin+ep ~/.hippius/nebula/nebula");
-    println!("[Nebula]   macOS: sudo chown root ~/.hippius/nebula/nebula && sudo chmod u+s ~/.hippius/nebula/nebula");
+//     println!("[Nebula] Starting Nebula with config: {}", config_path.display());
+//     println!("[Nebula] Note: If Nebula fails to start, you may need to grant permissions:");
+//     println!("[Nebula]   Linux: sudo setcap cap_net_admin+ep ~/.hippius/nebula/nebula");
+//     println!("[Nebula]   macOS: sudo chown root ~/.hippius/nebula/nebula && sudo chmod u+s ~/.hippius/nebula/nebula");
 
-    // Run directly - will fail if permissions not granted
-    std::thread::spawn(move || {
-        let status = std::process::Command::new(binary_path)
-            .arg("-config")
-            .arg(config_path)
-            .status();
+//     // Run directly - will fail if permissions not granted
+//     std::thread::spawn(move || {
+//         let status = std::process::Command::new(binary_path)
+//             .arg("-config")
+//             .arg(config_path)
+//             .status();
             
-        match status {
-            Ok(s) => {
-                if s.success() {
-                    println!("[Nebula] Process exited successfully");
-                } else {
-                    eprintln!("[Nebula] Process exited with error: {}", s);
-                    eprintln!("[Nebula] You may need to grant permissions manually");
-                }
-            }
-            Err(e) => eprintln!("[Nebula] Failed to start: {}", e),
-        }
-    });
+//         match status {
+//             Ok(s) => {
+//                 if s.success() {
+//                     println!("[Nebula] Process exited successfully");
+//                 } else {
+//                     eprintln!("[Nebula] Process exited with error: {}", s);
+//                     eprintln!("[Nebula] You may need to grant permissions manually");
+//                 }
+//             }
+//             Err(e) => eprintln!("[Nebula] Failed to start: {}", e),
+//         }
+//     });
     
-    Ok(())
-}
+//     Ok(())
+// }
 
 /// Check if the binary has required permissions
 async fn check_permissions(binary_path: &Path) -> Result<bool> {
