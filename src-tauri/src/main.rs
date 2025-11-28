@@ -137,10 +137,8 @@ fn main() {
             utils::nebula::get_nebula_ip,
             utils::nebula::get_nebula_stats,
             utils::nebula::get_nebula_status,
-            // VPN Status Commands
             commands::vpn_enabled::get_vpn_status,
             commands::vpn_enabled::toggle_vpn_status,
-            commands::vpn_enabled::set_vpn_status
         ]);
 
     let builder = setup(builder);

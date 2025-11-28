@@ -54,21 +54,3 @@ pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
         is_enabled: new_status,
     })
 }
-
-/// Set the VPN status to a specific value
-#[tauri::command]
-pub async fn set_vpn_status(enabled: bool) -> Result<VpnStatus, String> {
-    let pool = DB_POOL.get().ok_or("Database pool not available")?;
-    
-    sqlx::query(
-        "UPDATE vpn_status SET is_enabled = ?, last_updated = CURRENT_TIMESTAMP WHERE id = 1",
-    )
-    .bind(enabled)
-    .execute(pool)
-    .await
-    .map_err(|e| e.to_string())?;
-    
-    Ok(VpnStatus {
-        is_enabled: enabled,
-    })
-}
