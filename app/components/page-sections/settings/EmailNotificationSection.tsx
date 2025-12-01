@@ -80,42 +80,33 @@ const EmailNotificationSection: React.FC = () => {
       <InView triggerOnce>
         {({ inView, ref }) => (
           <div
-            className="w-full cursor-pointer group"
             ref={ref}
-            onClick={() => setOpen(true)}
+            className="flex flex-col w-full border broder-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover"
           >
-            <div className="flex flex-row justify-between items-center flex-wrap gap-2">
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                className="delay-300 w-full"
-              >
-                <SectionHeader
-                  Icon={Mail}
-                  title="Email Notifications"
-                  subtitle={
-                    !settings && !isLoading
-                      ? "No authentication token available. Please log in to view your master token."
-                      : "Manage your email preferences"
-                  }
-                />
-              </RevealTextLine>
-              {/* <div className="flex items-start gap-2">
-                <AbstractIconWrapper className="size-8 sm:size-10 bg-grey-10 relative">
-                  <Mail className="absolute size-5 sm:size-6 text-primary-50" />
-                </AbstractIconWrapper>
-                <div className="flex flex-col gap-2">
-                  <h2 className="text-lg sm:text-[22px] font-medium  transition-colors">
-                    Email Notifications
-                  </h2>
-                  <p className="text-base leading-[22px] text-grey-60 font-medium">
-                    Manage your email preferences
-                  </p>
-                </div>
-              </div> */}
-              {!isLoading && settings && (
-                <Icons.ArrowRight2 className="size-5 text-grey-10 group-hover:text-primary-50 transition-colors" />
-              )}
+            <div
+              className="w-full cursor-pointer group"
+              onClick={() => setOpen(true)}
+            >
+              <div className="flex flex-row justify-between items-center flex-wrap gap-2">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                >
+                  <SectionHeader
+                    Icon={Mail}
+                    title="Email Notifications"
+                    subtitle={
+                      !settings && !isLoading
+                        ? "No authentication token available. Please log in to view your master token."
+                        : "Manage your email preferences"
+                    }
+                  />
+                </RevealTextLine>
+                {!isLoading && settings && (
+                  <Icons.ArrowRight2 className="size-5 text-grey-10 group-hover:text-primary-50 transition-colors" />
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -192,17 +183,6 @@ const EmailNotificationSection: React.FC = () => {
               <div className="h-px bg-grey-80 w-full" />
 
               <div className="flex flex-col gap-4">
-                {/* <CheckboxItem
-                  label="File processing status updates"
-                  checked={localSettings.file_status_updates}
-                  onCheckedChange={(checked) =>
-                    updateLocalSetting(
-                      "file_status_updates",
-                      checked as boolean
-                    )
-                  }
-                  disabled={!localSettings.email_enabled}
-                /> */}
                 <CheckboxItem
                   label="Low credit balance alerts"
                   checked={localSettings.low_credit_alerts}

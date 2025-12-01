@@ -18,6 +18,7 @@ import CustomizeRPC from "./CustomizeRPC";
 import SessionTimeoutSettings from "./SessionTimeoutSettings";
 import FileDeletionBehaviour from "./FileDeletionBehaviour";
 import OAuthTokenSection from "./OAuthTokenSection";
+import EmailNotificationSection from "./EmailNotificationSection";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -119,15 +120,27 @@ const SettingsDialogContent: React.FC = () => {
               </div>
             )}
             {activeTab === "Notifications" && (
-              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                <RevealTextLine
-                  rotate
-                  reveal={inView}
-                  className="delay-300 w-full"
-                  parentClassName="w-full"
-                >
-                  <NotificationSettings />
-                </RevealTextLine>
+              <div className="flex flex-col gap-4 w-full">
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                  <RevealTextLine
+                    rotate
+                    reveal={inView}
+                    className="delay-300 w-full"
+                    parentClassName="w-full"
+                  >
+                    <NotificationSettings />
+                  </RevealTextLine>
+                </div>
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                  <RevealTextLine
+                    rotate
+                    reveal={inView}
+                    className="delay-500 w-full"
+                    parentClassName="w-full"
+                  >
+                    <EmailNotificationSection />
+                  </RevealTextLine>
+                </div>
               </div>
             )}
             {activeTab === "Reset App" && (

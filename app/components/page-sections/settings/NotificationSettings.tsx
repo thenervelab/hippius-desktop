@@ -11,7 +11,6 @@ import {
   refreshEnabledTypesAtom,
   refreshNotificationsAtom,
 } from "@/components/page-sections/notifications/notificationStore";
-import EmailNotificationSection from "./EmailNotificationSection";
 
 const NotificationSettings: React.FC = () => {
   const { preferences, savePreferences } = useNotificationPreferences();
@@ -149,10 +148,6 @@ const NotificationSettings: React.FC = () => {
           </div>
         )}
       </InView>
-
-      <div className="flex flex-col w-full border broder-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
-        <EmailNotificationSection />
-      </div>
     </div>
   );
 };
