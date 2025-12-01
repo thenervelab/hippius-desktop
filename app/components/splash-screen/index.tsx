@@ -1,79 +1,82 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import SplashScreen from "./SplashScreen";
-import { useAtom, useSetAtom, useAtomValue } from "jotai";
-import { phaseAtom, phaseProgressionClockAtom } from "./atoms";
-import { updateCheckCompleteAtom, updateDialogOpenAtom, updateStore } from "@/app/components/updater/updateStore";
+import { useAtom, useAtomValue } from "jotai";
+import { phaseAtom } from "./atoms";
+import {
+  updateCheckCompleteAtom,
+  updateDialogOpenAtom,
+  updateStore,
+} from "@/app/components/updater/updateStore";
 import { cn } from "@/app/lib/utils";
+import { invoke } from "@tauri-apps/api/core";
+import { PHASE_CONTENT, AppSetupPhaseContent } from "./SplashContent";
 
 export default function SplashWrapper({
   children,
+  preventClose = false,
 }: {
   children: React.ReactNode;
-  skipSplash?: boolean;
+  preventClose?: boolean;
 }) {
   const [phase, setPhase] = useAtom(phaseAtom);
-  const setPhaseProgressionClock = useSetAtom(phaseProgressionClockAtom);
   const [keepSplashscreenInDom, setKeepSplacescreenInDom] = useState(true);
+  const setupStartedRef = useRef(false);
 
   // Track update status
   const updateCheckComplete = useAtomValue(updateCheckCompleteAtom);
-  const updateDialogOpen = useAtomValue(updateDialogOpenAtom, { store: updateStore });
+  const updateDialogOpen = useAtomValue(updateDialogOpenAtom, {
+    store: updateStore,
+  });
   const canProceedWithSplash = updateCheckComplete && !updateDialogOpen;
 
-  // Reset phase progression clock and phase when update check is not complete or dialog is open
+  // Reset phase when update dialog is open
   useEffect(() => {
-    if (!updateCheckComplete || updateDialogOpen) {
-      setPhaseProgressionClock(0);
-      // Reset phase to prevent any content changes
-      if (updateDialogOpen && phase) {
-        setPhase(null);
+    if (updateDialogOpen && phase) {
+      setPhase(null);
+    }
+  }, [updateDialogOpen, phase, setPhase]);
+
+  // Execute setup phases sequentially
+  useEffect(() => {
+    if (!canProceedWithSplash) return;
+    if (setupStartedRef.current) return;
+
+    setupStartedRef.current = true;
+
+    const runSetupPhases = async () => {
+      for (const phaseName of Object.keys(PHASE_CONTENT)) {
+        setPhase(phaseName);
+        const phaseContent: AppSetupPhaseContent | undefined =
+          PHASE_CONTENT[phaseName];
+
+        if (!phaseContent) {
+          console.warn(`Unknown phase: ${phaseName}`);
+          continue;
+        }
+
+        try {
+          // Execute the Tauri command for this phase
+          await invoke(phaseContent.command);
+        } catch (error) {
+          console.error(`Error during phase ${phaseName}:`, error);
+          // Continue to next phase even on error
+        }
       }
-    }
-  }, [updateCheckComplete, updateDialogOpen, setPhaseProgressionClock, phase, setPhase]);
-
-  useEffect(() => {
-    if (!canProceedWithSplash) return;
-
-    if (phase !== "ready") {
-      const timer = setTimeout(() => {
-        setPhase("ready");
-      }, 5000);
-
-      return () => {
-        clearTimeout(timer);
-      };
-    }
-  }, [phase, setPhase, canProceedWithSplash]);
-
-  useEffect(() => {
-    if (!canProceedWithSplash) return;
-    if (!phase || phase === "ready") return;
-
-    const duration = 4000;
-    const start = performance.now();
-
-    const update = () => {
-      const now = performance.now();
-      const elapsed = now - start;
-      const progress = Math.min(elapsed / duration, 1);
-      setPhaseProgressionClock(progress);
     };
 
-    setPhaseProgressionClock(0);
-
-    const interval = setInterval(update, 16);
-
-    return () => {
-      clearInterval(interval);
-      setPhaseProgressionClock(0);
-    };
-  }, [phase, setPhaseProgressionClock, canProceedWithSplash]);
+    runSetupPhases();
+  }, [canProceedWithSplash, setPhase]);
 
   useEffect(() => {
     if (!canProceedWithSplash) return;
+    if (preventClose) return; // Don't close splash screen if preventClose is true
 
-    if (phase === "ready") {
+    // Check if we're on the last phase
+    const phases = Object.keys(PHASE_CONTENT);
+    const lastPhase = phases[phases.length - 1];
+
+    if (phase === lastPhase) {
       const timeout = setTimeout(() => {
         setKeepSplacescreenInDom(false);
       }, 1000);
@@ -82,9 +85,12 @@ export default function SplashWrapper({
         clearTimeout(timeout);
       };
     }
-  }, [phase, canProceedWithSplash]);
+  }, [phase, canProceedWithSplash, preventClose]);
 
-  const isReady = phase === "ready";
+  // Only consider ready for fade-out if not preventing close and we're on the last phase
+  const phases = Object.keys(PHASE_CONTENT);
+  const lastPhase = phases[phases.length - 1];
+  const isReady = phase === lastPhase && !preventClose;
 
   return (
     <>

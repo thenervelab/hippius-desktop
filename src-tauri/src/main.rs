@@ -51,7 +51,13 @@ use utils::file_operations::delete_and_unpin_file_by_name;
 
 // Register the new  Tauri command so the frontend can invoke it.
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
-
+/// Dummy setup step command that waits 2 seconds and returns success
+#[tauri::command]
+async fn dummy_setup_step() -> Result<String, String> {
+    // Wait for 2 seconds
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    Ok(format!("Step completed successfully"))
+}
 fn main() {
     sodiumoxide::init().unwrap();
     println!("[Main] Application starting...");
@@ -139,6 +145,7 @@ fn main() {
             utils::nebula::get_nebula_status,
             commands::vpn_enabled::get_vpn_status,
             commands::vpn_enabled::toggle_vpn_status,
+            dummy_setup_step,
         ]);
 
     let builder = setup(builder);

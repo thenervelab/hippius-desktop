@@ -41,7 +41,7 @@ export default function RootLayout({
                 <NextTopLoader color="#3167DD" showSpinner={false} />
                 <NavigationLoaderProvider>
                   <Suspense fallback={<PageLoader />}>
-                    <SplashWrapper skipSplash={false}>
+                    <SplashWrapper preventClose={false}>
                       <div className="flex min-h-screen h-screen">
                         {children}
                       </div>

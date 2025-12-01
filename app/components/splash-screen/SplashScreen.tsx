@@ -1,21 +1,30 @@
 import React from "react";
-import { AbstractCity, Graphsheet, RevealTextLine, Icons } from "@/components/ui";
+import {
+  AbstractCity,
+  Graphsheet,
+  RevealTextLine,
+  Icons,
+} from "@/components/ui";
 import { InView } from "react-intersection-observer";
 import Link from "next/link";
 import AnimatedRings from "./AnimatedRings";
 import { PHASE_CONTENT } from "./SplashContent";
 import AnimatedProgressIcon from "./AnimatedIcons";
 import { AnimatePresence, motion } from "framer-motion";
-import ProgressDisplay from "./ProgressDisplay";
-import ProgressBarDisplay from "./ProgressBarDisplay";
 import { useAtomValue } from "jotai";
 import { stepAtom } from "./atoms";
-import { updateCheckCompleteAtom, updateDialogOpenAtom, updateStore } from "@/app/components/updater/updateStore";
+import {
+  updateCheckCompleteAtom,
+  updateDialogOpenAtom,
+  updateStore,
+} from "@/app/components/updater/updateStore";
 
 const SplashScreen = () => {
   const step = useAtomValue(stepAtom);
   const updateCheckComplete = useAtomValue(updateCheckCompleteAtom);
-  const updateDialogOpen = useAtomValue(updateDialogOpenAtom, { store: updateStore });
+  const updateDialogOpen = useAtomValue(updateDialogOpenAtom, {
+    store: updateStore,
+  });
 
   const contentArr = Object.values(PHASE_CONTENT);
 
@@ -64,10 +73,10 @@ const SplashScreen = () => {
   const isUpdateMode = !updateCheckComplete;
   const progressData = isUpdateMode
     ? {
-      status: "Checking for Updates",
-      subStatus: "Please wait while we check for new version...",
-      icon: <Icons.CheckingIPFS className="h-[140px] w-[230px]" />
-    }
+        status: "Checking for Updates",
+        subStatus: "Please wait while we check for new version...",
+        icon: <Icons.CheckingIPFS className="h-[140px] w-[230px]" />,
+      }
     : contentArr[step];
 
   return (
@@ -139,9 +148,6 @@ const SplashScreen = () => {
             justify-center gap-y-2 duration-300"
               style={{ top: "72%" }}
             >
-              <RevealTextLine rotate reveal={inView}>
-                <ProgressDisplay />
-              </RevealTextLine>
               <RevealTextLine reveal={inView} className="delay-300">
                 <AnimatePresence mode="wait">
                   <motion.div
@@ -174,9 +180,6 @@ const SplashScreen = () => {
                     </span>
                   </motion.div>
                 </AnimatePresence>
-              </RevealTextLine>
-              <RevealTextLine reveal={inView} className="delay-500">
-                <ProgressBarDisplay />
               </RevealTextLine>
             </div>
           )}
