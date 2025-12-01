@@ -80,11 +80,11 @@ const EmailNotificationSection: React.FC = () => {
       <InView triggerOnce>
         {({ inView, ref }) => (
           <div
-            className="w-full cursor-pointer group mt-6"
+            className="w-full cursor-pointer group"
             ref={ref}
             onClick={() => setOpen(true)}
           >
-            <div className="flex flex-row justify-between items-center flex-wrap gap-2 mt-6">
+            <div className="flex flex-row justify-between items-center flex-wrap gap-2">
               <RevealTextLine
                 rotate
                 reveal={inView}
