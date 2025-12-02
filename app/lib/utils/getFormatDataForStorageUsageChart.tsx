@@ -27,81 +27,28 @@ function normalizeDate(date: Date): string {
   )}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-// Helper function to extract date from UTC timestamp string
-function getDateFromUTCTimestamp(timestamp: string): Date {
-  const utcDate = new Date(timestamp);
-  // Extract just the date parts from the UTC timestamp
-  return new Date(
-    utcDate.getUTCFullYear(),
-    utcDate.getUTCMonth(),
-    utcDate.getUTCDate()
-  );
-}
-
-// Convert cumulative storage values to daily usage values
-// Input: Day1=4MB(cumulative), Day2=9MB(cumulative), Day3=19MB(cumulative)  
-// Output: Day1=4MB(usage), Day2=5MB(9-4), Day3=10MB(19-9)
+// Map daily usage data to date range, filling missing days with zero
 export function mapBytesToDateRange(
   rawData: ChartPoint[],
   dateRange: Date[],
   getLabel?: (date: Date) => string
 ): ChartPoint[] {
-  // Step 1: Get all cumulative data points sorted by date
-  const cumulativeData = rawData
-    .map(d => ({
-      date: normalizeDate(d.x),
-      cumulative: d.balance,
-      originalDate: d.x
-    }))
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  // Create a map for quick lookups
-  const cumulativeMap = new Map<string, number>();
-  cumulativeData.forEach(({ date, cumulative }) => {
-    cumulativeMap.set(date, cumulative);
+  // Create a map of date -> usage for quick lookups
+  const usageMap = new Map<string, number>();
+  rawData.forEach((point) => {
+    const key = normalizeDate(point.x);
+    usageMap.set(key, point.balance);
   });
 
-  // Step 2: For each date in range, calculate daily usage
+  // Map each date in range, using actual data or zero for missing days
   return dateRange.map((date) => {
     const key = normalizeDate(date);
-    const currentCumulative = cumulativeMap.get(key) || 0;
-
-    // Find the previous day's cumulative value (even if it's before our date range)
-    const prevDate = new Date(date);
-    prevDate.setDate(date.getDate() - 1);
-    const prevKey = normalizeDate(prevDate);
-
-    // Look for previous day's cumulative value
-    let previousCumulative = 0;
-
-    // Check if we have data for the previous day
-    if (cumulativeMap.has(prevKey)) {
-      previousCumulative = cumulativeMap.get(prevKey)!;
-    } else {
-      // If no data for previous day, find the last cumulative value before this date
-      // by looking through all available data
-      for (const { date: dataDate, cumulative } of cumulativeData) {
-        if (dataDate < key) {
-          previousCumulative = cumulative;
-        } else {
-          break; // Since data is sorted, we can stop here
-        }
-      }
-    }
-
-    // Calculate daily usage
-    let dailyUsage = 0;
-
-    if (currentCumulative > 0) {
-      // If we have data for current date, calculate difference
-      dailyUsage = currentCumulative - previousCumulative;
-    }
-    // If no data for current date, dailyUsage remains 0
+    const usage = usageMap.get(key) || 0;
 
     return {
-      balance: Math.max(0, dailyUsage), // Ensure non-negative
-      formattedBalance: formatBytes(Math.max(0, dailyUsage)),
-      timestamp: cumulativeMap.has(key) ? key : "",
+      balance: usage,
+      formattedBalance: formatBytes(usage),
+      timestamp: usageMap.has(key) ? key : "",
       x: new Date(date),
       dayLabel: getLabel
         ? getLabel(date)
@@ -110,8 +57,7 @@ export function mapBytesToDateRange(
   });
 }
 
-// New function to aggregate bytes by month for year view with usage calculation
-// This calculates monthly usage consumption instead of monthly deltas
+// Aggregate daily usage by month
 export function aggregateBytesByMonth(chartPoints: ChartPoint[]): ChartPoint[] {
   if (!chartPoints || chartPoints.length === 0) {
     return [];
@@ -125,7 +71,6 @@ export function aggregateBytesByMonth(chartPoints: ChartPoint[]): ChartPoint[] {
     const year = point.x.getFullYear();
     const key = `${year}-${month}`;
 
-    // Sum up all daily usage for each month
     const currentUsage = monthlyUsage.get(key) || 0;
     monthlyUsage.set(key, currentUsage + point.balance);
   });
@@ -147,8 +92,7 @@ export function aggregateBytesByMonth(chartPoints: ChartPoint[]): ChartPoint[] {
 }
 
 // Main function to format storage data for charts
-// Returns daily/monthly usage consumption instead of cumulative values
-// Shows how much storage was consumed (used) each day/month
+// Data is already daily usage per row, just filter by range and fill missing days with zero
 export const formatStorageForChartByRange = (
   accounts: Account[],
   range: "last7days" | "last30days" | "last60days" | "year"
@@ -157,23 +101,16 @@ export const formatStorageForChartByRange = (
     return [];
   }
 
-  const sortedAccounts = [...accounts].sort(
-    (a, b) =>
-      new Date(a.processed_timestamp).getTime() -
-      new Date(b.processed_timestamp).getTime()
-  );
-
-  // Convert accounts to ChartPoints with cumulative values
-  // Keep cumulative values for proper usage calculation
-  const chartPoints: ChartPoint[] = sortedAccounts.map((acc) => {
-    const normalizedDate = getDateFromUTCTimestamp(acc.processed_timestamp);
+  // Convert accounts to ChartPoints (data is already daily usage, date is already UTC)
+  const chartPoints: ChartPoint[] = accounts.map((acc) => {
+    const date = new Date(acc.processed_timestamp);
 
     return {
-      x: normalizedDate,
-      balance: Number(acc.total_balance), // Cumulative storage balance
+      x: date,
+      balance: Number(acc.total_balance),
       formattedBalance: formatBytes(Number(acc.total_balance)),
       timestamp: acc.processed_timestamp,
-      dayLabel: String(normalizedDate.getDate()).padStart(2, "0"),
+      dayLabel: String(date.getUTCDate()).padStart(2, "0"),
     };
   });
 
@@ -234,7 +171,7 @@ export const formatStorageForChartByRange = (
     const startOfYear = new Date(currentYear, 0, 1);
     const fullYearDates = getAllDatesInRange(startOfYear, today);
 
-    // Convert cumulative data to daily usage for the entire year
+    // Map daily usage data to full year dates (fill missing days with zero)
     const dailyUsagePoints = mapBytesToDateRange(
       chartPoints,
       fullYearDates,
@@ -249,19 +186,16 @@ export const formatStorageForChartByRange = (
 };
 
 // Aggregate by month but always show full year (Jan to current month)
-function aggregateBytesByMonthFullYear(
-  points: ChartPoint[]
-): ChartPoint[] {
+function aggregateBytesByMonthFullYear(points: ChartPoint[]): ChartPoint[] {
   if (points.length === 0) return [];
 
   const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth(); // 0-based (0 = January, 8 = September)
+  const currentMonth = new Date().getMonth();
 
   // Group daily usage by month and sum them up
   const monthlyUsage = new Map<number, number>();
 
-  // Sum up daily usage values for each month
-  points.forEach(point => {
+  points.forEach((point) => {
     const month = point.x.getMonth();
     const currentUsage = monthlyUsage.get(month) || 0;
     monthlyUsage.set(month, currentUsage + point.balance);

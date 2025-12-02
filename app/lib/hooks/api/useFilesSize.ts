@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { API_BASE_URL } from "@/lib/constants";
+import { sciToFullString } from "../../utils/formatters/formatBalance";
 
 // Define types based on the indexer API response
 export interface FileEvent {
@@ -51,36 +52,7 @@ export interface UseFilesParams {
   page?: number;
   limit?: number;
 }
-
-/** Use timestamp directly as it's already in milliseconds */
-const rowMs = (r: FileEvent): number => {
-  return r.timestamp;
-};
-
-/** Build a LOCAL day key (user's machine local time) */
-const localDayKey = (ms: number): string => {
-  const d = new Date(ms);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-};
-
-/** Keep only the latest entry per LOCAL day, based on timestamp */
-function latestPerLocalDay(rows: FileEvent[]): FileEvent[] {
-  const map = new Map<string, FileEvent>();
-  for (const r of rows) {
-    const t = rowMs(r);
-    const key = localDayKey(t);
-    const prev = map.get(key);
-    if (!prev || t > rowMs(prev)) map.set(key, r);
-  }
-  // Sort by recency using the same clock
-  return Array.from(map.values()).sort((a, b) => rowMs(b) - rowMs(a));
-}
-
 function toChartFormat(file: FileEvent): FileChartData {
-  const t = rowMs(file);
   return {
     account_id: file.account_id,
     block_number: file.block_number,
@@ -93,7 +65,7 @@ function toChartFormat(file: FileEvent): FileChartData {
     misc_frozen_balance: "0",
     fee_frozen_balance: "0",
     total_balance: file.total_files_size, // Using total_balance field to store file size
-    processed_timestamp: new Date(t).toISOString(),
+    processed_timestamp: new Date(file.processed_timestamp).toISOString(),
   };
 }
 
@@ -131,7 +103,12 @@ export default function useFiles(
     },
     select: (data) => {
       if (!data?.data?.length) return [];
-      const filtered = latestPerLocalDay(data.data);
+      const filtered = data.data.map((storage) => ({
+        ...storage,
+        total_files_size: storage.total_files_size.includes("+")
+          ? sciToFullString(storage.total_files_size)
+          : storage.total_files_size,
+      }));
       return filtered.map(toChartFormat);
     },
     placeholderData: keepPreviousData,

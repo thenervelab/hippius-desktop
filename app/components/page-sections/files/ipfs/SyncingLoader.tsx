@@ -22,7 +22,7 @@ const SyncingLoader: React.FC<SyncingLoaderProps> = ({
         >
             <div className="flex flex-col items-center justify-center">
                 <div className="size-12 flex items-center justify-center mb-3">
-                    <Icons.Refresh className="size-8 text-primary-50 animate-spin" />
+                    <Icons.Refresh className="size-8 text-primary-50 animate-[spin_1.4s_linear_infinite_reverse]" />
                 </div>
                 <p className="text-center text-grey-60 max-w-[240px] text-sm font-medium">
                     {message}
