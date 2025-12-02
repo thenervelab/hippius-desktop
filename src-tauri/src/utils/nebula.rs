@@ -7,12 +7,29 @@ use tauri::{AppHandle, Emitter};
 use tokio::fs;
 use std::time::Duration;
 use sysinfo::Networks;
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 const NEBULA_GITHUB_API: &str = "https://api.github.com/repos/slackhq/nebula/releases/latest";
 const NEBULA_VERSION_FILE: &str = "nebula_version.txt";
+
+// State to share between setup commands
+struct NebulaSetupState {
+    latest_version: Option<String>,
+    download_url: Option<String>,
+    needs_update: bool,
+}
+
+static SETUP_STATE: Lazy<Mutex<NebulaSetupState>> = Lazy::new(|| {
+    Mutex::new(NebulaSetupState {
+        latest_version: None,
+        download_url: None,
+        needs_update: false,
+    })
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NebulaSetupPhase {
@@ -287,191 +304,232 @@ async fn extract_tar_gz(bytes: &[u8], target_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Main function to ensure Nebula is installed and up-to-date
-pub async fn ensure_nebula_installed(app: AppHandle, pool: &sqlx::SqlitePool) -> Result<()> {
-    // Emit checking phase
-    let _ = app.emit("app_setup_event", NebulaSetupPhase::CheckingBinary);
-    
-    println!("[Nebula] Checking installation...");
+// --- New Granular Commands ---
+
+#[tauri::command]
+pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
+    println!("[Nebula] Checking requirements...");
     
     // Check current installation
-    let installed_version = check_nebula_installation().await?;
+    let installed_version = check_nebula_installation().await.map_err(|e| e.to_string())?;
     
     // Fetch latest release
-    println!("[Nebula] Fetching latest release information...");
-    let latest_release = fetch_latest_release().await?;
+    let latest_release = fetch_latest_release().await.map_err(|e| e.to_string())?;
     let latest_version = latest_release.tag_name.clone();
     
     println!("[Nebula] Latest version: {}", latest_version);
     
-    // Determine if we need to install/update
-    let needs_install = match installed_version {
-        None => {
-            println!("[Nebula] Not installed, will install");
-            true
-        }
-        Some(ref installed) => {
-            let cert_binary_exists = get_nebula_cert_binary_path()
-                .map(|p| p.exists())
-                .unwrap_or(false);
-
-            if installed != &latest_version {
-                println!("[Nebula] Update available: {} -> {}", installed, latest_version);
-                true
-            } else if !cert_binary_exists {
-                println!("[Nebula] nebula-cert binary missing, will reinstall");
-                true
-            } else {
-                println!("[Nebula] Already up-to-date: {}", installed);
-                false
-            }
-        }
-    };
+    let mut needs_install = false;
     
+    if installed_version.is_none() {
+        println!("[Nebula] Not installed, will install");
+        needs_install = true;
+    } else if let Some(ref installed) = installed_version {
+        let cert_binary_exists = get_nebula_cert_binary_path()
+            .map(|p| p.exists())
+            .unwrap_or(false);
+
+        if installed != &latest_version {
+            println!("[Nebula] Update available: {} -> {}", installed, latest_version);
+            needs_install = true;
+        } else if !cert_binary_exists {
+            println!("[Nebula] nebula-cert binary missing, will reinstall");
+            needs_install = true;
+        } else {
+            println!("[Nebula] Already up-to-date: {}", installed);
+        }
+    }
+    
+    // Find asset URL if needed
+    let mut download_url = None;
     if needs_install {
-        // Find the correct asset
-        let asset_name = get_asset_name()?;
+        let asset_name = get_asset_name().map_err(|e| e.to_string())?;
         let asset = latest_release
             .assets
             .iter()
             .find(|a| a.name == asset_name)
-            .ok_or_else(|| anyhow!("Asset not found: {}", asset_name))?;
-        
-        println!("[Nebula] Downloading asset: {}", asset.name);
-        
-        // Emit downloading phase
-        let _ = app.emit("app_setup_event", NebulaSetupPhase::DownloadingNebula);
-        
-        // Download and install
-        let _ = app.emit("app_setup_event", NebulaSetupPhase::InstallingNebula);
-        download_and_install_nebula(&asset.browser_download_url, &latest_version).await?;
-        
-        // Verify installation
-        let _ = app.emit("app_setup_event", NebulaSetupPhase::VerifyingInstallation);
-        let binary_path = get_nebula_binary_path()?;
-        
-        if !binary_path.exists() {
-            return Err(anyhow!("Installation verification failed: binary not found"));
-        }
-        
-        println!("[Nebula] Installation verified successfully");
-        
-        // Verify nebula-cert was also extracted
-        let cert_binary_path = get_nebula_cert_binary_path()?;
-        if !cert_binary_path.exists() {
-            eprintln!("[Nebula] Warning: nebula-cert binary not found at: {}", cert_binary_path.display());
-            eprintln!("[Nebula] Certificate generation will not be available");
-        } else {
-            println!("[Nebula] nebula-cert binary verified: {}", cert_binary_path.display());
-        }
-    }
-
-    // Check if VPN is enabled in DB
-    let is_enabled: bool = sqlx::query("SELECT is_enabled FROM vpn_status WHERE id = 1")
-        .fetch_optional(pool)
-        .await?
-        .map(|row| row.get("is_enabled"))
-        .unwrap_or(false);
-
-    if !is_enabled {
-        println!("[Nebula] VPN is disabled in settings, skipping certificate generation and startup");
-        let _ = app.emit("app_setup_event", NebulaSetupPhase::Ready);
-        return Ok(());
+            .ok_or_else(|| format!("Asset not found: {}", asset_name))?;
+        download_url = Some(asset.browser_download_url.clone());
     }
     
-    // Generate certificates if they don't exist
-    let config_dir = get_nebula_config_dir()?;
-    let ca_crt = config_dir.join("ca.crt");
-    
-    // Get hostname for node name
-    let hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "node".to_string());
-
-    if !ca_crt.exists() {
-        println!("[Nebula] No CA certificate found, generating certificates...");
-        
-        // Generate CA certificate
-        if let Err(e) = generate_ca_certificate("Hippius Network", 3650).await {
-            eprintln!("[Nebula] Failed to generate CA certificate: {}", e);
-            eprintln!("[Nebula] You can generate certificates manually later");
-        } else {
-            println!("[Nebula] CA certificate generated successfully");
-            
-            // Generate node certificate
-            let node_ip = "192.168.100.2/24"; // Default IP, can be customized later
-            if let Err(e) = generate_node_certificate(&hostname, node_ip, vec![], 365).await {
-                eprintln!("[Nebula] Failed to generate node certificate: {}", e);
-            } else {
-                println!("[Nebula] Node certificate generated for: {}", hostname);
-                
-                // Generate config file
-                if let Err(e) = generate_config_file(&hostname, None, false).await {
-                    eprintln!("[Nebula] Failed to generate config file: {}", e);
-                } else {
-                    println!("[Nebula] Config file generated: {}.yml", hostname);
-                }
-            }
-        }
-    } else {
-        println!("[Nebula] Certificates already exist, skipping generation");
+    // Update state
+    {
+        let mut state = SETUP_STATE.lock().unwrap();
+        state.latest_version = Some(latest_version);
+        state.download_url = download_url;
+        state.needs_update = needs_install;
     }
     
-    // Emit ready phase
-    let _ = app.emit("app_setup_event", NebulaSetupPhase::Ready);
+    // If no update needed, sleep for UI consistency
+    if !needs_install {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
     
     Ok(())
 }
 
-// /// Start the Nebula process
-// pub async fn start_nebula() -> Result<()> {
-//     // Check if already running
-//     if check_nebula_running().await? {
-//         println!("[Nebula] Already running");
-//         return Ok(());
-//     }
-
-//     let binary_path = get_nebula_binary_path()?;
-//     let hostname = hostname::get()
-//         .ok()
-//         .and_then(|h| h.into_string().ok())
-//         .unwrap_or_else(|| "node".to_string());
-        
-//     let config_dir = get_nebula_config_dir()?;
-//     let config_path = config_dir.join(format!("{}.yml", hostname));
+#[tauri::command]
+pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
+    let (needs_update, download_url, latest_version) = {
+        let state = SETUP_STATE.lock().unwrap();
+        (state.needs_update, state.download_url.clone(), state.latest_version.clone())
+    };
     
-//     if !binary_path.exists() || !config_path.exists() {
-//         return Err(anyhow!("Nebula binary or config not found"));
-//     }
-    
-//     println!("[Nebula] Starting Nebula with config: {}", config_path.display());
-//     println!("[Nebula] Note: If Nebula fails to start, you may need to grant permissions:");
-//     println!("[Nebula]   Linux: sudo setcap cap_net_admin+ep ~/.hippius/nebula/nebula");
-//     println!("[Nebula]   macOS: sudo chown root ~/.hippius/nebula/nebula && sudo chmod u+s ~/.hippius/nebula/nebula");
-
-//     // Run directly - will fail if permissions not granted
-//     std::thread::spawn(move || {
-//         let status = std::process::Command::new(binary_path)
-//             .arg("-config")
-//             .arg(config_path)
-//             .status();
+    if needs_update {
+        if let (Some(url), Some(version)) = (download_url, latest_version) {
+            // Check if temp file already exists (maybe from previous run?)
+            // But we should re-download to be safe or check size. 
+            // For now, just download.
             
-//         match status {
-//             Ok(s) => {
-//                 if s.success() {
-//                     println!("[Nebula] Process exited successfully");
-//                 } else {
-//                     eprintln!("[Nebula] Process exited with error: {}", s);
-//                     eprintln!("[Nebula] You may need to grant permissions manually");
-//                 }
-//             }
-//             Err(e) => eprintln!("[Nebula] Failed to start: {}", e),
-//         }
-//     });
+            let nebula_dir = get_nebula_dir().map_err(|e| e.to_string())?;
+            fs::create_dir_all(&nebula_dir).await.map_err(|e| e.to_string())?;
+            let temp_path = nebula_dir.join("temp_download.file");
+            
+            println!("[Nebula] Downloading to temp file: {}", temp_path.display());
+            
+            let client = Client::builder()
+                .timeout(Duration::from_secs(300))
+                .build()
+                .map_err(|e| e.to_string())?;
+            
+            let response = client.get(&url).send().await.map_err(|e| e.to_string())?;
+            
+            if !response.status().is_success() {
+                return Err(format!("Download failed: HTTP {}", response.status()));
+            }
+            
+            let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+            fs::write(&temp_path, bytes).await.map_err(|e| e.to_string())?;
+            
+            println!("[Nebula] Download complete");
+        }
+    } else {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
     
-//     Ok(())
-// }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
+    let (needs_update, latest_version) = {
+        let state = SETUP_STATE.lock().unwrap();
+        (state.needs_update, state.latest_version.clone())
+    };
+    
+    if needs_update {
+        let nebula_dir = get_nebula_dir().map_err(|e| e.to_string())?;
+        let temp_path = nebula_dir.join("temp_download.file");
+        
+        if temp_path.exists() {
+             println!("[Nebula] Installing from temp file...");
+             let bytes = fs::read(&temp_path).await.map_err(|e| e.to_string())?;
+             
+             // Determine archive type from asset name
+             let asset_name = get_asset_name().map_err(|e| e.to_string())?;
+             
+             if asset_name.ends_with(".zip") {
+                 extract_zip(&bytes, &nebula_dir).await.map_err(|e| e.to_string())?;
+             } else if asset_name.ends_with(".tar.gz") {
+                 extract_tar_gz(&bytes, &nebula_dir).await.map_err(|e| e.to_string())?;
+             }
+             
+             // Cleanup
+             let _ = fs::remove_file(temp_path).await;
+             
+             // Permissions
+             #[cfg(unix)]
+            {
+                let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
+                if binary_path.exists() {
+                    let mut perms = fs::metadata(&binary_path).await.map_err(|e| e.to_string())?.permissions();
+                    perms.set_mode(0o755);
+                    fs::set_permissions(&binary_path, perms).await.map_err(|e| e.to_string())?;
+                }
+                
+                let cert_binary_path = get_nebula_cert_binary_path().map_err(|e| e.to_string())?;
+                if cert_binary_path.exists() {
+                    let mut perms = fs::metadata(&cert_binary_path).await.map_err(|e| e.to_string())?.permissions();
+                    perms.set_mode(0o755);
+                    fs::set_permissions(&cert_binary_path, perms).await.map_err(|e| e.to_string())?;
+                }
+            }
+            
+            if let Some(v) = latest_version {
+                save_installed_version(&v).await.map_err(|e| e.to_string())?;
+            }
+        } else {
+             return Err("Installation failed: Downloaded file not found".to_string());
+        }
+    } else {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
+    // Verify binaries
+    let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
+    if !binary_path.exists() {
+        return Err("Verification failed: Nebula binary not found".to_string());
+    }
+    
+    // Check VPN status in DB
+    // Accessing DB_POOL from crate
+    let pool = crate::DB_POOL.get().ok_or("Database not initialized".to_string())?;
+    
+    let is_enabled: bool = sqlx::query("SELECT is_enabled FROM vpn_status WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|row| row.get("is_enabled"))
+        .unwrap_or(false);
+
+    if !is_enabled {
+        println!("[Nebula] VPN is disabled in settings, skipping certificate generation");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        return Ok(());
+    }
+    
+    // Generate certificates if needed
+    let config_dir = get_nebula_config_dir().map_err(|e| e.to_string())?;
+    let ca_crt = config_dir.join("ca.crt");
+    
+    let mut generated_something = false;
+    
+    if !ca_crt.exists() {
+        println!("[Nebula] Generating certificates...");
+        generated_something = true;
+        
+        let hostname = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "node".to_string());
+            
+        generate_ca_certificate("Hippius Network", 3650).await.map_err(|e| e.to_string())?;
+        
+        let node_ip = "192.168.100.2/24"; 
+        generate_node_certificate(&hostname, node_ip, vec![], 365).await.map_err(|e| e.to_string())?;
+        generate_config_file(&hostname, None, false).await.map_err(|e| e.to_string())?;
+    }
+    
+    if !generated_something {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn finish_setup() -> Result<(), String> {
+    // Just a final delay for UI
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    Ok(())
+}
+
+// --- End New Commands ---
 
 /// Check if the binary has required permissions
 async fn check_permissions(binary_path: &Path) -> Result<bool> {

@@ -362,13 +362,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 }
 
                 println!("[Setup] Database initialized successfully");
-
-                // Ensure Nebula is installed and up-to-date
-                println!("[Setup] Checking Nebula installation...");
-                if let Err(e) = crate::utils::nebula::ensure_nebula_installed(_handle.clone(), &pool).await {
-                    eprintln!("[Setup] Nebula installation failed: {}", e);
-                    // Continue with app setup even if Nebula fails
-                }
             });
             Ok(())
         })

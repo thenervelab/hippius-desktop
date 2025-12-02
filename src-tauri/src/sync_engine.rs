@@ -1201,7 +1201,7 @@ pub async fn sync_once_cas(
     max_retries: usize,
     prunefile_id: &str,
 ) -> Result<()> {
-    println!("[Sync] sync_once_cas beimg called");
+
     let client_tag8 = client_tag8_from(prunefile_id);
 
     /* ---- Phase 0: Snapshot ---- */
