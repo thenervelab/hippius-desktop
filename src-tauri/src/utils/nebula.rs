@@ -478,7 +478,6 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
     }
     
     // Check VPN status in DB
-    // Accessing DB_POOL from crate
     let pool = crate::DB_POOL.get().ok_or("Database not initialized".to_string())?;
     
     let is_enabled: bool = sqlx::query("SELECT is_enabled FROM vpn_status WHERE id = 1")
@@ -489,36 +488,146 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
         .unwrap_or(false);
 
     if !is_enabled {
-        println!("[Nebula] VPN is disabled in settings, skipping certificate generation");
+        println!("[Nebula] VPN is disabled in settings, skipping certificate setup");
         tokio::time::sleep(Duration::from_secs(2)).await;
         return Ok(());
     }
     
-    // Generate certificates if needed
+    // Setup certificates from API (using mock data for now)
     let config_dir = get_nebula_config_dir().map_err(|e| e.to_string())?;
     let ca_crt = config_dir.join("ca.crt");
     
-    let mut generated_something = false;
-    
     if !ca_crt.exists() {
-        println!("[Nebula] Generating certificates...");
-        generated_something = true;
-        
-        let hostname = hostname::get()
-            .ok()
-            .and_then(|h| h.into_string().ok())
-            .unwrap_or_else(|| "node".to_string());
-            
-        generate_ca_certificate("Hippius Network", 3650).await.map_err(|e| e.to_string())?;
-        
-        let node_ip = "192.168.100.2/24"; 
-        generate_node_certificate(&hostname, node_ip, vec![], 365).await.map_err(|e| e.to_string())?;
-        generate_config_file(&hostname, None, false).await.map_err(|e| e.to_string())?;
+        println!("[Nebula] Setting up certificates from API...");
+        setup_nebula_from_api().await.map_err(|e| e.to_string())?;
+    } else {
+        println!("[Nebula] Certificates already exist, skipping setup");
     }
     
-    if !generated_something {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    
+    Ok(())
+}
+
+/// Setup Nebula using certificates and config from API
+/// For now, uses mock data until API is ready
+async fn setup_nebula_from_api() -> Result<()> {
+    let config_dir = get_nebula_config_dir()?;
+    fs::create_dir_all(&config_dir).await?;
+    
+    println!("[Nebula] Using API credentials (mock data)");
+    
+    // Mock API response - replace this with actual API call later
+    let ca_cert = r#"-----BEGIN NEBULA CERTIFICATE-----
+CkEKD0hpcHBpdXNWTjEsIEluYyj+lZDJBjD+mKiUBzogi5DLE8kKgr6AJ0E3uSMc
+mHwyFrvUMIOLzMDl+i0j+mxAARJAieLMGaFk9mYVA4Q46+GkDf6DTRp1hrtRL7w8
+sQaU5S1vK2TWa1tI4wP89LdxHOfxgOEIvf5fpeYSIZdKTkRXCA==
+-----END NEBULA CERTIFICATE-----
+"#;
+    
+    let host_cert = r#"-----BEGIN NEBULA CERTIFICATE-----
+CmwKDmhpcHBpdXMta2V5LTAxEgqfgICiBoCAgP4PKMGNtskGMMGn1MoGOiD2fxDq
+doBwGRspvSSI19zszkw+uWbq756XkqQLqSOtREogyzVeS1g6yQLRYYTdGGQa+cp3
+xp07HNvv7hAEZHy17OUSQDMCKFL5Es3zLHAjHIyXiuS1BVBvnytX/h1lxZlHzdDJ
+Q5d7u2gTy459pq/7XVvl/Cf5T5MoxmCc/t/6lemM4QU=
+-----END NEBULA CERTIFICATE-----
+"#;
+    
+    let host_key = r#"-----BEGIN NEBULA X25519 PRIVATE KEY-----
++V3Z9jiGMdRF9hH16v9avHIVXlawg3FHZHlR5D69nB0=
+-----END NEBULA X25519 PRIVATE KEY-----
+"#;
+    
+    let nebula_ip = "100.64.0.31";
+    
+    // Write certificates
+    let ca_crt_path = config_dir.join("ca.crt");
+    let host_crt_path = config_dir.join("host.crt");
+    let host_key_path = config_dir.join("host.key");
+    
+    fs::write(&ca_crt_path, ca_cert).await?;
+    fs::write(&host_crt_path, host_cert).await?;
+    fs::write(&host_key_path, host_key).await?;
+    
+    println!("[Nebula] Certificates written to: {}", config_dir.display());
+    
+    // Generate config file with correct paths
+    let config_content = format!(r#"pki:
+  ca: {}
+  cert: {}
+  key: {}
+
+# Map lighthouse nebula IPs to their public IPs
+static_host_map:
+  "100.64.0.1": ["51.83.22.71:4242"]
+  "100.64.0.2": ["139.99.219.137:4242"]
+  "100.64.0.3": ["15.235.44.178:4242"]
+
+lighthouse:
+  am_lighthouse: false
+  interval: 60
+  hosts:
+    - "100.64.0.1"
+    - "100.64.0.2"
+    - "100.64.0.3"
+
+listen:
+  host: 0.0.0.0
+  port: 4242
+
+punchy:
+  punch: true
+  respond: true
+
+tun:
+  disabled: false
+  dev: nebula1
+  drop_local_broadcast: false
+  drop_multicast: false
+  tx_queue: 500
+  mtu: 1300
+
+logging:
+  level: info
+  format: text
+
+# Nebula overlay network firewall
+firewall:
+  conntrack:
+    tcp_timeout: 12m
+    udp_timeout: 3m
+    default_timeout: 10m
+
+  outbound:
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    - port: any
+      proto: any
+      host: any
+
+    # HCC API Services
+    - port: 9999
+      proto: tcp
+      host: any
+
+    # Allow ICMP ping
+    - port: any
+      proto: icmp
+      host: any
+"#,
+        ca_crt_path.display(),
+        host_crt_path.display(),
+        host_key_path.display()
+    );
+    
+    let config_file = config_dir.join("config.yml");
+    fs::write(&config_file, config_content.as_bytes()).await?;
+    
+    println!("[Nebula] Config file written: {}", config_file.display());
+    println!("[Nebula] Node IP: {}", nebula_ip);
     
     Ok(())
 }
@@ -568,23 +677,16 @@ pub async fn start_nebula_internal() -> Result<(), String> {
     let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
     let config_dir = get_nebula_config_dir().map_err(|e| e.to_string())?;
     
-    // Find the config file (hostname.yml)
-    let hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "node".to_string());
-    let config_file = config_dir.join(format!("{}.yml", hostname));
+    // Use config.yml (from API) instead of hostname-based config
+    let config_file = config_dir.join("config.yml");
 
     if !config_file.exists() {
-        return Err(format!("Config file not found: {}", config_file.display()));
+        return Err(format!("Config file not found: {}. Run verify_nebula first.", config_file.display()));
     }
 
     println!("[Nebula] Starting process: {} -config {}", binary_path.display(), config_file.display());
 
     // Spawn the process
-    // Note: On Linux/macOS this might need sudo/root if not setuid/cap_net_admin
-    // We assume permissions were handled in install/verify phase
-    
     #[cfg(not(target_os = "windows"))]
     {
         let child = std::process::Command::new(&binary_path)
@@ -594,14 +696,17 @@ pub async fn start_nebula_internal() -> Result<(), String> {
             .map_err(|e| format!("Failed to spawn nebula: {}", e))?;
             
         println!("[Nebula] Started with PID: {}", child.id());
-        // We don't wait for it, let it run in background
-        // In a real app we might want to track the child handle
     }
 
     #[cfg(target_os = "windows")]
     {
-        // Windows implementation
-        // ...
+        let child = std::process::Command::new(&binary_path)
+            .arg("-config")
+            .arg(&config_file)
+            .spawn()
+            .map_err(|e| format!("Failed to spawn nebula: {}", e))?;
+            
+        println!("[Nebula] Started with PID: {}", child.id());
     }
 
     Ok(())
@@ -757,13 +862,9 @@ pub async fn get_nebula_version() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn get_nebula_ip() -> Result<String, String> {
-    let hostname = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "node".to_string());
-        
     let config_dir = get_nebula_config_dir().map_err(|e| e.to_string())?;
-    let crt_path = config_dir.join(format!("{}.crt", hostname));
+    // Use host.crt from API instead of hostname-based cert
+    let crt_path = config_dir.join("host.crt");
     
     if !crt_path.exists() {
         return Err("Nebula certificate not found".to_string());
