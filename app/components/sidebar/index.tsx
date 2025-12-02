@@ -16,7 +16,6 @@ import { InView } from "react-intersection-observer";
 import FooterNavItem from "./FooterNavItems";
 import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
 import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
-import { openAppLink } from "@/app/lib/utils/links";
 import CheckForUpdateDialog from "../updater/CheckForUpdateDialog";
 import { useState } from "react";
 
@@ -31,10 +30,6 @@ const Sidebar: React.FC = () => {
 
   const toggleSidebar = () => {
     setCollapsed(!collapsed);
-  };
-
-  const submitABug = () => {
-    openAppLink("https://github.com/thenervelab/hippius-desktop/issues/new");
   };
 
   const openSettingsWithDefaultTab = () => {

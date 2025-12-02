@@ -188,7 +188,7 @@ const Support: React.FC = () => {
           },
         }
       );
-    } catch (error) {
+    } catch {
       toast.error("An unexpected error occurred");
     }
   };
