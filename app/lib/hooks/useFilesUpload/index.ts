@@ -90,8 +90,11 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     setProgress(0);
 
     try {
-      // check credits as before
-      if (!credits || credits <= BigInt(0)) {
+      // Credits may still be loading on first app render; surface a clearer message.
+      if (credits === undefined) {
+        throw new Error("Credits are still loading. Please try again in a moment.");
+      }
+      if (credits <= BigInt(0)) {
         throw new Error("Insufficient Credits. Please add credits.");
       }
 
