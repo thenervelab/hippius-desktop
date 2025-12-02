@@ -153,6 +153,13 @@ pub async fn start_private_folder_sync(
         Ok(path) => path,
         Err(e) => {
             eprintln!("[PrivateFolderSync] Failed to get private sync path: {}", e);
+            let payload = json!({
+                "scope": "private",
+                "account_id": account_id,
+                "success": false,
+                "error": e.to_string(),
+            });
+            let _ = app_handle.emit("sync_completed", &payload);
             sleep(Duration::from_secs(15)).await;
             return;
         }
@@ -183,6 +190,13 @@ pub async fn start_private_folder_sync(
     // before potentially long-running operations like sub-account resolution.
     if let Err(e) = std::fs::create_dir_all(&sync_path) {
         eprintln!("[PrivateFolderSync] Failed to create sync directory: {}", e);
+        let payload = json!({
+            "scope": "private",
+            "account_id": account_id,
+            "success": false,
+            "error": e.to_string(),
+        });
+        let _ = app_handle.emit("sync_completed", &payload);
         return;
     }
 
@@ -262,6 +276,13 @@ pub async fn start_private_folder_sync(
         Ok((name, hash)) => (name, hash),
         Err(e) => {
             eprintln!("[PrivateFolderSync] Failed to get bucket name: {}", e);
+            let payload = json!({
+                "scope": "private",
+                "account_id": account_id,
+                "success": false,
+                "error": e.to_string(),
+            });
+            let _ = app_handle.emit("sync_completed", &payload);
             sleep(Duration::from_secs(15)).await;
             return;
         }
@@ -284,6 +305,13 @@ pub async fn start_private_folder_sync(
                 "[PrivateFolderSync] Failed to create file system watcher: {}",
                 e
             );
+            let payload = json!({
+                "scope": "private",
+                "account_id": account_id,
+                "success": false,
+                "error": e.to_string(),
+            });
+            let _ = app_handle.emit("sync_completed", &payload);
             return;
         }
     };
@@ -292,6 +320,13 @@ pub async fn start_private_folder_sync(
         Some(p) => p.clone(),
         None => {
             eprintln!("[PrivateFolderSync] Database pool not available");
+            let payload = json!({
+                "scope": "private",
+                "account_id": account_id,
+                "success": false,
+                "error": "Database pool not available",
+            });
+            let _ = app_handle.emit("sync_completed", &payload);
             return;
         }
     };
@@ -384,7 +419,7 @@ pub async fn start_private_folder_sync(
             state.uploading_items.retain(|_| false);
             state.total_files = 0; // we don't have per-file progress when delegating to sync_once_cas
         }
-        println!("calling sync_once_cas from private_folder_sync");
+        println!("[PrivateFolderSync] Calling sync_once_cas...");
         // Run reconcile with retries
         let max_retries = 6; // preserve existing behavior
         let result = sync_once_cas(
@@ -396,6 +431,7 @@ pub async fn start_private_folder_sync(
             &prunefile_id,
         )
         .await;
+        println!("[PrivateFolderSync] sync_once_cas returned: {:?}", result.is_ok());
 
         // Build + emit status; preserve "sync_completed" on both success and failure.
         let status = match &result {
@@ -419,7 +455,7 @@ pub async fn start_private_folder_sync(
                 }
             }
             Err(e) => {
-                // Heuristic: treat “CAS:” errors as conflict storms; add jitter before the next attempt.
+                // Heuristic: treat "CAS:" errors as conflict storms; add jitter before the next attempt.
                 let es = e.to_string();
                 let casy = es.contains("CAS:")
                     || es.contains("conflicted too many times")
@@ -447,13 +483,25 @@ pub async fn start_private_folder_sync(
         let _ = app_handle.emit("sync-status-update", &status);
 
         // emit completion payload (note: SyncStatusResponse does NOT have `processed_files`)
-        let _payload = json!({
+        let mut payload = json!({
             "scope": "private",
             "account_id": account_id,
             "success": result.is_ok(),
             "total_files": status.total_files,
             "processed_files": status.synced_files, // use synced_files
         });
+        
+        // Add error message if sync failed
+        if let Err(e) = &result {
+            payload["error"] = json!(e.to_string());
+        }
+        
+        // Emit sync_completed event for frontend
+        if let Err(e) = app_handle.emit("sync_completed", &payload) {
+            eprintln!("[PrivateFolderSync] Failed to emit sync_completed: {}", e);
+        } else {
+            println!("[PrivateFolderSync] Emitted sync_completed event ({})", if result.is_ok() { "success" } else { "error" });
+        }
 
         last_run_end = Instant::now();
         running = false;

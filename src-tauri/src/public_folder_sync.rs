@@ -192,6 +192,13 @@ pub async fn start_public_folder_sync(
         Ok(path) => path,
         Err(e) => {
             eprintln!("[PublicFolderSync] Failed to get public sync path: {}", e);
+            let payload = serde_json::json!({
+                "scope": "public",
+                "account_id": account_id,
+                "success": false,
+                "error": e.to_string(),
+            });
+            let _ = app_handle.emit("sync_completed", &payload);
             tokio::time::sleep(Duration::from_secs(15)).await;
             return;
         }
@@ -222,6 +229,13 @@ pub async fn start_public_folder_sync(
     // before potentially long-running operations like sub-account resolution.
     if let Err(e) = std::fs::create_dir_all(&sync_path) {
         eprintln!("[PublicFolderSync] Failed to create sync directory: {}", e);
+        let payload = serde_json::json!({
+            "scope": "public",
+            "account_id": account_id,
+            "success": false,
+            "error": e.to_string(),
+        });
+        let _ = app_handle.emit("sync_completed", &payload);
         return;
     }
 
@@ -301,6 +315,13 @@ pub async fn start_public_folder_sync(
         Ok((name, hash)) => (name, hash),
         Err(e) => {
             eprintln!("[PublicFolderSync] Failed to get bucket name: {}", e);
+            let payload = serde_json::json!({
+                "scope": "public",
+                "account_id": account_id,
+                "success": false,
+                "error": e.to_string(),
+            });
+            let _ = app_handle.emit("sync_completed", &payload);
             tokio::time::sleep(Duration::from_secs(15)).await;
             return;
         }
@@ -317,6 +338,13 @@ pub async fn start_public_folder_sync(
         Ok(watcher) => watcher,
         Err(e) => {
             eprintln!("[PublicFolderSync] Failed to create fs watcher: {}", e);
+            let payload = serde_json::json!({
+                "scope": "public",
+                "account_id": account_id,
+                "success": false,
+                "error": e.to_string(),
+            });
+            let _ = app_handle.emit("sync_completed", &payload);
             return;
         }
     };
@@ -325,6 +353,13 @@ pub async fn start_public_folder_sync(
         Some(p) => p.clone(),
         None => {
             eprintln!("[PublicFolderSync] Database pool not available");
+            let payload = serde_json::json!({
+                "scope": "public",
+                "account_id": account_id,
+                "success": false,
+                "error": "Database pool not available",
+            });
+            let _ = app_handle.emit("sync_completed", &payload);
             return;
         }
     };
@@ -415,7 +450,7 @@ pub async fn start_public_folder_sync(
         }
 
         let max_retries = 5;
-        println!("calling sync_once_cas from public_folder_sync");
+        println!("[PublicFolderSync] Calling sync_once_cas...");
         let result = sync_once_cas(
             &s3,
             &bucket_name,
@@ -425,6 +460,7 @@ pub async fn start_public_folder_sync(
             &prunefile_id,
         )
         .await;
+        println!("[PublicFolderSync] sync_once_cas returned: {:?}", result.is_ok());
 
         match result {
             Ok(()) => {
@@ -444,16 +480,23 @@ pub async fn start_public_folder_sync(
                 };
                 let _ = app_handle.emit("sync-status-update", &status);
 
-                let _payload = serde_json::json!({
+                let payload = serde_json::json!({
                     "scope": "public",
                     "account_id": account_id,
                     "success": true,
                     "total_files": status.total_files,
                     "processed_files": status.synced_files,
                 });
+                
+                // Emit sync_completed event for frontend
+                if let Err(e) = app_handle.emit("sync_completed", &payload) {
+                    eprintln!("[PublicFolderSync] Failed to emit sync_completed: {}", e);
+                } else {
+                    println!("[PublicFolderSync] Emitted sync_completed event (success)");
+                }
             }
             Err(e) => {
-                // Heuristic: treat “CAS:” errors as conflict storms; add jitter before the next attempt.
+                // Heuristic: treat "CAS:" errors as conflict storms; add jitter before the next attempt.
                 let es = e.to_string();
                 let casy = es.contains("CAS:")
                     || es.contains("conflicted too many times")
@@ -477,6 +520,22 @@ pub async fn start_public_folder_sync(
                     }
                 };
                 let _ = app_handle.emit("sync-status-update", &status);
+
+                // IMPORTANT: Emit sync_completed even on error so frontend doesn't get stuck
+                let payload = serde_json::json!({
+                    "scope": "public",
+                    "account_id": account_id,
+                    "success": false,
+                    "error": e.to_string(),
+                    "total_files": status.total_files,
+                    "processed_files": status.synced_files,
+                });
+                
+                if let Err(e) = app_handle.emit("sync_completed", &payload) {
+                    eprintln!("[PublicFolderSync] Failed to emit sync_completed (error): {}", e);
+                } else {
+                    println!("[PublicFolderSync] Emitted sync_completed event (error)");
+                }
             }
         }
 
