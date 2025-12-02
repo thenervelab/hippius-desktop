@@ -5,10 +5,11 @@ use sqlx::Row;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 use tokio::fs;
-use std::time::Duration;
 use sysinfo::Networks;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Instant, Duration};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -64,8 +65,8 @@ struct NebulaCertDetails {
 
 #[derive(Debug, Serialize)]
 pub struct NebulaStats {
-    udp_tx_bytes: u64,
-    udp_rx_bytes: u64,
+    udp_tx_bytes: f64,
+    udp_rx_bytes: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -526,6 +527,83 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
 pub async fn finish_setup() -> Result<(), String> {
     // Just a final delay for UI
     tokio::time::sleep(Duration::from_secs(2)).await;
+    
+    // Try to start Nebula if enabled
+    if let Err(e) = start_nebula_internal().await {
+        println!("[Nebula] Failed to auto-start in finish_setup: {}", e);
+        // We don't return error here to not block the UI flow, just log it
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_nebula() -> Result<(), String> {
+    start_nebula_internal().await
+}
+
+pub async fn start_nebula_internal() -> Result<(), String> {
+    println!("[Nebula] Attempting to start Nebula...");
+    
+    // Check DB status
+    let pool = crate::DB_POOL.get().ok_or("Database not initialized".to_string())?;
+    
+    let is_enabled: bool = sqlx::query("SELECT is_enabled FROM vpn_status WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|row| row.get("is_enabled"))
+        .unwrap_or(false);
+
+    if !is_enabled {
+        println!("[Nebula] VPN is disabled in settings, skipping startup");
+        return Ok(());
+    }
+
+    if check_nebula_running().await.unwrap_or(false) {
+        println!("[Nebula] Already running");
+        return Ok(());
+    }
+
+    let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
+    let config_dir = get_nebula_config_dir().map_err(|e| e.to_string())?;
+    
+    // Find the config file (hostname.yml)
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "node".to_string());
+    let config_file = config_dir.join(format!("{}.yml", hostname));
+
+    if !config_file.exists() {
+        return Err(format!("Config file not found: {}", config_file.display()));
+    }
+
+    println!("[Nebula] Starting process: {} -config {}", binary_path.display(), config_file.display());
+
+    // Spawn the process
+    // Note: On Linux/macOS this might need sudo/root if not setuid/cap_net_admin
+    // We assume permissions were handled in install/verify phase
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        let child = std::process::Command::new(&binary_path)
+            .arg("-config")
+            .arg(&config_file)
+            .spawn()
+            .map_err(|e| format!("Failed to spawn nebula: {}", e))?;
+            
+        println!("[Nebula] Started with PID: {}", child.id());
+        // We don't wait for it, let it run in background
+        // In a real app we might want to track the child handle
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows implementation
+        // ...
+    }
+
     Ok(())
 }
 
@@ -629,6 +707,46 @@ pub async fn check_nebula_running() -> Result<bool> {
     }
 }
 
+/// Stop the Nebula process
+pub async fn stop_nebula() -> Result<(), String> {
+    println!("[Nebula] Stopping Nebula process...");
+    
+    #[cfg(unix)]
+    {
+        // Use pkill to terminate nebula process
+        let output = tokio::process::Command::new("pkill")
+            .arg("-f")
+            .arg("nebula")
+            .output()
+            .await
+            .map_err(|e| format!("Failed to execute pkill: {}", e))?;
+            
+        if output.status.success() {
+            println!("[Nebula] Process stopped successfully");
+        } else {
+            println!("[Nebula] No process found or already stopped");
+        }
+    }
+    
+    #[cfg(windows)]
+    {
+        // Windows implementation using taskkill
+        let output = tokio::process::Command::new("taskkill")
+            .args(&["/F", "/IM", "nebula.exe"])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to execute taskkill: {}", e))?;
+            
+        if output.status.success() {
+            println!("[Nebula] Process stopped successfully");
+        } else {
+            println!("[Nebula] No process found or already stopped");
+        }
+    }
+    
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_nebula_version() -> Result<String, String> {
     check_nebula_installation()
@@ -676,25 +794,77 @@ pub async fn get_nebula_ip() -> Result<String, String> {
         .ok_or_else(|| "No IP found in certificate".to_string())
 }
 
+// Store previous values for delta calculation
+static LAST_UPDATE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+static LAST_TX: AtomicU64 = AtomicU64::new(0);
+static LAST_RX: AtomicU64 = AtomicU64::new(0);
+static CUMULATIVE_TX: AtomicU64 = AtomicU64::new(0);
+static CUMULATIVE_RX: AtomicU64 = AtomicU64::new(0);
+
 #[tauri::command]
 pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
-    // Monitor the nebula network interface directly
+    // Get current network stats
     let networks = Networks::new_with_refreshed_list();
     
-    let mut tx_bytes = 0;
-    let mut rx_bytes = 0;
+    let mut current_tx = 0;
+    let mut current_rx = 0;
     
     // Look for nebula interface (usually nebula1, nebula0, etc.)
     for (interface_name, data) in &networks {
         if interface_name.contains("nebula") {
-            tx_bytes += data.transmitted();
-            rx_bytes += data.received();
+            current_tx += data.transmitted();
+            current_rx += data.received();
         }
     }
     
+    let now = Instant::now();
+    let mut last_update_guard = LAST_UPDATE.lock().unwrap();
+    
+    // Calculate deltas if we have previous values
+    let (tx_delta, rx_delta) = if let Some(last_update) = *last_update_guard {
+        let elapsed = now.duration_since(last_update).as_secs_f64();
+        
+        if elapsed > 0.1 {  // At least 100ms since last update
+            let last_tx = LAST_TX.load(Ordering::Relaxed);
+            let last_rx = LAST_RX.load(Ordering::Relaxed);
+            
+            // Calculate bytes per second
+            let tx_delta = if current_tx >= last_tx {
+                current_tx - last_tx
+            } else {
+                current_tx  // Counter wrapped around
+            };
+            
+            let rx_delta = if current_rx >= last_rx {
+                current_rx - last_rx
+            } else {
+                current_rx  // Counter wrapped around
+            };
+            
+            // Update cumulative stats
+            CUMULATIVE_TX.fetch_add(tx_delta, Ordering::Relaxed);
+            CUMULATIVE_RX.fetch_add(rx_delta, Ordering::Relaxed);
+            
+            (tx_delta, rx_delta)
+        } else {
+            (0, 0)  // Not enough time passed, return zeros
+        }
+    } else {
+        (0, 0)  // First run, no delta yet
+    };
+    
+    // Update stored values
+    LAST_TX.store(current_tx, Ordering::Relaxed);
+    LAST_RX.store(current_rx, Ordering::Relaxed);
+    *last_update_guard = Some(now);
+    
+    // Return the cumulative stats (convert to MB)
+    let mb_tx = CUMULATIVE_TX.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
+    let mb_rx = CUMULATIVE_RX.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
+    
     Ok(NebulaStats {
-        udp_tx_bytes: tx_bytes,
-        udp_rx_bytes: rx_bytes,
+        udp_tx_bytes: mb_tx,
+        udp_rx_bytes: mb_rx,
     })
 }
 

@@ -362,6 +362,9 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 }
 
                 println!("[Setup] Database initialized successfully");
+
+                // Nebula installation is now handled by the frontend splash screen
+                // via granular commands (check_nebula_requirements, etc.)
             });
             Ok(())
         })

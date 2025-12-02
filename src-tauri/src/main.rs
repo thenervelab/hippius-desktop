@@ -144,6 +144,7 @@ fn main() {
             utils::nebula::install_nebula,
             utils::nebula::verify_nebula,
             utils::nebula::finish_setup,
+            utils::nebula::start_nebula,
         ]);
 
     let builder = setup(builder);
