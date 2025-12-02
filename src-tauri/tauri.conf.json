@@ -33,7 +33,8 @@
             "height": 1000,
             "visible": true,
             "center": true,
-            "resizable": true
+            "resizable": true,
+            "devtools": true
         }],
         "security": {
             "capabilities": [
