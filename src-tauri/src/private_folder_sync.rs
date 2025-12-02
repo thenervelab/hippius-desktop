@@ -454,6 +454,10 @@ pub async fn start_private_folder_sync(
             "total_files": status.total_files,
             "processed_files": status.synced_files, // use synced_files
         });
+        let _ = app_handle.emit(
+            "sync_completed",
+            serde_json::json!({ "scope": "private", "success": result.is_ok() }),
+        );
 
         last_run_end = Instant::now();
         running = false;

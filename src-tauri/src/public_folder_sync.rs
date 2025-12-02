@@ -443,6 +443,10 @@ pub async fn start_public_folder_sync(
                     }
                 };
                 let _ = app_handle.emit("sync-status-update", &status);
+                let _ = app_handle.emit(
+                    "sync_completed",
+                    serde_json::json!({ "scope": "public", "success": true }),
+                );
 
                 let _payload = serde_json::json!({
                     "scope": "public",
@@ -477,6 +481,10 @@ pub async fn start_public_folder_sync(
                     }
                 };
                 let _ = app_handle.emit("sync-status-update", &status);
+                let _ = app_handle.emit(
+                    "sync_completed",
+                    serde_json::json!({ "scope": "public", "success": false }),
+                );
             }
         }
 
