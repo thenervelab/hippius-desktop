@@ -429,6 +429,7 @@ pub async fn start_private_folder_sync(
             deletion_policy,
             max_retries,
             &prunefile_id,
+            false,
         )
         .await;
         println!("[PrivateFolderSync] sync_once_cas returned: {:?}", result.is_ok());
