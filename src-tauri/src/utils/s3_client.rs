@@ -1,10 +1,16 @@
 use aws_config::{BehaviorVersion, stalled_stream_protection::StalledStreamProtectionConfig};
-use aws_sdk_s3::{Client, config::Region};
+use aws_sdk_s3::{config::Region, Client};
+use crate::utils::objectstore_tokens::ensure_master_token_env;
 
 const S3_ENDPOINT: &str = "https://s3.hippius.com";
 const S3_REGION: &str = "us-east-1";
 
 pub async fn make_s3_client() -> Client {
+    // Ensure AWS_* env vars are populated from the stored master token if present.
+    if let Err(e) = ensure_master_token_env().await {
+        eprintln!("[S3] No stored master token yet ({}) - falling back to existing AWS env vars", e);
+    }
+
     let shared = aws_config::defaults(BehaviorVersion::latest())
         .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .load()

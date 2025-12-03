@@ -76,6 +76,16 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
+        (
+            "objectstore_auth",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("temp_auth_key", "TEXT"),
+                ("master_access_key_id", "TEXT"),
+                ("master_secret", "TEXT"),
+                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
     ];
 
     for (table_name, columns) in TABLE_SCHEMAS {

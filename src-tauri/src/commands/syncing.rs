@@ -45,16 +45,18 @@ pub struct AppState {
 }
 
 #[allow(deprecated)]
-pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
-    // Resolve or create subaccount seed (with encryption and chain-side handling)
-    let seed_to_use = resolve_or_create_subaccount_seed(account_id.clone(), mnemonic.clone()).await;
-
-    // Configure AWS env
-    let encoded_seed = b64::encode(&seed_to_use);
-    unsafe {
-        std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
-        std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
-        std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
+pub async fn ensure_aws_env(account_id: String, _mnemonic: String) {
+    // New flow: prefer stored master token for S3 access. Keep params for compatibility.
+    match crate::utils::objectstore_tokens::ensure_master_token_env().await {
+        Ok(_) => {
+            println!("[Auth] Loaded AWS creds from stored master token");
+        }
+        Err(e) => {
+            eprintln!(
+                "[Auth] No master token available for S3 auth (account_id:{}): {}",
+                account_id, e
+            );
+        }
     }
 }
 

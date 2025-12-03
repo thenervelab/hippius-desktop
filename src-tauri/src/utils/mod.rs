@@ -7,3 +7,4 @@ pub mod ipfs;
 pub mod nebula;
 pub mod s3_client;
 pub mod sync;
+pub mod objectstore_tokens;
