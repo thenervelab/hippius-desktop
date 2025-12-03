@@ -474,6 +474,18 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
              return Err("Installation failed: Downloaded file not found".to_string());
         }
     } else {
+        // Binary is already installed, update database status
+        let pool = crate::DB_POOL.get().ok_or("Database not initialized".to_string())?;
+        if let Err(e) = sqlx::query(
+            "UPDATE nebula_binary_status SET is_nebula_binary_installed = TRUE, last_updated = CURRENT_TIMESTAMP WHERE id = 1"
+        )
+        .execute(pool)
+        .await {
+            eprintln!("[Nebula] Failed to update binary installation status: {}", e);
+        } else {
+            println!("[Nebula] Binary already installed, status updated in database");
+        }
+        
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
     
