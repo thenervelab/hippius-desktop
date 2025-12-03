@@ -3,13 +3,12 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::fs;
 use sysinfo::Networks;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Instant, Duration};
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -907,78 +906,148 @@ pub async fn get_nebula_ip() -> Result<String, String> {
         .ok_or_else(|| "No IP found in certificate".to_string())
 }
 
-// Store previous values for delta calculation
-static LAST_UPDATE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
-static LAST_TX: AtomicU64 = AtomicU64::new(0);
-static LAST_RX: AtomicU64 = AtomicU64::new(0);
-static CUMULATIVE_TX: AtomicU64 = AtomicU64::new(0);
-static CUMULATIVE_RX: AtomicU64 = AtomicU64::new(0);
-
 #[tauri::command]
 pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
-    // Get current network stats
+    // Platform-specific implementations for accurate TUN interface statistics
+    
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: Read directly from /sys/class/net (most reliable for TUN interfaces)
+        let tx_bytes = read_sys_net_stat("nebula1", "tx_bytes").await?;
+        let rx_bytes = read_sys_net_stat("nebula1", "rx_bytes").await?;
+        
+        let mb_tx = tx_bytes as f64 / (1024.0 * 1024.0);
+        let mb_rx = rx_bytes as f64 / (1024.0 * 1024.0);
+        
+        
+        Ok(NebulaStats {
+            udp_tx_bytes: mb_tx,
+            udp_rx_bytes: mb_rx,
+        })
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: Use netstat command for accurate stats
+        match get_macos_interface_stats("utun").await {
+            Ok((tx, rx)) => {
+                let mb_tx = tx as f64 / (1024.0 * 1024.0);
+                let mb_rx = rx as f64 / (1024.0 * 1024.0);
+                
+                println!("[Nebula Stats] TX: {} bytes ({:.3} MB), RX: {} bytes ({:.3} MB)", 
+                         tx, mb_tx, rx, mb_rx);
+                
+                Ok(NebulaStats {
+                    udp_tx_bytes: mb_tx,
+                    udp_rx_bytes: mb_rx,
+                })
+            }
+            Err(e) => {
+                // Fallback to sysinfo if netstat fails
+                println!("[Nebula Stats] netstat failed ({}), falling back to sysinfo", e);
+                get_stats_via_sysinfo()
+            }
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: Use sysinfo (works better on Windows than Linux for TUN)
+        get_stats_via_sysinfo()
+    }
+    
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        // Other platforms: fallback to sysinfo
+        get_stats_via_sysinfo()
+    }
+}
+
+/// Fallback stats reader using sysinfo crate
+fn get_stats_via_sysinfo() -> Result<NebulaStats, String> {
     let networks = Networks::new_with_refreshed_list();
     
     let mut current_tx = 0;
     let mut current_rx = 0;
     
-    // Look for nebula interface (usually nebula1, nebula0, etc.)
+    // Look for nebula interface (nebula1, utun*, etc.)
     for (interface_name, data) in &networks {
-        if interface_name.contains("nebula") {
+        if interface_name.contains("nebula") || interface_name.contains("utun") {
             current_tx += data.transmitted();
             current_rx += data.received();
+            println!("[Nebula Stats] Interface: {}, TX: {} bytes, RX: {} bytes", 
+                     interface_name, data.transmitted(), data.received());
         }
     }
     
-    let now = Instant::now();
-    let mut last_update_guard = LAST_UPDATE.lock().unwrap();
+    let mb_tx = current_tx as f64 / (1024.0 * 1024.0);
+    let mb_rx = current_rx as f64 / (1024.0 * 1024.0);
     
-    // Calculate deltas if we have previous values
-    let (tx_delta, rx_delta) = if let Some(last_update) = *last_update_guard {
-        let elapsed = now.duration_since(last_update).as_secs_f64();
-        
-        if elapsed > 0.1 {  // At least 100ms since last update
-            let last_tx = LAST_TX.load(Ordering::Relaxed);
-            let last_rx = LAST_RX.load(Ordering::Relaxed);
-            
-            // Calculate bytes per second
-            let tx_delta = if current_tx >= last_tx {
-                current_tx - last_tx
-            } else {
-                current_tx  // Counter wrapped around
-            };
-            
-            let rx_delta = if current_rx >= last_rx {
-                current_rx - last_rx
-            } else {
-                current_rx  // Counter wrapped around
-            };
-            
-            // Update cumulative stats
-            CUMULATIVE_TX.fetch_add(tx_delta, Ordering::Relaxed);
-            CUMULATIVE_RX.fetch_add(rx_delta, Ordering::Relaxed);
-            
-            (tx_delta, rx_delta)
-        } else {
-            (0, 0)  // Not enough time passed, return zeros
-        }
-    } else {
-        (0, 0)  // First run, no delta yet
-    };
-    
-    // Update stored values
-    LAST_TX.store(current_tx, Ordering::Relaxed);
-    LAST_RX.store(current_rx, Ordering::Relaxed);
-    *last_update_guard = Some(now);
-    
-    // Return the cumulative stats (convert to MB)
-    let mb_tx = CUMULATIVE_TX.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
-    let mb_rx = CUMULATIVE_RX.load(Ordering::Relaxed) as f64 / (1024.0 * 1024.0);
+    println!("[Nebula Stats] Total TX: {:.3} MB, Total RX: {:.3} MB", mb_tx, mb_rx);
     
     Ok(NebulaStats {
         udp_tx_bytes: mb_tx,
         udp_rx_bytes: mb_rx,
     })
+}
+
+/// Read network statistics from /sys/class/net on Linux
+#[cfg(target_os = "linux")]
+async fn read_sys_net_stat(interface: &str, stat: &str) -> Result<u64, String> {
+    let path = format!("/sys/class/net/{}/statistics/{}", interface, stat);
+    
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => {
+            content.trim().parse::<u64>()
+                .map_err(|e| format!("Failed to parse {}: {}", stat, e))
+        }
+        Err(e) => {
+            // Interface might not exist yet
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Ok(0)
+            } else {
+                Err(format!("Failed to read {}: {}", path, e))
+            }
+        }
+    }
+}
+
+/// Get interface stats on macOS using netstat
+#[cfg(target_os = "macos")]
+async fn get_macos_interface_stats(interface_prefix: &str) -> Result<(u64, u64), String> {
+    // Run netstat -ibn to get interface statistics
+    let output = tokio::process::Command::new("netstat")
+        .args(&["-ibn"])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run netstat: {}", e))?;
+    
+    if !output.status.success() {
+        return Err("netstat command failed".to_string());
+    }
+    
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    
+    // Parse netstat output to find utun interface (Nebula uses utun on macOS)
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        
+        // netstat format: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes
+        if parts.len() >= 10 && parts[0].starts_with(interface_prefix) {
+            // Check if this is the Nebula interface by looking for the 100.64.x.x IP
+            if parts.len() > 3 && parts[3].starts_with("100.64") {
+                let ibytes = parts[6].parse::<u64>()
+                    .map_err(|e| format!("Failed to parse ibytes: {}", e))?;
+                let obytes = parts[9].parse::<u64>()
+                    .map_err(|e| format!("Failed to parse obytes: {}", e))?;
+                
+                println!("[Nebula Stats] Found interface: {}, IP: {}", parts[0], parts[3]);
+                return Ok((obytes, ibytes)); // TX, RX
+            }
+        }
+    }
+    
+    Err("Nebula interface not found in netstat output".to_string())
 }
 
 #[tauri::command]
