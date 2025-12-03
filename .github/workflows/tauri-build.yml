@@ -20,11 +20,11 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: '--target universal-apple-darwin'   # One universal mac build
+            args: "--target universal-apple-darwin" # One universal mac build
           - platform: ubuntu-22.04
-            args: ''
+            args: "--bundles deb"
           - platform: windows-latest
-            args: ''
+            args: ""
 
     runs-on: ${{ matrix.platform }}
 
@@ -32,7 +32,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Fetch all history to get commit messages
+          fetch-depth: 0 # Fetch all history to get commit messages
 
       # Get PR or commit details for the release notes
       - name: Get release notes
@@ -101,12 +101,12 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: "./src-tauri -> target"
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 'lts/*'
+          node-version: "lts/*"
 
       - name: Setup PNPM
         uses: pnpm/action-setup@v2
@@ -140,7 +140,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
-          releaseName: '${{ steps.release_notes.outputs.title }}'
+          releaseName: "${{ steps.release_notes.outputs.title }}"
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
