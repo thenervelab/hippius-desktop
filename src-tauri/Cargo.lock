@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Hippius"
-version = "0.1.54"
+version = "0.1.55"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -2219,7 +2219,7 @@ checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
 name = "cmake"
-version = "0.1.54"
+version = "0.1.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7caa3f9de89ddbe2c607f4101924c5abec803763ae9534e4f4d7d8f84aa81f0"
 dependencies = [
