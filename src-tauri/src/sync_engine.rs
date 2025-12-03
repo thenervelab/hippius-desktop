@@ -3,7 +3,6 @@ use aws_sdk_s3::Client;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::ObjectCannedAcl;
 use hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -97,9 +96,11 @@ pub fn pruned_key_for(prunefile_id: &str) -> String {
 
 pub fn prunefile_id(sub_account: &str, path_hash: &str, private: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(sub_account.as_bytes());
+    hasher.update(b"hippius_manifest_v1");
     hasher.update(b":");
     hasher.update(path_hash.as_bytes());
+    hasher.update(b":");
+    hasher.update(sub_account.as_bytes());
     hasher.update(b":");
     hasher.update(private.as_bytes());
     let digest = hasher.finalize();
@@ -597,25 +598,23 @@ async fn publish_conflict_object_with_bumps(
     bucket: &str,
     local_bytes: &[u8],
     desired_key: &str,
-    is_public: bool,
 ) -> (Option<String>, String) {
     let mut used_key = desired_key.to_string();
     let mut bump_idx: u32 = 2;
     let mut attempt = 0usize;
-    println!("[Sync] trying to upload conflict object with bumps: {}", used_key);
+    println!(
+        "[Sync] trying to upload conflict object with bumps: {}",
+        used_key
+    );
     loop {
-        let mut req = client
+        let res = client
             .put_object()
             .bucket(bucket)
             .key(&used_key)
             .if_none_match("*")
-            .body(ByteStream::from(local_bytes.to_vec()));
-
-        if is_public {
-            req = req.acl(ObjectCannedAcl::PublicRead);
-        }
-
-        let res = req.send().await;
+            .body(ByteStream::from(local_bytes.to_vec()))
+            .send()
+            .await;
 
         match res {
             Ok(out) => return (out.e_tag.map(|e| normalize_etag(&e)), used_key),
@@ -887,7 +886,6 @@ async fn execute_conflict_flow(
     remote_etag_hint: Option<String>,
     prune: &mut PrunedMap,
     strategy: ConflictStrategy,
-    is_public: bool,
 ) -> Result<()> {
     println!("[Sync] trying to execute conflict flow");
     match strategy {
@@ -911,7 +909,6 @@ async fn execute_conflict_flow(
                     bucket,
                     &conflict_bytes,
                     &conflict_rel,
-                    is_public,
                 )
                 .await;
 
@@ -966,7 +963,7 @@ async fn execute_conflict_flow(
             let conflict_bytes = tokio_fs::read(&conflict_full).await?;
             let conflict_cid = hex::encode(Sha256::digest(&conflict_bytes));
             let (uploaded_etag, used_key) =
-                publish_conflict_object_with_bumps(client, bucket, &conflict_bytes, &conflict_rel, is_public)
+                publish_conflict_object_with_bumps(client, bucket, &conflict_bytes, &conflict_rel)
                     .await;
 
             if used_key != conflict_rel {
@@ -1208,9 +1205,8 @@ pub async fn sync_once_cas(
     delete_policy: DeletePolicy,
     max_retries: usize,
     prunefile_id: &str,
-    is_public: bool,
 ) -> Result<()> {
-
+    println!("[Sync] sync_once_cas beimg called");
     let client_tag8 = client_tag8_from(prunefile_id);
 
     /* ---- Phase 0: Snapshot ---- */
@@ -1228,7 +1224,10 @@ pub async fn sync_once_cas(
     println!("  - Manifest entries: {}", manifest.entries.len());
     println!("  - Prunefile ID: {}", prunefile_id);
     if prune.is_empty() && !local.is_empty() {
-        eprintln!("[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!", local.len());
+        eprintln!(
+            "[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!",
+            local.len()
+        );
     }
 
     /* ---- Phase 3 Preamble: REMOTE -> LOCAL (diff vs remote) --------------------------- */
@@ -1287,7 +1286,10 @@ pub async fn sync_once_cas(
             }
             Some(pe) => {
                 if !pe.present {
-                    println!("[Sync] Scheduling upload for '{}': marked as not present in prune", lk);
+                    println!(
+                        "[Sync] Scheduling upload for '{}': marked as not present in prune",
+                        lk
+                    );
                     schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
                 } else if (!pe.cid.is_empty() && pe.cid != lm.cid)
                     || (pe.cid.is_empty() && !lm.cid.is_empty())
@@ -1370,8 +1372,11 @@ pub async fn sync_once_cas(
     // Early-exit optimization: skip sync if no operations needed
     // Check this BEFORE executing ops to avoid unnecessary S3 API calls
     let ops_l2r_count = ops_l2r.len();
-    println!("[Sync] Phase 1 operations queued: {} uploads/deletes", ops_l2r_count);
-    
+    println!(
+        "[Sync] Phase 1 operations queued: {} uploads/deletes",
+        ops_l2r_count
+    );
+
     // === Execute Phase 1 ops ===
     for op in ops_l2r {
         match op {
@@ -1453,10 +1458,6 @@ pub async fn sync_once_cas(
                         .key(&path)
                         .body(ByteStream::from(bytes.clone()));
 
-                    if is_public {
-                        req = req.acl(ObjectCannedAcl::PublicRead);
-                    }
-
                     if let Some(ref prev) = prev_cid_for_meta {
                         if !prev.is_empty() {
                             req = req.metadata(META_PREV_CID_KEY, prev.clone());
@@ -1493,7 +1494,6 @@ pub async fn sync_once_cas(
                                             Some(final_et.clone()),
                                             &mut prune,
                                             ConflictStrategy::RenameLocalAndAdoptRemote,
-                                            is_public,
                                         )
                                         .await
                                         {
@@ -1525,7 +1525,6 @@ pub async fn sync_once_cas(
                                     None,
                                     &mut prune,
                                     ConflictStrategy::RenameLocalAndAdoptRemote,
-                                    is_public,
                                 )
                                 .await
                                 {
@@ -1550,7 +1549,6 @@ pub async fn sync_once_cas(
                                                 remote_et.clone(),
                                                 &mut prune,
                                                 ConflictStrategy::RenameLocalAndAdoptRemote,
-                                                is_public,
                                             )
                                             .await
                                             {
@@ -1577,7 +1575,6 @@ pub async fn sync_once_cas(
                                                 None,
                                                 &mut prune,
                                                 ConflictStrategy::RenameLocalAndAdoptRemote,
-                                                is_public,
                                             )
                                             .await
                                             {
@@ -1989,8 +1986,11 @@ pub async fn sync_once_cas(
 
     // Early-exit if no operations needed (both phases)
     let ops_adopt_count = ops_adopt.len();
-    println!("[Sync] Phase 3 operations queued: {} downloads/renames/deletes", ops_adopt_count);
-    
+    println!(
+        "[Sync] Phase 3 operations queued: {} downloads/renames/deletes",
+        ops_adopt_count
+    );
+
     if ops_l2r_count == 0 && ops_adopt_count == 0 {
         println!("[Sync] No changes detected, skipping sync cycle");
         return Ok(());
@@ -2118,7 +2118,6 @@ pub async fn sync_once_cas(
                                             remote_etag.clone(),
                                             &mut prune,
                                             ConflictStrategy::RenameLocalAndAdoptRemote,
-                                            is_public,
                                         )
                                         .await
                                         {
@@ -2166,7 +2165,6 @@ pub async fn sync_once_cas(
                                             remote_etag.clone(),
                                             &mut prune,
                                             ConflictStrategy::RenameLocalAndAdoptRemote,
-                                            is_public,
                                         )
                                         .await
                                         {
@@ -2279,4 +2277,3 @@ pub async fn sync_once_cas(
 
     Ok(())
 }
-
