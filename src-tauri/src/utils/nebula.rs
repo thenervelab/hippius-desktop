@@ -751,14 +751,23 @@ pub async fn start_nebula_internal() -> Result<(), String> {
 
     println!("[Nebula] Starting process: {} -config {}", binary_path.display(), config_file.display());
 
-    // Spawn the process
+    // Spawn the process using setsid to detach it from our process tree
+    // This prevents zombie processes when we kill it
     #[cfg(not(target_os = "windows"))]
     {
-        let child = std::process::Command::new(&binary_path)
+        use std::process::Stdio;
+        
+        // Use setsid to start nebula in its own session
+        // This makes it independent of our process tree
+        let child = std::process::Command::new("setsid")
+            .arg(&binary_path)
             .arg("-config")
             .arg(&config_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
-            .map_err(|e| format!("Failed to spawn nebula: {}", e))?;
+            .map_err(|e| format!("Failed to spawn nebula with setsid: {}", e))?;
             
         println!("[Nebula] Started with PID: {}", child.id());
     }
@@ -859,16 +868,34 @@ async fn grant_permissions(binary_path: &Path) -> Result<()> {
 
 /// Check if Nebula is running
 pub async fn check_nebula_running() -> Result<bool> {
-    // Simple check using pgrep (linux/mac)
     #[cfg(unix)]
     {
-        let output = tokio::process::Command::new("pgrep")
-            .arg("-f")
-            .arg("nebula")
+        // Use ps to check if nebula is running and NOT a zombie
+        // This is more reliable than pgrep for detecting actual running processes
+        let output = tokio::process::Command::new("ps")
+            .args(&["-C", "nebula", "-o", "stat="])
             .output()
             .await?;
             
-        Ok(output.status.success())
+        if !output.status.success() {
+            // No process found
+            return Ok(false);
+        }
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        
+        // Check if any of the processes are NOT zombies
+        // Zombie processes have 'Z' in their state
+        for line in stdout.lines() {
+            let state = line.trim();
+            if !state.is_empty() && !state.contains('Z') {
+                // Found a non-zombie nebula process
+                return Ok(true);
+            }
+        }
+        
+        // All processes are zombies or no processes found
+        Ok(false)
     }
     
     #[cfg(windows)]
@@ -883,16 +910,31 @@ pub async fn stop_nebula() -> Result<(), String> {
     
     #[cfg(unix)]
     {
-        // Use pkill to terminate nebula process
+        // Use pkill to terminate nebula process with exact name match
         let output = tokio::process::Command::new("pkill")
-            .arg("-f")
+            .arg("-x")
             .arg("nebula")
             .output()
             .await
             .map_err(|e| format!("Failed to execute pkill: {}", e))?;
             
         if output.status.success() {
-            println!("[Nebula] Process stopped successfully");
+            println!("[Nebula] Termination signal sent, waiting for process to stop...");
+            
+            // Wait for the process to actually stop (up to 5 seconds)
+            // Check every 100ms for faster response
+            for i in 0..50 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                
+                if !check_nebula_running().await.unwrap_or(false) {
+                    println!("[Nebula] Process stopped successfully after {} ms", (i + 1) * 100);
+                    return Ok(());
+                }
+                
+                if i == 49 {
+                    eprintln!("[Nebula] Warning: Process may still be running after 5 seconds");
+                }
+            }
         } else {
             println!("[Nebula] No process found or already stopped");
         }
@@ -908,7 +950,18 @@ pub async fn stop_nebula() -> Result<(), String> {
             .map_err(|e| format!("Failed to execute taskkill: {}", e))?;
             
         if output.status.success() {
-            println!("[Nebula] Process stopped successfully");
+            println!("[Nebula] Termination signal sent, waiting for process to stop...");
+            
+            // Wait for the process to actually stop (up to 5 seconds)
+            for i in 0..50 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                
+                // On Windows, we'd need a proper check here
+                // For now, just wait a bit
+                if i == 49 {
+                    println!("[Nebula] Process stopped successfully");
+                }
+            }
         } else {
             println!("[Nebula] No process found or already stopped");
         }

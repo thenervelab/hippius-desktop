@@ -50,6 +50,23 @@ pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
     .await
     .map_err(|e| e.to_string())?;
     
+    // Start or stop Nebula based on new status
+    if new_status {
+        // VPN enabled - start Nebula
+        println!("[VPN] VPN enabled, starting Nebula...");
+        if let Err(e) = crate::utils::nebula::start_nebula_internal().await {
+            eprintln!("[VPN] Failed to start Nebula: {}", e);
+            // Don't return error, just log it - the toggle still succeeded
+        }
+    } else {
+        // VPN disabled - stop Nebula
+        println!("[VPN] VPN disabled, stopping Nebula...");
+        if let Err(e) = crate::utils::nebula::stop_nebula().await {
+            eprintln!("[VPN] Failed to stop Nebula: {}", e);
+            // Don't return error, just log it - the toggle still succeeded
+        }
+    }
+    
     Ok(VpnStatus {
         is_enabled: new_status,
     })
