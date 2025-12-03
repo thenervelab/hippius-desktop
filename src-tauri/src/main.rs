@@ -137,6 +137,7 @@ fn main() {
             utils::nebula::get_nebula_ip,
             utils::nebula::get_nebula_stats,
             utils::nebula::get_nebula_status,
+            utils::nebula::get_nebula_binary_installed_status,
             commands::vpn_enabled::get_vpn_status,
             commands::vpn_enabled::toggle_vpn_status,
             utils::nebula::check_nebula_requirements,

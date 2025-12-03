@@ -22,6 +22,14 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             ],
         ),
         (
+            "nebula_binary_status",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("is_nebula_binary_installed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
+        (
             "user_profiles",
             &[
                 ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -358,6 +366,31 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                         }
                     } else {
                         println!("[Setup] VPN status entry already exists");
+                    }
+                }
+
+                // Initialize Nebula binary status if it doesn't exist
+                let nebula_binary_status_exists: Option<(i64,)> = sqlx::query_as(
+                    "SELECT COUNT(*) as count FROM nebula_binary_status"
+                )
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+                if let Some((count,)) = nebula_binary_status_exists {
+                    if count == 0 {
+                        println!("[Setup] No Nebula binary status found, creating default entry...");
+                        if let Err(e) = sqlx::query(
+                            "INSERT INTO nebula_binary_status (id, is_nebula_binary_installed) VALUES (1, FALSE)"
+                        )
+                        .execute(&pool)
+                        .await {
+                            eprintln!("[Setup] Failed to create default Nebula binary status: {}", e);
+                        } else {
+                            println!("[Setup] Default Nebula binary status created successfully");
+                        }
+                    } else {
+                        println!("[Setup] Nebula binary status entry already exists");
                     }
                 }
 

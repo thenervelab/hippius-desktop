@@ -459,6 +459,18 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
             if let Some(v) = latest_version {
                 save_installed_version(&v).await.map_err(|e| e.to_string())?;
             }
+            
+            // Update database to mark binary as installed
+            let pool = crate::DB_POOL.get().ok_or("Database not initialized".to_string())?;
+            if let Err(e) = sqlx::query(
+                "UPDATE nebula_binary_status SET is_nebula_binary_installed = TRUE, last_updated = CURRENT_TIMESTAMP WHERE id = 1"
+            )
+            .execute(pool)
+            .await {
+                eprintln!("[Nebula] Failed to update binary installation status: {}", e);
+            } else {
+                println!("[Nebula] Binary installation status updated in database");
+            }
         } else {
              return Err("Installation failed: Downloaded file not found".to_string());
         }
@@ -1275,8 +1287,6 @@ stats:
     Ok(())
 }
 
-
-
 #[tauri::command]
 pub async fn check_nebula_update() -> Result<Option<String>, String> {
     let installed = check_nebula_installation()
@@ -1293,3 +1303,19 @@ pub async fn check_nebula_update() -> Result<Option<String>, String> {
         _ => Ok(None),
     }
 }
+
+#[tauri::command]
+pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
+    let pool = crate::DB_POOL.get().ok_or("Database not initialized".to_string())?;
+    
+    let is_installed: bool = sqlx::query("SELECT is_nebula_binary_installed FROM nebula_binary_status WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|row| row.get("is_nebula_binary_installed"))
+        .unwrap_or(false);
+    
+    Ok(is_installed)
+}
+
+// TODO ! : use api call to get certificate and config and update config file path before saving
