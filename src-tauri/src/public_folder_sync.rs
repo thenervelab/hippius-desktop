@@ -327,7 +327,6 @@ pub async fn start_public_folder_sync(
         }
     };
 
-    let bucket_name = String::from("testing-public-bucket-again22222");
     let prunefile_id = prunefile_id(&sub_account, &path_hash, "public");
 
     let s3 = make_s3_client().await;
