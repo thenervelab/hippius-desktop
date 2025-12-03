@@ -96,9 +96,11 @@ pub fn pruned_key_for(prunefile_id: &str) -> String {
 
 pub fn prunefile_id(sub_account: &str, path_hash: &str, private: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(sub_account.as_bytes());
+    hasher.update(b"hippius_manifest_v1");
     hasher.update(b":");
     hasher.update(path_hash.as_bytes());
+    hasher.update(b":");
+    hasher.update(sub_account.as_bytes());
     hasher.update(b":");
     hasher.update(private.as_bytes());
     let digest = hasher.finalize();
@@ -600,7 +602,10 @@ async fn publish_conflict_object_with_bumps(
     let mut used_key = desired_key.to_string();
     let mut bump_idx: u32 = 2;
     let mut attempt = 0usize;
-    println!("[Sync] trying to upload conflict object with bumps: {}", used_key);
+    println!(
+        "[Sync] trying to upload conflict object with bumps: {}",
+        used_key
+    );
     loop {
         let res = client
             .put_object()
@@ -1219,7 +1224,10 @@ pub async fn sync_once_cas(
     println!("  - Manifest entries: {}", manifest.entries.len());
     println!("  - Prunefile ID: {}", prunefile_id);
     if prune.is_empty() && !local.is_empty() {
-        eprintln!("[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!", local.len());
+        eprintln!(
+            "[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!",
+            local.len()
+        );
     }
 
     /* ---- Phase 3 Preamble: REMOTE -> LOCAL (diff vs remote) --------------------------- */
@@ -1278,7 +1286,10 @@ pub async fn sync_once_cas(
             }
             Some(pe) => {
                 if !pe.present {
-                    println!("[Sync] Scheduling upload for '{}': marked as not present in prune", lk);
+                    println!(
+                        "[Sync] Scheduling upload for '{}': marked as not present in prune",
+                        lk
+                    );
                     schedule_upload(&mut ops_l2r, &mut scheduled_uploads, lk);
                 } else if (!pe.cid.is_empty() && pe.cid != lm.cid)
                     || (pe.cid.is_empty() && !lm.cid.is_empty())
@@ -1361,8 +1372,11 @@ pub async fn sync_once_cas(
     // Early-exit optimization: skip sync if no operations needed
     // Check this BEFORE executing ops to avoid unnecessary S3 API calls
     let ops_l2r_count = ops_l2r.len();
-    println!("[Sync] Phase 1 operations queued: {} uploads/deletes", ops_l2r_count);
-    
+    println!(
+        "[Sync] Phase 1 operations queued: {} uploads/deletes",
+        ops_l2r_count
+    );
+
     // === Execute Phase 1 ops ===
     for op in ops_l2r {
         match op {
@@ -1972,8 +1986,11 @@ pub async fn sync_once_cas(
 
     // Early-exit if no operations needed (both phases)
     let ops_adopt_count = ops_adopt.len();
-    println!("[Sync] Phase 3 operations queued: {} downloads/renames/deletes", ops_adopt_count);
-    
+    println!(
+        "[Sync] Phase 3 operations queued: {} downloads/renames/deletes",
+        ops_adopt_count
+    );
+
     if ops_l2r_count == 0 && ops_adopt_count == 0 {
         println!("[Sync] No changes detected, skipping sync cycle");
         return Ok(());
@@ -2260,4 +2277,3 @@ pub async fn sync_once_cas(
 
     Ok(())
 }
-
