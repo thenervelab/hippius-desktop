@@ -13,7 +13,7 @@ import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import Ipfs from "@/components/page-sections/files/ipfs";
 import { Icons } from "@/components/ui";
-import NebulaTest from "../../DemoIpfsUpload";
+// import NebulaTest from "../../DemoIpfsUpload";
 
 const Home: React.FC = () => {
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
@@ -67,7 +67,7 @@ const Home: React.FC = () => {
         subText="Secure & Encrypted Storage with Easy Sync and Real-Time Tracking"
       >
         <div className="mt-6">
-          <NebulaTest />
+          {/* <NebulaTest /> */}
           {/* Stats Cards */}
           <DetailList />
 

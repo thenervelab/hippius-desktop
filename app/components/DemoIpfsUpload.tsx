@@ -112,7 +112,7 @@ export default function NebulaTest() {
                 TX (Sent)
               </div>
               <div className="text-2xl font-mono text-blue-700 dark:text-blue-300">
-                {(stats.udp_tx_bytes / 1024 / 1024).toFixed(2)}{" "}
+                {(stats.udp_tx_bytes / 1024 / 1024).toFixed(6)}{" "}
                 <span className="text-sm font-sans text-gray-500">MB</span>
               </div>
             </div>
@@ -121,7 +121,7 @@ export default function NebulaTest() {
                 RX (Received)
               </div>
               <div className="text-2xl font-mono text-green-700 dark:text-green-300">
-                {(stats.udp_rx_bytes / 1024 / 1024).toFixed(2)}{" "}
+                {(stats.udp_rx_bytes / 1024 / 1024).toFixed(6)}{" "}
                 <span className="text-sm font-sans text-gray-500">MB</span>
               </div>
             </div>
