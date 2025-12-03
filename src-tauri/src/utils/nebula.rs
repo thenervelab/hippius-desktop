@@ -459,6 +459,28 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
                 save_installed_version(&v).await.map_err(|e| e.to_string())?;
             }
             
+            // Grant permissions to the binary (required for TUN/TAP device creation)
+            let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
+            println!("[Nebula] Checking and granting permissions...");
+            
+            match check_permissions(&binary_path).await {
+                Ok(has_perms) => {
+                    if !has_perms {
+                        println!("[Nebula] Binary needs permissions, requesting elevated access...");
+                        if let Err(e) = grant_permissions(&binary_path).await {
+                            eprintln!("[Nebula] Warning: Failed to grant permissions: {}. You may need to run the app with elevated privileges or grant permissions manually.", e);
+                        } else {
+                            println!("[Nebula] Permissions granted successfully");
+                        }
+                    } else {
+                        println!("[Nebula] Binary already has required permissions");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[Nebula] Warning: Failed to check permissions: {}", e);
+                }
+            }
+            
             // Update database to mark binary as installed
             let pool = crate::DB_POOL.get().ok_or("Database not initialized".to_string())?;
             if let Err(e) = sqlx::query(
@@ -514,6 +536,26 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
         println!("[Nebula] VPN is disabled in settings, skipping certificate setup");
         tokio::time::sleep(Duration::from_secs(2)).await;
         return Ok(());
+    }
+    
+    // Check and grant permissions if needed
+    println!("[Nebula] Verifying binary permissions...");
+    match check_permissions(&binary_path).await {
+        Ok(has_perms) => {
+            if !has_perms {
+                println!("[Nebula] Binary needs permissions, requesting elevated access...");
+                if let Err(e) = grant_permissions(&binary_path).await {
+                    eprintln!("[Nebula] Warning: Failed to grant permissions: {}. Nebula may fail to start.", e);
+                } else {
+                    println!("[Nebula] Permissions granted successfully");
+                }
+            } else {
+                println!("[Nebula] Binary has required permissions");
+            }
+        }
+        Err(e) => {
+            eprintln!("[Nebula] Warning: Failed to check permissions: {}", e);
+        }
     }
     
     // Setup certificates from API (using mock data for now)
