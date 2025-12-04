@@ -360,11 +360,6 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
         state.needs_update = needs_install;
     }
     
-    // If no update needed, sleep for UI consistency
-    if !needs_install {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-    
     Ok(())
 }
 
@@ -403,8 +398,6 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
             
             println!("[Nebula] Download complete");
         }
-    } else {
-        tokio::time::sleep(Duration::from_secs(2)).await;
     }
     
     Ok(())
@@ -507,8 +500,6 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
         } else {
             println!("[Nebula] Binary already installed, status updated in database");
         }
-        
-        tokio::time::sleep(Duration::from_secs(2)).await;
     }
     
     Ok(())
@@ -534,7 +525,6 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
 
     if !is_enabled {
         println!("[Nebula] VPN is disabled in settings, skipping certificate setup");
-        tokio::time::sleep(Duration::from_secs(2)).await;
         return Ok(());
     }
     
@@ -568,8 +558,6 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
     } else {
         println!("[Nebula] Certificates already exist, skipping setup");
     }
-    
-    tokio::time::sleep(Duration::from_secs(2)).await;
     
     Ok(())
 }
@@ -699,9 +687,6 @@ firewall:
 
 #[tauri::command]
 pub async fn finish_setup() -> Result<(), String> {
-    // Just a final delay for UI
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    
     // Try to start Nebula if enabled
     if let Err(e) = start_nebula_internal().await {
         println!("[Nebula] Failed to auto-start in finish_setup: {}", e);
