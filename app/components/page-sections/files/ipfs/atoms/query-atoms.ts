@@ -29,10 +29,11 @@ export const uploadFilesToIpfsAtom = atomWithMutation(() => {
       const uploadSingleFile = async (file: File) => {
         const credits = (await creditsChecker()).data;
 
-        if (!credits || credits <= BigInt(0)) {
-          throw new Error(
-            "Insufficient Credits. Please add credits to your account."
-          );
+        if (credits === undefined) {
+          throw new Error("Credits are still loading. Please try again in a moment.");
+        }
+        if (credits <= BigInt(0)) {
+          throw new Error("Insufficient Credits. Please add credits to your account.");
         }
         const formData = new FormData();
         formData.append("file", file, file.name);
@@ -172,10 +173,11 @@ export const uploadFileCIDsToIpfsAtom = atomWithMutation(() => {
       const uploadSingleFile = async (file: File) => {
         const credits = (await creditsChecker()).data;
 
-        if (!credits || credits <= BigInt(0)) {
-          throw new Error(
-            "Insufficient Credits. Please add credits to your account."
-          );
+        if (credits === undefined) {
+          throw new Error("Credits are still loading. Please try again in a moment.");
+        }
+        if (credits <= BigInt(0)) {
+          throw new Error("Insufficient Credits. Please add credits to your account.");
         }
         const formData = new FormData();
         formData.append("file", file, file.name);

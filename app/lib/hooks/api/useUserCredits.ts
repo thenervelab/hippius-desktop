@@ -14,7 +14,10 @@ export function useUserCredits() {
 
   return useQuery<bigint | undefined>({
     queryKey: ["user-credits", polkadotAddress],
-    enabled: !!polkadotAddress, // don’t run before we have an address
+    // Only run once the wallet address and a live API connection are present.
+    enabled: Boolean(polkadotAddress && api && isConnected),
+    refetchOnMount: "always",
+    refetchOnReconnect: true,
     refetchInterval: 30_000,
 
     queryFn: async () => {
