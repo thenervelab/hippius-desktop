@@ -1,11 +1,7 @@
 use crate::DB_POOL;
-use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 use crate::sync_shared::collect_files_recursively;
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use hex;
-use sp_core::Pair;
-use sp_core::crypto::Ss58Codec;
-use sp_core::sr25519;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -206,34 +202,12 @@ pub async fn copy_to_sync_and_add_to_db(
     };
     println!("File size in bytes: {}", file_size_in_bytes);
     if let Some(pool) = DB_POOL.get() {
-        // Get sub-account to construct bucket_name
-        let bucket_name = match sqlx::query_as::<_, (String,)>(
-            "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1",
-        )
-        .bind(account_id)
-        .fetch_optional(pool)
-        .await
-        {
-            Ok(Some((sub_account_seed_phrase,))) => {
-                // Try to decrypt if we have a key, otherwise use as-is
-                let maybe_key = load_encryption_key(pool).await;
-                let phrase = if let Some(key) = &maybe_key {
-                    decrypt_phrase(&sub_account_seed_phrase, key)
-                        .unwrap_or_else(|| sub_account_seed_phrase.clone())
-                } else {
-                    sub_account_seed_phrase
-                };
-                // Convert seed phrase to SS58 address
-                if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
-                    let ss58 = pair.public().to_ss58check();
-                    format!("{}-{}", ss58, if is_public { "public" } else { "private" })
-                } else {
-                    eprintln!("Failed to convert seed phrase to SS58 address");
-                    String::new()
-                }
-            }
-            _ => String::new(),
-        };
+        // For master-token auth, derive bucket name directly from account_id + scope (skip sub-accounts).
+        let bucket_name = format!(
+            "{}-{}",
+            account_id,
+            if is_public { "public" } else { "private" }
+        );
 
         // Check if file already exists in user_profiles
         let exists: Option<(String,)> = sqlx::query_as(
@@ -529,34 +503,12 @@ pub async fn copy_to_sync_folder(
         };
         println!("File size in bytes: {}", file_size_in_bytes);
         if let Some(pool) = DB_POOL.get() {
-            // Get sub-account to construct bucket_name
-            let bucket_name = match sqlx::query_as::<_, (String,)>(
-                "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1",
-            )
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await
-            {
-                Ok(Some((sub_account_seed_phrase,))) => {
-                    // Try to decrypt if we have a key, otherwise use as-is
-                    let maybe_key = load_encryption_key(pool).await;
-                    let phrase = if let Some(key) = &maybe_key {
-                        decrypt_phrase(&sub_account_seed_phrase, key)
-                            .unwrap_or_else(|| sub_account_seed_phrase.clone())
-                    } else {
-                        sub_account_seed_phrase
-                    };
-                    // Convert seed phrase to SS58 address
-                    if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
-                        let ss58 = pair.public().to_ss58check();
-                        format!("{}-{}", ss58, if is_public { "public" } else { "private" })
-                    } else {
-                        eprintln!("Failed to convert seed phrase to SS58 address");
-                        String::new()
-                    }
-                }
-                _ => String::new(),
-            };
+            // For master-token auth, derive bucket name directly from account_id + scope (skip sub-accounts).
+            let bucket_name = format!(
+                "{}-{}",
+                account_id,
+                if is_public { "public" } else { "private" }
+            );
 
             // Check if folder record already exists
             let exists: Option<(String,)> = sqlx::query_as(

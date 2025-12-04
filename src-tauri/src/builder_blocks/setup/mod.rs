@@ -88,6 +88,16 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
+        (
+            "objectstore_auth_scoped",
+            &[
+                ("owner", "TEXT PRIMARY KEY"),
+                ("temp_auth_key", "TEXT"),
+                ("master_access_key_id", "TEXT"),
+                ("master_secret", "TEXT"),
+                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
     ];
 
     for (table_name, columns) in TABLE_SCHEMAS {
@@ -142,18 +152,52 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sync_paths (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
             path TEXT NOT NULL,
-            type TEXT NOT NULL UNIQUE,
-            timestamp INTEGER NOT NULL
+            type TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            UNIQUE(owner, type)
         )",
     )
     .execute(pool)
     .await?;
 
+    // Ensure owner column exists for legacy installs
+    let cols = sqlx::query("PRAGMA table_info(sync_paths)")
+        .fetch_all(pool)
+        .await?;
+    let has_owner = cols.iter().any(|row| {
+        let name: String = row.get("name");
+        name == "owner"
+    });
+    if !has_owner {
+        sqlx::query("ALTER TABLE sync_paths ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await?;
+        // rebuild uniqueness via index
+        let _ = sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS sync_paths_owner_type_idx ON sync_paths(owner, type)",
+        )
+        .execute(pool)
+        .await;
+    }
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS wss_endpoint (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             endpoint TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Per-account bucket policies
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bucket_policies_scoped (
+            owner TEXT PRIMARY KEY,
+            sync_policy TEXT NOT NULL DEFAULT 'upload_only' CHECK(sync_policy IN ('mirror_local_deletes', 'restore_from_remote', 'local_only_deletes', 'upload_only')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )

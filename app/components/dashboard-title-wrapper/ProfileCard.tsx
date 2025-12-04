@@ -13,11 +13,11 @@ import BoxSimple from "../ui/icons/BoxSimple";
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 
 const ProfileCard: React.FC = () => {
-  const { oauthSession } = useWalletAuth();
+  const { oauthSession, polkadotAddress } = useWalletAuth();
   const { blockNumber, isConnected } = usePolkadotApi();
 
-  // Use substrate_address from OAuth session
-  const displayAddress = oauthSession?.substrateAddress;
+  // Prefer OAuth substrate address; fall back to locally-derived address for mnemonic logins.
+  const displayAddress = oauthSession?.substrateAddress || polkadotAddress || null;
 
   const handleCopyAddress = () => {
     if (!displayAddress) return;

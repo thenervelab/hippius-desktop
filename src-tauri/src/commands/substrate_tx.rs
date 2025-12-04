@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sp_core::{Pair, sr25519};
 use sqlx::Row;
+use crate::utils::account_key::account_key;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use subxt::tx::PairSigner;
@@ -71,6 +72,13 @@ pub struct SetSyncPathParams {
     pub mnemonic: String,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSyncPathParams {
+    pub is_public: bool,
+    pub account_id: Option<String>,
+}
+
 #[derive(Serialize, Debug)]
 pub struct SyncPathResult {
     pub path: String,
@@ -86,6 +94,7 @@ pub async fn set_sync_path(
     app_handle: tauri::AppHandle,
     params: SetSyncPathParams,
 ) -> Result<String, String> {
+    crate::utils::sync::set_active_account(&params.account_id);
     let path_type = if params.is_public {
         "public"
     } else {
@@ -95,8 +104,29 @@ pub async fn set_sync_path(
 
     if let Some(pool) = DB_POOL.get() {
         // Get the current sync path (if any) to detect changes
+        let owner = account_key(&params.account_id);
+        // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
+        if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
+        )
+        .bind(path_type)
+        .fetch_optional(pool)
+        .await
+        {
+            let _ = sqlx::query(
+                "REPLACE INTO sync_paths (id, owner, path, type, timestamp) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(legacy_id)
+            .bind(&owner)
+            .bind(&params.path)
+            .bind(path_type)
+            .bind(timestamp)
+            .execute(pool)
+            .await;
+        }
         let current_path: Option<String> =
-            sqlx::query_scalar("SELECT path FROM sync_paths WHERE type = ?")
+            sqlx::query_scalar("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
+                .bind(&owner)
                 .bind(path_type)
                 .fetch_optional(pool)
                 .await
@@ -155,9 +185,10 @@ pub async fn set_sync_path(
 
         // Rest of your existing code for database update and sync start...
         let res = sqlx::query(
-            "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
-             ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
+            "INSERT INTO sync_paths (owner, path, type, timestamp) VALUES (?, ?, ?, ?)
+             ON CONFLICT(owner, type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
         )
+        .bind(&owner)
         .bind(&params.path)
         .bind(path_type)
         .bind(timestamp)
@@ -376,7 +407,13 @@ pub async fn set_sync_path(
 
                 Ok(format!("Sync path for '{}' set successfully.", path_type))
             }
-            Err(e) => Err(format!("Failed to set sync path: {}", e)),
+            Err(e) => {
+                eprintln!(
+                    "[set_sync_path] DB write failed for owner {} type {}: {}",
+                    owner, path_type, e
+                );
+                Err(format!("Failed to set sync path: {}", e))
+            }
         }
     } else {
         Err("DB_POOL not initialized".to_string())
@@ -436,10 +473,11 @@ pub async fn transfer_balance_tauri(
 }
 
 // Add this internal function
-pub async fn get_sync_path_internal(is_public: bool) -> Result<SyncPathResult, String> {
+pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<SyncPathResult, String> {
     let path_type = if is_public { "public" } else { "private" };
     if let Some(pool) = DB_POOL.get() {
-        let rec = sqlx::query("SELECT path FROM sync_paths WHERE type = ?")
+        let rec = sqlx::query("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
+            .bind(owner)
             .bind(path_type)
             .fetch_optional(pool)
             .await
@@ -460,8 +498,22 @@ pub async fn get_sync_path_internal(is_public: bool) -> Result<SyncPathResult, S
 }
 
 #[tauri::command]
-pub async fn get_sync_path(is_public: bool) -> Result<SyncPathResult, String> {
-    get_sync_path_internal(is_public).await
+pub async fn get_sync_path(params: GetSyncPathParams) -> Result<SyncPathResult, String> {
+    // Allow camelCase param names from the frontend and fall back to the active account if none provided.
+    let account_id = match params
+        .account_id
+        .or_else(|| crate::utils::sync::current_account_id().ok())
+    {
+        Some(id) => id,
+        None => {
+            return Ok(SyncPathResult {
+                path: "".to_string(),
+                is_public: params.is_public,
+            })
+        }
+    };
+    let owner = account_key(&account_id);
+    get_sync_path_internal(params.is_public, &owner).await
 }
 
 #[tauri::command]

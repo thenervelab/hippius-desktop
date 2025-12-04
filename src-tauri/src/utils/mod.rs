@@ -8,3 +8,4 @@ pub mod nebula;
 pub mod s3_client;
 pub mod sync;
 pub mod objectstore_tokens;
+pub mod account_key;

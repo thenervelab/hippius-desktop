@@ -295,7 +295,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     (async () => {
       try {
         setIsLoadingPublicPath(true);
-        const publicfolderPath = await getPublicSyncPath();
+        const publicfolderPath = await getPublicSyncPath(polkadotAddress || undefined);
         setSelectedPublicFolderPath(publicfolderPath);
       } catch {
         console.error("Failed to load public sync folder");
@@ -303,14 +303,14 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         setIsLoadingPublicPath(false);
       }
     })();
-  }, []);
+  }, [polkadotAddress]);
 
   // Load private sync path
   useEffect(() => {
     (async () => {
       try {
         setIsLoadingPrivatePath(true);
-        const privatefolderPath = await getPrivateSyncPath();
+        const privatefolderPath = await getPrivateSyncPath(polkadotAddress || undefined);
         setSelectedPrivateFolderPath(privatefolderPath);
       } catch {
         console.error("Failed to load private sync folder");
@@ -318,7 +318,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         setIsLoadingPrivatePath(false);
       }
     })();
-  }, []);
+  }, [polkadotAddress]);
 
   // Check if sync path is configured
   useEffect(() => {
@@ -589,7 +589,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       (async () => {
         try {
           setIsLoadingPrivatePath(true);
-          const privatefolderPath = await getPrivateSyncPath();
+          const privatefolderPath = await getPrivateSyncPath(polkadotAddress || undefined);
           setSelectedPrivateFolderPath(privatefolderPath);
         } catch {
           console.error("Failed to reload private sync folder");
@@ -602,7 +602,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       (async () => {
         try {
           setIsLoadingPublicPath(true);
-          const publicfolderPath = await getPublicSyncPath();
+          const publicfolderPath = await getPublicSyncPath(polkadotAddress || undefined);
           setSelectedPublicFolderPath(publicfolderPath);
         } catch {
           console.error("Failed to reload public sync folder");
@@ -611,7 +611,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         }
       })();
     }
-  }, [syncPathRefreshTrigger]);
+  }, [syncPathRefreshTrigger, polkadotAddress]);
 
   // Computed values for current view
   const currentSyncPath = isPrivateView

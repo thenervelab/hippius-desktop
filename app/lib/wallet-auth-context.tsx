@@ -438,6 +438,7 @@ export function WalletAuthProvider({
         try {
           console.log("[WalletAuth] Requesting master token for S3 access...");
           await invoke("save_temp_auth_key_command", {
+            accountId: polkadotAddr,
             tempAuthKey: session.token,
           });
           console.log("[WalletAuth] ✅ Master token sent for S3 access");
@@ -476,6 +477,7 @@ export function WalletAuthProvider({
       try {
         console.log("[WalletAuth] Sending master token for S3 access...");
         await invoke("save_temp_auth_key_command", {
+          accountId: session.substrateAddress,
           tempAuthKey: session.token,
         });
         console.log("[WalletAuth] ✅ Master token obtained for S3 access");

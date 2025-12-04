@@ -2,25 +2,25 @@ import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 // Utility functions
-export async function getPublicSyncPath(): Promise<string> {
-  const result = await invoke<{ path: string }>("get_sync_path", { isPublic: true });
+export async function getPublicSyncPath(accountId?: string): Promise<string> {
+  const result = await invoke<{ path: string }>("get_sync_path", { params: { isPublic: true, accountId } });
   return result.path;
 }
 
-export async function getPrivateSyncPath(): Promise<string> {
-  const result = await invoke<{ path: string }>("get_sync_path", { isPublic: false });
+export async function getPrivateSyncPath(accountId?: string): Promise<string> {
+  const result = await invoke<{ path: string }>("get_sync_path", { params: { isPublic: false, accountId } });
   return result.path;
 }
 
-export async function setPublicSyncPath(path: string): Promise<string> {
+export async function setPublicSyncPath(path: string, accountId?: string, mnemonic?: string): Promise<string> {
   return await invoke<string>("set_sync_path", {
-    params: { path, isPublic: true },
+    params: { path, is_public: true, account_id: accountId, mnemonic },
   });
 }
 
-export async function setPrivateSyncPath(path: string): Promise<string> {
+export async function setPrivateSyncPath(path: string, accountId?: string, mnemonic?: string): Promise<string> {
   return await invoke<string>("set_sync_path", {
-    params: { path, is_public: false },
+    params: { path, is_public: false, account_id: accountId, mnemonic },
   });
 }
 

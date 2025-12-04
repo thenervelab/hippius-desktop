@@ -1,5 +1,6 @@
 use crate::utils::objectstore_tokens::{
-    ensure_master_token_env, get_temp_auth_key, save_master_token, save_temp_auth_key,
+    clear_objectstore_env, ensure_master_token_env, get_temp_auth_key, save_master_token,
+    save_temp_auth_key,
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -29,18 +30,19 @@ struct CreateMasterTokenBody<'a> {
 }
 
 #[tauri::command]
-pub async fn save_temp_auth_key_command(temp_auth_key: String) -> Result<(), String> {
-    println!("[Auth] Master Token:{})", temp_auth_key);
-    save_temp_auth_key(&temp_auth_key).await
+pub async fn save_temp_auth_key_command(account_id: String, temp_auth_key: String) -> Result<(), String> {
+    println!("[Auth] Master Token for {}:{}", account_id, temp_auth_key);
+    save_temp_auth_key(&account_id, &temp_auth_key).await
 }
 
 #[tauri::command]
 pub async fn request_master_token_command(
+    account_id: String,
     temp_auth_key: Option<String>,
 ) -> Result<MasterTokenResponse, String> {
     let key_to_use = match temp_auth_key {
         Some(k) if !k.trim().is_empty() => k,
-        _ => get_temp_auth_key()
+        _ => get_temp_auth_key(&account_id)
             .await?
             .ok_or_else(|| "No temporary auth key stored; pass one to this command".to_string())?,
     };
@@ -75,9 +77,9 @@ pub async fn request_master_token_command(
         .await
         .map_err(|e| format!("Failed to parse master token response: {}", e))?;
 
-    save_master_token(&parsed.access_key_id, &parsed.secret).await?;
+    save_master_token(&account_id, &parsed.access_key_id, &parsed.secret).await?;
     // Immediately place into environment for S3 client use
-    let _ = ensure_master_token_env().await;
+    let _ = ensure_master_token_env(&account_id).await;
 
     Ok(parsed)
 }
