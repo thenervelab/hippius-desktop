@@ -43,7 +43,7 @@ interface WalletContextType {
   login: (mnemonic: string) => Promise<void>;
   setOAuthSession: (
     session: import("@/app/lib/types/oAuth").OAuthSession
-  ) => void;
+  ) => Promise<void>;
   setSession: (
     mnemonic: string,
     logoutTimeInMinutes?: number
@@ -396,6 +396,19 @@ export function WalletAuthProvider({
         });
         syncInitialized.current = true;
       }
+
+      // Send master token for S3 access using the session token
+      if (session.token) {
+        try {
+          console.log("[WalletAuth] Requesting master token for S3 access...");
+          await invoke("save_temp_auth_key_command", {
+            tempAuthKey: session.token,
+          });
+          console.log("[WalletAuth] ✅ Master token sent for S3 access");
+        } catch (error) {
+          console.error("[WalletAuth] ❌ Failed to send master token:", error);
+        }
+      }
     } catch (error) {
       console.error("[WalletAuth] Login failed:", error);
       // Clear sensitive data on error
@@ -411,7 +424,7 @@ export function WalletAuthProvider({
   };
 
   // Set OAuth session from external OAuth flow
-  const setOAuthSession = (
+  const setOAuthSession = async (
     session: import("@/app/lib/types/oAuth").OAuthSession
   ) => {
     console.log("[WalletAuth] Setting OAuth session");
@@ -421,6 +434,19 @@ export function WalletAuthProvider({
     setIsAuthenticated(true);
 
     console.log("[WalletAuth] ✅ OAuth session persisted and state updated");
+
+    // Request master token for S3 access using the OAuth token
+    if (session.token) {
+      try {
+        console.log("[WalletAuth] Sending master token for S3 access...");
+        await invoke("save_temp_auth_key_command", {
+          tempAuthKey: session.token,
+        });
+        console.log("[WalletAuth] ✅ Master token obtained for S3 access");
+      } catch (error) {
+        console.error("[WalletAuth] ❌ Failed to obtain master token:", error);
+      }
+    }
   };
 
   // Full reset: clear session + wallet storage

@@ -30,6 +30,7 @@ struct CreateMasterTokenBody<'a> {
 
 #[tauri::command]
 pub async fn save_temp_auth_key_command(temp_auth_key: String) -> Result<(), String> {
+    println!("[Auth] Master Token:{})", temp_auth_key);
     save_temp_auth_key(&temp_auth_key).await
 }
 

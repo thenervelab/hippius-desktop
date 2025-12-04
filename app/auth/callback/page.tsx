@@ -91,7 +91,7 @@ export default function OAuthCallbackPage() {
                 console.log("[OAuthCallback] ✅ Session created successfully");
 
                 // Update auth context with OAuth session
-                setOAuthSession(session);
+                await setOAuthSession(session);
 
                 // Get redirect path from URL params, sessionStorage, or default
                 const urlRedirect = searchParams.get("redirect");

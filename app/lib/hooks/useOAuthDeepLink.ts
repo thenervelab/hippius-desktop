@@ -47,7 +47,7 @@ export function useOAuthDeepLink() {
                 console.log("[useOAuthDeepLink] Parsed:", params);
 
                 const session = await oauthService.handleCallback(params);
-                setOAuthSession(session);
+                await setOAuthSession(session);
 
                 const redirectPath = sessionStorage.getItem("oauth_redirect") || "/";
                 sessionStorage.removeItem("oauth_redirect");
