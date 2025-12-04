@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_yaml;
 use sqlx::Row;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
@@ -9,12 +10,16 @@ use sysinfo::Networks;
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::time::Duration;
+use tokio::task::JoinHandle;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 const NEBULA_GITHUB_API: &str = "https://api.github.com/repos/slackhq/nebula/releases/latest";
 const NEBULA_VERSION_FILE: &str = "nebula_version.txt";
+
+// Ping interval for keeping stats active (seconds)
+const PING_INTERVAL_SECS: u64 = 10;
 
 // State to share between setup commands
 struct NebulaSetupState {
@@ -30,6 +35,9 @@ static SETUP_STATE: Lazy<Mutex<NebulaSetupState>> = Lazy::new(|| {
         needs_update: false,
     })
 });
+
+// Handle for the background ping task
+static PING_TASK_HANDLE: Lazy<Mutex<Option<JoinHandle<()>>>> = Lazy::new(|| Mutex::new(None));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NebulaSetupPhase {
@@ -73,6 +81,17 @@ pub struct NebulaStatus {
     is_running: bool,
     has_interface: bool,
     message: String,
+}
+
+/// Struct to parse lighthouse hosts from config.yml
+#[derive(Debug, Deserialize)]
+struct NebulaConfig {
+    lighthouse: Option<LighthouseConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LighthouseConfig {
+    hosts: Option<Vec<String>>,
 }
 
 /// Get the Nebula binary directory in user's home
@@ -721,6 +740,8 @@ pub async fn start_nebula_internal() -> Result<(), String> {
 
     if check_nebula_running().await.unwrap_or(false) {
         println!("[Nebula] Already running");
+        // Start ping task even if already running (in case it was stopped)
+        start_ping_task();
         return Ok(());
     }
 
@@ -767,6 +788,9 @@ pub async fn start_nebula_internal() -> Result<(), String> {
             
         println!("[Nebula] Started with PID: {}", child.id());
     }
+
+    // Start the background ping task to keep stats active
+    start_ping_task();
 
     Ok(())
 }
@@ -889,9 +913,12 @@ pub async fn check_nebula_running() -> Result<bool> {
     }
 }
 
-/// Stop the Nebula process
+/// Stop the Nebula process and the background ping task
 pub async fn stop_nebula() -> Result<(), String> {
     println!("[Nebula] Stopping Nebula process...");
+    
+    // Stop the background ping task first
+    stop_ping_task();
     
     #[cfg(unix)]
     {
@@ -953,6 +980,115 @@ pub async fn stop_nebula() -> Result<(), String> {
     }
     
     Ok(())
+}
+
+/// Read lighthouse IPs from the Nebula config file
+async fn read_lighthouse_ips_from_config() -> Vec<String> {
+    let config_dir = match get_nebula_config_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("[Nebula Ping] Failed to get config dir: {}", e);
+            return Vec::new();
+        }
+    };
+    
+    let config_file = config_dir.join("config.yml");
+    
+    if !config_file.exists() {
+        eprintln!("[Nebula Ping] Config file not found: {}", config_file.display());
+        return Vec::new();
+    }
+    
+    let content = match tokio::fs::read_to_string(&config_file).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[Nebula Ping] Failed to read config file: {}", e);
+            return Vec::new();
+        }
+    };
+    
+    let config: NebulaConfig = match serde_yaml::from_str(&content) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[Nebula Ping] Failed to parse config file: {}", e);
+            return Vec::new();
+        }
+    };
+    
+    config.lighthouse
+        .and_then(|l| l.hosts)
+        .unwrap_or_default()
+}
+
+/// Start the background ping task to keep VPN stats active
+fn start_ping_task() {
+    // Stop any existing ping task first
+    stop_ping_task();
+    
+    let handle = tokio::spawn(async {
+        println!("[Nebula Ping] Starting background ping task (interval: {}s)", PING_INTERVAL_SECS);
+        
+        // Wait a bit for Nebula to fully initialize
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        
+        // Read lighthouse IPs from config
+        let lighthouse_ips = read_lighthouse_ips_from_config().await;
+        
+        if lighthouse_ips.is_empty() {
+            eprintln!("[Nebula Ping] No lighthouse IPs found in config, ping task will not run");
+            return;
+        }
+        
+        println!("[Nebula Ping] Loaded {} lighthouse IPs from config: {:?}", lighthouse_ips.len(), lighthouse_ips);
+        
+        let mut lighthouse_index = 0;
+        
+        loop {
+            // Rotate through lighthouse IPs
+            let target_ip = &lighthouse_ips[lighthouse_index];
+            lighthouse_index = (lighthouse_index + 1) % lighthouse_ips.len();
+            
+            // Perform ping
+            #[cfg(unix)]
+            {
+                let _ = tokio::process::Command::new("ping")
+                    .args(&["-c", "1", "-W", "2", target_ip])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await;
+            }
+            
+            #[cfg(windows)]
+            {
+                let _ = tokio::process::Command::new("ping")
+                    .args(&["-n", "1", "-w", "2000", target_ip])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await;
+            }
+            
+            // Wait before next ping
+            tokio::time::sleep(Duration::from_secs(PING_INTERVAL_SECS)).await;
+        }
+    });
+    
+    // Store the handle
+    if let Ok(mut guard) = PING_TASK_HANDLE.lock() {
+        *guard = Some(handle);
+        println!("[Nebula Ping] Background ping task started");
+    }
+}
+
+/// Stop the background ping task
+fn stop_ping_task() {
+    if let Ok(mut guard) = PING_TASK_HANDLE.lock() {
+        if let Some(handle) = guard.take() {
+            handle.abort();
+            println!("[Nebula Ping] Background ping task stopped");
+        }
+    }
 }
 
 #[tauri::command]
