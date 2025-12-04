@@ -3,6 +3,8 @@ use dirs;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Manager, Wry};
+#[cfg(target_os = "linux")]
+use tauri_plugin_deep_link::DeepLinkExt;
 
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Drop faulty is_first_run table if it exists (old schema with CHECK (id = 1))
@@ -229,6 +231,16 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
             println!("[Setup] .setup() closure called in setup.rs");
+
+            // Register deep links for Linux at runtime (required for dev)
+            #[cfg(target_os = "linux")]
+            {
+                println!("[Setup] Registering deep links for Linux...");
+                match app.deep_link().register_all() {
+                    Ok(_) => println!("[Setup] Deep links registered successfully for Linux"),
+                    Err(e) => eprintln!("[Setup] Failed to register deep links: {}", e),
+                }
+            }
 
             let _handle = app.handle().clone();
             let win = app.get_webview_window("main").expect("main window not found");

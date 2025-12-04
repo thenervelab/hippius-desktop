@@ -49,6 +49,8 @@ use std::sync::Arc;
 use tauri::{Builder, Manager, Emitter, Listener};
 use tokio::sync::Mutex;
 use utils::file_operations::delete_and_unpin_file_by_name;
+#[cfg(target_os = "linux")]
+use tauri_plugin_deep_link::DeepLinkExt;
 
 // Register the new  Tauri command so the frontend can invoke it.
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
@@ -97,8 +99,9 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            println!("Another instance attempted to start");
+        // Single instance plugin with deep link integration - must be BEFORE deep_link plugin
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            println!("[SingleInstance] Another instance attempted to start with argv: {:?}", argv);
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
