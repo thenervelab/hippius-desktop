@@ -55,9 +55,8 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
     setLoggingIn(true);
 
     try {
-      await clearHippiusDesktopDB();
-
       await login(mnemonic.trim());
+      await clearHippiusDesktopDB();
       // Check if this is the first time and add welcome notification
       if (await isFirstTime()) {
         const notifications = await listNotifications(1);

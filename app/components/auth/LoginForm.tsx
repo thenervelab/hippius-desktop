@@ -82,11 +82,18 @@ export function LoginForm({
             // setDlRaw(url);
 
             try {
-                // Check if this deep link has already been processed
-                const lastProcessedUrl = sessionStorage.getItem("last_processed_deep_link");
-                if (lastProcessedUrl === url) {
+                // Check if this deep link has already been processed (use localStorage for persistence across restarts)
+                const lastProcessedUrl = localStorage.getItem("last_processed_deep_link");
+                const lastProcessedTime = localStorage.getItem("last_processed_deep_link_time");
+                
+                // Consider a deep link "stale" if it was processed more than 5 minutes ago
+                // This prevents re-processing the same deep link on app restart
+                const isStaleDeepLink = lastProcessedTime && 
+                    (Date.now() - parseInt(lastProcessedTime, 10)) < 5 * 60 * 1000; // 5 minutes
+                
+                if (lastProcessedUrl === url && isStaleDeepLink) {
                     // addDlLog("⚠️ This deep link was already processed, skipping");
-                    console.log("[LoginForm] Deep link already processed, skipping:", url);
+                    console.log("[LoginForm] Deep link already processed recently, skipping:", url);
                     return;
                 }
 
@@ -97,6 +104,21 @@ export function LoginForm({
                     console.log("[LoginForm] Skipping initial deep link due to manual navigation");
                     sessionStorage.removeItem("manual_navigation");
                     return;
+                }
+                
+                // Check if user is already authenticated - don't process deep links if already logged in
+                const storedSession = localStorage.getItem("hippius_oauth_session");
+                const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
+                if (storedSession && storedExpiry) {
+                    const expiryTime = isNaN(Number(storedExpiry))
+                        ? new Date(storedExpiry).getTime()
+                        : parseInt(storedExpiry, 10);
+                    
+                    if (Date.now() < expiryTime) {
+                        console.log("[LoginForm] User already has valid session, redirecting to home instead of processing deep link");
+                        router.replace("/");
+                        return;
+                    }
                 }
 
                 const urlObj = new URL(url);
@@ -150,8 +172,9 @@ export function LoginForm({
                     // addDlLog(`✅ Redirecting to: ${callbackUrl}`);
                     console.log("[LoginForm] Redirecting to callback page:", callbackUrl);
 
-                    // Mark this deep link as processed BEFORE redirecting
-                    sessionStorage.setItem("last_processed_deep_link", url);
+                    // Mark this deep link as processed BEFORE redirecting (use localStorage for persistence)
+                    localStorage.setItem("last_processed_deep_link", url);
+                    localStorage.setItem("last_processed_deep_link_time", Date.now().toString());
                     console.log("[LoginForm] Marked deep link as processed");
 
                     // Redirect to callback page

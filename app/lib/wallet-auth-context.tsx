@@ -100,6 +100,9 @@ export function WalletAuthProvider({
         if (typeof window !== "undefined") {
           localStorage.removeItem("hippius_oauth_session");
           localStorage.removeItem("hippius_oauth_session_expiry");
+          // Clear deep link tracking to prevent stale deep links from being processed
+          localStorage.removeItem("last_processed_deep_link");
+          localStorage.removeItem("last_processed_deep_link_time");
         }
       } catch (error) {
         console.error("Failed to cleanup sync on logout:", error);
@@ -162,7 +165,10 @@ export function WalletAuthProvider({
         );
 
         if (storedSession && storedExpiry) {
-          const expiryTime = parseInt(storedExpiry, 10);
+          // Parse expiry - handle both ISO string and timestamp formats
+          const expiryTime = isNaN(Number(storedExpiry))
+            ? new Date(storedExpiry).getTime()
+            : parseInt(storedExpiry, 10);
 
           // Check if session is still valid
           if (Date.now() < expiryTime) {
@@ -176,11 +182,43 @@ export function WalletAuthProvider({
               // Restore OAuth session state
               setOAuthSessionState(oauthSessionData);
               setPolkadotAddress(oauthSessionData.substrateAddress || null);
-              setAuthType("oauth");
+              setAuthType(
+                oauthSessionData.provider === "mnemonic" ? "mnemonic" : "oauth"
+              );
               setIsAuthenticated(true);
 
+              // For mnemonic-based auth, also restore mnemonic from database for sync
+              if (oauthSessionData.provider === "mnemonic") {
+                const mnemonicSession = await getSession();
+                if (mnemonicSession && mnemonicSession.mnemonic) {
+                  console.log(
+                    "[WalletAuth] Restoring mnemonic session for sync"
+                  );
+                  await cryptoWaitReady();
+                  const keyring = new Keyring({ type: "sr25519" });
+                  const pair = keyring.addFromMnemonic(
+                    mnemonicSession.mnemonic
+                  );
+
+                  setMnemonic(mnemonicSession.mnemonic);
+                  setWalletManager({ polkadotPair: pair });
+
+                  // Initialize sync
+                  if (!syncInitialized.current) {
+                    await invoke("initialize_sync", {
+                      accountId: pair.address,
+                      mnemonic: mnemonicSession.mnemonic,
+                    });
+                    syncInitialized.current = true;
+                  }
+                  console.log(
+                    "[WalletAuth] ✅ Mnemonic session restored with sync"
+                  );
+                }
+              }
+
               console.log("[WalletAuth] ✅ OAuth session restored");
-              return; // Skip mnemonic session check
+              return; // Skip mnemonic-only session check
             } catch (error) {
               console.error(
                 "[WalletAuth] Failed to restore OAuth session:",
@@ -198,9 +236,9 @@ export function WalletAuthProvider({
         }
       }
 
-      // Check for mnemonic session
+      // Check for mnemonic session (legacy or fallback)
       const session = await getSession();
-      if (!session) {
+      if (!session || !session.mnemonic) {
         setSessionTimeRemaining(null);
         return;
       }
@@ -387,6 +425,7 @@ export function WalletAuthProvider({
       setOAuthSessionState(session);
       setAuthType("mnemonic");
       setIsAuthenticated(true);
+      await saveSession(inputMnemonic, -1);
 
       // Initialize sync with the mnemonic
       if (!syncInitialized.current) {

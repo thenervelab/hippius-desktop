@@ -13,11 +13,17 @@ import { oauthService } from "@/app/lib/services/oAuthService";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2, AlertCircle } from "lucide-react";
 import type { OAuthCallbackParams } from "@/app/lib/types/oAuth";
+import {
+    addNotification,
+    isFirstTime,
+    listNotifications,
+} from "@/app/lib/helpers/notificationsDb";
+import { clearHippiusDesktopDB } from "@/app/lib/helpers/hippiusDesktopDB";
 
 export default function OAuthCallbackPage() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { setOAuthSession } = useWalletAuth();
+    const { setOAuthSession, isAuthenticated } = useWalletAuth();
     const [error, setError] = useState<string | null>(null);
     const hasProcessed = useRef(false);
 
@@ -32,6 +38,27 @@ export default function OAuthCallbackPage() {
             try {
                 hasProcessed.current = true;
                 console.log("[OAuthCallback] Processing OAuth callback");
+
+                // FIRST: Check if user is already authenticated via localStorage
+                // This check happens before processing any parameters to handle app restarts
+                const storedSession = localStorage.getItem("hippius_oauth_session");
+                const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
+                
+                if (storedSession && storedExpiry) {
+                    const expiryTime = isNaN(Number(storedExpiry))
+                        ? new Date(storedExpiry).getTime()
+                        : parseInt(storedExpiry, 10);
+                    
+                    if (Date.now() < expiryTime) {
+                        console.log("[OAuthCallback] Valid OAuth session already exists, redirecting to home");
+                        router.replace("/");
+                        return;
+                    } else {
+                        console.log("[OAuthCallback] OAuth session expired, clearing and continuing");
+                        localStorage.removeItem("hippius_oauth_session");
+                        localStorage.removeItem("hippius_oauth_session_expiry");
+                    }
+                }
 
                 // Fix malformed URL with multiple question marks (backend issue workaround)
                 // Example: ?source=desktop?code=xxx should be ?source=desktop&code=xxx
@@ -63,6 +90,14 @@ export default function OAuthCallbackPage() {
                     error_description: paramsToUse.get("error_description") || undefined,
                 };
 
+                // If no token and no code, user landed here without valid OAuth params
+                // Since we already checked for valid session at the start, redirect to login
+                if (!params.token && !params.code && !params.error) {
+                    console.log("[OAuthCallback] No OAuth parameters found, redirecting to login");
+                    router.replace("/login");
+                    return;
+                }
+
                 // Extract user data if provided (also check 'id' as fallback for 'user_id')
                 const userId = paramsToUse.get("user_id") || paramsToUse.get("id");
                 const username = paramsToUse.get("username");
@@ -93,6 +128,22 @@ export default function OAuthCallbackPage() {
                 // Update auth context with OAuth session
                 await setOAuthSession(session);
 
+                // Clear DB and check if this is the first time to add welcome notification
+                await clearHippiusDesktopDB();
+                if (await isFirstTime()) {
+                    const notifications = await listNotifications(1);
+                    if (notifications.length === 0) {
+                        await addNotification({
+                            notificationType: "Hippius",
+                            notificationSubtype: "Welcome",
+                            notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
+                            notificationDescription: `🎉 Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you're spending. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.`,
+                            notificationLinkText: "Check Out",
+                            notificationLink: "/files",
+                        });
+                    }
+                }
+
                 // Get redirect path from URL params, sessionStorage, or default
                 const urlRedirect = searchParams.get("redirect");
                 const storedRedirect = sessionStorage.getItem("oauth_redirect");
@@ -100,7 +151,9 @@ export default function OAuthCallbackPage() {
 
                 // Clean up - remove all OAuth-related session storage
                 sessionStorage.removeItem("oauth_redirect");
-                sessionStorage.removeItem("last_processed_deep_link");
+                // Clear deep link tracking from localStorage
+                localStorage.removeItem("last_processed_deep_link");
+                localStorage.removeItem("last_processed_deep_link_time");
                 console.log("[OAuthCallback] Cleared deep link processing flag");
 
                 console.log("[OAuthCallback] Redirecting to:", redirectPath);
@@ -139,11 +192,12 @@ export default function OAuthCallbackPage() {
                             <button
                                 onClick={() => {
                                     // Clear the deep link flag so it doesn't re-trigger
-                                    sessionStorage.removeItem("last_processed_deep_link");
+                                    localStorage.removeItem("last_processed_deep_link");
+                                    localStorage.removeItem("last_processed_deep_link_time");
                                     // Mark as manual navigation to prevent deep link re-processing
                                     sessionStorage.setItem("manual_navigation", "true");
                                     console.log("[OAuthCallback] Cleared deep link flag and set manual navigation, navigating to login");
-                                    router.push("/login");
+                                    router.replace("/login");
                                 }}
                                 className="px-6 py-3 bg-primary-50 text-white rounded-lg font-medium hover:bg-primary-60 transition-colors"
                             >
