@@ -2,7 +2,7 @@
 import React from "react";
 import { toast } from "sonner";
 import BoxSimple from "@/components/ui/icons/BoxSimple";
-import { Icons } from "@/components/ui";
+import { Icons, ThreeDotLoader } from "@/components/ui";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { openAppLink } from "@/lib/utils/links";
@@ -10,7 +10,7 @@ import dynamic from "next/dynamic";
 const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
 const ProfileCard: React.FC = () => {
   const { polkadotAddress } = useWalletAuth();
-  const { blockNumber, isConnected } = usePolkadotApi();
+  const { blockNumber, isConnected, isConnecting } = usePolkadotApi();
 
   const handleCopyAddress = () => {
     if (!polkadotAddress) return;
@@ -52,20 +52,23 @@ const ProfileCard: React.FC = () => {
                 onClick={handleCopyAddress}
                 className=" rounded-l-full font-semibold"
               >
-
                 <span className="cursor-pointer">
                   {polkadotAddress.slice(0, 6)}...
                   {polkadotAddress.slice(polkadotAddress.length - 5)}
                 </span>
-
               </button>
-
             </div>
             <div className="flex gap-x-1 items-center">
               <BoxSimple className="size-4" />
-              {isConnected && (
+              {isConnecting && !isConnected ? (
+                <ThreeDotLoader dotClassName="bg-grey-50" />
+              ) : isConnected ? (
                 <span className="text-success-40 text-xs font-semibold">
-                  # {blockNumber}
+                  # {blockNumber?.toString()}
+                </span>
+              ) : (
+                <span className="text-grey-50 text-xs font-semibold">
+                  Disconnected
                 </span>
               )}
             </div>
@@ -77,7 +80,7 @@ const ProfileCard: React.FC = () => {
         >
           <Icons.Send className="size-4 text-primary-10" />
         </button>
-      </div >
+      </div>
     );
   }
 };
