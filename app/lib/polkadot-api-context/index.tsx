@@ -5,7 +5,6 @@ import { ApiPromise, WsProvider } from "@polkadot/api";
 import { RECONNECT_INTERVAL, MAX_RETRIES } from "@/config/constants";
 import { useAtomValue, useSetAtom } from "jotai";
 import { polkadotApiAtom } from "@/lib/global-atoms/polkadotApiAtom";
-import { phaseAtom } from "@/components/splash-screen/atoms";
 import { invoke } from "@tauri-apps/api/core";
 
 export const usePolkadotApi = () => {
@@ -14,8 +13,6 @@ export const usePolkadotApi = () => {
 
 export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   const setState = useSetAtom(polkadotApiAtom);
-  const appPhase = useAtomValue(phaseAtom);
-  const isAppReady = appPhase === "ready";
   const [wssEndpoint, setWssEndpoint] = useState<string | null>(null);
 
   const apiRef = useRef<ApiPromise | null>(null);
@@ -79,9 +76,9 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   }, [setState]);
 
   const connect = useCallback(async () => {
-    // Don't try to connect if the app isn't ready yet or we don't have an endpoint
-    if (!isAppReady || !wssEndpoint) {
-      console.log("Skipping connection: app not ready yet or missing endpoint");
+    // Don't try to connect if we don't have an endpoint
+    if (!wssEndpoint) {
+      console.log("Skipping connection: missing endpoint");
       return;
     }
 
@@ -115,6 +112,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
 
       wsProvider.on("connected", () => {
         console.log("WebSocket connected!");
+
         retryCountRef.current = 0; // Reset retry count on successful connection
       });
 
@@ -176,21 +174,20 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         }
       }
     }
-  }, [cleanup, setState, isAppReady, wssEndpoint]);
+  }, [cleanup, setState, wssEndpoint]);
 
-  // Connect when ready and when the endpoint changes
+  // Connect when endpoint is available
   useEffect(() => {
     mountedRef.current = true;
 
-    // Only try to connect if the app is ready and we have an endpoint
-    if (isAppReady && wssEndpoint && !connectionInitiatedRef.current) {
+    // Only try to connect if we have an endpoint
+    if (wssEndpoint && !connectionInitiatedRef.current) {
       connectionInitiatedRef.current = true;
       connect();
     }
 
     // Reconnect if the endpoint changes
     if (
-      isAppReady &&
       wssEndpoint &&
       connectionInitiatedRef.current &&
       wsProviderRef.current &&
@@ -204,7 +201,7 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
       mountedRef.current = false;
       cleanup();
     };
-  }, [connect, cleanup, isAppReady, wssEndpoint]);
+  }, [connect, cleanup, wssEndpoint]);
 
   return children;
 }
