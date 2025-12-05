@@ -67,7 +67,10 @@ struct NebulaCert {
 
 #[derive(Debug, Deserialize)]
 struct NebulaCertDetails {
+    #[serde(default)]
     ips: Vec<String>,
+    #[serde(default)]
+    networks: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1126,12 +1129,23 @@ pub async fn get_nebula_ip() -> Result<String, String> {
         return Err(format!("Failed to read certificate: {}", String::from_utf8_lossy(&output.stderr)));
     }
     
-    let cert: NebulaCert = serde_json::from_slice(&output.stdout)
+    // The output is an array of certificates
+    let certs: Vec<NebulaCert> = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("Failed to parse certificate JSON: {}", e))?;
-        
-    cert.details.ips.first()
-        .cloned()
-        .ok_or_else(|| "No IP found in certificate".to_string())
+    
+    let cert = certs.first()
+        .ok_or_else(|| "No certificate found in output".to_string())?;
+    
+    // Try networks first (newer format), then fall back to ips (older format)
+    let ip_cidr = cert.details.networks.first()
+        .or_else(|| cert.details.ips.first())
+        .ok_or_else(|| "No IP found in certificate".to_string())?;
+    
+    // Extract IP from CIDR notation (e.g., "100.64.0.31/10" -> "100.64.0.31")
+    let ip = ip_cidr.split('/').next()
+        .ok_or_else(|| "Invalid IP format in certificate".to_string())?;
+    
+    Ok(ip.to_string())
 }
 
 #[tauri::command]
