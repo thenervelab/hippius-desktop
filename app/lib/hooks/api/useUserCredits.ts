@@ -1,45 +1,60 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useQuery } from "@tanstack/react-query";
+import { ensureBillingAuth } from "./useBillingAuth";
+import { getApiAuth } from "@/app/lib/helpers/sessionStore";
 
 /**
- * Read `credits.freeCredits(AccountId32) -> u128`
- * Returns bigint   → on-chain value
- * Returns undefined → api not ready, Option::None, or any error
+ * Fetch user credits from API
+ * Returns bigint   → balance value (scaled to 18 decimals)
+ * Returns undefined → no token or error
  */
 export function useUserCredits() {
-  const { api, isConnected } = usePolkadotApi();
   const { polkadotAddress } = useWalletAuth();
 
   return useQuery<bigint | undefined>({
     queryKey: ["user-credits", polkadotAddress],
-    // Only run once the wallet address and a live API connection are present.
-    enabled: Boolean(polkadotAddress && api && isConnected),
-    refetchOnMount: "always",
-    refetchOnReconnect: true,
     refetchInterval: 30_000,
+    refetchOnWindowFocus: false,
+    enabled: !!polkadotAddress,
 
     queryFn: async () => {
-      /* ── Guard: API not ready ───────────────────────────── */
-      if (!api || !isConnected || !polkadotAddress) return undefined;
-
-      try {
-        const raw = await api.query.credits.freeCredits(polkadotAddress);
-
-        /* Option<Balance> case (toggle in explorer shows “include option”) */
-        if ("isSome" in raw) {
-          if (!raw.isSome) return undefined; // Option::None → undefined
-          return BigInt((raw as any).unwrap().toString());
-        }
-
-        /* Plain u128 balance */
-        return BigInt(raw.toString());
-      } catch (err) {
-        console.error("freeCredits query failed:", err);
-        /* any error → treat as no data */
-        return undefined;
+      if (!polkadotAddress) {
+        throw new Error("No Polkadot address available");
       }
+
+      // Ensure we have a valid billing auth token
+      const authResult = await ensureBillingAuth();
+      if (!authResult.ok) {
+        throw new Error(authResult.error || "Failed to authenticate for billing");
+      }
+
+      // Get the token from storage
+      const apiAuth = await getApiAuth();
+      if (!apiAuth?.token) {
+        throw new Error("No API token available after authentication");
+      }
+
+      const response = await fetch(
+        `https://api.hippius.com/api/billing/credits/balance/`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Token ${apiAuth.token}`,
+            Accept: "application/json",
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch credits balance: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Convert balance string to bigint (scaled to 18 decimals)
+      const balanceStr = data.balance || "0";
+      const balance = parseFloat(balanceStr) * Math.pow(10, 18);
+      return BigInt(Math.floor(balance));
     },
   });
 }
