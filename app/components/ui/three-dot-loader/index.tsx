@@ -3,7 +3,10 @@ import classes from "./three-dot-loader.module.css";
 
 const LOADING_INDICATOR_ANIMATION_DURATION = 1;
 
-const ThreeDotLoader: React.FC<{ className?: string }> = ({ className }) => (
+const ThreeDotLoader: React.FC<{
+  className?: string;
+  dotClassName?: string;
+}> = ({ className, dotClassName }) => (
   <div className={cn("flex items-center gap-x-1", className)}>
     {[1, 2, 3].map((value) => (
       <div
@@ -15,8 +18,9 @@ const ThreeDotLoader: React.FC<{ className?: string }> = ({ className }) => (
         }}
         key={value}
         className={cn(
-          "h-1 w-1 rounded bg-black",
-          classes.loadingIndicatorCircle
+          "h-2 w-2 rounded-full bg-primary-50",
+          classes.loadingIndicatorCircle,
+          dotClassName
         )}
       />
     ))}

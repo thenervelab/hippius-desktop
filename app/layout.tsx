@@ -40,13 +40,13 @@ export default function RootLayout({
               <PreAuthProvider>
                 <NextTopLoader color="#3167DD" showSpinner={false} />
                 <NavigationLoaderProvider>
-                  <Suspense fallback={<PageLoader />}>
-                    <SplashWrapper skipSplash={false}>
+                  <SplashWrapper skipSplash={false}>
+                    <Suspense fallback={<PageLoader />}>
                       <div className="flex min-h-screen h-screen">
                         {children}
                       </div>
-                    </SplashWrapper>
-                  </Suspense>
+                    </Suspense>
+                  </SplashWrapper>
 
                   <Toaster
                     position="bottom-right"
