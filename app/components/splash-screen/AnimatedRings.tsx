@@ -6,7 +6,13 @@ const MIDDLE_RING_DIAMETER = MIDDLE_RING_RADIUS * 2;
 const INNER_RING_RADIUS = 180;
 const INNER_RING_DIAMETER = INNER_RING_RADIUS * 2;
 
-export default function AnimatedRings() {
+type AnimatedRingsProps = {
+  showProgressBar?: boolean;
+};
+
+export default function AnimatedRings({
+  showProgressBar = true,
+}: AnimatedRingsProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [blurDiameter, setBlurDiameter] = useState(0);
   const [innerBlurDiameter, setInnerBlurDiameter] = useState(0);
@@ -115,18 +121,20 @@ export default function AnimatedRings() {
         </g>
 
         {/* INNER ring, rotated initial angle */}
-        <g style={{ transform: "rotate(-33deg)" }} className="origin-center">
-          <g className="animate-spin-fast origin-center">
-            <circle
-              cx={500}
-              cy={500}
-              r={INNER_RING_RADIUS}
-              fill="none"
-              stroke="url(#fadeVerticalInner)"
-              strokeWidth={4}
-            />
+        {showProgressBar && (
+          <g style={{ transform: "rotate(-33deg)" }} className="origin-center">
+            <g className="animate-spin-fast origin-center">
+              <circle
+                cx={500}
+                cy={500}
+                r={INNER_RING_RADIUS}
+                fill="none"
+                stroke="url(#fadeVerticalInner)"
+                strokeWidth={4}
+              />
+            </g>
           </g>
-        </g>
+        )}
       </svg>
     </div>
   );

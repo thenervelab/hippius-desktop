@@ -69,7 +69,9 @@ const SplashScreen = () => {
         </div>
         <InView triggerOnce>
           {({ inView, ref }) => (
-            <div ref={ref}>{inView && <AnimatedRings />}</div>
+            <div ref={ref}>
+              {inView && <AnimatedRings showProgressBar={showProgressBar} />}
+            </div>
           )}
         </InView>
         {/* No other UI elements when update dialog is open */}
@@ -116,7 +118,9 @@ const SplashScreen = () => {
       </div>
       <InView triggerOnce>
         {({ inView, ref }) => (
-          <div ref={ref}>{inView && <AnimatedRings />}</div>
+          <div ref={ref}>
+            {inView && <AnimatedRings showProgressBar={showProgressBar} />}
+          </div>
         )}
       </InView>
       {!showProgress && (
@@ -140,11 +144,20 @@ const SplashScreen = () => {
           )}
         </InView>
       )}
-      {showProgress && (
+      {showProgress && showProgressBar && (
         <AnimatedProgressIcon
           status={progressData?.status}
           icon={progressData?.icon}
           step={isUpdateCheckPhase ? -1 : step}
+          showProgressBar={showProgressBar}
+        />
+      )}
+      {showProgress && !showProgressBar && (
+        <AnimatedProgressIcon
+          status={progressData?.status}
+          icon={<Icons.SplashHippiusLogo className="h-[73px] w-[74px]" />}
+          step={isUpdateCheckPhase ? -1 : step}
+          showProgressBar={showProgressBar}
         />
       )}
 
@@ -156,7 +169,7 @@ const SplashScreen = () => {
               ref={ref}
               className="flex flex-col text-lg items-center absolute z-20
             justify-center gap-y-2 duration-300"
-              style={{ top: "72%" }}
+              style={{ top: showProgressBar ? "72%" : "56%" }}
             >
               {showProgressBar && (
                 <RevealTextLine rotate reveal={inView}>
