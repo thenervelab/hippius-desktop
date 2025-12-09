@@ -65,6 +65,7 @@ pub async fn initialize_sync(
     app: tauri::AppHandle,
     account_id: String,
     mnemonic: String,
+    temp_auth_key: Option<String>,
 ) -> Result<(), String> {
     set_active_account(&account_id);
     let state = app.state::<Arc<AppState>>();
@@ -83,6 +84,20 @@ pub async fn initialize_sync(
 
     // Prepare for new sync (reset cancellation token)
     prepare_for_new_sync();
+
+    // Persist temp auth key if no master token exists yet for this account.
+    if !crate::utils::objectstore_tokens::has_master_token(&account_id)
+        .await
+        .unwrap_or(false)
+    {
+        if let Some(tk) = temp_auth_key
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            let _ = crate::utils::objectstore_tokens::save_temp_auth_key(&account_id, tk).await;
+        }
+    }
 
     // Purge old S3 entries for other accounts to avoid mixing buckets after logout/login.
     if let Some(pool) = crate::DB_POOL.get() {
@@ -455,7 +470,7 @@ pub async fn set_bucket_policy(
 
     // 3. Restart sync processes with the new policy
     println!("[BucketPolicy] Restarting sync processes with new policy...");
-    initialize_sync(app, account_id, mnemonic).await?;
+    initialize_sync(app, account_id, mnemonic, None).await?;
 
     println!("[BucketPolicy] Sync processes restarted with new policy");
     Ok(())
