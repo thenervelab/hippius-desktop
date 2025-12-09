@@ -56,7 +56,6 @@
         "jotai": "^2.12.3",
         "jotai-history": "^0.4.3",
         "jotai-tanstack-query": "^0.9.0",
-        "jszip": "^3.10.1",
         "lucide-react": "^0.513.0",
         "next": "15.3.6",
         "nextjs-toploader": "^3.8.16",

@@ -1,10 +1,7 @@
 import React, { useEffect } from "react";
 import { Icons, RevealTextLine } from "@/components/ui";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
-import ChangePasscode from "./change-passcode";
-import BackupAppData from "./BackupAppData";
 import { InView } from "react-intersection-observer";
-import ResetAppData from "./ResetAppData";
 import UpdateSyncFolder from "./UpdateSyncFolder";
 import APIKeys from "./api-keys";
 import NotificationSettings from "./NotificationSettings";
@@ -12,10 +9,7 @@ import { useAtom } from "jotai";
 import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
-// import EncryptionKey from "./encryption-key";
 import CustomizeRPC from "./CustomizeRPC";
-// import { Clock } from "lucide-react";
-import SessionTimeoutSettings from "./SessionTimeoutSettings";
 import FileDeletionBehaviour from "./FileDeletionBehaviour";
 import OAuthTokenSection from "./OAuthTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
@@ -40,19 +34,10 @@ const SettingsDialogContent: React.FC = () => {
       tabName: "Master Token",
       icon: <Icons.Key className="size-4" />,
     },
-    // {
-    //   tabName: "Change Passcode",
-    //   icon: <Icons.WalletAdd className="size-4" />,
-    // },
     {
       tabName: "API Keys",
       icon: <Icons.KeySquare className="size-4" />,
     },
-    // {
-    //   tabName: "Encryption Key",
-    //   icon: <Icons.Key className="size-4" />,
-    // },
-
     {
       tabName: "Notifications",
       icon: <Icons.Notification className="size-4" />,
@@ -61,18 +46,6 @@ const SettingsDialogContent: React.FC = () => {
       tabName: "Customize RPC",
       icon: <Icons.Box className="size-4" />,
     },
-    // {
-    //   tabName: "Session Timeout",
-    //   icon: <Clock className="size-4" />,
-    // },
-    // {
-    //   tabName: "Backup App Data",
-    //   icon: <Icons.Wallet className="size-4" />,
-    // },
-    // {
-    //   tabName: "Reset App",
-    //   icon: <Icons.Trash className="size-4" />,
-    // },
   ];
 
   return (
@@ -94,19 +67,6 @@ const SettingsDialogContent: React.FC = () => {
             className="flex flex-col animate-in fade-in duration-300 gap-8 w-full h-max mb-4 pt-[18px]"
             ref={ref}
           >
-            {activeTab === "Change Passcode" && (
-              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                <RevealTextLine
-                  rotate
-                  reveal={inView}
-                  className="delay-300 w-full"
-                  parentClassName="w-full"
-                >
-                  <ChangePasscode />
-                </RevealTextLine>
-              </div>
-            )}
-
             {activeTab === "API Keys" && (
               <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
@@ -141,18 +101,6 @@ const SettingsDialogContent: React.FC = () => {
                     <EmailNotificationSection />
                   </RevealTextLine>
                 </div>
-              </div>
-            )}
-            {activeTab === "Reset App" && (
-              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                <RevealTextLine
-                  rotate
-                  reveal={inView}
-                  className="delay-300 w-full"
-                  parentClassName="w-full"
-                >
-                  <ResetAppData />
-                </RevealTextLine>
               </div>
             )}
 
@@ -192,28 +140,6 @@ const SettingsDialogContent: React.FC = () => {
                 </RevealTextLine>
               </div>
             )}
-            {activeTab === "Backup App Data" && (
-              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                <RevealTextLine
-                  rotate
-                  reveal={inView}
-                  className="delay-300 w-full"
-                  parentClassName="w-full"
-                >
-                  <BackupAppData />
-                </RevealTextLine>
-              </div>
-            )}
-            {/* 
-            {activeTab === "Encryption Key" && (
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                className="delay-300 w-full flex"
-              >
-                <EncryptionKey />
-              </RevealTextLine>
-            )} */}
 
             {activeTab === "Customize RPC" && (
               <div className="shadow-menu rounded-lg bg-white p-4 w-full">
@@ -224,18 +150,6 @@ const SettingsDialogContent: React.FC = () => {
                   parentClassName="w-full"
                 >
                   <CustomizeRPC />
-                </RevealTextLine>
-              </div>
-            )}
-            {activeTab === "Session Timeout" && (
-              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                <RevealTextLine
-                  rotate
-                  reveal={inView}
-                  className="delay-300 w-full"
-                  parentClassName="w-full"
-                >
-                  <SessionTimeoutSettings />
                 </RevealTextLine>
               </div>
             )}
