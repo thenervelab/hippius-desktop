@@ -23,7 +23,7 @@ import { clearHippiusDesktopDB } from "@/app/lib/helpers/hippiusDesktopDB";
 export default function OAuthCallbackPage() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { setOAuthSession, isAuthenticated } = useWalletAuth();
+    const { setOAuthSession } = useWalletAuth();
     const [error, setError] = useState<string | null>(null);
     const hasProcessed = useRef(false);
 
@@ -43,12 +43,12 @@ export default function OAuthCallbackPage() {
                 // This check happens before processing any parameters to handle app restarts
                 const storedSession = localStorage.getItem("hippius_oauth_session");
                 const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
-                
+
                 if (storedSession && storedExpiry) {
                     const expiryTime = isNaN(Number(storedExpiry))
                         ? new Date(storedExpiry).getTime()
                         : parseInt(storedExpiry, 10);
-                    
+
                     if (Date.now() < expiryTime) {
                         console.log("[OAuthCallback] Valid OAuth session already exists, redirecting to home");
                         router.replace("/");
