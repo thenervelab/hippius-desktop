@@ -72,7 +72,7 @@ export async function setApiAuth(
     );
   } else {
     db.run(
-      "INSERT INTO session (mnemonic,oauth_mnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO session (mnemonic,oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       [
         "",
         "",
@@ -171,7 +171,7 @@ export async function saveSession(
 
     db.run("DELETE FROM session");
     db.run(
-      "INSERT INTO session (oauth_mnemonic, logoutTimeStamp, logoutTimeInMinutes) VALUES (?, ?, ?)",
+      "INSERT INTO session (oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes) VALUES (?, ?, ?)",
       [mnemonic, logoutTimeStamp, effectiveMinutes]
     );
 
@@ -193,7 +193,7 @@ export async function getSession(): Promise<{
     const db = await initHippiusDesktopDB();
 
     const res = db.exec(
-      "SELECT oauth_mnemonic, logoutTimeStamp, logoutTimeInMinutes FROM session LIMIT 1"
+      "SELECT oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes FROM session LIMIT 1"
     );
 
     if (!res.length || !res[0]?.values.length) {
@@ -241,13 +241,13 @@ export async function clearSession() {
     if (hasRow && id != null) {
       // Clear active session data + API auth
       db.run(
-        "UPDATE session SET mnemonic = ?,oauth_mnemonic = ?, logoutTimeStamp = ?, logoutTimeInMinutes = ?, authToken = ?, tokenExpiry = ?, userId = ?, username = ? WHERE id = ?",
+        "UPDATE session SET mnemonic = ?,oauthMnemonic = ?, logoutTimeStamp = ?, logoutTimeInMinutes = ?, authToken = ?, tokenExpiry = ?, userId = ?, username = ? WHERE id = ?",
         ["", "", 0, minutes, null, null, null, null, id]
       );
     } else {
       // No row yet: create placeholder carrying the minutes
       db.run(
-        "INSERT INTO session (mnemonic,oauth_mnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO session (mnemonic,oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         ["", "", 0, minutes, null, null, null, null]
       );
     }
