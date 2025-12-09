@@ -84,16 +84,12 @@ export function LoginForm({
             try {
                 // Check if this deep link has already been processed (use localStorage for persistence across restarts)
                 const lastProcessedUrl = localStorage.getItem("last_processed_deep_link");
-                const lastProcessedTime = localStorage.getItem("last_processed_deep_link_time");
                 
-                // Consider a deep link "stale" if it was processed more than 5 minutes ago
-                // This prevents re-processing the same deep link on app restart
-                const isStaleDeepLink = lastProcessedTime && 
-                    (Date.now() - parseInt(lastProcessedTime, 10)) < 5 * 60 * 1000; // 5 minutes
-                
-                if (lastProcessedUrl === url && isStaleDeepLink) {
+                if (lastProcessedUrl === url) {
                     // addDlLog("⚠️ This deep link was already processed, skipping");
-                    console.log("[LoginForm] Deep link already processed recently, skipping:", url);
+                    console.log("[LoginForm] Deep link already processed, skipping:", url);
+                    // Refresh the timestamp so we keep skipping this stale callback
+                    localStorage.setItem("last_processed_deep_link_time", Date.now().toString());
                     return;
                 }
 

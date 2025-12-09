@@ -151,10 +151,7 @@ export default function OAuthCallbackPage() {
 
                 // Clean up - remove all OAuth-related session storage
                 sessionStorage.removeItem("oauth_redirect");
-                // Clear deep link tracking from localStorage
-                localStorage.removeItem("last_processed_deep_link");
-                localStorage.removeItem("last_processed_deep_link_time");
-                console.log("[OAuthCallback] Cleared deep link processing flag");
+                console.log("[OAuthCallback] Session storage cleared");
 
                 console.log("[OAuthCallback] Redirecting to:", redirectPath);
 
@@ -191,12 +188,9 @@ export default function OAuthCallbackPage() {
                             </p>
                             <button
                                 onClick={() => {
-                                    // Clear the deep link flag so it doesn't re-trigger
-                                    localStorage.removeItem("last_processed_deep_link");
-                                    localStorage.removeItem("last_processed_deep_link_time");
                                     // Mark as manual navigation to prevent deep link re-processing
                                     sessionStorage.setItem("manual_navigation", "true");
-                                    console.log("[OAuthCallback] Cleared deep link flag and set manual navigation, navigating to login");
+                                    console.log("[OAuthCallback] Set manual navigation flag, navigating to login");
                                     router.replace("/login");
                                 }}
                                 className="px-6 py-3 bg-primary-50 text-white rounded-lg font-medium hover:bg-primary-60 transition-colors"

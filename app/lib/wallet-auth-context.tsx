@@ -100,9 +100,6 @@ export function WalletAuthProvider({
         if (typeof window !== "undefined") {
           localStorage.removeItem("hippius_oauth_session");
           localStorage.removeItem("hippius_oauth_session_expiry");
-          // Clear deep link tracking to prevent stale deep links from being processed
-          localStorage.removeItem("last_processed_deep_link");
-          localStorage.removeItem("last_processed_deep_link_time");
         }
       } catch (error) {
         console.error("Failed to cleanup sync on logout:", error);
