@@ -27,6 +27,7 @@ const TABLE_SCHEMA = `
   CREATE TABLE IF NOT EXISTS session (
     id INTEGER PRIMARY KEY,
     mnemonic TEXT,
+    oauthMnemonic TEXT,
     logoutTimeStamp INTEGER,
     logoutTimeInMinutes INTEGER DEFAULT 1440,
     authToken TEXT,
@@ -113,6 +114,7 @@ export async function ensureSessionAuthColumns(): Promise<boolean> {
         : new Set<string>();
 
     const missing: string[] = [];
+    if (!cols.has("oauthMnemonic")) missing.push("oauthMnemonic TEXT");
     if (!cols.has("authToken")) missing.push("authToken TEXT");
     if (!cols.has("tokenExpiry")) missing.push("tokenExpiry INTEGER");
     if (!cols.has("userId")) missing.push("userId INTEGER");
@@ -174,6 +176,7 @@ export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
             ? new Set(info[0].values.map((r) => String(r[1])))
             : new Set<string>();
         const toAdd: string[] = [];
+        if (!cols.has("oauthMnemonic")) toAdd.push("oauthMnemonic TEXT");
         if (!cols.has("authToken")) toAdd.push("authToken TEXT");
         if (!cols.has("tokenExpiry")) toAdd.push("tokenExpiry INTEGER");
         if (!cols.has("userId")) toAdd.push("userId INTEGER");
