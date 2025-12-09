@@ -73,6 +73,46 @@ pub async fn save_master_token(account_id: &str, access_key_id: &str, secret: &s
     }
 }
 
+/// Returns true if a non-empty master token is stored for this account (scoped or legacy).
+pub async fn has_master_token(account_id: &str) -> Result<bool, String> {
+    if let Some(pool) = DB_POOL.get() {
+        // Scoped first
+        if let Some(row) = sqlx::query(
+            "SELECT master_access_key_id, master_secret FROM objectstore_auth_scoped WHERE owner = ?",
+        )
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error fetching master token: {}", e))?
+        {
+            let access: Option<String> = row.get("master_access_key_id");
+            let secret: Option<String> = row.get("master_secret");
+            if matches!((access.as_deref(), secret.as_deref()), (Some(a), Some(s)) if !a.is_empty() && !s.is_empty()) {
+                return Ok(true);
+            }
+        }
+
+        // Legacy single-row
+        if let Some(row) = sqlx::query(
+            "SELECT master_access_key_id, master_secret FROM objectstore_auth WHERE id = ?",
+        )
+        .bind(AUTH_ROW_ID)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error fetching master token: {}", e))?
+        {
+            let access: Option<String> = row.get("master_access_key_id");
+            let secret: Option<String> = row.get("master_secret");
+            if matches!((access.as_deref(), secret.as_deref()), (Some(a), Some(s)) if !a.is_empty() && !s.is_empty()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    } else {
+        Err("DB_POOL not initialized".to_string())
+    }
+}
+
 pub async fn get_temp_auth_key(account_id: &str) -> Result<Option<String>, String> {
     if let Some(pool) = DB_POOL.get() {
         // Prefer scoped record, fall back to legacy single-row storage

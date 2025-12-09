@@ -1,6 +1,6 @@
 use crate::utils::objectstore_tokens::{
     clear_objectstore_env, ensure_master_token_env, get_temp_auth_key, save_master_token,
-    save_temp_auth_key,
+    save_temp_auth_key, has_master_token,
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -82,4 +82,9 @@ pub async fn request_master_token_command(
     let _ = ensure_master_token_env(&account_id).await;
 
     Ok(parsed)
+}
+
+#[tauri::command]
+pub async fn has_master_token_command(account_id: String) -> Result<bool, String> {
+    has_master_token(&account_id).await
 }

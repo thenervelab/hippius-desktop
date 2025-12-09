@@ -8,6 +8,7 @@ use crate::sync_shared::{
     GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, S3SyncState, SYNCING_ACCOUNTS,
 };
 use crate::{start_private_folder_sync_tauri, start_public_folder_sync_tauri};
+use crate::utils::objectstore_tokens::{has_master_token, save_temp_auth_key};
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
@@ -70,6 +71,7 @@ pub struct SetSyncPathParams {
     pub is_public: bool,
     pub account_id: String,
     pub mnemonic: String,
+    pub temp_auth_key: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -95,6 +97,18 @@ pub async fn set_sync_path(
     params: SetSyncPathParams,
 ) -> Result<String, String> {
     crate::utils::sync::set_active_account(&params.account_id);
+
+    // If no master token yet and a temp auth key is provided, store it now for this account.
+    if !has_master_token(&params.account_id).await.unwrap_or(false) {
+        if let Some(tk) = params
+            .temp_auth_key
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            let _ = save_temp_auth_key(&params.account_id, tk).await;
+        }
+    }
     let path_type = if params.is_public {
         "public"
     } else {
@@ -476,22 +490,79 @@ pub async fn transfer_balance_tauri(
 pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<SyncPathResult, String> {
     let path_type = if is_public { "public" } else { "private" };
     if let Some(pool) = DB_POOL.get() {
-        let rec = sqlx::query("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
+        // Try scoped entry first
+        let rec_row = sqlx::query("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
             .bind(owner)
             .bind(path_type)
             .fetch_optional(pool)
             .await
             .map_err(|e| format!("DB error: {}", e))?;
-        let path = if let Some(row) = rec {
-            row.get::<String, _>("path")
+
+        // If not found, migrate a legacy (owner='') row only when no scoped rows exist yet.
+        let path_opt: Option<String> = if let Some(row) = rec_row {
+            Some(row.get::<String, _>("path"))
         } else {
-            // Return error instead of fallback to constant
-            return Err(format!(
+            let scoped_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM sync_paths WHERE owner != '' AND owner IS NOT NULL",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+
+            if scoped_count == 0 {
+                let mut tx = pool
+                    .begin()
+                    .await
+                    .map_err(|e| format!("DB error (tx begin): {}", e))?;
+
+                let legacy = sqlx::query_as::<_, (i64, String)>(
+                    "SELECT id, path FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
+                )
+                .bind(path_type)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| format!("DB error: {}", e))?;
+
+                if let Some((legacy_id, legacy_path)) = legacy {
+                    // Remove any pre-existing scoped row to avoid UNIQUE constraint failures.
+                    let _ = sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
+                        .bind(owner)
+                        .bind(path_type)
+                        .execute(&mut *tx)
+                        .await;
+
+                    let _ = sqlx::query(
+                        "UPDATE sync_paths SET owner = ? WHERE id = ? AND owner = ''",
+                    )
+                    .bind(owner)
+                    .bind(legacy_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| format!("DB error updating legacy row: {}", e))?;
+
+                    tx.commit()
+                        .await
+                        .map_err(|e| format!("DB error (commit): {}", e))?;
+                    Some(legacy_path)
+                } else {
+                    tx.commit()
+                        .await
+                        .map_err(|e| format!("DB error (commit): {}", e))?;
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(path) = path_opt {
+            Ok(SyncPathResult { path, is_public })
+        } else {
+            Err(format!(
                 "Sync path for {} not set yet. Please configure encryption key first.",
                 path_type
-            ));
-        };
-        Ok(SyncPathResult { path, is_public })
+            ))
+        }
     } else {
         Err("DB_POOL not initialized".to_string())
     }

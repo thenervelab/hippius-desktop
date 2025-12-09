@@ -29,7 +29,7 @@ use commands::accounts::{
     create_encryption_key, export_app_data, get_all_subaccount_addresses, get_encryption_keys,
     import_app_data, import_key, reset_app,
 };
-use commands::objectstore_auth::{request_master_token_command, save_temp_auth_key_command};
+use commands::objectstore_auth::{request_master_token_command, save_temp_auth_key_command, has_master_token_command};
 use commands::ipfs_commands::{
     add_file_to_private_folder, add_file_to_public_folder, add_folder_to_private_folder,
     add_folder_to_public_folder, delete_file, download_and_decrypt_file,
@@ -162,6 +162,7 @@ fn main() {
             utils::nebula::get_nebula_version,
             utils::nebula::check_nebula_update,
             save_temp_auth_key_command,
+            has_master_token_command,
             request_master_token_command
         ]);
 

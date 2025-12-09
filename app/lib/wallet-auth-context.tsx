@@ -86,6 +86,26 @@ export function WalletAuthProvider({
   const syncInitialized = useRef(false);
   const logoutTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  const ensureTempAuthKey = useCallback(
+    async (accountId?: string | null, token?: string | null) => {
+      if (!accountId || !token) return;
+      try {
+        const hasMaster = await invoke<boolean>("has_master_token_command", {
+          accountId,
+        });
+        if (!hasMaster) {
+          await invoke("save_temp_auth_key_command", {
+            accountId,
+            tempAuthKey: token,
+          });
+        }
+      } catch (err) {
+        console.error("[WalletAuth] Failed to persist temp auth key:", err);
+      }
+    },
+    []
+  );
+
   const logout = useCallback(
     async (redirectPath?: string) => {
       try {
@@ -183,6 +203,10 @@ export function WalletAuthProvider({
                 oauthSessionData.provider === "mnemonic" ? "mnemonic" : "oauth"
               );
               setIsAuthenticated(true);
+              await ensureTempAuthKey(
+                oauthSessionData.substrateAddress,
+                oauthSessionData.token
+              );
 
               // For mnemonic-based auth, also restore mnemonic from database for sync
               if (oauthSessionData.provider === "mnemonic") {
@@ -433,19 +457,8 @@ export function WalletAuthProvider({
         syncInitialized.current = true;
       }
 
-      // Send master token for S3 access using the session token
-      if (session.token) {
-        try {
-          console.log("[WalletAuth] Requesting master token for S3 access...");
-          await invoke("save_temp_auth_key_command", {
-            accountId: polkadotAddr,
-            tempAuthKey: session.token,
-          });
-          console.log("[WalletAuth] ✅ Master token sent for S3 access");
-        } catch (error) {
-          console.error("[WalletAuth] ❌ Failed to send master token:", error);
-        }
-      }
+      // Ensure temp auth key is stored for S3 access if no master token yet
+      await ensureTempAuthKey(polkadotAddr, session.token);
     } catch (error) {
       console.error("[WalletAuth] Login failed:", error);
       // Clear sensitive data on error
@@ -472,19 +485,8 @@ export function WalletAuthProvider({
 
     console.log("[WalletAuth] ✅ OAuth session persisted and state updated");
 
-    // Request master token for S3 access using the OAuth token
-    if (session.token) {
-      try {
-        console.log("[WalletAuth] Sending master token for S3 access...");
-        await invoke("save_temp_auth_key_command", {
-          accountId: session.substrateAddress,
-          tempAuthKey: session.token,
-        });
-        console.log("[WalletAuth] ✅ Master token obtained for S3 access");
-      } catch (error) {
-        console.error("[WalletAuth] ❌ Failed to obtain master token:", error);
-      }
-    }
+    // Ensure temp auth key is stored for S3 access if no master token yet
+    await ensureTempAuthKey(session.substrateAddress, session.token);
   };
 
   // Full reset: clear session + wallet storage

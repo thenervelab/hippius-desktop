@@ -24,7 +24,7 @@ const UpdateSyncFolder: React.FC = () => {
   const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState("");
   const [selectedPublicFolderName, setSelectedPublicFolderName] = useState("");
   const [isPublicFolderSelection, setIsPublicFolderSelection] = useState(false);
-  const { polkadotAddress, mnemonic } = useWalletAuth();
+  const { polkadotAddress, mnemonic, oauthSession } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
   const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
   const [isStoppingSync, setIsStoppingSync] = useState(false);
@@ -69,12 +69,12 @@ const UpdateSyncFolder: React.FC = () => {
         toast.error("Please select a valid folder for private sync");
         return;
       }
-      if (!polkadotAddress || !mnemonic) {
+      if (!polkadotAddress) {
         toast.error("Wallet authentication is required");
         return;
       }
 
-      await setPrivateSyncPath(p, polkadotAddress, mnemonic);
+      await setPrivateSyncPath(p, polkadotAddress, mnemonic ?? "", oauthSession?.token);
       setSelectedPrivateFolderPath(p);
       setSelectedPrivateFolderName(p.split(/[\\/]/).pop() || "");
       toast.success("Private sync folder updated");
@@ -98,12 +98,12 @@ const UpdateSyncFolder: React.FC = () => {
         return;
       }
 
-      if (!polkadotAddress || !mnemonic) {
+      if (!polkadotAddress) {
         toast.error("Wallet authentication is required");
         return;
       }
 
-      await setPublicSyncPath(p, polkadotAddress, mnemonic);
+      await setPublicSyncPath(p, polkadotAddress, mnemonic ?? "", oauthSession?.token);
       setSelectedPublicFolderPath(p);
       setSelectedPublicFolderName(p.split(/[\\/]/).pop() || "");
       toast.success("Public sync folder updated");
@@ -126,7 +126,7 @@ const UpdateSyncFolder: React.FC = () => {
 
   const handleStopSyncConfirm = async () => {
     if (!stopSyncTarget) return;
-    if (!polkadotAddress || !mnemonic) {
+    if (!polkadotAddress) {
       toast.error("Wallet authentication is required");
       return;
     }
@@ -135,12 +135,12 @@ const UpdateSyncFolder: React.FC = () => {
 
     try {
       if (stopSyncTarget === "private") {
-        await setPrivateSyncPath("", polkadotAddress, mnemonic);
+        await setPrivateSyncPath("", polkadotAddress, mnemonic ?? "", oauthSession?.token);
         setSelectedPrivateFolderPath("");
         setSelectedPrivateFolderName("");
         toast.success("Private folder syncing stopped");
       } else {
-        await setPublicSyncPath("", polkadotAddress, mnemonic);
+        await setPublicSyncPath("", polkadotAddress, mnemonic ?? "", oauthSession?.token);
         setSelectedPublicFolderPath("");
         setSelectedPublicFolderName("");
         toast.success("Public folder syncing stopped");

@@ -182,6 +182,9 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await;
     }
 
+    // If a legacy UNIQUE constraint exists on sync_paths.type, rebuild table to use UNIQUE(owner, type)
+    migrate_sync_paths_unique_constraint(pool).await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS wss_endpoint (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -269,6 +272,69 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    Ok(())
+}
+
+async fn migrate_sync_paths_unique_constraint(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // Detect a legacy unique index on "type" only
+    let index_rows = sqlx::query("PRAGMA index_list(sync_paths)")
+        .fetch_all(pool)
+        .await?;
+
+    let mut has_legacy_unique = false;
+    for row in index_rows {
+        let unique: i64 = row.get("unique");
+        let name: String = row.get("name");
+        if unique == 1 {
+            let cols = sqlx::query(&format!("PRAGMA index_info({})", name)).fetch_all(pool).await?;
+            let col_names: Vec<String> = cols.into_iter().map(|r| r.get("name")).collect();
+            if col_names.len() == 1 && col_names[0] == "type" {
+                has_legacy_unique = true;
+                break;
+            }
+        }
+    }
+
+    if !has_legacy_unique {
+        return Ok(());
+    }
+
+    println!("[Setup] Migrating sync_paths to drop legacy UNIQUE(type) constraint");
+    let mut tx = pool.begin().await?;
+
+    // Ensure the new table exists with the correct schema
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_paths_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL DEFAULT '',
+            path TEXT NOT NULL,
+            type TEXT NOT NULL,
+            timestamp INTEGER NOT NULL
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Copy data; if owner column was absent, COALESCE to ''
+    sqlx::query(
+        "INSERT OR IGNORE INTO sync_paths_new (owner, path, type, timestamp)
+         SELECT COALESCE(owner, ''), path, type, timestamp FROM sync_paths",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Replace old table
+    sqlx::query("DROP TABLE IF EXISTS sync_paths").execute(&mut *tx).await?;
+    sqlx::query("ALTER TABLE sync_paths_new RENAME TO sync_paths")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS sync_paths_owner_type_idx ON sync_paths(owner, type)",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
     Ok(())
 }
 

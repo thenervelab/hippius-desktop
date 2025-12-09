@@ -47,7 +47,7 @@ import {
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
-  const { polkadotAddress, mnemonic } = useWalletAuth();
+  const { polkadotAddress, mnemonic, oauthSession } = useWalletAuth();
   const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
   const isPrivateView = activeSubMenuItem === "Private";
 
@@ -391,7 +391,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const handleFolderSelected = useCallback(
     async (path: string) => {
       try {
-        if (!polkadotAddress || !mnemonic) {
+        if (!polkadotAddress) {
           toast.error("Wallet authentication is required");
           return;
         }
@@ -403,7 +403,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             );
             return;
           }
-          await setPrivateSyncPath(path, polkadotAddress, mnemonic);
+          await setPrivateSyncPath(path, polkadotAddress, mnemonic ?? "", oauthSession?.token);
           setSelectedPrivateFolderPath(path);
         } else {
           if (path === selectedPrivateFolderPath) {
@@ -412,7 +412,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             );
             return;
           }
-          await setPublicSyncPath(path, polkadotAddress, mnemonic);
+          await setPublicSyncPath(path, polkadotAddress, mnemonic ?? "", oauthSession?.token);
           setSelectedPublicFolderPath(path);
         }
         toast.success(
@@ -444,7 +444,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   // Handle skip sync folder setup
   const handleSkipSyncFolder = useCallback(async () => {
     try {
-      if (!polkadotAddress || !mnemonic) {
+      if (!polkadotAddress) {
         toast.error("Wallet authentication is required");
         return;
       }
@@ -453,10 +453,10 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       const emptyPath = "";
 
       if (isPrivateView) {
-        await setPrivateSyncPath(emptyPath, polkadotAddress, mnemonic);
+        await setPrivateSyncPath(emptyPath, polkadotAddress, mnemonic ?? "", oauthSession?.token);
         setSelectedPrivateFolderPath(emptyPath);
       } else {
-        await setPublicSyncPath(emptyPath, polkadotAddress, mnemonic);
+        await setPublicSyncPath(emptyPath, polkadotAddress, mnemonic ?? "", oauthSession?.token);
         setSelectedPublicFolderPath(emptyPath);
       }
 
