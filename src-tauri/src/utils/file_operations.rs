@@ -128,6 +128,15 @@ pub async fn delete_and_unpin_file_by_name(
 
 // Helper function for recursive directory copy
 fn copy_dir(src: &Path, dst: &Path) {
+    // Prevent copying a folder into its own subtree (avoids infinite nesting)
+    if dst.starts_with(src) {
+        eprintln!(
+            "[copy_dir] Destination {:?} is inside source {:?}; skipping copy to avoid recursion",
+            dst, src
+        );
+        return;
+    }
+
     if let Ok(entries) = std::fs::read_dir(src) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -188,6 +197,13 @@ pub async fn copy_to_sync_and_add_to_db(
     let dest_path = sync_folder.join(&file_name);
     let dest_path_str = dest_path.to_string_lossy().to_string();
     let dest_path_str_clone = dest_path_str.clone();
+    if is_folder && dest_path.starts_with(original_path) {
+        eprintln!(
+            "[copy_to_sync_and_add_to_db] Refusing to copy folder {:?} into its own subdirectory {:?}",
+            original_path, dest_path
+        );
+        return;
+    }
 
     let cid_vec = metadata_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec);
@@ -492,6 +508,13 @@ pub async fn copy_to_sync_folder(
             .to_string_lossy()
             .to_string();
         let dest_path = target_folder.join(&file_name);
+        if is_folder && dest_path.starts_with(original_path) {
+            eprintln!(
+                "[copy_to_sync_folder] Refusing to copy folder {:?} into its own subdirectory {:?}",
+                original_path, dest_path
+            );
+            return;
+        }
 
         // --- Track this file/folder to prevent redundant watcher events ---
         let dest_path_str = dest_path.to_string_lossy().to_string();
