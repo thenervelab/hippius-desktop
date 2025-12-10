@@ -12,15 +12,15 @@ export async function getPrivateSyncPath(accountId?: string): Promise<string> {
   return result.path;
 }
 
-export async function setPublicSyncPath(path: string, accountId?: string, mnemonic?: string): Promise<string> {
+export async function setPublicSyncPath(path: string, accountId?: string, _tempAuthKey?: string): Promise<string> {
   return await invoke<string>("set_sync_path", {
-    params: { path, is_public: true, account_id: accountId, mnemonic },
+    params: { path, is_public: true, account_id: accountId },
   });
 }
 
-export async function setPrivateSyncPath(path: string, accountId?: string, mnemonic?: string): Promise<string> {
+export async function setPrivateSyncPath(path: string, accountId?: string, _tempAuthKey?: string): Promise<string> {
   return await invoke<string>("set_sync_path", {
-    params: { path, is_public: false, account_id: accountId, mnemonic },
+    params: { path, is_public: false, account_id: accountId },
   });
 }
 

@@ -12,10 +12,10 @@ export async function getPrivateSyncPath(accountId?: string): Promise<string> {
     }
 }
 
-export async function setPrivateSyncPath(path: string, polkadotAddress: string, mnemonic?: string | null, tempAuthKey?: string): Promise<string> {
+export async function setPrivateSyncPath(path: string, polkadotAddress: string, tempAuthKey?: string): Promise<string> {
     try {
         return await invoke<string>("set_sync_path", {
-            params: { path, is_public: false, account_id: polkadotAddress, mnemonic: mnemonic ?? "", temp_auth_key: tempAuthKey },
+            params: { path, is_public: false, account_id: polkadotAddress, temp_auth_key: tempAuthKey },
         });
     } catch (error) {
         console.error("Error setting sync path:", error);
@@ -36,10 +36,10 @@ export async function getPublicSyncPath(accountId?: string): Promise<string> {
     }
 }
 
-export async function setPublicSyncPath(path: string, polkadotAddress: string, mnemonic?: string | null, tempAuthKey?: string): Promise<string> {
+export async function setPublicSyncPath(path: string, polkadotAddress: string, tempAuthKey?: string): Promise<string> {
     try {
         return await invoke<string>("set_sync_path", {
-            params: { path, is_public: true, account_id: polkadotAddress, mnemonic: mnemonic ?? "", temp_auth_key: tempAuthKey },
+            params: { path, is_public: true, account_id: polkadotAddress, temp_auth_key: tempAuthKey },
         });
     } catch (error) {
         console.error("Error setting sync path:", error);

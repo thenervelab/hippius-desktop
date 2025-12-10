@@ -24,7 +24,7 @@ const UpdateSyncFolder: React.FC = () => {
   const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState("");
   const [selectedPublicFolderName, setSelectedPublicFolderName] = useState("");
   const [isPublicFolderSelection, setIsPublicFolderSelection] = useState(false);
-  const { polkadotAddress, mnemonic, oauthSession } = useWalletAuth();
+  const { polkadotAddress, oauthSession } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
   const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
   const [isStoppingSync, setIsStoppingSync] = useState(false);
@@ -74,7 +74,7 @@ const UpdateSyncFolder: React.FC = () => {
         return;
       }
 
-      await setPrivateSyncPath(p, polkadotAddress, mnemonic ?? "", oauthSession?.token);
+      await setPrivateSyncPath(p, polkadotAddress, oauthSession?.token);
       setSelectedPrivateFolderPath(p);
       setSelectedPrivateFolderName(p.split(/[\\/]/).pop() || "");
       toast.success("Private sync folder updated");
@@ -103,7 +103,7 @@ const UpdateSyncFolder: React.FC = () => {
         return;
       }
 
-      await setPublicSyncPath(p, polkadotAddress, mnemonic ?? "", oauthSession?.token);
+      await setPublicSyncPath(p, polkadotAddress, oauthSession?.token);
       setSelectedPublicFolderPath(p);
       setSelectedPublicFolderName(p.split(/[\\/]/).pop() || "");
       toast.success("Public sync folder updated");
@@ -135,12 +135,12 @@ const UpdateSyncFolder: React.FC = () => {
 
     try {
       if (stopSyncTarget === "private") {
-        await setPrivateSyncPath("", polkadotAddress, mnemonic ?? "", oauthSession?.token);
+        await setPrivateSyncPath("", polkadotAddress, oauthSession?.token);
         setSelectedPrivateFolderPath("");
         setSelectedPrivateFolderName("");
         toast.success("Private folder syncing stopped");
       } else {
-        await setPublicSyncPath("", polkadotAddress, mnemonic ?? "", oauthSession?.token);
+        await setPublicSyncPath("", polkadotAddress, oauthSession?.token);
         setSelectedPublicFolderPath("");
         setSelectedPublicFolderName("");
         toast.success("Public folder syncing stopped");

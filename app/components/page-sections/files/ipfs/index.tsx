@@ -47,7 +47,7 @@ import {
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
-  const { polkadotAddress, mnemonic, oauthSession } = useWalletAuth();
+  const { polkadotAddress, oauthSession } = useWalletAuth();
   const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
   const isPrivateView = activeSubMenuItem === "Private";
 
@@ -403,7 +403,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             );
             return;
           }
-          await setPrivateSyncPath(path, polkadotAddress, mnemonic ?? "", oauthSession?.token);
+          await setPrivateSyncPath(path, polkadotAddress, oauthSession?.token);
           setSelectedPrivateFolderPath(path);
         } else {
           if (path === selectedPrivateFolderPath) {
@@ -412,7 +412,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             );
             return;
           }
-          await setPublicSyncPath(path, polkadotAddress, mnemonic ?? "", oauthSession?.token);
+          await setPublicSyncPath(path, polkadotAddress, oauthSession?.token);
           setSelectedPublicFolderPath(path);
         }
         toast.success(
@@ -437,7 +437,6 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       selectedPrivateFolderPath,
       selectedPublicFolderPath,
       polkadotAddress,
-      mnemonic,
     ]
   );
 
@@ -453,10 +452,10 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       const emptyPath = "";
 
       if (isPrivateView) {
-        await setPrivateSyncPath(emptyPath, polkadotAddress, mnemonic ?? "", oauthSession?.token);
+        await setPrivateSyncPath(emptyPath, polkadotAddress, oauthSession?.token);
         setSelectedPrivateFolderPath(emptyPath);
       } else {
-        await setPublicSyncPath(emptyPath, polkadotAddress, mnemonic ?? "", oauthSession?.token);
+        await setPublicSyncPath(emptyPath, polkadotAddress, oauthSession?.token);
         setSelectedPublicFolderPath(emptyPath);
       }
 
@@ -477,7 +476,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         }`
       );
     }
-  }, [isPrivateView, polkadotAddress, mnemonic]);
+  }, [isPrivateView, polkadotAddress]);
 
   // Navigation to settings
   const handleNavigateToSettings = useCallback(() => {

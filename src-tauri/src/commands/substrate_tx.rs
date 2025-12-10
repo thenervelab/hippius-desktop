@@ -70,7 +70,6 @@ pub struct SetSyncPathParams {
     pub path: String,
     pub is_public: bool,
     pub account_id: String,
-    pub mnemonic: String,
     pub temp_auth_key: Option<String>,
 }
 
@@ -233,16 +232,12 @@ pub async fn set_sync_path(
                 if params.is_public {
                     let app_handle_public = app_handle.clone();
                     let account = params.account_id.clone();
-                    let mnemonic = params.mnemonic.clone();
 
                     let handle = tokio::spawn(async move {
-                        let _ = crate::commands::syncing::resolve_or_create_subaccount_seed(
-                            account.clone(),
-                            mnemonic.clone(),
-                        )
-                        .await;
-
-                        ensure_aws_env(account.clone(), mnemonic.clone()).await;
+                        if let Err(e) = ensure_aws_env(account.clone()).await {
+                            eprintln!("[set_sync_path] Aborting public sync start: {}", e);
+                            return;
+                        }
 
                         println!("[set_sync_path] Starting PUBLIC sync task...");
                         match get_sync_policy_from_db().await {
@@ -250,7 +245,7 @@ pub async fn set_sync_path(
                                 start_public_folder_sync_tauri(
                                     app_handle_public,
                                     account.clone(),
-                                    mnemonic,
+                                    String::new(),
                                     delete_policy,
                                 )
                                 .await;
@@ -261,7 +256,7 @@ pub async fn set_sync_path(
                                 start_public_folder_sync_tauri(
                                     app_handle_public,
                                     account.clone(),
-                                    mnemonic,
+                                    String::new(),
                                     DeletePolicy::UploadOnly,
                                 )
                                 .await;
@@ -328,15 +323,12 @@ pub async fn set_sync_path(
                     // Similar logic for private...
                     let app_handle_private = app_handle.clone();
                     let account = params.account_id.clone();
-                    let mnemonic = params.mnemonic.clone();
 
                     let handle = tokio::spawn(async move {
-                        let _ = crate::commands::syncing::resolve_or_create_subaccount_seed(
-                            account.clone(),
-                            mnemonic.clone(),
-                        )
-                        .await;
-                        ensure_aws_env(account.clone(), mnemonic.clone()).await;
+                        if let Err(e) = ensure_aws_env(account.clone()).await {
+                            eprintln!("[set_sync_path] Aborting private sync start: {}", e);
+                            return;
+                        }
 
                         println!("[set_sync_path] Starting PRIVATE sync task...");
                         match get_sync_policy_from_db().await {
@@ -344,7 +336,7 @@ pub async fn set_sync_path(
                                 start_private_folder_sync_tauri(
                                     app_handle_private,
                                     account.clone(),
-                                    mnemonic,
+                                    String::new(),
                                     delete_policy,
                                 )
                                 .await;
@@ -355,7 +347,7 @@ pub async fn set_sync_path(
                                 start_private_folder_sync_tauri(
                                     app_handle_private,
                                     account.clone(),
-                                    mnemonic,
+                                    String::new(),
                                     DeletePolicy::UploadOnly,
                                 )
                                 .await;

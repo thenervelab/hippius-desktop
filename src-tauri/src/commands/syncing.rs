@@ -45,17 +45,19 @@ pub struct AppState {
 }
 
 #[allow(deprecated)]
-pub async fn ensure_aws_env(account_id: String, _mnemonic: String) {
+pub async fn ensure_aws_env(account_id: String) -> Result<(), String> {
     // New flow: prefer stored master token for S3 access. Keep params for compatibility.
     match crate::utils::objectstore_tokens::ensure_master_token_or_fetch(&account_id).await {
         Ok(_) => {
             println!("[Auth] Loaded AWS creds from stored master token");
+            Ok(())
         }
         Err(e) => {
             eprintln!(
                 "[Auth] No master token available for S3 auth (account_id:{}): {}",
                 account_id, e
             );
+            Err(e)
         }
     }
 }
@@ -144,7 +146,10 @@ pub async fn initialize_sync(
         };
 
         // Only perform AWS credentials setup if at least one sync is enabled
-        ensure_aws_env(account_for_bg.clone(), mnemonic_for_bg.clone()).await;
+        if let Err(e) = ensure_aws_env(account_for_bg.clone()).await {
+            eprintln!("[SyncInit] Aborting sync start: {}", e);
+            return;
+        }
 
         let folder_task = if private_enabled {
             let delete_policy = match get_sync_policy_from_db().await {
