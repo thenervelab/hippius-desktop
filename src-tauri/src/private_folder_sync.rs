@@ -131,7 +131,6 @@ async fn handle_fs_events(
 pub async fn start_private_folder_sync(
     app_handle: AppHandle,
     account_id: String,
-    _seed_phrase: String,
     deletion_policy: DeletePolicy,
 ) {
     {
@@ -415,14 +414,13 @@ pub async fn start_private_folder_sync(
 pub async fn start_private_folder_sync_tauri(
     app_handle: AppHandle,
     account_id: String,
-    seed_phrase: String,
     policy: DeletePolicy,
 ) {
     println!(
         "[PrivateFolderSync] Starting sync for private, policy {:?}",
         policy
     );
-    start_private_folder_sync(app_handle, account_id, seed_phrase, policy).await;
+    start_private_folder_sync(app_handle, account_id, policy).await;
 }
 
 async fn process_batch(events: &[FsEvent], pool: &SqlitePool, owner: &str, bucket_name: &str) {

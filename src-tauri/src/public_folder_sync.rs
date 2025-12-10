@@ -157,20 +157,18 @@ async fn handle_fs_events(
 pub async fn start_public_folder_sync_tauri(
     app_handle: AppHandle,
     account_id: String,
-    mnemonic: String,
     policy: DeletePolicy,
 ) {
     println!(
         "[PublicFolderSync] Starting sync for public, policy {:?}",
         policy
     );
-    start_public_folder_sync(app_handle, account_id, mnemonic, policy).await;
+    start_public_folder_sync(app_handle, account_id, policy).await;
 }
 
 pub async fn start_public_folder_sync(
     app_handle: AppHandle,
     account_id: String,
-    _mnemonic: String,
     deletion_policy: DeletePolicy,
 ) {
     {

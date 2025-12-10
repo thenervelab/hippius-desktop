@@ -245,7 +245,6 @@ pub async fn set_sync_path(
                                 start_public_folder_sync_tauri(
                                     app_handle_public,
                                     account.clone(),
-                                    String::new(),
                                     delete_policy,
                                 )
                                 .await;
@@ -256,7 +255,6 @@ pub async fn set_sync_path(
                                 start_public_folder_sync_tauri(
                                     app_handle_public,
                                     account.clone(),
-                                    String::new(),
                                     DeletePolicy::UploadOnly,
                                 )
                                 .await;
@@ -336,7 +334,6 @@ pub async fn set_sync_path(
                                 start_private_folder_sync_tauri(
                                     app_handle_private,
                                     account.clone(),
-                                    String::new(),
                                     delete_policy,
                                 )
                                 .await;
@@ -347,7 +344,6 @@ pub async fn set_sync_path(
                                 start_private_folder_sync_tauri(
                                     app_handle_private,
                                     account.clone(),
-                                    String::new(),
                                     DeletePolicy::UploadOnly,
                                 )
                                 .await;

@@ -117,8 +117,7 @@ pub async fn initialize_sync(
         let app_handle_folder_sync = app_for_bg.clone();
         let app_handle_public_folder_sync = app_for_bg.clone();
         let account_clone2 = account_for_bg.clone();
-        let account_clone3 = account_for_bg.clone();
-        let mnemonic_clone = mnemonic_for_bg.clone();
+        let account_for_cron = account_for_bg.clone();
 
         // let user_profile_task = tokio::spawn(async move {
         //     start_user_profile_sync_tauri(app_handle_clone, account_clone).await;
@@ -164,12 +163,7 @@ pub async fn initialize_sync(
             };
 
             Some(tokio::spawn(async move {
-                start_private_folder_sync_tauri(
-                    app_handle_folder_sync,
-                    account_for_bg,
-                    mnemonic_for_bg,
-                    delete_policy,
-                )
+                start_private_folder_sync_tauri(app_handle_folder_sync, account_for_bg, delete_policy)
                 .await;
             }))
         } else {
@@ -189,12 +183,7 @@ pub async fn initialize_sync(
             };
 
             Some(tokio::spawn(async move {
-                start_public_folder_sync_tauri(
-                    app_handle_public_folder_sync,
-                    account_clone2,
-                    mnemonic_clone,
-                    delete_policy,
-                )
+                start_public_folder_sync_tauri(app_handle_public_folder_sync, account_clone2, delete_policy)
                 .await;
             }))
         } else {
@@ -218,7 +207,7 @@ pub async fn initialize_sync(
             // Start PUBLIC listing cron only if public sync was started
             if public_enabled {
                 let pool_pub = pool.clone();
-                let account_for_cron_pub = account_clone3.clone();
+                let account_for_cron_pub = account_for_cron.clone();
                 let public_cron_handle = tokio::spawn(async move {
                     let interval = 30u64; // 30 seconds
                     loop {
@@ -261,7 +250,7 @@ pub async fn initialize_sync(
             // Start PRIVATE listing cron only if private sync was started
             if private_enabled {
                 let pool_priv = pool.clone();
-                let account_for_cron_priv = account_clone3.clone();
+                let account_for_cron_priv = account_for_cron.clone();
                 let private_cron_handle = tokio::spawn(async move {
                     let interval = 30u64; // 30 seconds
                     loop {
@@ -408,16 +397,6 @@ pub fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
     let nonce = SbNonce::from_slice(nonce_b)?;
     let pt = secretbox::open(ct, &nonce, key).ok()?;
     String::from_utf8(pt).ok()
-}
-
-// Helper: heavy logic to resolve or create subaccount seed (non-blocking to UI)
-pub async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String) -> String {
-    // Sub-account logic disabled for master-token based auth; keep using provided mnemonic.
-    println!(
-        "[SyncInit] Sub-account resolution disabled; using provided mnemonic for account_id={}",
-        account_id
-    );
-    mnemonic
 }
 
 /// Request payload for updating bucket policy
