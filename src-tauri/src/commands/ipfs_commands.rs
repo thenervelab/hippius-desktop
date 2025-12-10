@@ -52,7 +52,6 @@ fn normalize_subfolder_path(mut subfolder_path: Option<Vec<String>>) -> Option<V
 pub async fn encrypt_and_upload_file(
     account_id: String,
     file_path: String,
-    _seed_phrase: String,
 ) -> Result<String, String> {
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
@@ -237,7 +236,6 @@ async fn reconstruct_and_decrypt_file(
 pub async fn encrypt_and_upload_folder(
     account_id: String,
     folder_path: String,
-    _seed_phrase: String,
     _source: String,
 ) -> Result<String, String> {
     let folder_path = Path::new(&folder_path);
@@ -480,7 +478,6 @@ pub async fn add_file_to_private_folder(
     _folder_metadata_cid: String,
     folder_name: String,
     file_path: String,
-    _seed_phrase: String,
     _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
@@ -528,7 +525,6 @@ pub async fn remove_file_from_private_folder(
     _folder_metadata_cid: String,
     folder_name: String,
     file_name: String,
-    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     println!(
@@ -676,7 +672,6 @@ pub fn read_file(path: String) -> Result<Vec<u8>, String> {
 pub async fn upload_file_public(
     account_id: String,
     file_path: String,
-    _seed_phrase: String,
 ) -> Result<String, String> {
     let path = std::path::PathBuf::from(&file_path);
     let file_name = path
@@ -756,7 +751,6 @@ pub async fn download_file_public(
 pub async fn public_upload_folder(
     account_id: String,
     folder_path: String,
-    _seed_phrase: String,
 ) -> Result<String, String> {
     let folder_path = Path::new(&folder_path);
     if !folder_path.is_dir() {
@@ -1313,7 +1307,6 @@ pub async fn add_file_to_public_folder(
     folder_metadata_cid: String,
     folder_name: String,
     file_path: String,
-    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     println!("[add_file_to_public_folder] Adding file: {}", file_path);
@@ -1369,7 +1362,6 @@ pub async fn remove_file_from_public_folder(
     _folder_metadata_cid: String,
     folder_name: String,
     file_name: String,
-    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     println!(
@@ -1409,7 +1401,6 @@ pub async fn add_folder_to_public_folder(
     _folder_metadata_cid: String,
     folder_name: String,
     folder_path: String,
-    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     println!(
@@ -1451,7 +1442,6 @@ pub async fn remove_folder_from_public_folder(
     _folder_metadata_cid: String,
     folder_name: String,
     folder_to_remove: String,
-    _seed_phrase: String,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
     println!(
@@ -1491,7 +1481,6 @@ pub async fn add_folder_to_private_folder(
     _folder_metadata_cid: String,
     folder_name: String,
     folder_path: String,
-    _seed_phrase: String,
     _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {
@@ -1534,7 +1523,6 @@ pub async fn remove_folder_from_private_folder(
     _folder_metadata_cid: String,
     folder_name: String,
     folder_to_remove: String,
-    _seed_phrase: String,
     _encryption_key: Option<String>,
     subfolder_path: Option<Vec<String>>,
 ) -> Result<String, String> {

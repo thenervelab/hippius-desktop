@@ -15,7 +15,7 @@ interface TestResult {
 export default function PrivateFolderTest() {
   const [results, setResults] = useState<TestResult[]>([]);
   const [loading, setLoading] = useState(false);
-  const { polkadotAddress, mnemonic } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   // Hardcoded test values
   const TEST_VALUES = {
@@ -23,7 +23,6 @@ export default function PrivateFolderTest() {
     folderMetadataCid: 'bafkreieptq462643z6judqz27h2a4i6dy7cdbf5vstxkaavfpyw6z2j4qa',
     folderName: 'testing-file-add122',
     fileName: 'stranger.jpeg',
-    seedPhrase: mnemonic,
     subfolderPath: ['testing-file-add122', '3-folder-inside-2'],
     fileData: new TextEncoder().encode('This is test file content for testing purposes'),
   };
@@ -47,7 +46,6 @@ export default function PrivateFolderTest() {
         folderName: TEST_VALUES.folderName,
         fileData: Array.from(TEST_VALUES.fileData), // Convert to number array
         fileName: TEST_VALUES.fileName,
-        seedPhrase: TEST_VALUES.seedPhrase,
         subfolderPath: TEST_VALUES.subfolderPath,
       });
 
@@ -77,7 +75,6 @@ export default function PrivateFolderTest() {
         folderMetadataCid: TEST_VALUES.folderMetadataCid,
         folderName: TEST_VALUES.folderName,
         fileName: TEST_VALUES.fileName,
-        seedPhrase: TEST_VALUES.seedPhrase,
         subfolderPath: TEST_VALUES.subfolderPath,
       });
 
@@ -108,7 +105,6 @@ export default function PrivateFolderTest() {
         folderName: TEST_VALUES.folderName,
         fileData: Array.from(TEST_VALUES.fileData),
         fileName: 'root-test-file.txt',
-        seedPhrase: TEST_VALUES.seedPhrase,
         subfolderPath: null, // Root folder
       });
 
@@ -138,7 +134,6 @@ export default function PrivateFolderTest() {
         folderMetadataCid: TEST_VALUES.folderMetadataCid,
         folderName: TEST_VALUES.folderName,
         fileName: 'stranger.jpeg',
-        seedPhrase: TEST_VALUES.seedPhrase,
         subfolderPath: null, // Root folder
       });
 

@@ -32,7 +32,7 @@ pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
 }
 
 #[allow(dead_code)]
-pub async fn unpin_user_file_by_name(file_name: &str, _seed_phrase: &str) -> Result<(), String> {
+pub async fn unpin_user_file_by_name(file_name: &str) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
         let variations = get_file_name_variations(file_name);
         let mut last_error = None;
@@ -76,7 +76,6 @@ pub async fn unpin_user_file_by_name(file_name: &str, _seed_phrase: &str) -> Res
 
 pub async fn delete_and_unpin_user_file_records_by_name(
     file_name: &str,
-    _seed_phrase: &str,
     is_public: bool,
     should_delete_folder: bool,
 ) -> Result<u64, String> {
@@ -101,7 +100,6 @@ pub async fn delete_and_unpin_user_file_records_by_name(
 #[tauri::command]
 pub async fn delete_and_unpin_file_by_name(
     file_name: String,
-    seed_phrase: String,
 ) -> Result<u64, String> {
     println!("[-] Deleting file by name '{}'", file_name);
     println!("file_name : {}", file_name);
@@ -119,7 +117,7 @@ pub async fn delete_and_unpin_file_by_name(
             }
         }
     }
-    delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase, is_public, true).await
+    delete_and_unpin_user_file_records_by_name(&file_name, is_public, true).await
 }
 
 // Helper function for recursive directory copy

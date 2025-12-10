@@ -431,7 +431,6 @@ pub struct UpdateBucketPolicyRequest {
 pub async fn set_bucket_policy(
     app: tauri::AppHandle,
     account_id: String,
-    mnemonic: String,
     policy: UpdateBucketPolicyRequest,
 ) -> Result<(), String> {
     // Validate sync_policy
@@ -475,7 +474,7 @@ pub async fn set_bucket_policy(
 
     // 3. Restart sync processes with the new policy
     println!("[BucketPolicy] Restarting sync processes with new policy...");
-    initialize_sync(app, account_id, mnemonic, None).await?;
+    initialize_sync(app, account_id, String::new(), None).await?;
 
     println!("[BucketPolicy] Sync processes restarted with new policy");
     Ok(())

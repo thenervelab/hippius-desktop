@@ -4,10 +4,8 @@ import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 export default function DirectStorageRequestDemo({
-  seedPhrase,
   accountId
 }: {
-  seedPhrase: string;
   accountId: string
 }) {
   const [file, setFile] = useState<File | null>(null);
@@ -33,9 +31,7 @@ export default function DirectStorageRequestDemo({
       // Call the Rust erasure coding upload command
       const result = await invoke<string>("encrypt_and_upload_file", {
         accountId: accountId,
-        filePath: tempPath,
-        seedPhrase: seedPhrase,
-        encryptionKey: null, // so it uses lated encryption key by default 
+        filePath: tempPath
       });
       setMetadataCid(result);
       setStatus("Upload successful! Metadata CID: " + result);

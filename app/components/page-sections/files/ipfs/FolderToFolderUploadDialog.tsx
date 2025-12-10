@@ -38,7 +38,7 @@ export default function FolderToFolderUploadDialog({
     mainFolderActualName,
     subFolderPath
 }: Props) {
-    const { polkadotAddress, mnemonic } = useWalletAuth();
+    const { polkadotAddress } = useWalletAuth();
     const { getParam } = useUrlParams();
 
     const [folderPath, setFolderPath] = useState<string>("");
@@ -92,14 +92,10 @@ export default function FolderToFolderUploadDialog({
                 folderMetadataCid: effectiveMainFolderCid,
                 folderName: mainFolderActualName || parentFolderName,
                 folderPath: folderPath,
-                seedPhrase: mnemonic,
                 subfolderPath: folderPathArray || null
             };
 
-            console.log("Invoke params (sanitized):", {
-                ...invokeParams,
-                seedPhrase: "[REDACTED]"
-            });
+            console.log("Invoke params:", invokeParams);
 
             const manifestCid = await invoke<string>(command, invokeParams);
 

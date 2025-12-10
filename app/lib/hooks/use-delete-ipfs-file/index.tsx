@@ -28,7 +28,7 @@ export const useDeleteIpfsFile = ({
     console.log("isPrivateFolder", isPrivateFolder)
 
     const { api } = usePolkadotApi();
-    const { walletManager, polkadotAddress, mnemonic } = useWalletAuth();
+    const { walletManager, polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
     const mainFolderActualName = getParam("mainFolderActualName", "");
     const subFolderPath = getParam("subFolderPath");
@@ -139,10 +139,6 @@ export const useDeleteIpfsFile = ({
                 try {
                     // Handle file in folder deletion
                     if (mainFolderActualName) {
-                        if (!mnemonic) {
-                            throw new Error("Seed phrase required to delete files from folder");
-                        }
-
                         const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
                         const mainFolderCid = getParam("mainFolderCid", "");
 
@@ -157,7 +153,6 @@ export const useDeleteIpfsFile = ({
                             accountId: polkadotAddress,
                             folderMetadataCid: mainFolderCid,
                             folderName: mainFolderActualName,
-                            seedPhrase: mnemonic,
                             subfolderPath: folderPath || null
                         };
 
@@ -174,18 +169,13 @@ export const useDeleteIpfsFile = ({
                         await invoke<string>(command, params);
                         results.push({ file: actualFileToDelete, success: true });
                     } else {
-                        if (!mnemonic) {
-                            throw new Error("Seed phrase required to delete local files");
-                        }
-
                         console.log("command", "delete_and_unpin_file_by_name")
                         console.log("params", {
                             fileName: actualFileToDelete.actualFileName
                         });
 
                         await invoke("delete_and_unpin_file_by_name", {
-                            fileName: actualFileToDelete.actualFileName,
-                            seedPhrase: mnemonic
+                            fileName: actualFileToDelete.actualFileName
                         });
                         results.push({ file: actualFileToDelete, success: true });
                     }

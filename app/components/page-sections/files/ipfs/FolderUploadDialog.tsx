@@ -28,7 +28,7 @@ export default function FolderUploadDialog({
     onSuccess,
     onRefresh
 }: Props) {
-    const { polkadotAddress, mnemonic } = useWalletAuth();
+    const { polkadotAddress } = useWalletAuth();
     const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
     const useEncryption = activeSubMenuItem === "Private";
 
@@ -72,7 +72,6 @@ export default function FolderUploadDialog({
             const manifestCid = await invoke<string>(command, {
                 accountId: polkadotAddress,
                 folderPath,
-                seedPhrase: mnemonic,
                 ...(useEncryption ? { source: folderPath } : {})
             });
 
@@ -225,4 +224,3 @@ export default function FolderUploadDialog({
         </Dialog.Root>
     );
 }
-
