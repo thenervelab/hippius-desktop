@@ -7,6 +7,7 @@ import {
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { API_BASE_URL } from "@/lib/constants";
 import { sciToFullString } from "../../utils/formatters/formatBalance";
+import { calculateDelta } from "../../utils";
 
 // Define types based on the indexer API response
 export interface FileEvent {
@@ -109,7 +110,8 @@ export default function useFiles(
           ? sciToFullString(storage.total_files_size)
           : storage.total_files_size,
       }));
-      return filtered.map(toChartFormat);
+      const chartData = filtered.map(toChartFormat);
+      return calculateDelta(chartData, "total_balance");
     },
     placeholderData: keepPreviousData,
     enabled: !!polkadotAddress,

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { BackButton, CardButton, Icons } from "@/components/ui";
+import { BackButton, CardButton, Icons, ThreeDotLoader } from "@/components/ui";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { desktopDir, documentDir, downloadDir } from "@tauri-apps/api/path";
@@ -8,6 +8,7 @@ import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
+import { usePolkadotApi } from "@/app/lib/polkadot-api-context";
 
 interface SyncFolderSelectorProps {
   onFolderSelected: (path: string) => void;
@@ -26,10 +27,9 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   handleBackClick,
   isPrivateView = true,
 }) => {
+  const { api, isConnected } = usePolkadotApi();
   const { data: balanceInfo } = useHippiusBalance();
-  const {
-    data: credits,
-  } = useUserCredits();
+  const { data: credits } = useUserCredits();
   const [suggested, setSuggested] = useState({
     desktop: "",
     documents: "",
@@ -51,8 +51,8 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
 
   useEffect(() => {
     if (!initialPath) {
-      setSelected(null)
-      setSelected(null)
+      setSelected(null);
+      setSelected(null);
       return;
     }
     const key = (Object.keys(suggested) as Array<keyof typeof suggested>).find(
@@ -83,7 +83,9 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
       }
       setSelected((prev) => (prev === opt ? null : opt));
     } catch {
-      toast.error(`Could not access ${opt} folder. Please use a custom folder instead.`);
+      toast.error(
+        `Could not access ${opt} folder. Please use a custom folder instead.`
+      );
     }
   };
 
@@ -98,14 +100,25 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
         setCustom(p);
         setSelected(p);
       }
-    } catch { }
+    } catch {}
   };
 
   const apply = async () => {
-    console.log("formatCreditBalance(credits)", formatCreditBalance(credits ?? null));
+    console.log(
+      "formatCreditBalance(credits)",
+      formatCreditBalance(credits ?? null)
+    );
     console.log("balanceInfo", balanceInfo);
     if (!selected) {
       toast.error("Please select a folder to sync");
+      return;
+    }
+
+    // Check if chain connection is established
+    if (!api || !isConnected) {
+      toast.info(
+        "Please wait while we establish connection to the blockchain. This may take a few moments."
+      );
       return;
     }
 
@@ -168,7 +181,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
         className={cn(
           "w-full flex-1 relative ",
           !isFromSettingsPage &&
-          "bg-[url('/assets/folder-sync-bg-layer.png')] bg-no-repeat bg-cover",
+            "bg-[url('/assets/folder-sync-bg-layer.png')] bg-no-repeat bg-cover",
           !initialPath && !isFromSettingsPage && "mt-6"
         )}
       >
@@ -193,8 +206,9 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
                 subtitle={
                   initialPath
                     ? `Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
-                    : `Choose a folder on your device to keep your ${isPrivateView ? "private" : "public"
-                    } files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
+                    : `Choose a folder on your device to keep your ${
+                        isPrivateView ? "private" : "public"
+                      } files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
                 }
               />
             </div>
@@ -310,9 +324,13 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
           loading={loading}
           onClick={apply}
         >
-          <span className="text-lg leading-6 font-medium">
-            {loading ? "Setting up..." : "Sync Folder"}
-          </span>
+          {!isConnected ? (
+            <ThreeDotLoader dotClassName="bg-white" />
+          ) : (
+            <span className="text-lg leading-6 font-medium">
+              {loading ? "Setting up..." : "Sync Folder"}
+            </span>
+          )}
         </CardButton>
       </div>
     </div>

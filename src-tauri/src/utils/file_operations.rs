@@ -124,20 +124,40 @@ pub async fn delete_and_unpin_file_by_name(
 
 // Helper function for recursive directory copy
 fn copy_dir(src: &Path, dst: &Path) {
-    if let Ok(entries) = std::fs::read_dir(src) {
+    // Prevent copying a folder into its own subtree (avoids infinite nesting)
+    if dst.starts_with(src) {
+        eprintln!(
+            "[copy_dir] Destination {:?} is inside source {:?}; skipping copy to avoid recursion",
+            dst, src
+        );
+        return;
+    }
+
+    let mut stack: Vec<(PathBuf, PathBuf)> = vec![(src.to_path_buf(), dst.to_path_buf())];
+
+    while let Some((src_dir, dst_dir)) = stack.pop() {
+        if let Err(e) = std::fs::create_dir_all(&dst_dir) {
+            eprintln!("[copy_dir] Failed to create directory {:?}: {}", dst_dir, e);
+            continue;
+        }
+
+        let entries = match std::fs::read_dir(&src_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("[copy_dir] Failed to read directory {:?}: {}", src_dir, e);
+                continue;
+            }
+        };
+
         for entry in entries.flatten() {
             let path = entry.path();
             let file_name = match path.file_name() {
                 Some(name) => name,
                 None => continue,
             };
-            let dest_path = dst.join(file_name);
+            let dest_path = dst_dir.join(file_name);
             if path.is_dir() {
-                if let Err(e) = std::fs::create_dir_all(&dest_path) {
-                    eprintln!("Failed to create subfolder: {}", e);
-                    continue;
-                }
-                copy_dir(&path, &dest_path);
+                stack.push((path, dest_path));
             } else if path.is_file() {
                 if let Err(e) = std::fs::copy(&path, &dest_path) {
                     eprintln!("Failed to copy file to sync folder: {}", e);
@@ -184,6 +204,13 @@ pub async fn copy_to_sync_and_add_to_db(
     let dest_path = sync_folder.join(&file_name);
     let dest_path_str = dest_path.to_string_lossy().to_string();
     let dest_path_str_clone = dest_path_str.clone();
+    if is_folder && dest_path.starts_with(original_path) {
+        eprintln!(
+            "[copy_to_sync_and_add_to_db] Refusing to copy folder {:?} into its own subdirectory {:?}",
+            original_path, dest_path
+        );
+        return;
+    }
 
     let cid_vec = metadata_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec);
@@ -466,6 +493,13 @@ pub async fn copy_to_sync_folder(
             .to_string_lossy()
             .to_string();
         let dest_path = target_folder.join(&file_name);
+        if is_folder && dest_path.starts_with(original_path) {
+            eprintln!(
+                "[copy_to_sync_folder] Refusing to copy folder {:?} into its own subdirectory {:?}",
+                original_path, dest_path
+            );
+            return;
+        }
 
         // --- Track this file/folder to prevent redundant watcher events ---
         let dest_path_str = dest_path.to_string_lossy().to_string();

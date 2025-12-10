@@ -2,10 +2,9 @@
 
 import { useEffect, useCallback, useRef, ReactNode, useState } from "react";
 import { ApiPromise, WsProvider } from "@polkadot/api";
-import { RECONNECT_INTERVAL, MAX_RETRIES } from "@/config/constants";
+import { RECONNECT_INTERVAL } from "@/config/constants";
 import { useAtomValue, useSetAtom } from "jotai";
 import { polkadotApiAtom } from "@/lib/global-atoms/polkadotApiAtom";
-import { phaseAtom } from "@/components/splash-screen/atoms";
 import { invoke } from "@tauri-apps/api/core";
 
 export const usePolkadotApi = () => {
@@ -14,197 +13,280 @@ export const usePolkadotApi = () => {
 
 export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   const setState = useSetAtom(polkadotApiAtom);
-  const appPhase = useAtomValue(phaseAtom);
-  const isAppReady = appPhase === "ready";
   const [wssEndpoint, setWssEndpoint] = useState<string | null>(null);
 
   const apiRef = useRef<ApiPromise | null>(null);
   const wsProviderRef = useRef<WsProvider | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
-  const mountedRef = useRef(true);
-  const connectingRef = useRef(false);
-  const retryCountRef = useRef(0);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const connectionInitiatedRef = useRef(false);
 
+  // Use state instead of refs for connection status to ensure proper reactivity
+  const [connectionState, setConnectionState] = useState<{
+    connecting: boolean;
+    connected: boolean;
+    initiated: boolean;
+  }>({ connecting: false, connected: false, initiated: false });
+
+  // Fetch endpoint on mount - retry until available
   useEffect(() => {
+    let isMounted = true;
+    let retryTimeout: NodeJS.Timeout | null = null;
+    const ENDPOINT_RETRY_INTERVAL = 100; // 100 milliseconds
+
     const fetchEndpoint = async () => {
-      const endpoint = await invoke<string>("get_wss_endpoint");
-      setWssEndpoint(endpoint);
+      try {
+        console.log("Attempting to fetch WSS endpoint...");
+        const endpoint = await invoke<string>("get_wss_endpoint");
+
+        if (isMounted && endpoint) {
+          console.log("Fetched WSS endpoint:", endpoint);
+          setWssEndpoint(endpoint);
+        } else if (isMounted) {
+          // Endpoint is empty/null, retry
+          console.log(
+            "WSS endpoint is empty, retrying in",
+            ENDPOINT_RETRY_INTERVAL,
+            "ms..."
+          );
+          retryTimeout = setTimeout(fetchEndpoint, ENDPOINT_RETRY_INTERVAL);
+        }
+      } catch (error) {
+        console.error("Failed to fetch WSS endpoint:", error);
+        // Retry on error
+        if (isMounted) {
+          console.log(
+            "Retrying endpoint fetch in",
+            ENDPOINT_RETRY_INTERVAL,
+            "ms..."
+          );
+          retryTimeout = setTimeout(fetchEndpoint, ENDPOINT_RETRY_INTERVAL);
+        }
+      }
     };
 
     fetchEndpoint();
+
+    return () => {
+      isMounted = false;
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
+    };
   }, []);
 
-  const cleanup = useCallback(async () => {
-    console.log("Cleaning up Polkadot API connections...");
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
+  const connect = useCallback(
+    async (endpoint: string) => {
+      console.log("Connect called with endpoint:", endpoint);
+      console.log("Current connection state:", connectionState);
 
-    if (unsubscribeRef.current) {
-      unsubscribeRef.current();
-      unsubscribeRef.current = null;
-    }
-
-    if (apiRef.current) {
-      try {
-        await apiRef.current.disconnect();
-      } catch (e) {
-        console.log("Error disconnecting API:", e);
+      // Don't try to connect if already connected
+      if (connectionState.connected) {
+        console.log("Skipping connection: already connected");
+        return;
       }
-      apiRef.current = null;
-    }
 
-    if (wsProviderRef.current) {
-      try {
-        await wsProviderRef.current.disconnect();
-      } catch (e) {
-        console.log("Error disconnecting WebSocket:", e);
+      // Don't try to connect if already connecting
+      if (connectionState.connecting) {
+        console.log("Skipping connection: already connecting");
+        return;
       }
-      wsProviderRef.current = null;
-    }
 
-    if (mountedRef.current) {
-      setState((prev) => ({
-        ...prev,
-        api: null,
-        isConnected: false,
-        blockNumber: null,
-      }));
-    }
+      // Clear any pending reconnect
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
 
-    connectingRef.current = false;
-  }, [setState]);
-
-  const connect = useCallback(async () => {
-    // Don't try to connect if the app isn't ready yet or we don't have an endpoint
-    if (!isAppReady || !wssEndpoint) {
-      console.log("Skipping connection: app not ready yet or missing endpoint");
-      return;
-    }
-
-    if (connectingRef.current) {
-      console.log("Skipping connection: already connecting");
-      return;
-    }
-
-    try {
       console.log("Starting connection process...");
-      connectingRef.current = true;
-      await cleanup();
+      setConnectionState((prev) => ({
+        ...prev,
+        connecting: true,
+        initiated: true,
+      }));
 
-      console.log("Creating WebSocket provider:", wssEndpoint);
-      const wsProvider = new WsProvider(wssEndpoint);
-      wsProviderRef.current = wsProvider;
+      // Set isConnecting state immediately
+      setState((prev) => ({ ...prev, isConnecting: true }));
 
-      wsProvider.on("error", async (error) => {
-        console.error("WebSocket error:", error);
-        if (mountedRef.current) {
-          setState((prev) => ({ ...prev, isConnected: false }));
-          await cleanup();
-          if (retryCountRef.current < MAX_RETRIES) {
-            reconnectTimeoutRef.current = setTimeout(() => {
-              retryCountRef.current++;
-              connect();
-            }, RECONNECT_INTERVAL);
-          }
+      // Clean up existing connections
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+
+      if (apiRef.current) {
+        try {
+          await apiRef.current.disconnect();
+        } catch (e) {
+          console.log("Error disconnecting API:", e);
         }
-      });
+        apiRef.current = null;
+      }
 
-      wsProvider.on("connected", () => {
-        console.log("WebSocket connected!");
-        retryCountRef.current = 0; // Reset retry count on successful connection
-      });
-
-      wsProvider.on("disconnected", async () => {
-        console.log("WebSocket disconnected!");
-        if (mountedRef.current) {
-          setState((prev) => ({ ...prev, isConnected: false }));
-          await cleanup();
-          if (retryCountRef.current < MAX_RETRIES) {
-            reconnectTimeoutRef.current = setTimeout(() => {
-              retryCountRef.current++;
-              connect();
-            }, RECONNECT_INTERVAL);
-          }
+      if (wsProviderRef.current) {
+        try {
+          await wsProviderRef.current.disconnect();
+        } catch (e) {
+          console.log("Error disconnecting WebSocket:", e);
         }
-      });
+        wsProviderRef.current = null;
+      }
 
-      console.log("Creating API...");
-      const api = await ApiPromise.create({
-        provider: wsProvider,
-        throwOnConnect: true,
-      });
-      apiRef.current = api;
+      try {
+        console.log("Creating WebSocket provider:", endpoint);
+        const wsProvider = new WsProvider(endpoint);
+        wsProviderRef.current = wsProvider;
 
-      await api.isReady;
-      console.log("API is ready!");
+        // Create a promise that resolves when connected or rejects on error
+        const connectionPromise = new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("Connection timeout"));
+          }, 30000); // 30 second timeout
 
-      // Subscribe to new blocks but only update blockNumber
-      const unsubscribe = await api.rpc.chain.subscribeNewHeads((header) => {
-        if (mountedRef.current) {
+          wsProvider.on("error", (error) => {
+            console.error("WebSocket error:", error);
+          });
+
+          wsProvider.on("connected", () => {
+            console.log("WebSocket connected!");
+            clearTimeout(timeout);
+            resolve();
+          });
+
+          wsProvider.on("disconnected", () => {
+            console.log("WebSocket disconnected!");
+            clearTimeout(timeout);
+
+            setConnectionState((prev) => ({
+              ...prev,
+              connecting: false,
+              connected: false,
+            }));
+            setState((prev) => ({
+              ...prev,
+              isConnected: false,
+              isConnecting: true,
+            }));
+
+            // Schedule reconnect
+            console.log(`Scheduling reconnect in ${RECONNECT_INTERVAL}ms...`);
+            reconnectTimeoutRef.current = setTimeout(() => {
+              // Reset connecting state to allow new connection attempt
+              setConnectionState((prev) => ({ ...prev, connecting: false }));
+              connect(endpoint);
+            }, RECONNECT_INTERVAL);
+          });
+        });
+
+        // Wait for WebSocket to connect
+        await connectionPromise;
+
+        console.log("Creating API...");
+        const api = await ApiPromise.create({
+          provider: wsProvider,
+          throwOnConnect: true,
+        });
+        apiRef.current = api;
+
+        await api.isReady;
+        console.log("API is ready!");
+
+        // Subscribe to new blocks
+        const unsubscribe = await api.rpc.chain.subscribeNewHeads((header) => {
           setState((prev) => ({
             ...prev,
             blockNumber: BigInt(header.number.toString()),
           }));
-        }
-      });
+        });
 
-      unsubscribeRef.current = unsubscribe;
-      connectingRef.current = false;
-      retryCountRef.current = 0; // Reset retry count on successful connection
+        unsubscribeRef.current = unsubscribe;
+        setConnectionState((prev) => ({
+          ...prev,
+          connecting: false,
+          connected: true,
+        }));
 
-      if (mountedRef.current) {
         setState((prev) => ({
           ...prev,
           api,
           isConnected: true,
+          isConnecting: false,
         }));
-      }
-    } catch (error) {
-      console.error("Connection error:", error);
-      if (mountedRef.current) {
-        setState((prev) => ({ ...prev, isConnected: false }));
-        await cleanup();
-        if (retryCountRef.current < MAX_RETRIES) {
-          reconnectTimeoutRef.current = setTimeout(() => {
-            retryCountRef.current++;
-            connect();
-          }, RECONNECT_INTERVAL);
-        }
-      }
-    }
-  }, [cleanup, setState, isAppReady, wssEndpoint]);
 
-  // Connect when ready and when the endpoint changes
+        console.log("Connection established successfully!");
+      } catch (error) {
+        console.error("Connection error:", error);
+        setConnectionState((prev) => ({
+          ...prev,
+          connecting: false,
+          connected: false,
+        }));
+
+        setState((prev) => ({
+          ...prev,
+          isConnected: false,
+          isConnecting: true,
+        }));
+
+        // Schedule reconnect on error
+        console.log(`Scheduling reconnect in ${RECONNECT_INTERVAL}ms...`);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          setConnectionState((prev) => ({ ...prev, connecting: false }));
+          connect(endpoint);
+        }, RECONNECT_INTERVAL);
+      }
+    },
+    [setState, connectionState.connected, connectionState.connecting]
+  );
+
+  // Connect when endpoint is available
   useEffect(() => {
-    mountedRef.current = true;
+    console.log(
+      "Effect triggered - wssEndpoint:",
+      wssEndpoint,
+      "initiated:",
+      connectionState.initiated
+    );
 
-    // Only try to connect if the app is ready and we have an endpoint
-    if (isAppReady && wssEndpoint && !connectionInitiatedRef.current) {
-      connectionInitiatedRef.current = true;
-      connect();
-    }
-
-    // Reconnect if the endpoint changes
-    if (
-      isAppReady &&
-      wssEndpoint &&
-      connectionInitiatedRef.current &&
-      wsProviderRef.current &&
-      wsProviderRef.current.endpoint !== wssEndpoint
-    ) {
-      console.log("WSS endpoint changed, reconnecting...");
-      connect();
+    if (wssEndpoint && !connectionState.initiated) {
+      console.log("Initiating first connection...");
+      connect(wssEndpoint);
     }
 
     return () => {
-      mountedRef.current = false;
-      cleanup();
+      // Only cleanup on actual unmount, not on re-renders
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
     };
-  }, [connect, cleanup, isAppReady, wssEndpoint]);
+  }, [wssEndpoint, connectionState.initiated, connect]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      console.log("PolkadotApiProvider unmounting, cleaning up...");
+
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+
+      if (apiRef.current) {
+        apiRef.current.disconnect().catch(console.error);
+        apiRef.current = null;
+      }
+
+      if (wsProviderRef.current) {
+        wsProviderRef.current.disconnect().catch(console.error);
+        wsProviderRef.current = null;
+      }
+    };
+  }, []);
 
   return children;
 }
