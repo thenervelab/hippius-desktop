@@ -137,20 +137,31 @@ fn copy_dir(src: &Path, dst: &Path) {
         return;
     }
 
-    if let Ok(entries) = std::fs::read_dir(src) {
+    let mut stack: Vec<(PathBuf, PathBuf)> = vec![(src.to_path_buf(), dst.to_path_buf())];
+
+    while let Some((src_dir, dst_dir)) = stack.pop() {
+        if let Err(e) = std::fs::create_dir_all(&dst_dir) {
+            eprintln!("[copy_dir] Failed to create directory {:?}: {}", dst_dir, e);
+            continue;
+        }
+
+        let entries = match std::fs::read_dir(&src_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("[copy_dir] Failed to read directory {:?}: {}", src_dir, e);
+                continue;
+            }
+        };
+
         for entry in entries.flatten() {
             let path = entry.path();
             let file_name = match path.file_name() {
                 Some(name) => name,
                 None => continue,
             };
-            let dest_path = dst.join(file_name);
+            let dest_path = dst_dir.join(file_name);
             if path.is_dir() {
-                if let Err(e) = std::fs::create_dir_all(&dest_path) {
-                    eprintln!("Failed to create subfolder: {}", e);
-                    continue;
-                }
-                copy_dir(&path, &dest_path);
+                stack.push((path, dest_path));
             } else if path.is_file() {
                 if let Err(e) = std::fs::copy(&path, &dest_path) {
                     eprintln!("Failed to copy file to sync folder: {}", e);

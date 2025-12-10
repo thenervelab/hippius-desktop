@@ -419,24 +419,29 @@ pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);
 }
 
-// Helper to collect files recursively
+// Helper to collect files recursively (iterative to avoid deep stack overflows)
 pub fn collect_files_recursively(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
+    let mut stack = vec![dir.to_path_buf()];
 
-        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-            if name.starts_with('.') {
-                continue; // Skip hidden files and directories
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with('.') {
+                    continue; // Skip hidden files and directories
+                }
+            }
+
+            if path.is_file() {
+                files.push(path);
+            } else if path.is_dir() {
+                stack.push(path);
             }
         }
-
-        if path.is_file() {
-            files.push(path);
-        } else if path.is_dir() {
-            collect_files_recursively(&path, files)?;
-        }
     }
+
     Ok(())
 }
 
