@@ -208,6 +208,23 @@ export function WalletAuthProvider({
                 oauthSessionData.token
               );
 
+              // Initialize sync for OAuth session if not already started
+              if (
+                oauthSessionData.substrateAddress &&
+                !syncInitialized.current
+              ) {
+                try {
+                  await invoke("initialize_sync", {
+                    accountId: oauthSessionData.substrateAddress,
+                    mnemonic: "",
+                    tempAuthKey: oauthSessionData.token || null,
+                  });
+                  syncInitialized.current = true;
+                } catch (err) {
+                  console.error("[WalletAuth] Failed to start sync for OAuth restore:", err);
+                }
+              }
+
               // For mnemonic-based auth, also restore mnemonic from database for sync
               if (oauthSessionData.provider === "mnemonic") {
                 const mnemonicSession = await getSession();
@@ -490,6 +507,20 @@ export function WalletAuthProvider({
 
     // Ensure temp auth key is stored for S3 access if no master token yet
     await ensureTempAuthKey(session.substrateAddress, session.token);
+
+    // Kick off sync for OAuth login if not already started
+    if (session.substrateAddress && !syncInitialized.current) {
+      try {
+        await invoke("initialize_sync", {
+          accountId: session.substrateAddress,
+          mnemonic: "",
+          tempAuthKey: session.token || null,
+        });
+        syncInitialized.current = true;
+      } catch (err) {
+        console.error("[WalletAuth] Failed to start sync for OAuth login:", err);
+      }
+    }
   };
 
   // Full reset: clear session + wallet storage
