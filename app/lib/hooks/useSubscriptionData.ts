@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { getAuthHeaders } from "@/app/lib/services/authService";
-import { ensureBillingAuth } from "@/app/lib/hooks/api/useBillingAuth";
-import { API_CONFIG } from "@/app/lib/helpers/sessionStore";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { API_CONFIG } from "@/lib/config";
 
 export interface SubscriptionPlan {
     id: string;
@@ -47,6 +46,7 @@ export interface SubscriptionPlansResponse {
 }
 
 export default function useSubscriptionData() {
+    const { oauthSession } = useWalletAuth();
     const [activeSubscription, setActiveSubscription] = useState<ActiveSubscription | null>(null);
     const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
     const [recommendation, setRecommendation] = useState<string>("");
@@ -56,26 +56,26 @@ export default function useSubscriptionData() {
     const [plansError, setPlansError] = useState<string | null>(null);
 
     const fetchActiveSubscription = useCallback(async () => {
+        if (!oauthSession?.token) {
+            setActiveError("Not authenticated");
+            setIsLoadingActive(false);
+            return;
+        }
+
         try {
             setIsLoadingActive(true);
             setActiveError(null);
 
-            // Ensure authentication is valid
-            const authOk = await ensureBillingAuth();
-            if (!authOk.ok) {
-                setActiveError(authOk.error || "Not authenticated");
-                return;
-            }
-
-            const headers = await getAuthHeaders();
-            if (!headers) {
-                setActiveError("Not authenticated");
-                return;
-            }
-
-            const response = await fetch(`${API_CONFIG.baseUrl}/api/billing/stripe/active-subscription/`, {
-                headers
-            });
+            const response = await fetch(
+                `${API_CONFIG.baseUrl}${API_CONFIG.billing.activeSubscription}`,
+                {
+                    method: "GET",
+                    headers: {
+                        Authorization: `Token ${oauthSession.token}`,
+                        Accept: "application/json",
+                    },
+                }
+            );
 
             if (!response.ok) {
                 throw new Error(`Failed to fetch active subscription: ${response.status}`);
@@ -89,29 +89,29 @@ export default function useSubscriptionData() {
         } finally {
             setIsLoadingActive(false);
         }
-    }, []);
+    }, [oauthSession?.token]);
 
     const fetchSubscriptionPlans = useCallback(async () => {
+        if (!oauthSession?.token) {
+            setPlansError("Not authenticated");
+            setIsLoadingPlans(false);
+            return;
+        }
+
         try {
             setIsLoadingPlans(true);
             setPlansError(null);
 
-            // Ensure authentication is valid
-            const authOk = await ensureBillingAuth();
-            if (!authOk.ok) {
-                setPlansError(authOk.error || "Not authenticated");
-                return;
-            }
-
-            const headers = await getAuthHeaders();
-            if (!headers) {
-                setPlansError("Not authenticated");
-                return;
-            }
-
-            const response = await fetch(`${API_CONFIG.baseUrl}/api/billing/stripe/subscription-plans/`, {
-                headers
-            });
+            const response = await fetch(
+                `${API_CONFIG.baseUrl}${API_CONFIG.billing.subscriptionPlans}`,
+                {
+                    method: "GET",
+                    headers: {
+                        Authorization: `Token ${oauthSession.token}`,
+                        Accept: "application/json",
+                    },
+                }
+            );
 
             if (!response.ok) {
                 throw new Error(`Failed to fetch subscription plans: ${response.status}`);
@@ -126,12 +126,14 @@ export default function useSubscriptionData() {
         } finally {
             setIsLoadingPlans(false);
         }
-    }, []);
+    }, [oauthSession?.token]);
 
     useEffect(() => {
-        fetchActiveSubscription();
-        fetchSubscriptionPlans();
-    }, [fetchActiveSubscription, fetchSubscriptionPlans]);
+        if (oauthSession?.token) {
+            fetchActiveSubscription();
+            fetchSubscriptionPlans();
+        }
+    }, [oauthSession?.token, fetchActiveSubscription, fetchSubscriptionPlans]);
 
     return {
         activeSubscription,

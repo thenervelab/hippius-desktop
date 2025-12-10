@@ -47,7 +47,7 @@ import {
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 
 const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
-  const { polkadotAddress, mnemonic } = useWalletAuth();
+  const { polkadotAddress, oauthSession } = useWalletAuth();
   const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
   const isPrivateView = activeSubMenuItem === "Private";
 
@@ -295,7 +295,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     (async () => {
       try {
         setIsLoadingPublicPath(true);
-        const publicfolderPath = await getPublicSyncPath();
+        const publicfolderPath = await getPublicSyncPath(polkadotAddress || undefined);
         setSelectedPublicFolderPath(publicfolderPath);
       } catch {
         console.error("Failed to load public sync folder");
@@ -303,14 +303,14 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         setIsLoadingPublicPath(false);
       }
     })();
-  }, []);
+  }, [polkadotAddress]);
 
   // Load private sync path
   useEffect(() => {
     (async () => {
       try {
         setIsLoadingPrivatePath(true);
-        const privatefolderPath = await getPrivateSyncPath();
+        const privatefolderPath = await getPrivateSyncPath(polkadotAddress || undefined);
         setSelectedPrivateFolderPath(privatefolderPath);
       } catch {
         console.error("Failed to load private sync folder");
@@ -318,7 +318,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         setIsLoadingPrivatePath(false);
       }
     })();
-  }, []);
+  }, [polkadotAddress]);
 
   // Check if sync path is configured
   useEffect(() => {
@@ -391,7 +391,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const handleFolderSelected = useCallback(
     async (path: string) => {
       try {
-        if (!polkadotAddress || !mnemonic) {
+        if (!polkadotAddress) {
           toast.error("Wallet authentication is required");
           return;
         }
@@ -403,7 +403,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             );
             return;
           }
-          await setPrivateSyncPath(path, polkadotAddress, mnemonic);
+          await setPrivateSyncPath(path, polkadotAddress, oauthSession?.token);
           setSelectedPrivateFolderPath(path);
         } else {
           if (path === selectedPrivateFolderPath) {
@@ -412,7 +412,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
             );
             return;
           }
-          await setPublicSyncPath(path, polkadotAddress, mnemonic);
+          await setPublicSyncPath(path, polkadotAddress, oauthSession?.token);
           setSelectedPublicFolderPath(path);
         }
         toast.success(
@@ -437,14 +437,13 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       selectedPrivateFolderPath,
       selectedPublicFolderPath,
       polkadotAddress,
-      mnemonic,
     ]
   );
 
   // Handle skip sync folder setup
   const handleSkipSyncFolder = useCallback(async () => {
     try {
-      if (!polkadotAddress || !mnemonic) {
+      if (!polkadotAddress) {
         toast.error("Wallet authentication is required");
         return;
       }
@@ -453,10 +452,10 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       const emptyPath = "";
 
       if (isPrivateView) {
-        await setPrivateSyncPath(emptyPath, polkadotAddress, mnemonic);
+        await setPrivateSyncPath(emptyPath, polkadotAddress, oauthSession?.token);
         setSelectedPrivateFolderPath(emptyPath);
       } else {
-        await setPublicSyncPath(emptyPath, polkadotAddress, mnemonic);
+        await setPublicSyncPath(emptyPath, polkadotAddress, oauthSession?.token);
         setSelectedPublicFolderPath(emptyPath);
       }
 
@@ -477,7 +476,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         }`
       );
     }
-  }, [isPrivateView, polkadotAddress, mnemonic]);
+  }, [isPrivateView, polkadotAddress]);
 
   // Navigation to settings
   const handleNavigateToSettings = useCallback(() => {
@@ -589,7 +588,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       (async () => {
         try {
           setIsLoadingPrivatePath(true);
-          const privatefolderPath = await getPrivateSyncPath();
+          const privatefolderPath = await getPrivateSyncPath(polkadotAddress || undefined);
           setSelectedPrivateFolderPath(privatefolderPath);
         } catch {
           console.error("Failed to reload private sync folder");
@@ -602,7 +601,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       (async () => {
         try {
           setIsLoadingPublicPath(true);
-          const publicfolderPath = await getPublicSyncPath();
+          const publicfolderPath = await getPublicSyncPath(polkadotAddress || undefined);
           setSelectedPublicFolderPath(publicfolderPath);
         } catch {
           console.error("Failed to reload public sync folder");
@@ -611,7 +610,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
         }
       })();
     }
-  }, [syncPathRefreshTrigger]);
+  }, [syncPathRefreshTrigger, polkadotAddress]);
 
   // Computed values for current view
   const currentSyncPath = isPrivateView

@@ -16,7 +16,7 @@ export const API_CONFIG = {
     plans: "/api/billing/stripe/subscription-plans/",
     depositAddress: "/api/billing/deposit-address/",
     customerPortal: "/api/billing/stripe/customer-portal/",
-    createSubscription: "/api/billing/stripe/create-subscription/"
+    createSubscription: "/api/billing/stripe/create-subscription/",
   },
   auth: {
     mnemonic: "/api/auth/mnemonic/",
@@ -26,7 +26,7 @@ export const API_CONFIG = {
 
 export const AUTH_CONFIG = {
   tokenStorageKey: "hippius_session_token", // retained for parity, not used in DB mode
-  tokenExpiryKey: "hippius_token_expiry",   // retained for parity, not used in DB mode
+  tokenExpiryKey: "hippius_token_expiry", // retained for parity, not used in DB mode
   tokenScheme: "Token", // or "Bearer" depending on backend
   defaultTtlHours: 24,
 } as const;
@@ -41,7 +41,12 @@ export type ApiAuth = {
 // Persist API auth in the session table (single-row model)
 export async function setApiAuth(
   token: string,
-  opts?: { ttlHours?: number; userId?: number; username?: string; absoluteExpiryMs?: number }
+  opts?: {
+    ttlHours?: number;
+    userId?: number;
+    username?: string;
+    absoluteExpiryMs?: number;
+  }
 ) {
   await ensureWalletTable();
   await ensureSessionAuthColumns();
@@ -57,12 +62,27 @@ export async function setApiAuth(
   if (res.length && res[0].values.length) {
     db.run(
       "UPDATE session SET authToken = ?, tokenExpiry = ?, userId = ?, username = ? WHERE id = ?",
-      [token, tokenExpiry, opts?.userId ?? null, opts?.username ?? null, res[0].values[0][0]]
+      [
+        token,
+        tokenExpiry,
+        opts?.userId ?? null,
+        opts?.username ?? null,
+        res[0].values[0][0],
+      ]
     );
   } else {
     db.run(
-      "INSERT INTO session (mnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      ["", 0, 1440, token, tokenExpiry, opts?.userId ?? null, opts?.username ?? null]
+      "INSERT INTO session (mnemonic,oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        "",
+        "",
+        0,
+        1440,
+        token,
+        tokenExpiry,
+        opts?.userId ?? null,
+        opts?.username ?? null,
+      ]
     );
   }
   await saveBytes(db.export());
@@ -116,7 +136,11 @@ export async function clearApiAuth() {
 
 export async function getAuthHeaders(): Promise<HeadersInit | null> {
   const auth = await getApiAuth();
-  if (!auth || !auth.token || (auth.tokenExpiry && auth.tokenExpiry < Date.now())) {
+  if (
+    !auth ||
+    !auth.token ||
+    (auth.tokenExpiry && auth.tokenExpiry < Date.now())
+  ) {
     return null;
   }
   return {
@@ -147,7 +171,7 @@ export async function saveSession(
 
     db.run("DELETE FROM session");
     db.run(
-      "INSERT INTO session (mnemonic, logoutTimeStamp, logoutTimeInMinutes) VALUES (?, ?, ?)",
+      "INSERT INTO session (oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes) VALUES (?, ?, ?)",
       [mnemonic, logoutTimeStamp, effectiveMinutes]
     );
 
@@ -169,17 +193,17 @@ export async function getSession(): Promise<{
     const db = await initHippiusDesktopDB();
 
     const res = db.exec(
-      "SELECT mnemonic, logoutTimeStamp, logoutTimeInMinutes FROM session LIMIT 1"
+      "SELECT oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes FROM session LIMIT 1"
     );
 
     if (!res.length || !res[0]?.values.length) {
       return null;
     }
 
-    const [mnemonic, logoutTimeStamp, logoutTimeInMinutes] = res[0]
+    const [oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes] = res[0]
       .values[0] as [string, number, number];
     return {
-      mnemonic,
+      mnemonic: oauthMnemonic,
       logoutTimeStamp,
       logoutTimeInMinutes: logoutTimeInMinutes || 1440,
     };
@@ -212,20 +236,19 @@ export async function clearSession() {
     const res = db.exec("SELECT logoutTimeInMinutes, id FROM session LIMIT 1");
     const hasRow = res.length && res[0].values.length;
     const id = hasRow ? Number(res[0].values[0][1]) : null;
-    const minutes =
-      hasRow ? Number(res[0].values[0][0]) || 1440 : 1440;
+    const minutes = hasRow ? Number(res[0].values[0][0]) || 1440 : 1440;
 
     if (hasRow && id != null) {
       // Clear active session data + API auth
       db.run(
-        "UPDATE session SET mnemonic = ?, logoutTimeStamp = ?, logoutTimeInMinutes = ?, authToken = ?, tokenExpiry = ?, userId = ?, username = ? WHERE id = ?",
-        ["", 0, minutes, null, null, null, null, id]
+        "UPDATE session SET mnemonic = ?,oauthMnemonic = ?, logoutTimeStamp = ?, logoutTimeInMinutes = ?, authToken = ?, tokenExpiry = ?, userId = ?, username = ? WHERE id = ?",
+        ["", "", 0, minutes, null, null, null, null, id]
       );
     } else {
       // No row yet: create placeholder carrying the minutes
       db.run(
-        "INSERT INTO session (mnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ["", 0, minutes, null, null, null, null]
+        "INSERT INTO session (mnemonic,oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ["", "", 0, minutes, null, null, null, null]
       );
     }
 

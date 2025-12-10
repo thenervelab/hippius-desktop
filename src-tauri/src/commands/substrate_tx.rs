@@ -8,12 +8,14 @@ use crate::sync_shared::{
     GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, S3SyncState, SYNCING_ACCOUNTS,
 };
 use crate::{start_private_folder_sync_tauri, start_public_folder_sync_tauri};
+use crate::utils::objectstore_tokens::{has_master_token, save_temp_auth_key};
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
 use sp_core::{Pair, sr25519};
 use sqlx::Row;
+use crate::utils::account_key::account_key;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use subxt::tx::PairSigner;
@@ -68,7 +70,14 @@ pub struct SetSyncPathParams {
     pub path: String,
     pub is_public: bool,
     pub account_id: String,
-    pub mnemonic: String,
+    pub temp_auth_key: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSyncPathParams {
+    pub is_public: bool,
+    pub account_id: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -86,6 +95,19 @@ pub async fn set_sync_path(
     app_handle: tauri::AppHandle,
     params: SetSyncPathParams,
 ) -> Result<String, String> {
+    crate::utils::sync::set_active_account(&params.account_id);
+
+    // If no master token yet and a temp auth key is provided, store it now for this account.
+    if !has_master_token(&params.account_id).await.unwrap_or(false) {
+        if let Some(tk) = params
+            .temp_auth_key
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            let _ = save_temp_auth_key(&params.account_id, tk).await;
+        }
+    }
     let path_type = if params.is_public {
         "public"
     } else {
@@ -95,8 +117,29 @@ pub async fn set_sync_path(
 
     if let Some(pool) = DB_POOL.get() {
         // Get the current sync path (if any) to detect changes
+        let owner = account_key(&params.account_id);
+        // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
+        if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
+        )
+        .bind(path_type)
+        .fetch_optional(pool)
+        .await
+        {
+            let _ = sqlx::query(
+                "REPLACE INTO sync_paths (id, owner, path, type, timestamp) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(legacy_id)
+            .bind(&owner)
+            .bind(&params.path)
+            .bind(path_type)
+            .bind(timestamp)
+            .execute(pool)
+            .await;
+        }
         let current_path: Option<String> =
-            sqlx::query_scalar("SELECT path FROM sync_paths WHERE type = ?")
+            sqlx::query_scalar("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
+                .bind(&owner)
                 .bind(path_type)
                 .fetch_optional(pool)
                 .await
@@ -155,9 +198,10 @@ pub async fn set_sync_path(
 
         // Rest of your existing code for database update and sync start...
         let res = sqlx::query(
-            "INSERT INTO sync_paths (path, type, timestamp) VALUES (?, ?, ?)
-             ON CONFLICT(type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
+            "INSERT INTO sync_paths (owner, path, type, timestamp) VALUES (?, ?, ?, ?)
+             ON CONFLICT(owner, type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
         )
+        .bind(&owner)
         .bind(&params.path)
         .bind(path_type)
         .bind(timestamp)
@@ -188,27 +232,22 @@ pub async fn set_sync_path(
                 if params.is_public {
                     let app_handle_public = app_handle.clone();
                     let account = params.account_id.clone();
-                    let mnemonic = params.mnemonic.clone();
 
                     let handle = tokio::spawn(async move {
-                        let _ = crate::commands::syncing::resolve_or_create_subaccount_seed(
-                            account.clone(),
-                            mnemonic.clone(),
-                        )
-                        .await;
-
-                        ensure_aws_env(account.clone(), mnemonic.clone()).await;
+                        if let Err(e) = ensure_aws_env(account.clone()).await {
+                            eprintln!("[set_sync_path] Aborting public sync start: {}", e);
+                            return;
+                        }
 
                         println!("[set_sync_path] Starting PUBLIC sync task...");
                         match get_sync_policy_from_db().await {
                             Ok(delete_policy) => {
-                                start_public_folder_sync_tauri(
-                                    app_handle_public,
-                                    account.clone(),
-                                    mnemonic,
-                                    delete_policy,
-                                )
-                                .await;
+                        start_public_folder_sync_tauri(
+                            app_handle_public,
+                            account.clone(),
+                            delete_policy,
+                        )
+                        .await;
                             }
                             Err(e) => {
                                 eprintln!("[set_sync_path] Failed to get delete policy: {}", e);
@@ -216,7 +255,6 @@ pub async fn set_sync_path(
                                 start_public_folder_sync_tauri(
                                     app_handle_public,
                                     account.clone(),
-                                    mnemonic,
                                     DeletePolicy::UploadOnly,
                                 )
                                 .await;
@@ -283,15 +321,12 @@ pub async fn set_sync_path(
                     // Similar logic for private...
                     let app_handle_private = app_handle.clone();
                     let account = params.account_id.clone();
-                    let mnemonic = params.mnemonic.clone();
 
                     let handle = tokio::spawn(async move {
-                        let _ = crate::commands::syncing::resolve_or_create_subaccount_seed(
-                            account.clone(),
-                            mnemonic.clone(),
-                        )
-                        .await;
-                        ensure_aws_env(account.clone(), mnemonic.clone()).await;
+                        if let Err(e) = ensure_aws_env(account.clone()).await {
+                            eprintln!("[set_sync_path] Aborting private sync start: {}", e);
+                            return;
+                        }
 
                         println!("[set_sync_path] Starting PRIVATE sync task...");
                         match get_sync_policy_from_db().await {
@@ -299,7 +334,6 @@ pub async fn set_sync_path(
                                 start_private_folder_sync_tauri(
                                     app_handle_private,
                                     account.clone(),
-                                    mnemonic,
                                     delete_policy,
                                 )
                                 .await;
@@ -310,7 +344,6 @@ pub async fn set_sync_path(
                                 start_private_folder_sync_tauri(
                                     app_handle_private,
                                     account.clone(),
-                                    mnemonic,
                                     DeletePolicy::UploadOnly,
                                 )
                                 .await;
@@ -376,7 +409,13 @@ pub async fn set_sync_path(
 
                 Ok(format!("Sync path for '{}' set successfully.", path_type))
             }
-            Err(e) => Err(format!("Failed to set sync path: {}", e)),
+            Err(e) => {
+                eprintln!(
+                    "[set_sync_path] DB write failed for owner {} type {}: {}",
+                    owner, path_type, e
+                );
+                Err(format!("Failed to set sync path: {}", e))
+            }
         }
     } else {
         Err("DB_POOL not initialized".to_string())
@@ -436,32 +475,104 @@ pub async fn transfer_balance_tauri(
 }
 
 // Add this internal function
-pub async fn get_sync_path_internal(is_public: bool) -> Result<SyncPathResult, String> {
+pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<SyncPathResult, String> {
     let path_type = if is_public { "public" } else { "private" };
     if let Some(pool) = DB_POOL.get() {
-        let rec = sqlx::query("SELECT path FROM sync_paths WHERE type = ?")
+        // Try scoped entry first
+        let rec_row = sqlx::query("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
+            .bind(owner)
             .bind(path_type)
             .fetch_optional(pool)
             .await
             .map_err(|e| format!("DB error: {}", e))?;
-        let path = if let Some(row) = rec {
-            row.get::<String, _>("path")
+
+        // If not found, migrate a legacy (owner='') row only when no scoped rows exist yet.
+        let path_opt: Option<String> = if let Some(row) = rec_row {
+            Some(row.get::<String, _>("path"))
         } else {
-            // Return error instead of fallback to constant
-            return Err(format!(
+            let scoped_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM sync_paths WHERE owner != '' AND owner IS NOT NULL",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+
+            if scoped_count == 0 {
+                let mut tx = pool
+                    .begin()
+                    .await
+                    .map_err(|e| format!("DB error (tx begin): {}", e))?;
+
+                let legacy = sqlx::query_as::<_, (i64, String)>(
+                    "SELECT id, path FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
+                )
+                .bind(path_type)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| format!("DB error: {}", e))?;
+
+                if let Some((legacy_id, legacy_path)) = legacy {
+                    // Remove any pre-existing scoped row to avoid UNIQUE constraint failures.
+                    let _ = sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
+                        .bind(owner)
+                        .bind(path_type)
+                        .execute(&mut *tx)
+                        .await;
+
+                    let _ = sqlx::query(
+                        "UPDATE sync_paths SET owner = ? WHERE id = ? AND owner = ''",
+                    )
+                    .bind(owner)
+                    .bind(legacy_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| format!("DB error updating legacy row: {}", e))?;
+
+                    tx.commit()
+                        .await
+                        .map_err(|e| format!("DB error (commit): {}", e))?;
+                    Some(legacy_path)
+                } else {
+                    tx.commit()
+                        .await
+                        .map_err(|e| format!("DB error (commit): {}", e))?;
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(path) = path_opt {
+            Ok(SyncPathResult { path, is_public })
+        } else {
+            Err(format!(
                 "Sync path for {} not set yet. Please configure encryption key first.",
                 path_type
-            ));
-        };
-        Ok(SyncPathResult { path, is_public })
+            ))
+        }
     } else {
         Err("DB_POOL not initialized".to_string())
     }
 }
 
 #[tauri::command]
-pub async fn get_sync_path(is_public: bool) -> Result<SyncPathResult, String> {
-    get_sync_path_internal(is_public).await
+pub async fn get_sync_path(params: GetSyncPathParams) -> Result<SyncPathResult, String> {
+    // Allow camelCase param names from the frontend and fall back to the active account if none provided.
+    let account_id = match params
+        .account_id
+        .or_else(|| crate::utils::sync::current_account_id().ok())
+    {
+        Some(id) => id,
+        None => {
+            return Ok(SyncPathResult {
+                path: "".to_string(),
+                is_public: params.is_public,
+            })
+        }
+    };
+    let owner = account_key(&account_id);
+    get_sync_path_internal(params.is_public, &owner).await
 }
 
 #[tauri::command]

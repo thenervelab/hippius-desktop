@@ -14,6 +14,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs as tokio_fs;
 use tokio::time::{Duration, sleep};
 
+/// Short, deterministic key derived from the main account id to namespace per-user data.
+pub fn account_key(account_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(account_id.as_bytes());
+    let digest = hasher.finalize();
+    hex::encode(&digest)[..8].to_string()
+}
+
 /* =============================== Policy ===================================== */
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,13 +102,14 @@ pub fn pruned_key_for(prunefile_id: &str) -> String {
     format!("{}/clients/{}/pruned.json", MANIFEST_ROOT, prunefile_id)
 }
 
-pub fn prunefile_id(sub_account: &str, path_hash: &str, private: &str) -> String {
+pub fn prunefile_id(account_id: &str, path_hash: &str, private: &str) -> String {
+    let account_key = account_key(account_id);
     let mut hasher = Sha256::new();
     hasher.update(b"hippius_manifest_v1");
     hasher.update(b":");
     hasher.update(path_hash.as_bytes());
     hasher.update(b":");
-    hasher.update(sub_account.as_bytes());
+    hasher.update(account_key.as_bytes());
     hasher.update(b":");
     hasher.update(private.as_bytes());
     let digest = hasher.finalize();

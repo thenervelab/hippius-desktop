@@ -1,44 +1,48 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export async function getPrivateSyncPath(): Promise<string> {
+export async function getPrivateSyncPath(accountId?: string): Promise<string> {
     try {
-        const result = await invoke<{ path: string }>("get_sync_path", { isPublic: false });
+        const result = await invoke<{ path: string }>("get_sync_path", {
+            params: { isPublic: false, accountId },
+        });
         return result.path;
     } catch (error) {
         console.error("Error fetching sync path:", error);
-        throw error;
+        throw new Error(error instanceof Error ? error.message : `${error}`);
     }
 }
 
-export async function setPrivateSyncPath(path: string, polkadotAddress: string, mnemonic: string): Promise<string> {
+export async function setPrivateSyncPath(path: string, polkadotAddress: string, tempAuthKey?: string): Promise<string> {
     try {
         return await invoke<string>("set_sync_path", {
-            params: { path, is_public: false, account_id: polkadotAddress, mnemonic },
+            params: { path, is_public: false, account_id: polkadotAddress, temp_auth_key: tempAuthKey },
         });
     } catch (error) {
         console.error("Error setting sync path:", error);
-        throw error;
+        throw new Error(error instanceof Error ? error.message : `${error}`);
     }
 }
 
 
-export async function getPublicSyncPath(): Promise<string> {
+export async function getPublicSyncPath(accountId?: string): Promise<string> {
     try {
-        const result = await invoke<{ path: string }>("get_sync_path", { isPublic: true });
+        const result = await invoke<{ path: string }>("get_sync_path", {
+            params: { isPublic: true, accountId },
+        });
         return result.path;
     } catch (error) {
         console.error("Error fetching sync path:", error);
-        throw error;
+        throw new Error(error instanceof Error ? error.message : `${error}`);
     }
 }
 
-export async function setPublicSyncPath(path: string, polkadotAddress: string, mnemonic: string): Promise<string> {
+export async function setPublicSyncPath(path: string, polkadotAddress: string, tempAuthKey?: string): Promise<string> {
     try {
         return await invoke<string>("set_sync_path", {
-            params: { path, is_public: true, account_id: polkadotAddress, mnemonic },
+            params: { path, is_public: true, account_id: polkadotAddress, temp_auth_key: tempAuthKey },
         });
     } catch (error) {
         console.error("Error setting sync path:", error);
-        throw error;
+        throw new Error(error instanceof Error ? error.message : `${error}`);
     }
 }

@@ -36,7 +36,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     const [revealFiles, setRevealFiles] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
-    const { polkadotAddress, mnemonic } = useWalletAuth();
+    const { polkadotAddress } = useWalletAuth();
     const mainFolderActualName = getParam("mainFolderActualName", "");
     const subFolderPath = getParam("subFolderPath");
 
@@ -113,7 +113,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
             return;
         }
 
-        if (!polkadotAddress || !mnemonic) {
+        if (!polkadotAddress) {
             toast.error("Wallet not connected. Please connect your wallet.");
             return;
         }
@@ -170,7 +170,6 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     folderMetadataCid: mainFolderCid,
                     folderName: mainFolderActualName,
                     filePath: filePath,
-                    seedPhrase: mnemonic,
                     subfolderPath: folderPath || null
                 };
 

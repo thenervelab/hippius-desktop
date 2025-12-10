@@ -2,13 +2,13 @@ use crate::private_folder_sync::start_private_folder_sync_tauri;
 use crate::public_folder_sync::start_public_folder_sync_tauri;
 use crate::sync_engine::DeletePolicy;
 use crate::sync_shared::{prepare_for_new_sync, reset_all_sync_state, stop_sync_for_scope};
-use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
+use crate::utils::account_key::account_key;
+use crate::utils::objectstore_tokens::clear_objectstore_env;
+use crate::utils::sync::{clear_active_account, current_account_id, get_private_sync_path, get_public_sync_path, set_active_account};
 use base64 as b64;
 use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::secretbox;
 use sodiumoxide::crypto::secretbox::{Key as SbKey, Nonce as SbNonce};
-use sp_core::Pair;
-use sp_core::sr25519;
 use sqlx;
 use std::sync::Arc;
 use tauri::Manager;
@@ -45,16 +45,20 @@ pub struct AppState {
 }
 
 #[allow(deprecated)]
-pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
-    // Resolve or create subaccount seed (with encryption and chain-side handling)
-    let seed_to_use = resolve_or_create_subaccount_seed(account_id.clone(), mnemonic.clone()).await;
-
-    // Configure AWS env
-    let encoded_seed = b64::encode(&seed_to_use);
-    unsafe {
-        std::env::set_var("AWS_ACCESS_KEY_ID", &encoded_seed);
-        std::env::set_var("AWS_SECRET_ACCESS_KEY", &seed_to_use);
-        std::env::set_var("AWS_DEFAULT_REGION", "decentralized");
+pub async fn ensure_aws_env(account_id: String) -> Result<(), String> {
+    // New flow: prefer stored master token for S3 access. Keep params for compatibility.
+    match crate::utils::objectstore_tokens::ensure_master_token_or_fetch(&account_id).await {
+        Ok(_) => {
+            println!("[Auth] Loaded AWS creds from stored master token");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!(
+                "[Auth] No master token available for S3 auth (account_id:{}): {}",
+                account_id, e
+            );
+            Err(e)
+        }
     }
 }
 
@@ -62,8 +66,9 @@ pub async fn ensure_aws_env(account_id: String, mnemonic: String) {
 pub async fn initialize_sync(
     app: tauri::AppHandle,
     account_id: String,
-    mnemonic: String,
+    temp_auth_key: Option<String>,
 ) -> Result<(), String> {
+    set_active_account(&account_id);
     let state = app.state::<Arc<AppState>>();
 
     // First, signal cancellation for any existing sync processes
@@ -81,17 +86,36 @@ pub async fn initialize_sync(
     // Prepare for new sync (reset cancellation token)
     prepare_for_new_sync();
 
+    // Persist temp auth key if no master token exists yet for this account.
+    if !crate::utils::objectstore_tokens::has_master_token(&account_id)
+        .await
+        .unwrap_or(false)
+    {
+        if let Some(tk) = temp_auth_key
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            let _ = crate::utils::objectstore_tokens::save_temp_auth_key(&account_id, tk).await;
+        }
+    }
+
+    // Purge old S3 entries for other accounts to avoid mixing buckets after logout/login.
+    if let Some(pool) = crate::DB_POOL.get() {
+        if let Err(e) = cleanup_s3_records_for_other_accounts(pool, &account_id).await {
+            eprintln!("[SyncInit] Failed to cleanup old S3 records: {}", e);
+        }
+    }
+
     // Offload heavy subaccount resolution and task spawning to a background task
     let app_for_bg = app.clone();
     let account_for_bg = account_id.clone();
-    let mnemonic_for_bg = mnemonic.clone();
     let parent_task = tokio::spawn(async move {
         // Spawn sync tasks
         let app_handle_folder_sync = app_for_bg.clone();
         let app_handle_public_folder_sync = app_for_bg.clone();
         let account_clone2 = account_for_bg.clone();
-        let account_clone3 = account_for_bg.clone();
-        let mnemonic_clone = mnemonic_for_bg.clone();
+        let account_for_cron = account_for_bg.clone();
 
         // let user_profile_task = tokio::spawn(async move {
         //     start_user_profile_sync_tauri(app_handle_clone, account_clone).await;
@@ -119,7 +143,10 @@ pub async fn initialize_sync(
         };
 
         // Only perform AWS credentials setup if at least one sync is enabled
-        ensure_aws_env(account_for_bg.clone(), mnemonic_for_bg.clone()).await;
+        if let Err(e) = ensure_aws_env(account_for_bg.clone()).await {
+            eprintln!("[SyncInit] Aborting sync start: {}", e);
+            return;
+        }
 
         let folder_task = if private_enabled {
             let delete_policy = match get_sync_policy_from_db().await {
@@ -134,12 +161,7 @@ pub async fn initialize_sync(
             };
 
             Some(tokio::spawn(async move {
-                start_private_folder_sync_tauri(
-                    app_handle_folder_sync,
-                    account_for_bg,
-                    mnemonic_for_bg,
-                    delete_policy,
-                )
+                start_private_folder_sync_tauri(app_handle_folder_sync, account_for_bg, delete_policy)
                 .await;
             }))
         } else {
@@ -159,12 +181,7 @@ pub async fn initialize_sync(
             };
 
             Some(tokio::spawn(async move {
-                start_public_folder_sync_tauri(
-                    app_handle_public_folder_sync,
-                    account_clone2,
-                    mnemonic_clone,
-                    delete_policy,
-                )
+                start_public_folder_sync_tauri(app_handle_public_folder_sync, account_clone2, delete_policy)
                 .await;
             }))
         } else {
@@ -188,7 +205,7 @@ pub async fn initialize_sync(
             // Start PUBLIC listing cron only if public sync was started
             if public_enabled {
                 let pool_pub = pool.clone();
-                let account_for_cron_pub = account_clone3.clone();
+                let account_for_cron_pub = account_for_cron.clone();
                 let public_cron_handle = tokio::spawn(async move {
                     let interval = 30u64; // 30 seconds
                     loop {
@@ -231,7 +248,7 @@ pub async fn initialize_sync(
             // Start PRIVATE listing cron only if private sync was started
             if private_enabled {
                 let pool_priv = pool.clone();
-                let account_for_cron_priv = account_clone3.clone();
+                let account_for_cron_priv = account_for_cron.clone();
                 let private_cron_handle = tokio::spawn(async move {
                     let interval = 30u64; // 30 seconds
                     loop {
@@ -286,6 +303,9 @@ pub async fn cleanup_sync(app: tauri::AppHandle) -> Result<(), String> {
 
     // Stop all sync processes and reset state
     crate::sync_shared::stop_all_sync_processes();
+    clear_active_account();
+    // Clear env so next login refreshes AWS creds/buckets without deleting stored tokens.
+    clear_objectstore_env();
 
     // Abort any running tasks
     let state = app.state::<Arc<AppState>>();
@@ -343,6 +363,27 @@ fn encrypt_phrase(plain: &str, key: &SbKey) -> String {
     b64::encode(&buf)
 }
 
+/// Remove S3-derived rows for any account other than the one currently logging in.
+async fn cleanup_s3_records_for_other_accounts(
+    pool: &sqlx::SqlitePool,
+    active_account: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        DELETE FROM user_profiles 
+        WHERE owner <> ?
+          AND (
+            main_req_hash = 's3'
+            OR source LIKE 's3://%'
+          )
+        "#,
+    )
+    .bind(active_account)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 // Helper: try decrypt base64 (nonce||ct), else None
 #[allow(deprecated)]
 pub fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
@@ -356,144 +397,6 @@ pub fn decrypt_phrase(b64_in: &str, key: &SbKey) -> Option<String> {
     String::from_utf8(pt).ok()
 }
 
-// Helper: heavy logic to resolve or create subaccount seed (non-blocking to UI)
-pub async fn resolve_or_create_subaccount_seed(account_id: String, mnemonic: String) -> String {
-    // Ensure sodiumoxide is initialized
-    let _ = sodiumoxide::init();
-
-    if let Some(pool) = crate::DB_POOL.get() {
-        // Load key (required for encrypt/decrypt)
-        let maybe_key = load_encryption_key(pool).await;
-
-        match sqlx::query_as::<_, (String,)>(
-            "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1",
-        )
-        .bind(&account_id)
-        .fetch_optional(pool)
-        .await
-        {
-            Ok(Some((stored_str,))) => {
-                if let Some(key) = &maybe_key {
-                    // Try decrypt; if fails, treat as legacy plaintext and migrate
-                    if let Some(decrypted) = decrypt_phrase(&stored_str, key) {
-                        decrypted
-                    } else {
-                        stored_str
-                    }
-                } else {
-                    stored_str
-                }
-            }
-            Ok(None) => {
-                // Create a new subaccount (sr25519) and store it encrypted
-                let (_pair, phrase, _seed) = sr25519::Pair::generate_with_phrase(None);
-                let to_store = if let Some(key) = &maybe_key {
-                    encrypt_phrase(&phrase, key)
-                } else {
-                    phrase.clone()
-                };
-
-                // Try to register subaccount on-chain; if we get the specific
-                // "MainCannotBeSubAccount" error, we will fallback to using the
-                // provided mnemonic as the subaccount as well (persisting to DB)
-                let mut chosen_seed_for_session = phrase.clone();
-                {
-                    let main_seed_plain = mnemonic.clone();
-                    let sub_seed_plain = phrase.clone();
-                    match crate::commands::substrate_tx::add_sub_account_tauri(
-                        main_seed_plain,
-                        sub_seed_plain,
-                    )
-                    .await
-                    {
-                        Ok(msg) => {
-                            if let Err(e) = sqlx::query(
-                                "INSERT INTO sub_accounts (account_id, sub_account_seed_phrase) VALUES (?, ?)",
-                            )
-                            .bind(&account_id)
-                            .bind(&to_store)
-                            .execute(pool)
-                            .await
-                            {
-                                eprintln!(
-                                    "[SyncInit] Failed to insert new subaccount for {}: {}",
-                                    account_id, e
-                                );
-                            } else {
-                                println!(
-                                    "[SyncInit] Stored new subaccount seed phrase for account_id={}",
-                                    account_id
-                                );
-                            };
-
-                            sleep(Duration::from_secs(60)).await;
-                            if let Some(key) = &maybe_key {
-                                // Try decrypt; if fails, treat as legacy plaintext and migrate
-                                if let Some(decrypted) = decrypt_phrase(&to_store, key) {
-                                    return decrypted;
-                                } else {
-                                    return to_store;
-                                }
-                            } else {
-                                return to_store;
-                            };
-
-                            println!("[SyncInit] add_sub_account submitted successfully: {}", msg)
-                        }
-                        Err(err) => {
-                            let err_str = err.to_string();
-                            eprintln!(
-                                "[SyncInit] Failed to submit add_sub_account extrinsic: {}",
-                                err_str
-                            );
-                            if err_str.contains("MainCannotBeSubAccount") {
-                                println!(
-                                    "[SyncInit] Detected MainCannotBeSubAccount; storing provided mnemonic as subaccount for account_id={}",
-                                    account_id
-                                );
-                                // Encrypt mnemonic if key available, otherwise store plaintext
-                                let to_store = if let Some(key) = &maybe_key {
-                                    encrypt_phrase(&mnemonic, key)
-                                } else {
-                                    mnemonic.clone()
-                                };
-                                if let Err(e) = sqlx::query(
-                                    "UPDATE sub_accounts SET sub_account_seed_phrase = ? WHERE account_id = ?"
-                                )
-                                .bind(&to_store)
-                                .bind(&account_id)
-                                .execute(pool)
-                                .await {
-                                    eprintln!("[SyncInit] Failed to update subaccount mnemonic for {}: {}", account_id, e);
-                                } else {
-                                    println!("[SyncInit] Updated subaccount seed to provided mnemonic for account_id={}", account_id);
-                                }
-                                // Use mnemonic for this session going forward
-                                chosen_seed_for_session = mnemonic.clone();
-                            }
-                        }
-                    }
-                }
-
-                chosen_seed_for_session
-            }
-            Err(e) => {
-                eprintln!(
-                    "[SyncInit] DB query error for sub_accounts ({}), falling back to provided mnemonic",
-                    e
-                );
-                mnemonic.clone()
-            }
-        }
-    } else {
-        println!(
-            "[SyncInit] DB pool unavailable; falling back to provided mnemonic for account_id={}",
-            account_id
-        );
-        mnemonic.clone()
-    }
-}
-
 /// Request payload for updating bucket policy
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UpdateBucketPolicyRequest {
@@ -505,7 +408,6 @@ pub struct UpdateBucketPolicyRequest {
 pub async fn set_bucket_policy(
     app: tauri::AppHandle,
     account_id: String,
-    mnemonic: String,
     policy: UpdateBucketPolicyRequest,
 ) -> Result<(), String> {
     // Validate sync_policy
@@ -521,22 +423,26 @@ pub async fn set_bucket_policy(
         .get()
         .ok_or("Database pool not initialized")?;
 
+    let owner = account_key(&account_id);
+
     sqlx::query(
         r#"
-        UPDATE bucket_policies 
-        SET sync_policy = ?,
+        INSERT INTO bucket_policies_scoped (owner, sync_policy, created_at, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(owner) DO UPDATE SET
+            sync_policy = excluded.sync_policy,
             updated_at = CURRENT_TIMESTAMP
-        WHERE id = 1
         "#,
     )
+    .bind(&owner)
     .bind(sync_policy)
     .execute(pool)
     .await
     .map_err(|e| format!("Failed to update bucket policy: {}", e))?;
 
     println!(
-        "[BucketPolicy] Updated bucket policy - sync_policy: {}",
-        policy.sync_policy
+        "[BucketPolicy] Updated bucket policy for {} - sync_policy: {}",
+        owner, policy.sync_policy
     );
 
     // 2. Stop all running sync processes
@@ -545,7 +451,7 @@ pub async fn set_bucket_policy(
 
     // 3. Restart sync processes with the new policy
     println!("[BucketPolicy] Restarting sync processes with new policy...");
-    initialize_sync(app, account_id, mnemonic).await?;
+    initialize_sync(app, account_id, None).await?;
 
     println!("[BucketPolicy] Sync processes restarted with new policy");
     Ok(())
@@ -557,13 +463,21 @@ pub async fn get_bucket_policy() -> Result<UpdateBucketPolicyRequest, String> {
         .get()
         .ok_or("Database pool not initialized")?;
 
-    let policy: (String,) = sqlx::query_as("SELECT sync_policy FROM bucket_policies WHERE id = 1")
-        .fetch_one(pool)
+    if let Ok(account_id) = current_account_id() {
+        let owner = account_key(&account_id);
+        if let Ok(Some((policy,))) = sqlx::query_as::<_, (String,)>(
+            "SELECT sync_policy FROM bucket_policies_scoped WHERE owner = ?",
+        )
+        .bind(&owner)
+        .fetch_optional(pool)
         .await
-        .map_err(|e| format!("Failed to fetch bucket policy: {}", e))?;
+        {
+            return Ok(UpdateBucketPolicyRequest { sync_policy: policy });
+        }
+    }
 
     Ok(UpdateBucketPolicyRequest {
-        sync_policy: policy.0,
+        sync_policy: "upload_only".to_string(),
     })
 }
 
@@ -586,11 +500,20 @@ pub async fn get_sync_policy_from_db() -> Result<crate::sync_engine::DeletePolic
         .get()
         .ok_or("Database pool not initialized")?;
 
-    let policy_str: (String,) =
-        sqlx::query_as("SELECT sync_policy FROM bucket_policies WHERE id = 1")
-            .fetch_one(pool)
-            .await
-            .map_err(|e| format!("Failed to fetch sync policy: {}", e))?;
+    // Prefer per-account policy when an active account is set.
+    if let Ok(account_id) = current_account_id() {
+        let owner = account_key(&account_id);
+        if let Ok(Some((policy_str,))) = sqlx::query_as::<_, (String,)>(
+            "SELECT sync_policy FROM bucket_policies_scoped WHERE owner = ?",
+        )
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await
+        {
+            return get_delete_policy_from_str(&policy_str);
+        }
+    }
 
-    get_delete_policy_from_str(&policy_str.0)
+    // Default to upload_only if nothing stored.
+    get_delete_policy_from_str("upload_only")
 }

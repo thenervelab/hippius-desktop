@@ -39,7 +39,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   const setTriggerUnpinnedFilesRefetch = useSetAtom(
     triggerUnpinnedFilesRefetchAtom
   );
-  const { mnemonic, polkadotAddress } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   const [requestState, setRequestState] = useState<
     "idle" | "uploading" | "submitting"
@@ -58,6 +58,9 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     isPrivateView: boolean,
     options?: UploadOptions
   ) {
+    if (!polkadotAddress) {
+      throw new Error("Wallet not connected. Please log in first.");
+    }
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
     const fileNames = await Promise.all(
@@ -111,19 +114,13 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
         let cid;
         console.log("Uploading file:", filePath);
-        if (isPrivateView) {
-          cid = await invoke<string>("encrypt_and_upload_file", {
+        cid = await invoke<string>(
+          isPrivateView ? "encrypt_and_upload_file" : "upload_file_public",
+          {
             accountId: polkadotAddress,
             filePath: filePath,
-            seedPhrase: mnemonic,
-          });
-        } else {
-          cid = await invoke<string>("upload_file_public", {
-            accountId: polkadotAddress,
-            filePath: filePath,
-            seedPhrase: mnemonic,
-          });
-        }
+          }
+        );
         cids.push(cid);
 
         // update progress

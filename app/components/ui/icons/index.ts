@@ -10,6 +10,8 @@ export { default as Discord } from "./Discord";
 export { default as Linkedin } from "./Linkedin";
 export { default as X } from "./X";
 export { default as Github } from "./Github";
+export { default as Google } from "./Google";
+export { default as Apple } from "./Apple";
 export { default as MagnifyGlass } from "./MagnifyGlass";
 export { default as Block } from "./Block";
 export { default as BlockSquare } from "./BlockSquare";
