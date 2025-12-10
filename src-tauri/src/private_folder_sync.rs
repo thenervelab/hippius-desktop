@@ -311,9 +311,8 @@ pub async fn start_private_folder_sync(
     // Immediately request an initial sync
     signal.trigger();
 
-    // 3s minimum interval; 30s heartbeat tick when idle (reduced from 5s to prevent excessive syncs)
     const MIN_INTERVAL: Duration = Duration::from_secs(3);
-    const HEARTBEAT: Duration = Duration::from_secs(30);
+    const HEARTBEAT: Duration = Duration::from_secs(5);
 
     let mut last_run_end = Instant::now() - HEARTBEAT;
     let mut running = false;
