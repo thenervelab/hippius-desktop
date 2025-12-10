@@ -242,12 +242,12 @@ pub async fn set_sync_path(
                         println!("[set_sync_path] Starting PUBLIC sync task...");
                         match get_sync_policy_from_db().await {
                             Ok(delete_policy) => {
-                                start_public_folder_sync_tauri(
-                                    app_handle_public,
-                                    account.clone(),
-                                    delete_policy,
-                                )
-                                .await;
+                        start_public_folder_sync_tauri(
+                            app_handle_public,
+                            account.clone(),
+                            delete_policy,
+                        )
+                        .await;
                             }
                             Err(e) => {
                                 eprintln!("[set_sync_path] Failed to get delete policy: {}", e);

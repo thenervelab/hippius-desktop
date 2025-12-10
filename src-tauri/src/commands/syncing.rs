@@ -66,7 +66,6 @@ pub async fn ensure_aws_env(account_id: String) -> Result<(), String> {
 pub async fn initialize_sync(
     app: tauri::AppHandle,
     account_id: String,
-    mnemonic: String,
     temp_auth_key: Option<String>,
 ) -> Result<(), String> {
     set_active_account(&account_id);
@@ -111,7 +110,6 @@ pub async fn initialize_sync(
     // Offload heavy subaccount resolution and task spawning to a background task
     let app_for_bg = app.clone();
     let account_for_bg = account_id.clone();
-    let mnemonic_for_bg = mnemonic.clone();
     let parent_task = tokio::spawn(async move {
         // Spawn sync tasks
         let app_handle_folder_sync = app_for_bg.clone();
@@ -453,7 +451,7 @@ pub async fn set_bucket_policy(
 
     // 3. Restart sync processes with the new policy
     println!("[BucketPolicy] Restarting sync processes with new policy...");
-    initialize_sync(app, account_id, String::new(), None).await?;
+    initialize_sync(app, account_id, None).await?;
 
     println!("[BucketPolicy] Sync processes restarted with new policy");
     Ok(())

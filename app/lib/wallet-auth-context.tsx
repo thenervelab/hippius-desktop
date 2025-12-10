@@ -216,7 +216,6 @@ export function WalletAuthProvider({
                 try {
                   await invoke("initialize_sync", {
                     accountId: oauthSessionData.substrateAddress,
-                    mnemonic: "",
                     tempAuthKey: oauthSessionData.token || null,
                   });
                   syncInitialized.current = true;
@@ -245,7 +244,6 @@ export function WalletAuthProvider({
                   if (!syncInitialized.current) {
                     await invoke("initialize_sync", {
                       accountId: pair.address,
-                      mnemonic: mnemonicSession.mnemonic,
                       tempAuthKey: oauthSessionData.token || null,
                     });
                     syncInitialized.current = true;
@@ -382,7 +380,6 @@ export function WalletAuthProvider({
       if (!syncInitialized.current) {
         await invoke("initialize_sync", {
           accountId: pair.address,
-          mnemonic: inputMnemonic,
           tempAuthKey: session.token || null,
         });
         syncInitialized.current = true;
@@ -469,11 +466,10 @@ export function WalletAuthProvider({
 
       // Initialize sync with the mnemonic
       if (!syncInitialized.current) {
-        await invoke("initialize_sync", {
-          accountId: polkadotAddr,
-          mnemonic: inputMnemonic,
-          tempAuthKey: session.token || null,
-        });
+      await invoke("initialize_sync", {
+        accountId: polkadotAddr,
+        tempAuthKey: session.token || null,
+      });
         syncInitialized.current = true;
       }
 
@@ -513,7 +509,6 @@ export function WalletAuthProvider({
       try {
         await invoke("initialize_sync", {
           accountId: session.substrateAddress,
-          mnemonic: "",
           tempAuthKey: session.token || null,
         });
         syncInitialized.current = true;
