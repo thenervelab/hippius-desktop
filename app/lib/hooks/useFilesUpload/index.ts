@@ -78,7 +78,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     const startText =
       filePaths.length > 1
         ? msgs?.startMultiple?.(filePaths.length) ??
-          `Uploading ${filePaths.length} files: 0%`
+        `Uploading ${filePaths.length} files: 0%`
         : msgs?.startSingle ?? `Uploading ${firstFileName}: 0%`;
 
     // If a toastId is given, update that toast; otherwise create a new one
@@ -112,9 +112,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           ? formatDisplayName(fileNames[i])
           : `file ${i + 1}`;
 
-        let cid;
         console.log("Uploading file:", filePath);
-        cid = await invoke<string>(
+        const cid = await invoke<string>(
           isPrivateView ? "encrypt_and_upload_file" : "upload_file_public",
           {
             accountId: polkadotAddress,
@@ -130,9 +129,9 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         const uploadingText =
           filePaths.length > 1
             ? msgs?.uploadingMultiple?.(filePaths.length, percent) ??
-              `Uploading ${filePaths.length} files: ${percent}%`
+            `Uploading ${filePaths.length} files: ${percent}%`
             : msgs?.uploadingSingle?.(percent) ??
-              `Uploading ${fileName}: ${percent}%`;
+            `Uploading ${fileName}: ${percent}%`;
 
         // Always update the same toast id
         toast.loading(uploadingText, { id: localToastId });
@@ -148,7 +147,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         const successText =
           filePaths.length > 1
             ? msgs?.successMultiple?.(filePaths.length) ??
-              `${filePaths.length} files successfully uploaded!`
+            `${filePaths.length} files successfully uploaded!`
             : msgs?.successSingle ?? `${firstFileName} successfully uploaded!`;
 
         // Convert loading -> success on the same toast id (auto-closes)
@@ -177,7 +176,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       const errorText =
         filePaths.length > 1
           ? msgs?.errorMultiple?.(filePaths.length) ??
-            `${filePaths.length} files failed to upload!`
+          `${filePaths.length} files failed to upload!`
           : msgs?.errorSingle ?? `${firstFileName} failed to upload!`;
 
       // Convert loading -> error on the same toast id

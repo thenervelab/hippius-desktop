@@ -380,7 +380,7 @@ export function WalletAuthProvider({
       if (!syncInitialized.current) {
         await invoke("initialize_sync", {
           accountId: pair.address,
-          tempAuthKey: session.token || null,
+          tempAuthKey: null,
         });
         syncInitialized.current = true;
       }
@@ -466,10 +466,10 @@ export function WalletAuthProvider({
 
       // Initialize sync with the mnemonic
       if (!syncInitialized.current) {
-      await invoke("initialize_sync", {
-        accountId: polkadotAddr,
-        tempAuthKey: session.token || null,
-      });
+        await invoke("initialize_sync", {
+          accountId: polkadotAddr,
+          tempAuthKey: session.token || null,
+        });
         syncInitialized.current = true;
       }
 
