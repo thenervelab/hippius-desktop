@@ -84,7 +84,7 @@ const ApiTokensTable: React.FC<ApiTokensTableProps> = ({
                         <NoMatchingResults
                             searchTerm={searchTerm}
                             hasActiveFilters={false}
-                            entityType="api-token"
+                            entityType="sub-token"
                         />
                     ) : (
                         <NoEntriesFound

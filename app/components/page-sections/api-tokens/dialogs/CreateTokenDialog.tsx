@@ -170,7 +170,7 @@ const CreateTokenDialog = React.memo(function CreateTokenDialog({
                     </Dialog.Close>
 
                     <Dialog.Title className="text-grey-10 text-[22px] sm:text-2xl font-medium text-center mb-4">
-                        Create API Token
+                        Create Sub Token
                     </Dialog.Title>
 
                     <div className="space-y-4">
@@ -411,7 +411,7 @@ const CreateTokenDialog = React.memo(function CreateTokenDialog({
                             disabled={isCreating || !tokenName.trim() || selectedBuckets.length === 0 || (selectedLifespan === "Custom" && !customDate)}
                         >
                             <div className="py-2.5 rounded border border-primary-40 text-lg">
-                                {isCreating ? "Creating..." : "Create API Token"}
+                                {isCreating ? "Creating..." : "Create Sub Token"}
                             </div>
                         </button>
                         <Dialog.Close asChild>

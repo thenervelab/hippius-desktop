@@ -5,14 +5,14 @@ import { Graphsheet } from "@/app/components/ui";
 interface NoMatchingResultsProps {
     searchTerm?: string;
     hasActiveFilters?: boolean;
-    entityType?: "file" | "api-token" | "master-token" | string;
+    entityType?: "file" | "sub-token" | "master-token" | string;
 }
 
 const NoMatchingResults: React.FC<NoMatchingResultsProps> = ({ searchTerm, hasActiveFilters, entityType = "file" }) => {
     const getEntityName = () => {
         switch (entityType) {
-            case "api-token":
-                return "API tokens";
+            case "sub-token":
+                return "sub tokens";
             case "master-token":
                 return "master tokens";
             case "file":

@@ -6,7 +6,7 @@ import RefreshButton from "@/components/ui/refresh-button";
 import CreateButton from "@/components/ui/button/CreateButton";
 import { useApiTokens } from "@/lib/hooks/useApiTokens";
 import { useMasterTokens } from "@/lib/hooks/useMasterTokens";
-import ApiTokensTable from "./ApiTokensTable";
+import ApiTokensTable from "./SubTokensTable";
 import MasterTokensTable from "../master-tokens/MasterTokensTable";
 import CreateTokenDialog from "./dialogs/CreateTokenDialog";
 import TokenDetailsDialog from "./dialogs/TokenDetailsDialog";
@@ -21,9 +21,9 @@ import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import { BackButton } from "@/components/ui";
 
 const ApiTokensContent = () => {
-    const [activeTab, setActiveTab] = useState<string>("API Tokens");
+    const [activeTab, setActiveTab] = useState<string>("Sub Tokens");
 
-    // API Tokens state
+    // Sub Tokens state
     const [apiSearchTerm, setApiSearchTerm] = useState("");
     const [showCreateDialog, setShowCreateDialog] = useState(false);
     const [showTokenDetails, setShowTokenDetails] = useState(false);
@@ -40,7 +40,7 @@ const ApiTokensContent = () => {
     const [selectedMasterToken, setSelectedMasterToken] = useState<MasterToken | null>(null);
     const [rotatedTokenData, setRotatedTokenData] = useState<MasterTokenRotateResponse | null>(null);
 
-    // API Tokens hook
+    // Sub Tokens hook
     const {
         tokens,
         isLoading: isLoadingApiTokens,
@@ -53,7 +53,7 @@ const ApiTokensContent = () => {
         isRotating: isRotatingApiToken,
     } = useApiTokens();
 
-    // Track if API token is being created (derived from loading state)
+    // Track if Sub token is being created (derived from loading state)
     const [isCreatingApiToken, setIsCreatingApiToken] = React.useState(false);
 
     // Master Tokens hook
@@ -73,7 +73,7 @@ const ApiTokensContent = () => {
     // Tab options
     const tabs: TabOption[] = [
         {
-            tabName: "API Tokens",
+            tabName: "Sub Tokens",
             icon: <Key className="size-4" />,
         },
         {
@@ -82,7 +82,7 @@ const ApiTokensContent = () => {
         },
     ];
 
-    // Filter API tokens based on search
+    // Filter Sub tokens based on search
     const filteredTokens = tokens.filter(
         (token) =>
             (token.name && token.name.toLowerCase().includes(apiSearchTerm.toLowerCase())) ||
@@ -96,7 +96,7 @@ const ApiTokensContent = () => {
             (token.access_key_id && token.access_key_id.toLowerCase().includes(masterSearchTerm.toLowerCase()))
     );
 
-    // API Token handlers
+    // Sub Token handlers
     const handleCreateToken = useCallback(
         async (data: {
             tokenName: string;
@@ -130,7 +130,7 @@ const ApiTokensContent = () => {
         [createToken]
     );
 
-    // API Token Revoke handlers
+    // Sub Token Revoke handlers
     const handleRevokeApiTokenClick = useCallback((token: ApiToken) => {
         setSelectedApiToken(token);
         setShowRevokeApiTokenDialog(true);
@@ -148,7 +148,7 @@ const ApiTokensContent = () => {
         }
     }, [selectedApiToken, revokeApiToken]);
 
-    // API Token Rotate handlers
+    // Sub Token Rotate handlers
     const handleRotateApiTokenClick = useCallback(
         async (token: ApiToken) => {
             try {
@@ -225,7 +225,7 @@ const ApiTokensContent = () => {
 
                 {/* Controls based on active tab */}
                 <div className="flex items-center gap-4">
-                    {activeTab === "API Tokens" ? (
+                    {activeTab === "Sub Tokens" ? (
                         <>
                             <SearchInput
                                 placeholder="Search for a token"
@@ -260,7 +260,7 @@ const ApiTokensContent = () => {
             </div>
 
             {/* Content based on active tab */}
-            {activeTab === "API Tokens" ? (
+            {activeTab === "Sub Tokens" ? (
                 <ApiTokensTable
                     tokens={filteredTokens}
                     isLoading={isLoadingApiTokens}
@@ -284,7 +284,7 @@ const ApiTokensContent = () => {
                 />
             )}
 
-            {/* API Token Dialogs */}
+            {/* Sub Token Dialogs */}
             <CreateTokenDialog
                 open={showCreateDialog}
                 onClose={() => setShowCreateDialog(false)}
@@ -303,7 +303,7 @@ const ApiTokensContent = () => {
                 isRotated={isTokenRotated}
             />
 
-            {/* API Token Revoke Dialog */}
+            {/* Sub Token Revoke Dialog */}
             <DeleteConfirmationDialog
                 open={showRevokeApiTokenDialog}
                 onClose={() => {
@@ -316,8 +316,8 @@ const ApiTokensContent = () => {
                 }}
                 onDelete={handleConfirmRevokeApiToken}
                 button={isRevokingApiToken ? "Revoking..." : "Revoke Token"}
-                text={`Are you sure you want to revoke the API token "${selectedApiToken?.name}"? This action cannot be undone and any applications using this token will lose access immediately.`}
-                heading="Revoke API Token"
+                text={`Are you sure you want to revoke the Sub token "${selectedApiToken?.name}"? This action cannot be undone and any applications using this token will lose access immediately.`}
+                heading="Revoke Sub Token"
                 disableButton={isRevokingApiToken}
             />
 
