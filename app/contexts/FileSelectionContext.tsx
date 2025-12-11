@@ -1,16 +1,16 @@
 import React, { createContext, useContext, useState, ReactNode, useMemo, useCallback } from 'react';
-import { FormattedUserIpfsFile } from '../lib/hooks/use-user-ipfs-files';
+import { FormattedUserFile } from '../lib/hooks/use-user-files';
 
 interface FileSelectionContextProps {
     isSelectionMode: boolean;
-    selectedFiles: FormattedUserIpfsFile[];
+    selectedFiles: FormattedUserFile[];
     toggleSelectionMode: () => void;
-    toggleFileSelection: (file: FormattedUserIpfsFile) => void;
-    isFileSelected: (file: FormattedUserIpfsFile) => boolean;
+    toggleFileSelection: (file: FormattedUserFile) => void;
+    isFileSelected: (file: FormattedUserFile) => boolean;
     clearSelection: () => void;
-    selectAllFiles: (files: FormattedUserIpfsFile[]) => void;
+    selectAllFiles: (files: FormattedUserFile[]) => void;
     unselectAllFiles: () => void;
-    enterSelectionModeAndSelectFile: (file: FormattedUserIpfsFile) => void;
+    enterSelectionModeAndSelectFile: (file: FormattedUserFile) => void;
 }
 
 const FileSelectionContext = createContext<FileSelectionContextProps | undefined>(undefined);
@@ -29,7 +29,7 @@ interface FileSelectionProviderProps {
 
 export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ children }) => {
     const [isSelectionMode, setIsSelectionMode] = useState(false);
-    const [selectedFiles, setSelectedFiles] = useState<FormattedUserIpfsFile[]>([]);
+    const [selectedFiles, setSelectedFiles] = useState<FormattedUserFile[]>([]);
 
     const toggleSelectionMode = useCallback(() => {
         setIsSelectionMode(prev => {
@@ -41,7 +41,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
         });
     }, []);
 
-    const toggleFileSelection = useCallback((file: FormattedUserIpfsFile) => {
+    const toggleFileSelection = useCallback((file: FormattedUserFile) => {
         // Only allow selection of files that can be deleted (isAssigned)
         if (!file.isAssigned) {
             console.log('File not assigned, cannot select:', file.name, file.isAssigned);
@@ -71,7 +71,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
         });
     }, []);
 
-    const isFileSelected = useCallback((file: FormattedUserIpfsFile) => {
+    const isFileSelected = useCallback((file: FormattedUserFile) => {
         return selectedFiles.some(f => f.actualFileName === file.actualFileName);
     }, [selectedFiles]);
 
@@ -80,7 +80,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
         setIsSelectionMode(false); // Exit selection mode when clearing
     }, []);
 
-    const selectAllFiles = useCallback((files: FormattedUserIpfsFile[]) => {
+    const selectAllFiles = useCallback((files: FormattedUserFile[]) => {
         // Filter to only include files that can be deleted (isAssigned)
         const deletableFiles = files.filter(file => file.isAssigned);
         setSelectedFiles(deletableFiles);
@@ -90,7 +90,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
         setSelectedFiles([]);
     }, []);
 
-    const enterSelectionModeAndSelectFile = useCallback((file: FormattedUserIpfsFile) => {
+    const enterSelectionModeAndSelectFile = useCallback((file: FormattedUserFile) => {
         // Only allow entering selection mode with deletable files
         if (!file.isAssigned) {
             return;

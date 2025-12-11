@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
-import { API_CONFIG, getAuthHeaders } from "@/app/lib/helpers/sessionStore";
-import { ensureBillingAuth } from "./useBillingAuth";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { API_CONFIG } from "@/lib/config";
 
 // Define types based on the indexer API response
 export interface BillingTransferEvent {
@@ -50,32 +50,33 @@ export interface UseBillingTransfersParams {
 }
 
 export default function useBillingTransactions() {
+    const { oauthSession } = useWalletAuth();
     const [data, setData] = useState<TransactionObject[] | null>(null);
     const [isPending, setIsPending] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     const fetchTransactions = useCallback(async () => {
+        if (!oauthSession?.token) {
+            setData([]);
+            setError("Not authenticated");
+            setIsPending(false);
+            return;
+        }
+
         try {
             setIsPending(true);
             setError(null);
             setData(null);
 
-            const authOk = await ensureBillingAuth();
-            if (!authOk.ok) {
-                setData([]);
-                setError(authOk.error || "Not authenticated");
-                return;
-            }
-
-            const headers = await getAuthHeaders();
-            if (!headers) {
-                setData([]);
-                setError("Not authenticated");
-                return;
-            }
-
             const url = `${API_CONFIG.baseUrl}${API_CONFIG.billing.transactions}`;
-            const res = await fetch(url, { method: "GET", headers });
+            const res = await fetch(url, {
+                method: "GET",
+                headers: {
+                    Authorization: `Token ${oauthSession.token}`,
+                    Accept: "application/json",
+                },
+            });
+
             if (!res.ok) {
                 const text = await res.text();
                 throw new Error(`Failed to fetch billing transactions: ${res.status} ${text}`);
@@ -97,11 +98,13 @@ export default function useBillingTransactions() {
         } finally {
             setIsPending(false);
         }
-    }, []);
+    }, [oauthSession?.token]);
 
     useEffect(() => {
-        fetchTransactions();
-    }, [fetchTransactions]);
+        if (oauthSession?.token) {
+            fetchTransactions();
+        }
+    }, [oauthSession?.token, fetchTransactions]);
 
     return { data, isPending, error, refetch: fetchTransactions };
 }

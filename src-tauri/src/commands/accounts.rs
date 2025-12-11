@@ -403,6 +403,8 @@ pub async fn reset_app() -> Result<(), String> {
         "wss_endpoint",
         "sub_accounts",
         "is_first_run",
+        "bucket_policies_scoped",
+        "objectstore_auth_scoped",
     ];
 
     for table in tables_to_clear {

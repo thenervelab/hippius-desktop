@@ -3,3 +3,4 @@ pub mod ipfs_commands;
 pub mod substrate_tx;
 pub mod syncing;
 pub mod types;
+pub mod objectstore_auth;

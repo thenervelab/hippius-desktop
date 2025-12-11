@@ -3,7 +3,7 @@ import { FileTypes } from "@/lib/types/fileTypes";
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { getFileIconForThumbnail } from '@/lib/utils/fileTypeUtils';
-import { FormattedUserIpfsFile } from '@/app/lib/hooks/use-user-ipfs-files';
+import { FormattedUserFile } from '@/app/lib/hooks/use-user-files';
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 
@@ -12,7 +12,7 @@ interface FileTypeIconProps {
     className?: string;
     iconClassName?: string;
     size?: 'sm' | 'md' | 'lg' | 'xl';
-    file: FormattedUserIpfsFile
+    file: FormattedUserFile
 }
 
 const FileTypeIcon: React.FC<FileTypeIconProps> = ({

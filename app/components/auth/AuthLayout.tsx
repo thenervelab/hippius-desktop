@@ -10,9 +10,10 @@ import HippiusHeader from "./HippiusHeader";
 interface AuthLayoutProps {
   children: ReactNode;
   isVerify?: boolean;
+  hideHeader?: boolean;
 }
 
-const AuthLayout = ({ children, isVerify = false }: AuthLayoutProps) => {
+const AuthLayout = ({ children, isVerify = false, hideHeader = false }: AuthLayoutProps) => {
   return (
     <BaseAuthLayout>
       <>
@@ -25,7 +26,7 @@ const AuthLayout = ({ children, isVerify = false }: AuthLayoutProps) => {
           <LeftCarouselPanel />
         </RevealTextLine>
         <div className="flex flex-col items-start justify-center h-full ">
-          <HippiusHeader isVerify={isVerify} />
+          {!hideHeader && <HippiusHeader isVerify={isVerify} />}
           <Suspense
             fallback={
               <div className="flex h-full w-full items-center justify-center opacity-0 grow animate-fade-in-0.5">

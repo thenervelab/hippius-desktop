@@ -17,7 +17,7 @@ interface ConfirmationDialog {
 }
 
 const FileDeletionBehaviour: React.FC = () => {
-    const { polkadotAddress, mnemonic } = useWalletAuth();
+    const { polkadotAddress } = useWalletAuth();
     const [selectedBehaviour, setSelectedBehaviour] = useState<DeletionBehaviour>("upload_only");
     const [originalBehaviour, setOriginalBehaviour] = useState<DeletionBehaviour>("upload_only");
     const [confirmationDialog, setConfirmationDialog] = useState<ConfirmationDialog>({
@@ -118,7 +118,6 @@ const FileDeletionBehaviour: React.FC = () => {
         try {
             await invoke("set_bucket_policy", {
                 accountId: polkadotAddress,
-                mnemonic: mnemonic,
                 policy: { sync_policy: selectedBehaviour }
             });
 

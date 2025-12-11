@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import { useUserIpfsFiles } from "@/app/lib/hooks/use-user-ipfs-files";
+import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom } from "jotai";
-import { uploadProgressAtom } from "@/app/components/page-sections/files/ipfs/atoms/query-atoms";
+import { uploadProgressAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
 import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
@@ -35,11 +35,11 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   const { onSuccess, onError } = handlers;
   const setProgress = useSetAtom(uploadProgressAtom);
   const { data: credits } = useUserCredits();
-  const { refetch: refetchUserFiles } = useUserIpfsFiles();
+  const { refetch: refetchUserFiles } = useUserFiles();
   const setTriggerUnpinnedFilesRefetch = useSetAtom(
     triggerUnpinnedFilesRefetchAtom
   );
-  const { mnemonic, polkadotAddress } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   const [requestState, setRequestState] = useState<
     "idle" | "uploading" | "submitting"
@@ -58,6 +58,9 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     isPrivateView: boolean,
     options?: UploadOptions
   ) {
+    if (!polkadotAddress) {
+      throw new Error("Wallet not connected. Please log in first.");
+    }
     if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
     const fileNames = await Promise.all(
@@ -75,7 +78,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     const startText =
       filePaths.length > 1
         ? msgs?.startMultiple?.(filePaths.length) ??
-          `Uploading ${filePaths.length} files: 0%`
+        `Uploading ${filePaths.length} files: 0%`
         : msgs?.startSingle ?? `Uploading ${firstFileName}: 0%`;
 
     // If a toastId is given, update that toast; otherwise create a new one
@@ -109,21 +112,14 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           ? formatDisplayName(fileNames[i])
           : `file ${i + 1}`;
 
-        let cid;
         console.log("Uploading file:", filePath);
-        if (isPrivateView) {
-          cid = await invoke<string>("encrypt_and_upload_file", {
+        const cid = await invoke<string>(
+          isPrivateView ? "encrypt_and_upload_file" : "upload_file_public",
+          {
             accountId: polkadotAddress,
             filePath: filePath,
-            seedPhrase: mnemonic,
-          });
-        } else {
-          cid = await invoke<string>("upload_file_public", {
-            accountId: polkadotAddress,
-            filePath: filePath,
-            seedPhrase: mnemonic,
-          });
-        }
+          }
+        );
         cids.push(cid);
 
         // update progress
@@ -133,9 +129,9 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         const uploadingText =
           filePaths.length > 1
             ? msgs?.uploadingMultiple?.(filePaths.length, percent) ??
-              `Uploading ${filePaths.length} files: ${percent}%`
+            `Uploading ${filePaths.length} files: ${percent}%`
             : msgs?.uploadingSingle?.(percent) ??
-              `Uploading ${fileName}: ${percent}%`;
+            `Uploading ${fileName}: ${percent}%`;
 
         // Always update the same toast id
         toast.loading(uploadingText, { id: localToastId });
@@ -151,7 +147,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         const successText =
           filePaths.length > 1
             ? msgs?.successMultiple?.(filePaths.length) ??
-              `${filePaths.length} files successfully uploaded!`
+            `${filePaths.length} files successfully uploaded!`
             : msgs?.successSingle ?? `${firstFileName} successfully uploaded!`;
 
         // Convert loading -> success on the same toast id (auto-closes)
@@ -180,7 +176,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       const errorText =
         filePaths.length > 1
           ? msgs?.errorMultiple?.(filePaths.length) ??
-            `${filePaths.length} files failed to upload!`
+          `${filePaths.length} files failed to upload!`
           : msgs?.errorSingle ?? `${firstFileName} failed to upload!`;
 
       // Convert loading -> error on the same toast id

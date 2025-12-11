@@ -1,7 +1,6 @@
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useQuery } from "@tanstack/react-query";
-import { ensureBillingAuth } from "./useBillingAuth";
-import { getApiAuth } from "@/app/lib/helpers/sessionStore";
+import { API_CONFIG } from "@/lib/config";
 
 /**
  * Fetch user credits from API
@@ -9,37 +8,25 @@ import { getApiAuth } from "@/app/lib/helpers/sessionStore";
  * Returns undefined → no token or error
  */
 export function useUserCredits() {
-  const { polkadotAddress } = useWalletAuth();
+  const { oauthSession } = useWalletAuth();
 
   return useQuery<bigint | undefined>({
-    queryKey: ["user-credits", polkadotAddress],
+    queryKey: ["user-credits", oauthSession?.userId],
     refetchInterval: 30_000,
     refetchOnWindowFocus: false,
-    enabled: !!polkadotAddress,
+    enabled: !!oauthSession?.token,
 
     queryFn: async () => {
-      if (!polkadotAddress) {
-        throw new Error("No Polkadot address available");
-      }
-
-      // Ensure we have a valid billing auth token
-      const authResult = await ensureBillingAuth();
-      if (!authResult.ok) {
-        throw new Error(authResult.error || "Failed to authenticate for billing");
-      }
-
-      // Get the token from storage
-      const apiAuth = await getApiAuth();
-      if (!apiAuth?.token) {
-        throw new Error("No API token available after authentication");
+      if (!oauthSession?.token) {
+        throw new Error("No authentication token available");
       }
 
       const response = await fetch(
-        `https://api.hippius.com/api/billing/credits/balance/`,
+        `${API_CONFIG.baseUrl}${API_CONFIG.billing.credits}`,
         {
           method: "GET",
           headers: {
-            Authorization: `Token ${apiAuth.token}`,
+            Authorization: `Token ${oauthSession.token}`,
             Accept: "application/json",
           },
         }

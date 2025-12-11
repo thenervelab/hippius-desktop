@@ -24,7 +24,7 @@ const HippiusHeader = ({
             inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8",
             {
               "mb-[26px]": isVerify,
-              "mb-[38px]": !isVerify,
+              "mb-6": !isVerify,
               "mb-0": isOnboarding
             }
           )}
