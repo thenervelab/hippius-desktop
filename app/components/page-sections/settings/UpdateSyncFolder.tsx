@@ -77,7 +77,7 @@ const UpdateSyncFolder: React.FC = () => {
       await setPrivateSyncPath(p, polkadotAddress, oauthSession?.token);
       setSelectedPrivateFolderPath(p);
       setSelectedPrivateFolderName(p.split(/[\\/]/).pop() || "");
-      toast.success("Private sync folder updated");
+      toast.success("Private sync folder updated, syncing is now in progress.");
       setShowSelector(false);
       // Trigger files page refresh
       triggerSyncPathRefresh((prev) => prev + 1);
@@ -106,7 +106,7 @@ const UpdateSyncFolder: React.FC = () => {
       await setPublicSyncPath(p, polkadotAddress, oauthSession?.token);
       setSelectedPublicFolderPath(p);
       setSelectedPublicFolderName(p.split(/[\\/]/).pop() || "");
-      toast.success("Public sync folder updated");
+      toast.success("Public sync folder updated, syncing is now in progress.");
       setShowSelector(false);
       // Trigger files page refresh
       triggerSyncPathRefresh((prev) => prev + 1);

@@ -416,7 +416,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           setSelectedPublicFolderPath(path);
         }
         toast.success(
-          `${isPrivateView ? "Private" : "Public"} sync folder set successfully`
+          `${isPrivateView ? "Private" : "Public"} sync folder set successfully, syncing is now in progress.`
         );
         setIsSyncPathConfigured(true);
 

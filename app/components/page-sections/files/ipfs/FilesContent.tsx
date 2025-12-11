@@ -33,7 +33,6 @@ import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import NoMatchingResults from "./NoMatchingResults";
 import { listen } from "@tauri-apps/api/event";
-import SyncingLoader from "./SyncingLoader";
 
 interface FilesContentProps {
   isRecentFiles?: boolean;
@@ -82,40 +81,6 @@ const FilesContent: FC<FilesContentProps> = ({
   const [animateCloud, setAnimateCloud] = useState(false);
   const dragCounterRef = useRef(0);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [isSyncing, setIsSyncing] = useState(() => {
-    try {
-      const stored = sessionStorage.getItem('hippius-syncing-state');
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        // Handle migration from old boolean format to new object format
-        if (typeof parsed === 'boolean') {
-          return { public: parsed, private: parsed };
-        }
-        return parsed;
-      }
-      return { public: false, private: false };
-    } catch {
-      return { public: false, private: false };
-    }
-  });
-
-  // Custom setter that updates both state and sessionStorage
-  const setSyncingState = useCallback((scope: 'public' | 'private', value: boolean) => {
-    setIsSyncing((prev: { public: boolean; private: boolean }) => {
-      const newState = { ...prev, [scope]: value };
-      try {
-        // Only store in sessionStorage if at least one sync is active
-        if (newState.public || newState.private) {
-          sessionStorage.setItem('hippius-syncing-state', JSON.stringify(newState));
-        } else {
-          sessionStorage.removeItem('hippius-syncing-state');
-        }
-      } catch (error) {
-        console.warn('Failed to save sync state to sessionStorage:', error);
-      }
-      return newState;
-    });
-  }, []);
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
@@ -349,17 +314,6 @@ const FilesContent: FC<FilesContentProps> = ({
   };
 
   const renderContent = () => {
-    const currentSyncType = isPrivateView ? 'private' : 'public';
-    const isCurrentlySyncing = isSyncing[currentSyncType];
-
-    if (isCurrentlySyncing) {
-      return (
-        <SyncingLoader
-          isRecentFiles={isRecentFiles}
-          message={`${currentSyncType.charAt(0).toUpperCase() + currentSyncType.slice(1)} syncing has started`}
-        />
-      );
-    }
 
     if (isLoading || isFetching) {
       return <WaitAMoment isRecentFiles={isRecentFiles} />;
