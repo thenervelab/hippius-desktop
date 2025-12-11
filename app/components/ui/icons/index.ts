@@ -37,6 +37,8 @@ export { default as ForwardArrowCircle } from "./ForwardArrowCircle";
 export { default as Tao } from "./Tao";
 export { default as Alpha } from "./Alpha";
 export { default as Setting } from "./Setting";
+export { default as Stop } from "./Stop";
+export { default as Setting2 } from "./Setting2";
 export { default as StopCircle } from "./StopCircle";
 export { default as CpuCharge } from "./CpuCharge";
 export { default as Cpu } from "./Cpu";

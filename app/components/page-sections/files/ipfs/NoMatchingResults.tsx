@@ -5,18 +5,33 @@ import { Graphsheet } from "@/app/components/ui";
 interface NoMatchingResultsProps {
     searchTerm?: string;
     hasActiveFilters?: boolean;
+    entityType?: "file" | "api-token" | "master-token" | string;
 }
 
-const NoMatchingResults: React.FC<NoMatchingResultsProps> = ({ searchTerm, hasActiveFilters }) => {
+const NoMatchingResults: React.FC<NoMatchingResultsProps> = ({ searchTerm, hasActiveFilters, entityType = "file" }) => {
+    const getEntityName = () => {
+        switch (entityType) {
+            case "api-token":
+                return "API tokens";
+            case "master-token":
+                return "master tokens";
+            case "file":
+            default:
+                return "files";
+        }
+    };
+
     const getMessage = () => {
+        const entity = getEntityName();
+
         if (searchTerm && hasActiveFilters) {
-            return "Try clearing your search or adjusting filters to see more results.";
+            return `Try clearing your search or adjusting filters to see more ${entity}.`;
         } else if (searchTerm) {
-            return "Try clearing your search to see more results.";
+            return `No ${entity} found matching "${searchTerm}". Try a different search term.`;
         } else if (hasActiveFilters) {
-            return "Try another filter, or use other filter options to find a file by type, size, or date.";
+            return `Try another filter, or use other filter options to find ${entity}.`;
         } else {
-            return "No files found in this location.";
+            return `No ${entity} found.`;
         }
     };
 

@@ -22,6 +22,7 @@ import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
 import { FileTypes } from "@/lib/types/fileTypes";
+import ManageButton from "./ManageButton";
 
 interface FilesHeaderProps {
   isRecentFiles?: boolean;
@@ -101,6 +102,10 @@ const FilesHeader: FC<FilesHeaderProps> = ({
     push("/files");
   };
 
+  const handleManageBucketClick = () => {
+    push("/tokens");
+  };
+
   const handleOpenSyncFolder = async () => {
     try {
       if (!syncFolderPath) {
@@ -169,6 +174,8 @@ const FilesHeader: FC<FilesHeaderProps> = ({
       setIsDeleting(false);
     }
   };
+
+
 
   return (
     <>
@@ -239,6 +246,11 @@ const FilesHeader: FC<FilesHeaderProps> = ({
           <RefreshButton
             refetching={isRefetching || isFetching}
             onClick={() => refetchUserFiles()}
+          />
+          <ManageButton
+            text="Manage"
+            isLoading={isRefetching || isFetching}
+            onClick={handleManageBucketClick}
           />
           {isRecentFiles && (
             <>
