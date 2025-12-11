@@ -1,7 +1,7 @@
-import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 
 export const shouldAllowPreview = (
-    file: FormattedUserIpfsFile,
+    file: FormattedUserFile,
     hasCheckmark: boolean,
     isPrivateFolder: boolean
 ): boolean => {

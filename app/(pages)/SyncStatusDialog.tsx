@@ -12,7 +12,7 @@ import {
   getFileTypeFromExtension,
 } from "@/lib/utils";
 import InfoTooltip from "@/components/ui/info-tooltip";
-import FileSyncTypeBadge from "../components/page-sections/files/ipfs/files-table/FileSyncTypeBadge";
+import FileSyncTypeBadge from "../components/page-sections/files/files-table/FileSyncTypeBadge";
 import { SyncActivityRow } from "@/lib/hooks/useSyncActivity";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
@@ -319,9 +319,9 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           <span>
                             {file.fileName.length > 14
                               ? `${file.fileName.slice(
-                                  0,
-                                  5
-                                )}...${file.fileName.slice(-7)}`
+                                0,
+                                5
+                              )}...${file.fileName.slice(-7)}`
                               : file.fileName}
                           </span>
                         </div>

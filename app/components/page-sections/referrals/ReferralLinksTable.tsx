@@ -23,8 +23,7 @@ import {
 
 import { REFERRAL_CODE_CONFIG } from "@/lib/config";
 import {
-  ReferralLink,
-  useReferralLinks
+  ReferralLink
 } from "@/app/lib/hooks/api/useReferralLinks";
 import { Link } from "@/components/ui/icons";
 
@@ -83,7 +82,10 @@ const saveColumnWidths = (columnWidths: Record<string, number>) => {
 };
 
 export default function ReferralLinksTable() {
-  const { links, loading } = useReferralLinks();
+  // Feature disabled - use static empty data to prevent app hanging
+  // The useReferralLinks hook depends on mnemonic which may not be available
+  const links: ReferralLink[] = [];
+  const loading = false;
   // pagination setup
   const pageSize = 10;
   const [pageIndex, setPageIndex] = useState(0);

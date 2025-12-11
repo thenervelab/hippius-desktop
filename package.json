@@ -1,7 +1,7 @@
 {
     "name": "hippius",
     "private": true,
-    "version": "0.1.60",
+    "version": "0.1.61",
     "type": "module",
     "scripts": {
         "dev": "next dev",
@@ -52,6 +52,7 @@
         "clsx": "^2.1.1",
         "crypto-js": "^4.2.0",
         "cva": "^1.0.0-beta.3",
+        "date-fns": "^4.1.0",
         "framer-motion": "^12.19.1",
         "jotai": "^2.12.3",
         "jotai-history": "^0.4.3",

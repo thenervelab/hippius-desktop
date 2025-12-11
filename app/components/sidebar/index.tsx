@@ -136,7 +136,7 @@ const Sidebar: React.FC = () => {
               ))}
             </div>
 
-            <div className="py-3 border-b border-gray-80  w-full">
+            <div className="py-3 border-b border-gray-80 w-full">
               {footerNavItems.map((item) => (
                 <FooterNavItem
                   key={item.label}
@@ -169,7 +169,7 @@ const Sidebar: React.FC = () => {
             <div className="py-3">
               <div
                 className={cn(
-                  " transition-all  duration-300  relative group cursor-pointer",
+                  "transition-all duration-300 relative group cursor-pointer py-2",
                   "hover:bg-gray-100 hover:text-primary-40 text-grey-40"
                 )}
                 onClick={() => setOpen(true)}

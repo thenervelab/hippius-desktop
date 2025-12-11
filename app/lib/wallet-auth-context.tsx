@@ -33,7 +33,6 @@ interface WalletContextType {
   isAuthenticated: boolean;
   address: string | null;
   polkadotAddress: string | null;
-  mnemonic: string | null;
   isLoading: boolean;
   walletManager: {
     polkadotPair: any;
@@ -70,7 +69,6 @@ export function WalletAuthProvider({
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [address, setAddress] = useState<string | null>(null);
   const [polkadotAddress, setPolkadotAddress] = useState<string | null>(null);
-  const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [walletManager, setWalletManager] = useState<{
     polkadotPair: any;
@@ -131,7 +129,6 @@ export function WalletAuthProvider({
         logoutTimerRef.current = null;
       }
 
-      setMnemonic(null);
       setAddress(null);
       setPolkadotAddress(null);
       setWalletManager(null);
@@ -237,7 +234,6 @@ export function WalletAuthProvider({
                     mnemonicSession.mnemonic
                   );
 
-                  setMnemonic(mnemonicSession.mnemonic);
                   setWalletManager({ polkadotPair: pair });
 
                   // Initialize sync
@@ -349,8 +345,6 @@ export function WalletAuthProvider({
       const keyring = new Keyring({ type: "sr25519" });
       const pair = keyring.addFromMnemonic(inputMnemonic);
 
-      console.log("[WalletAuth] Signature verified");
-      setMnemonic(inputMnemonic);
       setPolkadotAddress(pair.address);
       setWalletManager({ polkadotPair: pair });
       setIsAuthenticated(true);
@@ -388,7 +382,6 @@ export function WalletAuthProvider({
       return true;
     } catch (err) {
       console.error("[setSession] ", err);
-      setMnemonic(null);
       setPolkadotAddress(null);
       setWalletManager(null);
       setIsAuthenticated(false);
@@ -456,7 +449,6 @@ export function WalletAuthProvider({
       console.log("[WalletAuth] Mnemonic login successful");
 
       // Update state
-      setMnemonic(inputMnemonic);
       setPolkadotAddress(polkadotAddr);
       setWalletManager({ polkadotPair });
       setOAuthSessionState(session);
@@ -478,7 +470,6 @@ export function WalletAuthProvider({
     } catch (error) {
       console.error("[WalletAuth] Login failed:", error);
       // Clear sensitive data on error
-      setMnemonic(null);
       setPolkadotAddress(null);
       setWalletManager(null);
       setAuthType(null);
@@ -532,7 +523,6 @@ export function WalletAuthProvider({
         isAuthenticated,
         address,
         polkadotAddress,
-        mnemonic,
         isLoading,
         walletManager,
         authType,

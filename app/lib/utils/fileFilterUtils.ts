@@ -1,4 +1,4 @@
-import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { formatBytesFromBigInt } from "./formatBytes";
 import { getFilePartsFromFileName } from "./getFilePartsFromFileName";
@@ -35,9 +35,9 @@ export const getDateOptions = () => {
  * This function assumes the files have a 'timestamp' property added by enrichFilesWithTimestamps
  */
 export function filterFiles(
-    files: Array<FormattedUserIpfsFile & { timestamp?: Date | null }>,
+    files: Array<FormattedUserFile & { timestamp?: Date | null }>,
     criteria: FilterCriteria
-): Array<FormattedUserIpfsFile & { timestamp?: Date | null }> {
+): Array<FormattedUserFile & { timestamp?: Date | null }> {
     // Handle undefined or null files
     if (!files || !files.length) return [];
 

@@ -3,7 +3,6 @@ import { Icons, RevealTextLine } from "@/components/ui";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import { InView } from "react-intersection-observer";
 import UpdateSyncFolder from "./UpdateSyncFolder";
-import APIKeys from "./api-keys";
 import NotificationSettings from "./NotificationSettings";
 import { useAtom } from "jotai";
 import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
@@ -35,10 +34,6 @@ const SettingsDialogContent: React.FC = () => {
       icon: <Icons.Key className="size-4" />,
     },
     {
-      tabName: "API Keys",
-      icon: <Icons.KeySquare className="size-4" />,
-    },
-    {
       tabName: "Notifications",
       icon: <Icons.Notification className="size-4" />,
     },
@@ -67,18 +62,6 @@ const SettingsDialogContent: React.FC = () => {
             className="flex flex-col animate-in fade-in duration-300 gap-8 w-full h-max mb-4 pt-[18px]"
             ref={ref}
           >
-            {activeTab === "API Keys" && (
-              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                <RevealTextLine
-                  rotate
-                  reveal={inView}
-                  className="delay-300 w-full"
-                  parentClassName="w-full"
-                >
-                  <APIKeys />
-                </RevealTextLine>
-              </div>
-            )}
             {activeTab === "Notifications" && (
               <div className="flex flex-col gap-4 w-full">
                 <div className="shadow-menu rounded-lg bg-white p-4 w-full">

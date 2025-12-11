@@ -1,4 +1,4 @@
-import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { buildFolderPath } from "./folderPathUtils";
 
@@ -11,7 +11,7 @@ type ParamGetter = (name: string, defaultValue?: string) => string;
  * @param getParam Function to get URL parameters
  * @returns An object containing the URL string and the query parameters
  */
-export function generateFolderUrl(file: FormattedUserIpfsFile, getParam: ParamGetter) {
+export function generateFolderUrl(file: FormattedUserFile, getParam: ParamGetter) {
     // Get current path information for folder navigation
     const folderActualName = file.isFolder ? file.actualFileName || "" : "";
     const mainReqHash = file.mainReqHash
