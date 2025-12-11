@@ -532,7 +532,6 @@ export function WalletAuthProvider({
         isAuthenticated,
         address,
         polkadotAddress,
-        mnemonic,
         isLoading,
         walletManager,
         authType,
