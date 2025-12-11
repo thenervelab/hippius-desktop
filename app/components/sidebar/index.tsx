@@ -169,7 +169,7 @@ const Sidebar: React.FC = () => {
             <div className="py-3">
               <div
                 className={cn(
-                  " transition-all  duration-300  relative group cursor-pointer",
+                  "transition-all duration-300 relative group cursor-pointer py-2",
                   "hover:bg-gray-100 hover:text-primary-40 text-grey-40"
                 )}
                 onClick={() => setOpen(true)}

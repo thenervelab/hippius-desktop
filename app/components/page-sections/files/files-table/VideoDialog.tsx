@@ -1,4 +1,4 @@
-import React, { ReactNode, useState, useEffect, useCallback } from "react";
+import React, { ReactNode, useState, useEffect, useCallback, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Icons } from "@/components/ui";
@@ -7,7 +7,8 @@ import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import {
   getNextViewableFile,
-  getPrevViewableFile
+  getPrevViewableFile,
+  getViewableFilePosition
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
@@ -44,37 +45,67 @@ const VideoDialog: React.FC<{
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
-}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
+  isPrivateView?: boolean;
+}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload, isPrivateView = false }) => {
   const [nextFile, setNextFile] = useState<FormattedUserFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [resolvedUrl, setResolvedUrl] = useState<string>("");
+  const [isResolvingUrl, setIsResolvingUrl] = useState<boolean>(false);
   const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
+  const [isFromS3, setIsFromS3] = useState<boolean>(false);
+  const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
   const { polkadotAddress } = useWalletAuth();
+
+  // Track the current file to prevent race conditions
+  const currentFileRef = React.useRef<FormattedUserFile | null>(null);
+
+  // For private files, only navigate between locally synced files
+  const navigationOptions = useMemo(() => ({ localOnly: isPrivateView }), [isPrivateView]);
 
   useEffect(() => {
     if (!file) return;
 
-    const next = getNextViewableFile(file, allFiles);
-    const prev = getPrevViewableFile(file, allFiles);
+    const next = getNextViewableFile(file, allFiles, navigationOptions);
+    const prev = getPrevViewableFile(file, allFiles, navigationOptions);
+    const pos = getViewableFilePosition(file, allFiles, navigationOptions);
 
     setNextFile(next);
     setPrevFile(prev);
-  }, [file, allFiles]);
+    setPosition(pos);
+  }, [file, allFiles, navigationOptions]);
 
-  // Resolve URL whenever file changes
+  // Resolve URL whenever file changes - with race condition protection
   useEffect(() => {
     if (!file) return;
+
+    // Update ref to track current file
+    currentFileRef.current = file;
+
+    // Reset states immediately when file changes
+    setResolvedUrl("");
+    setIsResolvingUrl(true);
+
     const resolveUrl = async () => {
       try {
         const result = await getFileUrlAndSource(file);
-        setResolvedUrl(result.url);
-        setIsFromIpfs(result.isFromIpfs);
+
+        // Only update state if this is still the current file (prevent race condition)
+        if (currentFileRef.current === file) {
+          setResolvedUrl(result.url);
+          setIsFromIpfs(result.isFromIpfs);
+          setIsFromS3(result.isFromS3 || false);
+          setIsResolvingUrl(false);
+        }
       } catch (error) {
         console.error('VideoDialog - Failed to resolve URL:', error);
-        // Fallback to sync version
-        const result = getFileUrlAndSourceSync(file);
-        setResolvedUrl(result.url);
-        setIsFromIpfs(result.isFromIpfs);
+        // Fallback to sync version - also check for current file
+        if (currentFileRef.current === file) {
+          const result = getFileUrlAndSourceSync(file);
+          setResolvedUrl(result.url);
+          setIsFromIpfs(result.isFromIpfs);
+          setIsFromS3(result.isFromS3 || false);
+          setIsResolvingUrl(false);
+        }
       }
     };
 
@@ -113,7 +144,6 @@ const VideoDialog: React.FC<{
   }, [file, nextFile, prevFile, handleNext, handlePrev, onCloseClicked]);
   if (!file) return null;
 
-  const videoUrl = resolvedUrl;
   const { fileFormat } = getFilePartsFromFileName(file.name);
   return (
     <Dialog.Root
@@ -143,6 +173,11 @@ const VideoDialog: React.FC<{
                           >
                             {file.name}
                           </span>
+                          {position && position.total > 1 && (
+                            <span className="ml-2 text-sm text-grey-60 font-normal whitespace-nowrap">
+                              {position.current} of {position.total}
+                            </span>
+                          )}
                         </Dialog.Title>
 
                         <div className="flex gap-x-4 items-center">
@@ -157,7 +192,7 @@ const VideoDialog: React.FC<{
                               Download File
                             </span>
                           </button>
-                          {isFromIpfs && (
+                          {(isFromIpfs || isFromS3) && (
                             <button
                               onClick={() => {
                                 navigator.clipboard
@@ -204,13 +239,20 @@ const VideoDialog: React.FC<{
                     )}
 
                     <div className="animate-scale-in-95-0.4 shadow-dialo bottom-0 grow flex w-full h-full flex-col top-8 rounded overflow-hidden relative data-[state=open]:animate-scale-in-95-0.4">
-                      <VideoPlayer
-                        videoUrl={videoUrl}
-                        isFromIpfs={isFromIpfs}
-                        fileFormat={fileFormat}
-                        file={file}
-                        handleFileDownload={handleFileDownload}
-                      />
+                      {!isResolvingUrl && resolvedUrl ? (
+                        <VideoPlayer
+                          key={resolvedUrl} // Force re-mount on URL change
+                          videoUrl={resolvedUrl}
+                          isFromIpfs={isFromIpfs}
+                          fileFormat={fileFormat}
+                          file={file}
+                          handleFileDownload={handleFileDownload}
+                        />
+                      ) : (
+                        <div className="flex items-center justify-center w-full h-full">
+                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-50" />
+                        </div>
+                      )}
                     </div>
                   </>
                 );

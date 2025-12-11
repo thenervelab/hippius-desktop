@@ -1,11 +1,12 @@
-import React, { ReactNode, useState, useEffect, useCallback } from "react";
+import React, { ReactNode, useState, useEffect, useCallback, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Icons } from "@/components/ui";
 import { toast } from "sonner";
 import {
   getNextViewableFile,
-  getPrevViewableFile
+  getPrevViewableFile,
+  getViewableFilePosition
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2 } from "lucide-react";
@@ -43,40 +44,69 @@ const PdfDialog: React.FC<{
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
-}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
+  isPrivateView?: boolean;
+}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload, isPrivateView = false }) => {
   const [nextFile, setNextFile] = useState<FormattedUserFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [resolvedUrl, setResolvedUrl] = useState<string>("");
+  const [isResolvingUrl, setIsResolvingUrl] = useState<boolean>(false);
   const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
+  const [isFromS3, setIsFromS3] = useState<boolean>(false);
+  const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
   const { polkadotAddress } = useWalletAuth();
+
+  // Track the current file to prevent race conditions
+  const currentFileRef = React.useRef<FormattedUserFile | null>(null);
+
+  // For private files, only navigate between locally synced files
+  const navigationOptions = useMemo(() => ({ localOnly: isPrivateView }), [isPrivateView]);
 
   useEffect(() => {
     if (!file) return;
 
-    const next = getNextViewableFile(file, allFiles);
-    const prev = getPrevViewableFile(file, allFiles);
+    const next = getNextViewableFile(file, allFiles, navigationOptions);
+    const prev = getPrevViewableFile(file, allFiles, navigationOptions);
+    const pos = getViewableFilePosition(file, allFiles, navigationOptions);
 
     setNextFile(next);
     setPrevFile(prev);
-    setLoaded(false);
-  }, [file, allFiles]);
+    setPosition(pos);
+  }, [file, allFiles, navigationOptions]);
 
-  // Resolve URL whenever file changes
+  // Resolve URL whenever file changes - with race condition protection
   useEffect(() => {
     if (!file) return;
+
+    // Update ref to track current file
+    currentFileRef.current = file;
+
+    // Reset states immediately when file changes
+    setLoaded(false);
+    setResolvedUrl("");
+    setIsResolvingUrl(true);
 
     const resolveUrl = async () => {
       try {
         const result = await getFileUrlAndSource(file);
-        setResolvedUrl(result.url);
-        setIsFromIpfs(result.isFromIpfs);
+
+        // Only update state if this is still the current file (prevent race condition)
+        if (currentFileRef.current === file) {
+          setResolvedUrl(result.url);
+          setIsFromIpfs(result.isFromIpfs);
+          setIsFromS3(result.isFromS3 || false);
+          setIsResolvingUrl(false);
+        }
       } catch (error) {
         console.error('Failed to resolve URL:', error);
-        // Fallback to sync version
-        const result = getFileUrlAndSourceSync(file);
-        setResolvedUrl(result.url);
-        setIsFromIpfs(result.isFromIpfs);
+        // Fallback to sync version - also check for current file
+        if (currentFileRef.current === file) {
+          const result = getFileUrlAndSourceSync(file);
+          setResolvedUrl(result.url);
+          setIsFromIpfs(result.isFromIpfs);
+          setIsFromS3(result.isFromS3 || false);
+          setIsResolvingUrl(false);
+        }
       }
     };
 
@@ -106,8 +136,6 @@ const PdfDialog: React.FC<{
 
   if (!file) return null;
 
-  const pdfUrl = resolvedUrl;
-
   return (
     <Dialog.Root
       open={!!file}
@@ -132,6 +160,11 @@ const PdfDialog: React.FC<{
                       >
                         {file.name}
                       </span>
+                      {position && position.total > 1 && (
+                        <span className="ml-2 text-sm text-grey-60 font-normal whitespace-nowrap">
+                          {position.current} of {position.total}
+                        </span>
+                      )}
                     </Dialog.Title>
 
                     <div className="flex gap-x-4 items-center">
@@ -147,7 +180,7 @@ const PdfDialog: React.FC<{
                         </span>
                       </button>
 
-                      {isFromIpfs && (
+                      {(isFromIpfs || isFromS3) && (
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(resolvedUrl).then(() => {
@@ -193,28 +226,31 @@ const PdfDialog: React.FC<{
                   onClick={onCloseClicked}
                   className="w-full h-full flex items-center justify-center"
                 >
-                  {/* loader */}
+                  {/* loader - show when resolving URL or loading PDF */}
                   <div
                     className={cn(
                       "absolute top-0 left-0 h-full flex items-center justify-center w-full pointer-events-none",
-                      loaded && "opacity-0"
+                      (loaded && !isResolvingUrl) && "opacity-0"
                     )}
                   >
                     <Loader2 className="size-6 text-primary-50 animate-spin" />
                   </div>
 
-                  <div
-                    onClick={(e) => e.stopPropagation()}
-                    className="relative shadow-dialog flex w-full h-full flex-col rounded overflow-hidden animate-scale-in-95-0.4"
-                  >
-                    <iframe
-                      src={pdfUrl}
-                      width="100%"
-                      height="100%"
-                      className="border-none"
-                      onLoad={() => setLoaded(true)}
-                    />
-                  </div>
+                  {!isResolvingUrl && resolvedUrl && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="relative shadow-dialog flex w-full h-full flex-col rounded overflow-hidden animate-scale-in-95-0.4"
+                    >
+                      <iframe
+                        key={resolvedUrl} // Force re-mount on URL change
+                        src={resolvedUrl}
+                        width="100%"
+                        height="100%"
+                        className="border-none"
+                        onLoad={() => setLoaded(true)}
+                      />
+                    </div>
+                  )}
                 </div>
               </>
             )}

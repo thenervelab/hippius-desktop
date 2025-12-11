@@ -432,8 +432,9 @@ const FilesContent: FC<FilesContentProps> = ({
           onCloseClicked={() => setSelectedFile(null)}
           handleFileDownload={handleFileDownload}
           file={selectedFile}
-          allFiles={displayedData}
+          allFiles={filteredData}
           onNavigate={setSelectedFile}
+          isPrivateView={isPrivateView}
         />
       )}
       {selectedFileType === "image" && (
@@ -441,8 +442,9 @@ const FilesContent: FC<FilesContentProps> = ({
           onCloseClicked={() => setSelectedFile(null)}
           handleFileDownload={handleFileDownload}
           file={selectedFile}
-          allFiles={displayedData}
+          allFiles={filteredData}
           onNavigate={setSelectedFile}
+          isPrivateView={isPrivateView}
         />
       )}
       {selectedFileType === "PDF" && (
@@ -450,8 +452,9 @@ const FilesContent: FC<FilesContentProps> = ({
           onCloseClicked={() => setSelectedFile(null)}
           handleFileDownload={handleFileDownload}
           file={selectedFile}
-          allFiles={displayedData}
+          allFiles={filteredData}
           onNavigate={setSelectedFile}
+          isPrivateView={isPrivateView}
         />
       )}
 

@@ -30,6 +30,25 @@ export const isLocalFile = (source?: string): boolean => {
 };
 
 /**
+ * Checks if a file source is an S3 path
+ */
+export const isS3Source = (source?: string): boolean => {
+    return Boolean(source && source.startsWith('s3://'));
+};
+
+/**
+ * Converts an S3 source path to an HTTPS URL
+ * Example: s3://bucket-name/path/to/file.png -> https://s3.hippius.com/bucket-name/path/to/file.png
+ */
+export const convertS3ToHttpsUrl = (source: string): string => {
+    if (!source.startsWith('s3://')) {
+        return source;
+    }
+    const pathWithoutPrefix = source.slice(5); // Remove 's3://'
+    return `https://s3.hippius.com/${pathWithoutPrefix}`;
+};
+
+/**
  * Checks if a CID is valid (not pending, not empty)
  */
 export const isValidCid = (cid: string): boolean => {
@@ -107,19 +126,34 @@ export const resolveIPFSCid = async (originalCid: string): Promise<string> => {
 export const getFileUrlAndSource = async (file: FormattedUserFile) => {
     const isCidValid = isValidCid(file.cid);
     const hasLocalSource = isLocalFile(file.source);
+    const hasS3Source = isS3Source(file.source);
 
-    // Priority 2: Use local source if available
+    // Priority 1: Use local source if available (file is synced locally)
     if (hasLocalSource) {
         const normalised = file.source!.replace(/\\/g, "/");
         return {
             url: convertFileSrc(normalised),
             isFromIpfs: false,
             isFromLocal: true,
+            isFromS3: false,
             resolvedCid: null,
         };
     }
 
-    // Priority 1: Use IPFS if CID is valid
+    // Priority 2: Use S3 source if available (remote file not synced locally)
+    if (hasS3Source) {
+        const s3Url = convertS3ToHttpsUrl(file.source!);
+        console.log(`URL Resolver: Using S3 URL for ${file.name}: ${s3Url}`);
+        return {
+            url: s3Url,
+            isFromIpfs: false,
+            isFromLocal: false,
+            isFromS3: true,
+            resolvedCid: null,
+        };
+    }
+
+    // Priority 3: Use IPFS if CID is valid
     if (isCidValid) {
         try {
             console.log(`URL Resolver: Resolving IPFS CID for file ${file.name}`);
@@ -130,6 +164,7 @@ export const getFileUrlAndSource = async (file: FormattedUserFile) => {
                 url: finalUrl,
                 isFromIpfs: true,
                 isFromLocal: false,
+                isFromS3: false,
                 resolvedCid,
             };
         } catch (error) {
@@ -141,6 +176,7 @@ export const getFileUrlAndSource = async (file: FormattedUserFile) => {
                 url: fallbackUrl,
                 isFromIpfs: true,
                 isFromLocal: false,
+                isFromS3: false,
                 resolvedCid: decodedCid,
             };
         }
@@ -154,6 +190,7 @@ export const getFileUrlAndSource = async (file: FormattedUserFile) => {
         url: `https://get.hippius.network/ipfs/${decodedCid}`,
         isFromIpfs: true,
         isFromLocal: false,
+        isFromS3: false,
         resolvedCid: decodedCid,
     };
 };
@@ -216,8 +253,33 @@ if (typeof window !== 'undefined') {
 export const getFileUrlAndSourceSync = (file: FormattedUserFile) => {
     const isCidValid = isValidCid(file.cid);
     const hasLocalSource = isLocalFile(file.source);
+    const hasS3Source = isS3Source(file.source);
 
-    // Priority 1: Use IPFS if CID is valid
+    // Priority 1: Use local source if available (file is synced locally)
+    if (hasLocalSource) {
+        const normalised = file.source!.replace(/\\/g, "/");
+        return {
+            url: convertFileSrc(normalised),
+            isFromIpfs: false,
+            isFromLocal: true,
+            isFromS3: false,
+            resolvedCid: null,
+        };
+    }
+
+    // Priority 2: Use S3 source if available (remote file not synced locally)
+    if (hasS3Source) {
+        const s3Url = convertS3ToHttpsUrl(file.source!);
+        return {
+            url: s3Url,
+            isFromIpfs: false,
+            isFromLocal: false,
+            isFromS3: true,
+            resolvedCid: null,
+        };
+    }
+
+    // Priority 3: Use IPFS if CID is valid
     if (isCidValid) {
         const decodedCid = decodeHexCid(file.cid);
 
@@ -231,18 +293,8 @@ export const getFileUrlAndSourceSync = (file: FormattedUserFile) => {
             url: `https://get.hippius.network/ipfs/${resolvedCid}`,
             isFromIpfs: true,
             isFromLocal: false,
+            isFromS3: false,
             resolvedCid,
-        };
-    }
-
-    // Priority 2: Use local source if available
-    if (hasLocalSource) {
-        const normalised = file.source!.replace(/\\/g, "/");
-        return {
-            url: convertFileSrc(normalised),
-            isFromIpfs: false,
-            isFromLocal: true,
-            resolvedCid: null,
         };
     }
 
@@ -252,6 +304,7 @@ export const getFileUrlAndSourceSync = (file: FormattedUserFile) => {
         url: `https://get.hippius.network/ipfs/${decodedCid}`,
         isFromIpfs: true,
         isFromLocal: false,
+        isFromS3: false,
         resolvedCid: decodedCid,
     };
 };

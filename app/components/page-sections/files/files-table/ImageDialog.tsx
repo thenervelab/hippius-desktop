@@ -1,5 +1,5 @@
 /* eslint-disable @next/next/no-img-element */
-import React, { ReactNode, useState, useEffect, useCallback } from "react";
+import React, { ReactNode, useState, useEffect, useCallback, useMemo } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Icons } from "@/components/ui";
@@ -9,7 +9,8 @@ import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import {
   getNextViewableFile,
-  getPrevViewableFile
+  getPrevViewableFile,
+  getViewableFilePosition
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
@@ -79,43 +80,72 @@ const ImageDialog: React.FC<{
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
-}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload }) => {
+  isPrivateView?: boolean;
+}> = ({ file, allFiles, onCloseClicked, onNavigate, handleFileDownload, isPrivateView = false }) => {
   const { polkadotAddress } = useWalletAuth();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
   const [nextFile, setNextFile] = useState<FormattedUserFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [resolvedUrl, setResolvedUrl] = useState<string>("");
+  const [isResolvingUrl, setIsResolvingUrl] = useState<boolean>(false);
   const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
+  const [isFromS3, setIsFromS3] = useState<boolean>(false);
+  const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
+
+  // Track the current file to prevent race conditions
+  const currentFileRef = React.useRef<FormattedUserFile | null>(null);
+
+  // For private files, only navigate between locally synced files
+  const navigationOptions = useMemo(() => ({ localOnly: isPrivateView }), [isPrivateView]);
 
   // Calculate next and previous files whenever the current file changes
   useEffect(() => {
     if (!file) return;
 
-    const next = getNextViewableFile(file, allFiles);
-    const prev = getPrevViewableFile(file, allFiles);
+    const next = getNextViewableFile(file, allFiles, navigationOptions);
+    const prev = getPrevViewableFile(file, allFiles, navigationOptions);
+    const pos = getViewableFilePosition(file, allFiles, navigationOptions);
 
     setNextFile(next);
     setPrevFile(prev);
-    setImageLoaded(false);
-    setImageError(null); // Reset error state when file changes
-  }, [file, allFiles]);
+    setPosition(pos);
+  }, [file, allFiles, navigationOptions]);
 
-  // Resolve URL whenever file changes
+  // Resolve URL whenever file changes - with race condition protection
   useEffect(() => {
     if (!file) return;
+
+    // Update ref to track current file
+    currentFileRef.current = file;
+
+    // Reset states immediately when file changes
+    setImageLoaded(false);
+    setImageError(null);
+    setResolvedUrl("");
+    setIsResolvingUrl(true);
 
     const resolveUrl = async () => {
       try {
         const result = await getFileUrlAndSource(file);
-        setResolvedUrl(result.url);
-        setIsFromIpfs(result.isFromIpfs);
+
+        // Only update state if this is still the current file (prevent race condition)
+        if (currentFileRef.current === file) {
+          setResolvedUrl(result.url);
+          setIsFromIpfs(result.isFromIpfs);
+          setIsFromS3(result.isFromS3 || false);
+          setIsResolvingUrl(false);
+        }
       } catch (error) {
         console.error('Failed to resolve URL:', error);
-        // Fallback to sync version
-        const result = getFileUrlAndSourceSync(file);
-        setResolvedUrl(result.url);
-        setIsFromIpfs(result.isFromIpfs);
+        // Fallback to sync version - also check for current file
+        if (currentFileRef.current === file) {
+          const result = getFileUrlAndSourceSync(file);
+          setResolvedUrl(result.url);
+          setIsFromIpfs(result.isFromIpfs);
+          setIsFromS3(result.isFromS3 || false);
+          setIsResolvingUrl(false);
+        }
       }
     };
 
@@ -156,8 +186,6 @@ const ImageDialog: React.FC<{
 
   if (!file) return null;
 
-  const imageUrl = resolvedUrl;
-
   return (
     <Dialog.Root
       open={!!file}
@@ -187,6 +215,11 @@ const ImageDialog: React.FC<{
                           >
                             {file.name}
                           </span>
+                          {position && position.total > 1 && (
+                            <span className="ml-2 text-sm text-grey-60 font-normal whitespace-nowrap">
+                              {position.current} of {position.total}
+                            </span>
+                          )}
                         </Dialog.Title>
 
                         <div className="flex gap-x-4 items-center">
@@ -201,7 +234,7 @@ const ImageDialog: React.FC<{
                               Download File
                             </span>
                           </button>
-                          {isFromIpfs && (
+                          {(isFromIpfs || isFromS3) && (
                             <button
                               onClick={() => {
                                 navigator.clipboard
@@ -253,26 +286,28 @@ const ImageDialog: React.FC<{
                       onClick={onCloseClicked}
                       className="w-full h-full flex items-center justify-center"
                     >
-                      {/* Loading spinner - only show when not loaded and no error */}
-                      {!imageLoaded && !imageError && (
+                      {/* Loading spinner - show when resolving URL or loading image */}
+                      {(isResolvingUrl || (!imageLoaded && !imageError && resolvedUrl)) && (
                         <div className="absolute top-0 left-0 h-full flex items-center justify-center w-full pointer-events-none">
                           <Loader2 className="size-6 text-primary-50 animate-spin" />
                         </div>
                       )}
 
-                      {!imageError && (
+                      {!imageError && resolvedUrl && (
                         <motion.div
+                          key={file.actualFileName || file.name} // Force re-mount on file change
                           layout
                           initial={{ opacity: 0, scale: 0.95 }}
                           animate={{
-                            opacity: imageLoaded || imageError ? 1 : 0,
-                            scale: imageLoaded || imageError ? 1 : 1.0
+                            opacity: imageLoaded ? 1 : 0,
+                            scale: imageLoaded ? 1 : 1.0
                           }}
                           transition={{ duration: 0.3, ease: "easeInOut" }}
                           onClick={(e) => e.stopPropagation()}
                           className="min-w-28 min-h-28 relative shadow-dialog flex max-w-full max-h-full h-fit flex-col rounded overflow-hidden"
                         >
                           <img
+                            key={resolvedUrl} // Force new image element when URL changes
                             onLoad={() => {
                               setImageLoaded(true);
                               setImageError(null);
@@ -281,7 +316,7 @@ const ImageDialog: React.FC<{
                               setImageLoaded(false);
                               setImageError("Failed to load image");
                             }}
-                            src={imageUrl}
+                            src={resolvedUrl}
                             alt={file.name}
                             className={cn(
                               "max-h-[80vh] duration-300 opacity-0 max-w-full relative w-auto h-auto object-contain rounded",
