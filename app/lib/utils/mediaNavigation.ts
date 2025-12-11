@@ -1,4 +1,4 @@
-import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "./getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "./getTileTypeFromExtension";
 
@@ -7,7 +7,7 @@ export type ViewableFileType = "image" | "video" | "PDF";
 /**
  * Determines if a file is viewable in a dialog (image, video, or PDF)
  */
-export function isViewableFile(file: FormattedUserIpfsFile): boolean {
+export function isViewableFile(file: FormattedUserFile): boolean {
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
   return fileType === "image" || fileType === "video" || fileType === "PDF";
@@ -16,7 +16,7 @@ export function isViewableFile(file: FormattedUserIpfsFile): boolean {
 /**
  * Get file type for navigation purposes
  */
-export function getViewableFileType(file: FormattedUserIpfsFile): ViewableFileType | null {
+export function getViewableFileType(file: FormattedUserFile): ViewableFileType | null {
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
 
@@ -30,7 +30,7 @@ export function getViewableFileType(file: FormattedUserIpfsFile): ViewableFileTy
 /**
  * Filters all viewable files from the files array
  */
-export function getViewableFiles(files: FormattedUserIpfsFile[]): FormattedUserIpfsFile[] {
+export function getViewableFiles(files: FormattedUserFile[]): FormattedUserFile[] {
   return files.filter(isViewableFile);
 }
 
@@ -38,9 +38,9 @@ export function getViewableFiles(files: FormattedUserIpfsFile[]): FormattedUserI
  * Gets the next viewable file in the sequence
  */
 export function getNextViewableFile(
-  currentFile: FormattedUserIpfsFile,
-  allFiles: FormattedUserIpfsFile[]
-): FormattedUserIpfsFile | null {
+  currentFile: FormattedUserFile,
+  allFiles: FormattedUserFile[]
+): FormattedUserFile | null {
   const viewableFiles = getViewableFiles(allFiles);
   const currentIndex = viewableFiles.findIndex(file => file.cid === currentFile.cid);
 
@@ -55,9 +55,9 @@ export function getNextViewableFile(
  * Gets the previous viewable file in the sequence
  */
 export function getPrevViewableFile(
-  currentFile: FormattedUserIpfsFile,
-  allFiles: FormattedUserIpfsFile[]
-): FormattedUserIpfsFile | null {
+  currentFile: FormattedUserFile,
+  allFiles: FormattedUserFile[]
+): FormattedUserFile | null {
   const viewableFiles = getViewableFiles(allFiles);
   const currentIndex = viewableFiles.findIndex(file => file.cid === currentFile.cid);
 

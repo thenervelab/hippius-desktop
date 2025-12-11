@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
-import { useUserIpfsFiles } from "@/app/lib/hooks/use-user-ipfs-files";
+import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useSetAtom } from "jotai";
-import { uploadProgressAtom } from "@/app/components/page-sections/files/ipfs/atoms/query-atoms";
+import { uploadProgressAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
 import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
@@ -35,7 +35,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   const { onSuccess, onError } = handlers;
   const setProgress = useSetAtom(uploadProgressAtom);
   const { data: credits } = useUserCredits();
-  const { refetch: refetchUserFiles } = useUserIpfsFiles();
+  const { refetch: refetchUserFiles } = useUserFiles();
   const setTriggerUnpinnedFilesRefetch = useSetAtom(
     triggerUnpinnedFilesRefetchAtom
   );

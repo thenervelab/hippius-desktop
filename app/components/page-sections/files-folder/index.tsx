@@ -13,10 +13,10 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Icons, RefreshButton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import {
-  FormattedUserIpfsFile,
+  FormattedUserFile,
   parseMinerIds,
-} from "@/lib/hooks/use-user-ipfs-files";
-import FilesContent from "@/components/page-sections/files/ipfs/FilesContent";
+} from "@/app/lib/hooks/use-user-files";
+import FilesContent from "@/app/components/page-sections/files/FilesContent";
 import { toast } from "sonner";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import { FileTypes } from "@/lib/types/fileTypes";
@@ -25,17 +25,17 @@ import {
   generateActiveFilters,
 } from "@/lib/utils/fileFilterUtils";
 import { SearchInput } from "@/components/ui";
-import FilterChips from "@/components/page-sections/files/ipfs/filter-chips";
+import FilterChips from "@/app/components/page-sections/files/filter-chips";
 import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
-import { downloadIpfsFolder } from "@/lib/utils/downloadIpfsFolder";
-import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFileToFolderButton";
+import { downloadFolder } from "@/app/lib/utils/downloadFolder";
+import AddFileToFolderButton from "@/app/components/page-sections/files/AddFileToFolderButton";
 import {
   getViewModePreference,
   saveViewModePreference,
 } from "@/lib/utils/userPreferencesDb";
 import { getFolderPathArray } from "@/app/utils/folderPathUtils";
-import AddFolderToFolderButton from "@/components/page-sections/files/ipfs/AddFolderToFolderButton";
+import AddFolderToFolderButton from "@/app/components/page-sections/files/AddFolderToFolderButton";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { usePagination } from "@/lib/hooks";
@@ -77,7 +77,7 @@ export default function FolderView({
   const { getParam } = useUrlParams();
   const { polkadotAddress } = useWalletAuth();
   const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
-  const [files, setFiles] = useState<FormattedUserIpfsFile[]>([]);
+  const [files, setFiles] = useState<FormattedUserFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
@@ -155,7 +155,7 @@ export default function FolderView({
         console.log("Fetched folder contents:", fileEntries);
 
         const formattedFiles = fileEntries.map(
-          (entry): FormattedUserIpfsFile => {
+          (entry): FormattedUserFile => {
             const isErasureCodedFolder = entry.file_name.endsWith(
               ".folder.ec_metadata"
             );
@@ -285,7 +285,7 @@ export default function FolderView({
 
       // Download folder
       setIsDownloading(true);
-      const result = await downloadIpfsFolder({
+      const result = await downloadFolder({
         folderCid,
         folderName,
         polkadotAddress: polkadotAddress ?? "",

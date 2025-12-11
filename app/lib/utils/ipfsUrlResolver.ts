@@ -1,4 +1,4 @@
-import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
@@ -104,7 +104,7 @@ export const resolveIPFSCid = async (originalCid: string): Promise<string> => {
 /**
  * Determines the appropriate file URL and source type with async CID resolution
  */
-export const getFileUrlAndSource = async (file: FormattedUserIpfsFile) => {
+export const getFileUrlAndSource = async (file: FormattedUserFile) => {
     const isCidValid = isValidCid(file.cid);
     const hasLocalSource = isLocalFile(file.source);
 
@@ -213,7 +213,7 @@ if (typeof window !== 'undefined') {
  * Synchronous version for cases where we can't use async
  * This will use cached data if available, otherwise falls back to original CID
  */
-export const getFileUrlAndSourceSync = (file: FormattedUserIpfsFile) => {
+export const getFileUrlAndSourceSync = (file: FormattedUserFile) => {
     const isCidValid = isValidCid(file.cid);
     const hasLocalSource = isLocalFile(file.source);
 

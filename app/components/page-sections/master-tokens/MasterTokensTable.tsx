@@ -10,7 +10,7 @@ import {
 import * as TableModule from "@/components/ui/alt-table";
 import { getMasterTokenColumns } from "./MasterTokenColumns";
 import NoEntriesFound from "../NoEntriesFound";
-import NoMatchingResults from "@/components/page-sections/files/ipfs/NoMatchingResults";
+import NoMatchingResults from "@/app/components/page-sections/files/NoMatchingResults";
 import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import usePagination from "@/lib/hooks/use-pagination";

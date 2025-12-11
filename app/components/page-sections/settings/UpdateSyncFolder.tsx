@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { InView } from "react-intersection-observer";
 import SectionHeader from "./SectionHeader";
-import SyncFolderSelector from "@/components/page-sections/files/ipfs/SyncFolderSelector";
+import SyncFolderSelector from "@/app/components/page-sections/files/SyncFolderSelector";
 import {
   getPrivateSyncPath,
   getPublicSyncPath,
