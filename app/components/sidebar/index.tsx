@@ -136,7 +136,7 @@ const Sidebar: React.FC = () => {
               ))}
             </div>
 
-            <div className="py-3 border-b border-gray-80  w-full">
+            <div className="py-3 border-b border-gray-80 w-full">
               {footerNavItems.map((item) => (
                 <FooterNavItem
                   key={item.label}
