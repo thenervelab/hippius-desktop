@@ -18,7 +18,6 @@ import {
 } from "@tanstack/react-table";
 import {
   ReferralEvent,
-  useUserReferrals,
 } from "@/app/lib/hooks/api/useUserReferrals";
 import { useAtomValue } from "jotai";
 import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
@@ -82,7 +81,11 @@ const saveColumnWidths = (columnWidths: Record<string, number>) => {
 };
 
 const ReferralHistoryTable: React.FC = () => {
-  const { data, isPending, isError } = useUserReferrals();
+  // Feature disabled - use static empty data to prevent app hanging
+  // The useUserReferrals hook depends on mnemonic which may not be available
+  const data = { referralHistory: [] as ReferralEvent[], totalReferrals: 0, totalRewards: "0", referralCodes: [] };
+  const isPending = false;
+  const isError = false;
   const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
 
   // Column resizing state
