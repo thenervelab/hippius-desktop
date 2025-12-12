@@ -34,19 +34,6 @@ pub async fn save_temp_auth_key(account_id: &str, temp_key: &str) -> Result<(), 
     }
 }
 
-/// Clear stored auth for a specific account.
-pub async fn clear_objectstore_auth(account_id: &str) -> Result<(), String> {
-    if let Some(pool) = DB_POOL.get() {
-        sqlx::query("DELETE FROM objectstore_auth_scoped WHERE owner = ?")
-            .bind(account_id)
-            .execute(pool)
-            .await
-            .map_err(|e| format!("DB error clearing objectstore auth: {}", e))?;
-    }
-    clear_objectstore_env();
-    Ok(())
-}
-
 pub async fn save_master_token(account_id: &str, access_key_id: &str, secret: &str) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
         sqlx::query(

@@ -142,10 +142,4 @@ pub fn create_security_scoped_bookmark(_path: &str) -> Result<Vec<u8>, String> {
     Ok(Vec::new())
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn resolve_security_scoped_bookmark(_bookmark_data: &[u8]) -> Result<(String, ()), String> {
-    Err("Not supported on this platform".to_string())
-}
 
-#[cfg(not(target_os = "macos"))]
-pub fn stop_accessing_security_scoped_resource(_url: ()) {}
