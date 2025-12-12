@@ -1,7 +1,8 @@
 import Sidebar from "@/components/sidebar";
 import ResponsiveContent from "./ResponsiveContent";
 import OnBoardingGuard from "./OnBoardingGuard";
-import UnpinnedFilesHandler from "./UnpinnedFilesHandler";
+// TODO: Re-enable once backend integration is stable and syncing is reliable
+// import UnpinnedFilesHandler from "./UnpinnedFilesHandler";
 
 export default function ProtectedLayout({
   children,
@@ -11,7 +12,8 @@ export default function ProtectedLayout({
   return (
     <OnBoardingGuard>
       <div className="flex min-h-screen w-full">
-        <UnpinnedFilesHandler />
+        {/* TODO: Re-enable Pinning Queue once backend integration is stable */}
+        {/* <UnpinnedFilesHandler /> */}
         <Sidebar />
         <ResponsiveContent>{children}</ResponsiveContent>
       </div>
