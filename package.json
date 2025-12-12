@@ -1,7 +1,7 @@
 {
     "name": "hippius",
     "private": true,
-    "version": "0.1.61",
+    "version": "0.1.62",
     "type": "module",
     "scripts": {
         "dev": "next dev",
@@ -58,7 +58,7 @@
         "jotai-history": "^0.4.3",
         "jotai-tanstack-query": "^0.9.0",
         "lucide-react": "^0.513.0",
-        "next": "15.3.6",
+        "next": "15.3.8",
         "nextjs-toploader": "^3.8.16",
         "nprogress": "^0.2.0",
         "react": "^19.2.1",
