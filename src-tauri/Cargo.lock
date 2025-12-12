@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Hippius"
-version = "0.1.62"
+version = "0.1.63"
 dependencies = [
  "anyhow",
  "aws-config",
