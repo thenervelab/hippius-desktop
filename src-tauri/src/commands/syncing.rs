@@ -13,7 +13,6 @@ use sqlx;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
-use tokio::time::{Duration, sleep};
 
 #[tauri::command]
 pub async fn stop_sync_for_scope_command(scope: String) -> Result<(), String> {
@@ -350,17 +349,6 @@ pub async fn load_encryption_key(pool: &sqlx::SqlitePool) -> Option<SbKey> {
         }
         _ => None,
     }
-}
-
-// Helper: encrypt plain text with nonce, return base64 of (nonce || ciphertext)
-#[allow(deprecated)]
-fn encrypt_phrase(plain: &str, key: &SbKey) -> String {
-    let nonce = secretbox::gen_nonce();
-    let ct = secretbox::seal(plain.as_bytes(), &nonce, key);
-    let mut buf = Vec::with_capacity(secretbox::NONCEBYTES + ct.len());
-    buf.extend_from_slice(nonce.as_ref());
-    buf.extend_from_slice(&ct);
-    b64::encode(&buf)
 }
 
 /// Remove S3-derived rows for any account other than the one currently logging in.

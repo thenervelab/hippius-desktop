@@ -1,7 +1,7 @@
 use crate::DB_POOL;
 use crate::commands::syncing::ensure_aws_env;
 use crate::substrate_client::{
-    get_current_wss_endpoint, get_substrate_client, test_wss_endpoint, update_wss_endpoint,
+    get_current_wss_endpoint, get_substrate_client, update_wss_endpoint,
 };
 use crate::sync_engine::DeletePolicy;
 use crate::sync_shared::{
@@ -10,17 +10,17 @@ use crate::sync_shared::{
 use crate::{start_private_folder_sync_tauri, start_public_folder_sync_tauri};
 use crate::utils::objectstore_tokens::{has_master_token, save_temp_auth_key};
 use chrono::Utc;
-use once_cell::sync::Lazy;
+
 use serde::Deserialize;
 use serde::Serialize;
-use sp_core::{Pair, sr25519};
+
 use sqlx::Row;
 use crate::utils::account_key::account_key;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use subxt::tx::PairSigner;
+
 use tauri::Emitter;
-use tokio::sync::Mutex;
+
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -85,8 +85,6 @@ pub struct SyncPathResult {
     pub path: String,
     pub is_public: bool,
 }
-
-pub static SUBSTRATE_TX_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 use crate::commands::syncing::get_sync_policy_from_db;
 
@@ -428,7 +426,6 @@ pub async fn transfer_balance_tauri(
     recipient_address: String,
     amount: String,
 ) -> Result<String, String> {
-    use crate::substrate_client::get_substrate_client;
     use sp_core::{Pair, crypto::Ss58Codec, sr25519};
     use subxt::tx::PairSigner;
 
@@ -586,89 +583,3 @@ pub async fn update_wss_endpoint_command(endpoint: String) -> Result<String, Str
     Ok(format!("WSS endpoint updated to: {}", endpoint))
 }
 
-#[tauri::command]
-pub async fn test_wss_endpoint_command(endpoint: String) -> Result<bool, String> {
-    test_wss_endpoint(endpoint).await
-}
-
-type SubAccountRole = custom_runtime::runtime_types::pallet_subaccount::pallet::Role;
-
-#[tauri::command]
-pub async fn add_sub_account_tauri(main_seed: String, sub_seed: String) -> Result<String, String> {
-    let max_retries = 5;
-    let mut retry_count = 0;
-    let base_delay = std::time::Duration::from_secs(2);
-
-    loop {
-        match try_add_sub_account(&main_seed, &sub_seed).await {
-            Ok(result) => return Ok(result),
-            Err(e) => {
-                if e.contains("MainCannotBeSubAccount") {
-                    return Err(e); // Special case - don't retry
-                }
-
-                retry_count += 1;
-                if retry_count >= max_retries {
-                    return Err(format!("Failed after {} retries: {}", max_retries, e));
-                }
-
-                let delay = base_delay * 2_u32.pow(retry_count - 1);
-                eprintln!(
-                    "[Substrate] Attempt {} failed: {}. Retrying in {:?}",
-                    retry_count, e, delay
-                );
-                tokio::time::sleep(delay).await;
-            }
-        }
-    }
-}
-
-async fn try_add_sub_account(main_seed: &str, sub_seed: &str) -> Result<String, String> {
-    // Acquire the global lock
-    let _lock = SUBSTRATE_TX_LOCK.lock().await;
-
-    // Build signer from main seed
-    let main_pair = sr25519::Pair::from_string(main_seed, None)
-        .map_err(|e| format!("Failed to create main signer pair: {e:?}"))?;
-    let signer = PairSigner::new(main_pair.clone());
-
-    let main_id: sp_core::crypto::AccountId32 =
-        sp_core::crypto::AccountId32::from(main_pair.public());
-
-    // Build sub account id from sub seed
-    let sub_pair = sr25519::Pair::from_string(sub_seed, None)
-        .map_err(|e| format!("Failed to create sub pair: {e:?}"))?;
-    let sub_id: sp_core::crypto::AccountId32 =
-        sp_core::crypto::AccountId32::from(sub_pair.public());
-
-    let api = get_substrate_client()
-        .await
-        .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
-
-    // Hardcode role to UploadDelete
-    let role: SubAccountRole = SubAccountRole::UploadDelete;
-
-    // Submit tx
-    let tx =
-        custom_runtime::tx()
-            .sub_account()
-            .add_sub_account(main_id.into(), sub_id.into(), role);
-    println!("[Substrate] Submitting add_sub_account transaction...");
-    let tx_hash = api
-        .tx()
-        .sign_and_submit_then_watch_default(&tx, &signer)
-        .await
-        .map_err(|e| format!("Failed to submit transaction: {}", e))?
-        .wait_for_finalized_success()
-        .await
-        .map_err(|e| format!("Transaction failed: {}", e))?
-        .extrinsic_hash();
-    println!("[Substrate] add_sub_account finalized: {:?}", tx_hash);
-
-    // small cooldown similar to other txs
-    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-
-    Ok(format!(
-        "✅ add_sub_account submitted! Finalized in block: {tx_hash}"
-    ))
-}

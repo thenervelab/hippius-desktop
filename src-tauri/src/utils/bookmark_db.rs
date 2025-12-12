@@ -1,5 +1,3 @@
-use crate::DB_POOL;
-
 #[cfg(target_os = "macos")]
 use crate::macos_bookmarks::{
     create_security_scoped_bookmark, resolve_security_scoped_bookmark,

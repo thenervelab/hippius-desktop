@@ -2099,7 +2099,7 @@ pub async fn sync_once_cas(
                                 let pe_etag = pe.adopted_remote_etag.clone();
 
                                 let pe_snap_orig = prune_origin.entry(path.clone()).or_default();
-                                let pe_o_etag = pe_snap_orig.adopted_remote_etag.clone();
+                                let _pe_o_etag = pe_snap_orig.adopted_remote_etag.clone();
 
                                 let me_last_cid = remote_prev_cid.clone();
 

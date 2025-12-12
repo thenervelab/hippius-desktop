@@ -1,5 +1,5 @@
 use crate::utils::objectstore_tokens::{
-    clear_objectstore_env, ensure_master_token_env, get_temp_auth_key, save_master_token,
+    ensure_master_token_env, get_temp_auth_key, save_master_token,
     save_temp_auth_key, has_master_token,
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
