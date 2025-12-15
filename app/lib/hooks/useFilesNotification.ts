@@ -10,9 +10,9 @@ import {
 } from "@/components/page-sections/notifications/notificationStore";
 import { syncPercentAtom, syncStatusAtom } from "@/app/lib/store/syncAtoms";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { SyncActivityResponse } from "./useSyncActivity";
+import { SyncActivityResponse as HookSyncActivityResponse } from "./useSyncActivity";
 // import { toast } from "sonner";
-const processSyncActivity = (response: SyncActivityResponse) => {
+const processSyncActivity = (response: HookSyncActivityResponse) => {
   const allFiles = [];
 
   if (response.uploading) {
@@ -115,7 +115,7 @@ export function useFilesNotification() {
         setInvokeCount((prevCount) => prevCount + 1);
 
         // Get sync activity data
-        const response = await invoke<SyncActivityResponse>(
+        const response = await invoke<HookSyncActivityResponse>(
           "get_sync_activity",
           {
             accountId: polkadotAddress,
@@ -123,15 +123,24 @@ export function useFilesNotification() {
         );
 
         // Process the sync activity data
-        const syncFiles = processSyncActivity(response);
-        const metrics = calculateSyncMetrics(syncFiles);
+        // const syncFiles = processSyncActivity(response);
+        // const metrics = calculateSyncMetrics(syncFiles);
+
+        const totalFiles = response.total_files || 0;
+        const processedFiles = response.processed_files || 0;
+        const inProgress = response.in_progress || false;
+
+        let syncPercent = 0;
+        if (totalFiles > 0) {
+          syncPercent = Math.min(100, Math.round((processedFiles / totalFiles) * 100));
+        }
 
         // Convert to the expected status format
         const status: SyncStatusResponse = {
-          synced_files: metrics.syncedFiles,
-          total_files: metrics.totalFiles,
-          in_progress: metrics.isInProgress,
-          percent: metrics.syncPercent || 0,
+          synced_files: processedFiles,
+          total_files: totalFiles,
+          in_progress: inProgress,
+          percent: syncPercent,
         };
 
         // Use a timestamp to track freshness of updates

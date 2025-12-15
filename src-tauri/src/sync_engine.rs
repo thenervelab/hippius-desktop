@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs as tokio_fs;
 use tokio::time::{Duration, sleep, timeout};
-pub use crate::sync_shared::{update_uploaded_file, mark_upload_processed};
+pub use crate::sync_shared::{update_uploaded_file, mark_upload_processed, add_sync_total, increment_sync_processed};
 
 /// Short, deterministic key derived from the main account id to namespace per-user data.
 pub fn account_key(account_id: &str) -> String {
@@ -1399,6 +1399,7 @@ pub async fn sync_once_cas(
         "[Sync] Phase 1 operations queued: {} uploads/deletes",
         ops_l2r_count
     );
+    add_sync_total(scope, ops_l2r_count);
 
     // === Execute Phase 1 ops ===
     for op in ops_l2r {
@@ -1506,6 +1507,7 @@ pub async fn sync_once_cas(
                                         .unwrap_or_default();
                                     if equal {
                                         update_uploaded_file(scope, &full.to_string_lossy());
+                                        increment_sync_processed(scope);
                                         break Some(final_et);
                                     } else {
                                         if let Err(e) = execute_conflict_flow(
@@ -1562,6 +1564,7 @@ pub async fn sync_once_cas(
                                     Ok((equal, remote_et)) => {
                                         if equal {
                                             update_uploaded_file(scope, &full.to_string_lossy());
+                                            increment_sync_processed(scope);
                                             break Some(remote_et.unwrap_or_default());
                                         } else {
                                             if let Err(e) = execute_conflict_flow(
@@ -1709,6 +1712,7 @@ pub async fn sync_once_cas(
                     // Mark as processed to remove from "uploading" list if present
                     let full_path = key_to_local_path(local_root, &path);
                     mark_upload_processed(scope, &full_path.to_string_lossy());
+                    increment_sync_processed(scope);
 
                     if let Some(new) = planned_local_renames_old_to_new.get(&path) {
                         confirmed_local_renames.push((path.clone(), new.clone()));
@@ -2019,6 +2023,7 @@ pub async fn sync_once_cas(
         "[Sync] Phase 3 operations queued: {} downloads/renames/deletes",
         ops_adopt_count
     );
+    add_sync_total(scope, ops_adopt_count);
 
     if ops_l2r_count == 0 && ops_adopt_count == 0 {
         println!("[Sync] No changes detected, skipping sync cycle");
@@ -2084,6 +2089,7 @@ pub async fn sync_once_cas(
                             }
                             let pe = prune.entry(path.clone()).or_default();
                             commit_prune_after_adopt(pe);
+                            increment_sync_processed(scope);
                             continue;
                         }
 
@@ -2094,6 +2100,7 @@ pub async fn sync_once_cas(
                                 if local_cid_now == remote_cid_now {
                                     let pe = prune.entry(path.clone()).or_default();
                                     commit_prune_after_adopt(pe);
+                                    increment_sync_processed(scope);
                                     continue;
                                 }
 
@@ -2165,6 +2172,7 @@ pub async fn sync_once_cas(
                                         }
                                         let pe = prune.entry(path.clone()).or_default();
                                         commit_prune_after_adopt(pe);
+                                        increment_sync_processed(scope);
                                         continue;
                                     } else {
                                         // Either local-only change (odd to be here) or no content change
@@ -2206,6 +2214,7 @@ pub async fn sync_once_cas(
                                         // Equal → just adopt and record base
                                         let pe = prune.entry(path.clone()).or_default();
                                         commit_prune_after_adopt(pe);
+                                        increment_sync_processed(scope);
                                         continue;
                                     }
                                 }
@@ -2237,6 +2246,7 @@ pub async fn sync_once_cas(
                         pe.deletion_count = pe.deletion_count.max(m.deletion_count);
                         pe.resurrection_count = pe.resurrection_count.max(m.resurrection_count);
                     }
+                    increment_sync_processed(scope);
                 }
             }
 
@@ -2271,6 +2281,7 @@ pub async fn sync_once_cas(
                                     pe_new.resurrection_count.max(m.resurrection_count);
                             }
                         }
+                        increment_sync_processed(scope);
                     }
                 }
             }
@@ -2291,6 +2302,7 @@ pub async fn sync_once_cas(
                         .if_match(et)
                         .send()
                         .await;
+                    increment_sync_processed(scope);
                 }
             }
 

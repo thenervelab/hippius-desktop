@@ -6,11 +6,40 @@ import SyncStatusDialog from "./SyncStatusDialog";
 import useSyncActivity from "../lib/hooks/useSyncActivity";
 
 const SyncStatusHandler: React.FC = () => {
-  const { data: syncFiles, isLoading, refetch } = useSyncActivity();
+  const { data, isLoading, refetch } = useSyncActivity();
+  const syncFiles = data?.rows || [];
+  const backendTotalFiles = data?.totalFiles || 0;
+  const backendProcessedFiles = data?.processedFiles || 0;
+  const backendInProgress = data?.inProgress || false;
   const [isSyncOpen, setIsSyncOpen] = useState(false);
   const [isPermanentlyClosed, setIsPermanentlyClosed] = useState(false);
 
   const calculateSyncMetrics = () => {
+    // Use backend metrics if available
+    if (backendTotalFiles > 0 || backendInProgress) {
+      const totalFiles = backendTotalFiles;
+      const syncedFiles = backendProcessedFiles;
+      const uploadingFiles = syncFiles.filter(
+        (file) => file.status === "uploading"
+      ).length;
+
+      let syncPercent = 0;
+      if (totalFiles > 0) {
+        syncPercent = Math.min(100, Math.round((syncedFiles / totalFiles) * 100));
+      }
+
+      const isCompleted = !backendInProgress && (syncPercent === 100 || totalFiles === 0);
+
+      return {
+        syncPercent,
+        totalFiles,
+        syncedFiles,
+        uploadingFiles,
+        isInProgress: backendInProgress,
+        isCompleted,
+      };
+    }
+
     if (!syncFiles || syncFiles.length === 0) {
       return {
         syncPercent: null,

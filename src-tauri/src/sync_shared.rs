@@ -117,10 +117,31 @@ pub static S3_PRIVATE_SYNC_STATE: Lazy<Arc<Mutex<S3SyncState>>> =
 pub static S3_PUBLIC_SYNC_STATE: Lazy<Arc<Mutex<S3SyncState>>> =
     Lazy::new(|| Arc::new(Mutex::new(S3SyncState::default())));
 
+pub fn add_sync_total(scope: &str, count: usize) {
+    let mut state = if scope == "public" {
+        S3_PUBLIC_SYNC_STATE.lock().unwrap()
+    } else {
+        S3_PRIVATE_SYNC_STATE.lock().unwrap()
+    };
+    state.total_files += count;
+}
+
+pub fn increment_sync_processed(scope: &str) {
+    let mut state = if scope == "public" {
+        S3_PUBLIC_SYNC_STATE.lock().unwrap()
+    } else {
+        S3_PRIVATE_SYNC_STATE.lock().unwrap()
+    };
+    state.processed_files += 1;
+}
+
 #[derive(serde::Serialize, Clone, Debug)]
 pub struct SyncActivityResponse {
     pub recent: Vec<UserProfileFileWithType>,
     pub uploading: Vec<UserProfileFileWithType>,
+    pub total_files: usize,
+    pub processed_files: usize,
+    pub in_progress: bool,
 }
 
 // --- Update Tauri Commands to Aggregate Data ---
@@ -161,7 +182,7 @@ pub async fn get_sync_activity(
     let limit = limit.unwrap_or(100);
 
     // Collect all the data we need while holding the locks
-    let (recent, uploading, should_check_public, should_check_private) = {
+    let (recent, uploading, should_check_public, should_check_private, total_files, processed_files, in_progress) = {
         let p_state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
         let pub_state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
 
@@ -190,7 +211,11 @@ pub async fn get_sync_activity(
             && !p_state.recent_items.is_empty())
             || (p_state.uploading_items.is_empty() && p_state.recent_items.is_empty());
 
-        (recent, uploading, should_check_public, should_check_private)
+        let total_files = p_state.total_files + pub_state.total_files;
+        let processed_files = p_state.processed_files + pub_state.processed_files;
+        let in_progress = p_state.in_progress || pub_state.in_progress;
+
+        (recent, uploading, should_check_public, should_check_private, total_files, processed_files, in_progress)
     };
 
     // Now we can safely await without holding the locks
@@ -264,6 +289,9 @@ pub async fn get_sync_activity(
     SyncActivityResponse {
         recent: recent_unified,
         uploading: uploading_unified,
+        total_files,
+        processed_files,
+        in_progress,
     }
 }
 

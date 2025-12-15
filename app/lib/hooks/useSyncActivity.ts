@@ -66,6 +66,16 @@ export type SyncActivityResponse = {
     mainReqHash: string;
     deleted: boolean;
   }>;
+  total_files: number;
+  processed_files: number;
+  in_progress: boolean;
+};
+
+export type SyncActivityData = {
+  rows: SyncActivityRow[];
+  totalFiles: number;
+  processedFiles: number;
+  inProgress: boolean;
 };
 
 function hashId(item: SyncActivityItem): string {
@@ -154,9 +164,9 @@ const useSyncActivity = () => {
 
   return useQuery({
     queryKey: ["sync-activity", polkadotAddress],
-    queryFn: async (): Promise<SyncActivityRow[]> => {
+    queryFn: async (): Promise<SyncActivityData> => {
       if (!polkadotAddress) {
-        return [];
+        return { rows: [], totalFiles: 0, processedFiles: 0, inProgress: false };
       }
 
       try {
@@ -171,7 +181,7 @@ const useSyncActivity = () => {
           !response ||
           (!response.recent?.length && !response.uploading?.length)
         ) {
-          return [];
+          return { rows: [], totalFiles: 0, processedFiles: 0, inProgress: false };
         }
         console.log("response 1", response);
 
@@ -208,10 +218,19 @@ const useSyncActivity = () => {
 
         // Sort by timestamp (newest first)
         console.log("rows", rows);
-        return rows.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        // Sort by timestamp (newest first)
+        console.log("rows", rows);
+        const sortedRows = rows.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+        return {
+          rows: sortedRows,
+          totalFiles: response.total_files || 0,
+          processedFiles: response.processed_files || 0,
+          inProgress: response.in_progress || false
+        };
       } catch (error) {
         console.error("Error fetching sync activity:", error);
-        return [];
+        return { rows: [], totalFiles: 0, processedFiles: 0, inProgress: false };
       }
     },
     refetchInterval: 3000,
