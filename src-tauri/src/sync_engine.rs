@@ -12,7 +12,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs as tokio_fs;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, sleep, timeout};
 
 /// Short, deterministic key derived from the main account id to namespace per-user data.
 pub fn account_key(account_id: &str) -> String {
@@ -267,41 +267,39 @@ async fn scan_local(root: &str) -> Result<HashMap<String, FileMeta>> {
 /* =============================== S3 I/O ===================================== */
 
 async fn load_manifest(client: &Client, bucket: &str) -> Result<(Manifest, Option<String>)> {
-    match client
-        .get_object()
-        .bucket(bucket)
-        .key(MANIFEST_KEY)
-        .send()
-        .await
-    {
-        Ok(obj) => {
-            let mut body = obj.body.collect().await?.to_vec();
-            const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
-            if body.starts_with(BOM) {
-                body.drain(..BOM.len());
+    let op = client.get_object().bucket(bucket).key(MANIFEST_KEY).send();
+    match timeout(Duration::from_secs(15), op).await {
+        Ok(res) => match res {
+            Ok(obj) => {
+                let mut body = obj.body.collect().await?.to_vec();
+                const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+                if body.starts_with(BOM) {
+                    body.drain(..BOM.len());
+                }
+                if body.is_empty() {
+                    return Ok((Manifest::default(), obj.e_tag.map(|e| normalize_etag(&e))));
+                }
+                let m: Manifest = serde_json::from_slice(&body).map_err(|e| {
+                    anyhow!(
+                        "manifest load failed: invalid JSON ({} bytes): {e}",
+                        body.len()
+                    )
+                })?;
+                Ok((m, obj.e_tag.map(|e| normalize_etag(&e))))
             }
-            if body.is_empty() {
-                return Ok((Manifest::default(), obj.e_tag.map(|e| normalize_etag(&e))));
+            Err(SdkError::ServiceError(ref se)) => {
+                let code = se.raw().status().as_u16();
+                if code == 403 {
+                    return Ok((Manifest::default(), None));
+                }
+                match se.err() {
+                    GetObjectError::NoSuchKey(_) => Ok((Manifest::default(), None)),
+                    other => Err(anyhow!("manifest load failed: {other:?}"))?,
+                }
             }
-            let m: Manifest = serde_json::from_slice(&body).map_err(|e| {
-                anyhow!(
-                    "manifest load failed: invalid JSON ({} bytes): {e}",
-                    body.len()
-                )
-            })?;
-            Ok((m, obj.e_tag.map(|e| normalize_etag(&e))))
-        }
-        Err(SdkError::ServiceError(ref se)) => {
-            let code = se.raw().status().as_u16();
-            if code == 403 {
-                return Ok((Manifest::default(), None));
-            }
-            match se.err() {
-                GetObjectError::NoSuchKey(_) => Ok((Manifest::default(), None)),
-                other => Err(anyhow!("manifest load failed: {other:?}"))?,
-            }
-        }
-        Err(e) => Err(anyhow!("manifest load failed: {e:?}"))?,
+            Err(e) => Err(anyhow!("manifest load failed: {e:?}")),
+        },
+        Err(_) => Err(anyhow!("manifest load timed out")),
     }
 }
 
@@ -803,24 +801,28 @@ async fn load_pruned_remote(
     prunefile_id: &str,
 ) -> Result<(PrunedMap, Option<String>)> {
     let key = pruned_key_for(prunefile_id);
-    match client.get_object().bucket(bucket).key(&key).send().await {
-        Ok(obj) => {
-            let etag = obj.e_tag.map(|e| normalize_etag(&e));
-            let bytes = obj.body.collect().await?.to_vec();
-            let map: PrunedMap = serde_json::from_slice(&bytes)?;
-            Ok((map, etag))
-        }
-        Err(SdkError::ServiceError(ref se)) => {
-            let code = se.raw().status().as_u16();
-            if code == 403 {
-                return Ok((PrunedMap::default(), None));
+    let op = client.get_object().bucket(bucket).key(&key).send();
+    match timeout(Duration::from_secs(15), op).await {
+        Ok(res) => match res {
+            Ok(obj) => {
+                let etag = obj.e_tag.map(|e| normalize_etag(&e));
+                let bytes = obj.body.collect().await?.to_vec();
+                let map: PrunedMap = serde_json::from_slice(&bytes)?;
+                Ok((map, etag))
             }
-            match se.err() {
-                GetObjectError::NoSuchKey(_) => Ok((PrunedMap::default(), None)),
-                other => Err(anyhow!("load_pruned_remote failed: {other:?}"))?,
+            Err(SdkError::ServiceError(ref se)) => {
+                let code = se.raw().status().as_u16();
+                if code == 403 {
+                    return Ok((PrunedMap::default(), None));
+                }
+                match se.err() {
+                    GetObjectError::NoSuchKey(_) => Ok((PrunedMap::default(), None)),
+                    other => Err(anyhow!("load_pruned_remote failed: {other:?}"))?,
+                }
             }
-        }
-        Err(e) => Err(anyhow!("load_pruned_remote failed: {e:?}"))?,
+            Err(e) => Err(anyhow!("load_pruned_remote failed: {e:?}")),
+        },
+        Err(_) => Err(anyhow!("load_pruned_remote timed out")),
     }
 }
 
