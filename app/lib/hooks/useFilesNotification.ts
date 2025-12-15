@@ -88,7 +88,7 @@ export function useFilesNotification() {
   const [invokeCount, setInvokeCount] = useState<number>(0);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
-  const { polkadotAddress } = useWalletAuth();
+  const { polkadotAddress, oauthSession } = useWalletAuth();
 
   // Use both atoms
   const setSyncPercent = useSetAtom(syncPercentAtom);
@@ -185,8 +185,11 @@ export function useFilesNotification() {
             // Add notification for completed sync
             const timestamp = new Date().toISOString();
             const notificationSubtype = `FileSyncComplete-${timestamp}`;
+            const userAddress = oauthSession?.substrateAddress || polkadotAddress;
+            if (!userAddress) return;
 
             await addNotification({
+              userAddress: userAddress,
               notificationType: "Files",
               notificationSubtype: notificationSubtype,
               notificationTitleText: "Files Sync Complete!",

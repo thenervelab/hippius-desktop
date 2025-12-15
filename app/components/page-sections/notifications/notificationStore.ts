@@ -10,7 +10,6 @@ import {
 import { UiNotification } from "@/components/page-sections/notifications/types";
 import { Icons } from "@/components/ui";
 import { iconMap } from "@/lib/helpers/notificationIcons";
-import { unreadCount } from "@/lib/helpers/notificationsDb";
 
 // Add debug helpers to window for testing
 if (typeof window !== 'undefined') {
@@ -21,7 +20,6 @@ if (typeof window !== 'undefined') {
   };
 
   (window as any).__debugNotifications = async (userAddress?: string) => {
-    const { default: initSqlJs } = await import('sql.js/dist/sql-wasm.js');
     const { initHippiusDesktopDB } = await import('@/app/lib/helpers/hippiusDesktopDB');
 
     const db = await initHippiusDesktopDB();

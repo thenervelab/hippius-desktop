@@ -123,7 +123,7 @@ export function useTrayInit(polkadotAddress: string) {
           id: INSTALL_UPDATE,
           text: "Install Update",
           action: async () => {
-            await checkForUpdates();
+            await checkForUpdates(false, polkadotAddress);
           },
         });
       }
@@ -472,8 +472,8 @@ async function normalizeActivityToRows(
       it.action === "uploading"
         ? "uploading"
         : it.action === "deleted"
-        ? "deleted"
-        : "uploaded";
+          ? "deleted"
+          : "uploaded";
 
     const id = hashId(it);
     if (seen.has(id)) continue;
@@ -570,7 +570,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
     for (const [, item] of [...syncRowItems.entries()]) {
       try {
         await menu.remove(item);
-      } catch {}
+      } catch { }
     }
     syncRowItems.clear();
 
@@ -579,7 +579,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
       if (typeof item.id === "string" && item.id.startsWith(SYNC_ITEM_PREFIX)) {
         try {
           await menu.remove(item);
-        } catch {}
+        } catch { }
       }
     }
   } catch (error) {

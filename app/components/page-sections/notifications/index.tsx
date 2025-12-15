@@ -25,6 +25,7 @@ import {
 } from "@/app/components/sidebar/sideBarAtoms";
 import { iconMap } from "@/app/lib/helpers/notificationIcons";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 const Notifications = () => {
   const [activeTab, setActiveTab] = useState("All");
@@ -37,6 +38,7 @@ const Notifications = () => {
   const searchParams = useSearchParams();
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
+  const { polkadotAddress, oauthSession } = useWalletAuth();
 
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
 
@@ -175,7 +177,9 @@ const Notifications = () => {
   };
 
   const handleArchiveAll = async () => {
-    await deleteAllNotifications();
+    const userAddress = oauthSession?.substrateAddress || polkadotAddress;
+    if (!userAddress) return;
+    await deleteAllNotifications(userAddress);
     toast.success("All notifications deleted");
     await refresh();
     await refreshUnread();
