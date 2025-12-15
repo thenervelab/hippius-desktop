@@ -3,6 +3,7 @@ use rand::distributions::Alphanumeric;
 use rand::{Rng, thread_rng};
 use sodiumoxide::crypto::secretbox;
 use sqlx::Row;
+use sqlx::sqlite::SqliteRow;
 
 /// Generate a random key name
 fn generate_key_name() -> String {
@@ -112,7 +113,7 @@ pub async fn list_encryption_keys() -> Result<Vec<(String, i64)>, String> {
 
         Ok(rows
             .iter()
-            .map(|row| {
+            .map(|row: &SqliteRow| {
                 let key_bytes: Vec<u8> = row.get("key");
                 let key_b64 = base64::encode(&key_bytes);
                 (key_b64, row.get::<i64, _>("id"))

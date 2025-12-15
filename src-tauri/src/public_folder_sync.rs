@@ -366,6 +366,7 @@ pub async fn start_public_folder_sync(
             deletion_policy,
             max_retries,
             &prunefile_id,
+            "public",
         )
         .await;
 

@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs as tokio_fs;
 use tokio::time::{Duration, sleep, timeout};
+pub use crate::sync_shared::update_uploaded_file;
 
 /// Short, deterministic key derived from the main account id to namespace per-user data.
 pub fn account_key(account_id: &str) -> String {
@@ -1223,6 +1224,7 @@ pub async fn sync_once_cas(
     delete_policy: DeletePolicy,
     max_retries: usize,
     prunefile_id: &str,
+    scope: &str,
 ) -> Result<()> {
     println!("[Sync] sync_once_cas beimg called");
     let client_tag8 = client_tag8_from(prunefile_id);
@@ -1500,6 +1502,7 @@ pub async fn sync_once_cas(
                                         .or_else(|| out.e_tag.map(|e| normalize_etag(&e)))
                                         .unwrap_or_default();
                                     if equal {
+                                        update_uploaded_file(scope, &full.to_string_lossy());
                                         break Some(final_et);
                                     } else {
                                         if let Err(e) = execute_conflict_flow(
@@ -1555,6 +1558,7 @@ pub async fn sync_once_cas(
                                 match remote_equals_local(client, bucket, &path, &bytes).await {
                                     Ok((equal, remote_et)) => {
                                         if equal {
+                                            update_uploaded_file(scope, &full.to_string_lossy());
                                             break Some(remote_et.unwrap_or_default());
                                         } else {
                                             if let Err(e) = execute_conflict_flow(

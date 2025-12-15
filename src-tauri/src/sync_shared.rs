@@ -575,7 +575,7 @@ pub async fn list_single_bucket_contents(bucket_name: &str) -> Result<Vec<Bucket
             req = req.continuation_token(token);
         }
 
-        let resp = req.send().await;
+        let resp: Result<_, SdkError<aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error>> = req.send().await;
 
         match resp {
             Ok(output) => {

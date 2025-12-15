@@ -119,7 +119,8 @@ pub async fn get_temp_auth_key(account_id: &str) -> Result<Option<String>, Strin
             .await
             .map_err(|e| format!("DB error fetching temp auth key: {}", e))?;
         if let Some(row) = legacy {
-            if let Some(temp) = row.get::<Option<String>, _>("temp_auth_key") {
+            let temp_opt: Option<String> = row.get("temp_auth_key");
+            if let Some(temp) = temp_opt {
                 // migrate legacy to scoped
                 let _ = save_temp_auth_key(account_id, &temp).await;
                 let _ = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")

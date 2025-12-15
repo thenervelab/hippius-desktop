@@ -1,4 +1,21 @@
+use once_cell::sync::OnceCell;
+use sqlx::sqlite::SqlitePool;
+
 pub mod sync_engine;
+pub mod sync_shared;
+pub mod constants;
+pub mod utils;
+pub mod user_profile_sync;
+pub mod commands;
+pub mod events;
+pub mod substrate_client;
+pub mod builder_blocks;
+pub mod ipfs;
+pub mod macos_bookmarks;
+pub mod private_folder_sync;
+pub mod public_folder_sync;
+
+pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
 #[tauri::command]
 fn greet(name: &str) -> String {

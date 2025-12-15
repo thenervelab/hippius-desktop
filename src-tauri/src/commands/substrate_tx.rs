@@ -7,7 +7,8 @@ use crate::sync_engine::DeletePolicy;
 use crate::sync_shared::{
     GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, S3SyncState, SYNCING_ACCOUNTS,
 };
-use crate::{start_private_folder_sync_tauri, start_public_folder_sync_tauri};
+use crate::private_folder_sync::start_private_folder_sync_tauri;
+use crate::public_folder_sync::start_public_folder_sync_tauri;
 use crate::utils::objectstore_tokens::{has_master_token, save_temp_auth_key};
 use chrono::Utc;
 

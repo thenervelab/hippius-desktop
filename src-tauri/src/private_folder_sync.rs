@@ -338,6 +338,7 @@ pub async fn start_private_folder_sync(
             deletion_policy,
             max_retries,
             &prunefile_id,
+            "private",
         )
         .await;
 
