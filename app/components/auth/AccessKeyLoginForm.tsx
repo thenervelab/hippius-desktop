@@ -21,10 +21,7 @@ import { BackButton } from "@/components/ui";
 import ButtonCard from "../ui/button/CardButton";
 import {
   addNotification,
-  isFirstTime,
-  listNotifications,
 } from "@/app/lib/helpers/notificationsDb";
-import { clearHippiusDesktopDB } from "@/app/lib/helpers/hippiusDesktopDB";
 
 interface AccessKeyLoginFormProps {
   onBack: () => void;
@@ -56,21 +53,35 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
 
     try {
       await login(mnemonic.trim());
-      await clearHippiusDesktopDB();
-      // Check if this is the first time and add welcome notification
-      if (await isFirstTime()) {
-        const notifications = await listNotifications(1);
-        if (notifications.length === 0) {
-          await addNotification({
-            notificationType: "Hippius",
-            notificationSubtype: "Welcome",
-            notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
-            notificationDescription: `🎉 Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you're spending. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.`,
-            notificationLinkText: "Check Out",
-            notificationLink: "/files",
-          });
+
+      // Get the user address from session after login
+      await new Promise(resolve => setTimeout(resolve, 100));
+      const storedSession = localStorage.getItem("hippius_oauth_session");
+      let userAddress: string | null = null;
+
+      if (storedSession) {
+        try {
+          const session = JSON.parse(storedSession);
+          userAddress = session.substrateAddress;
+        } catch (e) {
+          console.error("[AccessKeyLogin] Failed to parse session:", e);
         }
       }
+
+      // Add welcome notification if we have the address
+      if (userAddress) {
+        console.log("[AccessKeyLogin] Creating welcome notification for:", userAddress);
+        await addNotification({
+          userAddress,
+          notificationType: "Hippius",
+          notificationSubtype: "Welcome",
+          notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
+          notificationDescription: `🎉 Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you're spending. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.`,
+          notificationLinkText: "Check Out",
+          notificationLink: "/files",
+        });
+      }
+
       // Get redirect parameter from URL or default to dashboard
       const redirectPath = searchParams.get("redirect") || "/";
       console.log("[AccessKeyLogin] Redirecting to:", redirectPath);

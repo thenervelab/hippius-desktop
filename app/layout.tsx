@@ -36,8 +36,8 @@ export default function RootLayout({
         className={`${digitalFonts.className} ${geistSans.className} ${geistSans.variable} bg-grey-100 text-grey-10 antialiased font-sans`}
       >
         <Providers>
-          <UpdateChecker>
-            <WalletAuthProvider>
+          <WalletAuthProvider>
+            <UpdateChecker>
               <PreAuthProvider>
                 <NextTopLoader color="#3167DD" showSpinner={false} />
                 <NavigationLoaderProvider>
@@ -58,8 +58,8 @@ export default function RootLayout({
                   />
                 </NavigationLoaderProvider>
               </PreAuthProvider>
-            </WalletAuthProvider>
-          </UpdateChecker>
+            </UpdateChecker>
+          </WalletAuthProvider>
         </Providers>
       </body>
     </html>

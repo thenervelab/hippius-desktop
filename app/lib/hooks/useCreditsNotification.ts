@@ -20,6 +20,7 @@ import {
   enabledNotificationTypesAtom,
 } from "@/components/page-sections/notifications/notificationStore";
 import { usePathname } from "next/navigation";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 const TEST_OFFSET = 0;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000; // 1 day in milliseconds
@@ -31,6 +32,7 @@ export function useCreditsNotification() {
   const [enabledTypes] = useAtom(enabledNotificationTypesAtom);
   const pathname = usePathname(); // Track route changes
   const [routeChangeKey, setRouteChangeKey] = useState(0);
+  const { oauthSession, polkadotAddress } = useWalletAuth();
 
   const areCreditsNotificationsEnabled = enabledTypes.includes("Credits");
 
@@ -94,8 +96,11 @@ export function useCreditsNotification() {
             if (canAddNotification) {
               const timestamp = new Date().toISOString();
               const warningSubtype = `LowCreditWarning-${timestamp}`;
+              const userAddress = oauthSession?.substrateAddress || polkadotAddress;
+              if (!userAddress) return;
 
               await addNotification({
+                userAddress: userAddress,
                 notificationType: "Credits",
                 notificationSubtype: warningSubtype,
                 notificationTitleText: "You're running low on credits.",
@@ -125,6 +130,8 @@ export function useCreditsNotification() {
     refreshUnread,
     areCreditsNotificationsEnabled,
     routeChangeKey, // Refetch when route changes
+    oauthSession,
+    polkadotAddress
   ]);
 
   // Process credit events and add as notifications
@@ -135,7 +142,9 @@ export function useCreditsNotification() {
     const run = async () => {
       try {
         /* grab existing welcome-time stamp for filtering */
-        const existing = await listNotifications(100);
+        const userAddress = oauthSession?.substrateAddress || polkadotAddress;
+        if (!userAddress) return;
+        const existing = await listNotifications(userAddress, 100);
         const welcome = existing.find(
           (n: any[]) => n[1] === "Hippius" && n[2] === "Welcome"
         );
@@ -164,7 +173,11 @@ export function useCreditsNotification() {
             amount = "some";
           }
 
+          const userAddress = oauthSession?.substrateAddress || polkadotAddress;
+          if (!userAddress) return;
+
           await addNotification({
+            userAddress: userAddress,
             notificationType: "Credits",
             notificationSubtype: subtype,
             notificationTitleText: `🎁 Woo-hoo! ${amount} credit${+amount > 1 ? "s" : ""
@@ -181,5 +194,5 @@ export function useCreditsNotification() {
     };
 
     run();
-  }, [creditEvents, isSuccess, refreshUnread, areCreditsNotificationsEnabled]);
+  }, [creditEvents, isSuccess, refreshUnread, areCreditsNotificationsEnabled, oauthSession, polkadotAddress]);
 }
