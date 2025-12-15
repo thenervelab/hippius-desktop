@@ -114,17 +114,17 @@ const useRecentFiles = () => {
               name: displayName || "Unnamed File",
               actualFileName: file.fileName,
               size: file.fileSizeInBytes,
-              createdAt: file.createdAt || Date.now(),
+              createdAt: file.createdAt ? file.createdAt * 1000 : Date.now(),
               cid: hexToCid(file.fileHash) ?? "",
               source: file.source || "Unknown",
               minerIds: parseMinerIds(file.minerIds || "[]"),
               isAssigned:
                 file.isAssigned !== undefined ? file.isAssigned : true,
-              lastChargedAt: file.lastChargedAt || file.createdAt || Date.now(),
+              lastChargedAt: file.lastChargedAt || (file.createdAt ? file.createdAt * 1000 : Date.now()),
               fileHash: file.fileHash,
               isFolder: isFolder || file.isFolder || false,
               type:
-                file.type || (file.source === "private" ? "Private" : "Public"),
+                file.type || (file.source?.includes("private") ? "Private" : "Public"),
               isErasureCoded: isErasureCoded || false,
               mainReqHash: file.mainReqHash || "",
             };

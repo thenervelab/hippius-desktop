@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs as tokio_fs;
 use tokio::time::{Duration, sleep, timeout};
-pub use crate::sync_shared::update_uploaded_file;
+pub use crate::sync_shared::{update_uploaded_file, mark_upload_processed};
 
 /// Short, deterministic key derived from the main account id to namespace per-user data.
 pub fn account_key(account_id: &str) -> String {
@@ -1325,6 +1325,9 @@ pub async fn sync_once_cas(
                     // File is already synced - CID matches and present=true
                     // This log confirms we're NOT re-uploading unchanged files
                     println!("[Sync] Skipping '{}': already synced (CID matches)", lk);
+                    // Mark as processed to remove from "uploading" list if present
+                    let full_path = key_to_local_path(local_root, lk);
+                    mark_upload_processed(scope, &full_path.to_string_lossy());
                 }
             }
         }
@@ -1702,6 +1705,10 @@ pub async fn sync_once_cas(
                     set_prune_absent(pe);
                     pe.deletion_count = pe.deletion_count.saturating_add(1);
                     pe.locally_deleted = false;
+
+                    // Mark as processed to remove from "uploading" list if present
+                    let full_path = key_to_local_path(local_root, &path);
+                    mark_upload_processed(scope, &full_path.to_string_lossy());
 
                     if let Some(new) = planned_local_renames_old_to_new.get(&path) {
                         confirmed_local_renames.push((path.clone(), new.clone()));

@@ -154,15 +154,26 @@ export function useTrayInit(polkadotAddress: string) {
         trayIconState = "default";
       }
 
-      // Start watcher for sync activity after menu exists
-      startSyncActivityWatcher(polkadotAddress);
-
       // Add quit item at the end
       await menu.append(quit);
 
       return menu;
     })();
   }, []);
+
+  // Watch for address changes to restart the sync activity watcher
+  useEffect(() => {
+    if (polkadotAddress) {
+      startSyncActivityWatcher(polkadotAddress);
+    } else {
+      // Stop watcher if no address
+      // @ts-expect-error custom watcher handle
+      if (typeof window !== "undefined" && window.__hippiusSyncWatcher) {
+        // @ts-expect-error custom watcher handle
+        clearInterval(window.__hippiusSyncWatcher);
+      }
+    }
+  }, [polkadotAddress]);
 }
 
 // Add these explicit debug logs
@@ -372,12 +383,12 @@ function startSyncActivityWatcher(polkadotAddress: string) {
         return {
           name: displayName || "Unnamed File",
           path: file.source || "",
-          scope: file.source || "",
+          scope: file.type || (file.source?.includes("private") ? "private" : "public"),
           action,
           kind: file.isFolder ? "folder" : "file",
-          timestamp: file.createdAt || Date.now(),
+          timestamp: file.createdAt ? file.createdAt * 1000 : Date.now(),
           file_type:
-            file.type || (file.source === "private" ? "Private" : "Public"),
+            file.type || (file.source?.includes("private") ? "private" : "Public"),
           deleted: file.deleted,
         };
       };
@@ -472,8 +483,8 @@ async function normalizeActivityToRows(
       it.action === "uploading"
         ? "uploading"
         : it.action === "deleted"
-        ? "deleted"
-        : "uploaded";
+          ? "deleted"
+          : "uploaded";
 
     const id = hashId(it);
     if (seen.has(id)) continue;
@@ -570,7 +581,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
     for (const [, item] of [...syncRowItems.entries()]) {
       try {
         await menu.remove(item);
-      } catch {}
+      } catch { }
     }
     syncRowItems.clear();
 
@@ -579,7 +590,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
       if (typeof item.id === "string" && item.id.startsWith(SYNC_ITEM_PREFIX)) {
         try {
           await menu.remove(item);
-        } catch {}
+        } catch { }
       }
     }
   } catch (error) {

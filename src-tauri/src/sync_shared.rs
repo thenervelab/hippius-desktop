@@ -259,6 +259,8 @@ pub async fn get_sync_activity(
         .map(|item| item.to_user_profile_file(&account_id))
         .collect();
 
+    println!("[Sync] get_sync_activity: returning {:?} recent items and {:?} uploading items", recent_unified, uploading_unified);
+
     SyncActivityResponse {
         recent: recent_unified,
         uploading: uploading_unified,
@@ -356,6 +358,7 @@ pub fn prepare_for_new_sync() {
 /// Removes any existing "uploading" entry for the same file and adds a new "uploaded" entry
 #[allow(dead_code)]
 pub fn update_uploaded_file(scope: &str, file_path: &str) -> Option<RecentItem> {
+    println!("[Sync] update_uploaded_file called for scope: {}, path: {}", scope, file_path);
     let state = if scope == "public" {
         S3_PUBLIC_SYNC_STATE.lock().unwrap()
     } else {
@@ -412,6 +415,18 @@ pub fn update_uploaded_file(scope: &str, file_path: &str) -> Option<RecentItem> 
     state.uploading_items.retain(|item| item.path != file_path);
 
     Some(uploaded_item)
+}
+
+/// Removes a file from the uploading_items list without adding it to recent_items
+/// Used when a file is skipped (already synced) or when a delete is confirmed
+pub fn mark_upload_processed(scope: &str, file_path: &str) {
+    let mut state = if scope == "public" {
+        S3_PUBLIC_SYNC_STATE.lock().unwrap()
+    } else {
+        S3_PRIVATE_SYNC_STATE.lock().unwrap()
+    };
+
+    state.uploading_items.retain(|item| item.path != file_path);
 }
 
 #[tauri::command]

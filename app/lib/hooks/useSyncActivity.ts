@@ -103,12 +103,12 @@ function processFile(
   return {
     name: displayName || "Unnamed File",
     path: file.source || "",
-    scope: file.source || "",
+    scope: file.type || (file.source?.includes("private") ? "private" : "public"),
     action,
     fileSizeInBytes: file.fileSizeInBytes || 0,
     kind: file.isFolder ? "folder" : "file",
-    timestamp: file.createdAt || Date.now(),
-    file_type: file.type || (file.source === "private" ? "Private" : "Public"),
+    timestamp: file.createdAt ? file.createdAt * 1000 : Date.now(),
+    file_type: file.type || (file.source?.includes("private") ? "private" : "public"),
     deleted: file.deleted || false,
   };
 }
@@ -122,8 +122,8 @@ function normalizeActivityToRows(items: SyncActivityItem[]): SyncActivityRow[] {
       item.action === "uploading"
         ? "uploading"
         : item.action === "deleted"
-        ? "deleted"
-        : "uploaded";
+          ? "deleted"
+          : "uploaded";
 
     const id = hashId(item);
     if (seen.has(id)) continue;
@@ -166,13 +166,14 @@ const useSyncActivity = () => {
             accountId: polkadotAddress,
           }
         );
-
+        console.log("response 0", response);
         if (
           !response ||
           (!response.recent?.length && !response.uploading?.length)
         ) {
           return [];
         }
+        console.log("response 1", response);
 
         // toast.success(`Files: ${JSON.stringify(response)}`, {
         //   action: {
@@ -206,6 +207,7 @@ const useSyncActivity = () => {
         const rows = normalizeActivityToRows(activityItems);
 
         // Sort by timestamp (newest first)
+        console.log("rows", rows);
         return rows.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
       } catch (error) {
         console.error("Error fetching sync activity:", error);

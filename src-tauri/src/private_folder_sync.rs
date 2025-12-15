@@ -325,7 +325,7 @@ pub async fn start_private_folder_sync(
             let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
             state.in_progress = true;
             state.processed_files = 0;
-            state.uploading_items.retain(|_| false);
+            // state.uploading_items.retain(|_| false); // Removed to preserve uploading state
             state.total_files = 0; // we don't have per-file progress when delegating to sync_once_cas
         }
         println!("calling sync_once_cas from private_folder_sync");

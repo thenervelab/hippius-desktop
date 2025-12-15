@@ -354,7 +354,7 @@ pub async fn start_public_folder_sync(
             st.in_progress = true;
             st.total_files = 0;
             st.processed_files = 0;
-            st.uploading_items.retain(|_| false);
+            // st.uploading_items.retain(|_| false); // Removed to preserve uploading state
         }
 
         let max_retries = 5;
