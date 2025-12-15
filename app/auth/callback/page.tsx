@@ -15,10 +15,7 @@ import { Loader2, AlertCircle } from "lucide-react";
 import type { OAuthCallbackParams } from "@/app/lib/types/oAuth";
 import {
     addNotification,
-    isFirstTime,
-    listNotifications,
 } from "@/app/lib/helpers/notificationsDb";
-import { clearHippiusDesktopDB } from "@/app/lib/helpers/hippiusDesktopDB";
 
 export default function OAuthCallbackPage() {
     const router = useRouter();
@@ -128,21 +125,17 @@ export default function OAuthCallbackPage() {
                 // Update auth context with OAuth session
                 await setOAuthSession(session);
 
-                // Clear DB and check if this is the first time to add welcome notification
-                await clearHippiusDesktopDB();
-                if (await isFirstTime()) {
-                    const notifications = await listNotifications(1);
-                    if (notifications.length === 0) {
-                        await addNotification({
-                            notificationType: "Hippius",
-                            notificationSubtype: "Welcome",
-                            notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
-                            notificationDescription: `🎉 Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you're spending. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.`,
-                            notificationLinkText: "Check Out",
-                            notificationLink: "/files",
-                        });
-                    }
-                }
+                // Add welcome notification for this user (built-in duplicate check)
+                console.log("[OAuthCallback] Creating welcome notification for:", session.substrateAddress);
+                await addNotification({
+                    userAddress: session.substrateAddress!,
+                    notificationType: "Hippius",
+                    notificationSubtype: "Welcome",
+                    notificationTitleText: "Hello from Hippius 👋  Here's what's new!",
+                    notificationDescription: `🎉 Welcome to Hippius! You're now part of a decentralised storage network. To get started, open the Files tab and upload your data. Each upload uses credits from your balance. We keep credit pricing simple and fair, so you always know what you're spending. You can check your remaining credits at any time in the billing tab, and top up when you need more. When you're ready, tap Check Out to launch your first storage session.`,
+                    notificationLinkText: "Check Out",
+                    notificationLink: "/files",
+                });
 
                 // Get redirect path from URL params, sessionStorage, or default
                 const urlRedirect = searchParams.get("redirect");
