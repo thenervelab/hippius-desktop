@@ -79,7 +79,6 @@ const CardView: FC<CardViewProps> = ({
   // Initialize delete hook with filesToDelete instead of selectedFiles
   const { mutate: deleteFiles, isPending: isDeleting } = useDeleteFile({
     files: filesToDelete,
-    isPrivateFolder
   });
 
   const [localFileDetailsFile, setLocalFileDetailsFile] =

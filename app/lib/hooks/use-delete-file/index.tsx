@@ -18,14 +18,11 @@ export type FileToDelete = FormattedUserFile;
 
 export const useDeleteFile = ({
     files,
-    isPrivateFolder
 }: {
     files: FileToDelete[],
-    isPrivateFolder?: boolean
 }) => {
     const { data: ipfsFiles } = useUserFiles();
     const { getParam } = useUrlParams();
-    console.log("isPrivateFolder", isPrivateFolder)
 
     const { api } = usePolkadotApi();
     const { walletManager, polkadotAddress } = useWalletAuth();

@@ -46,7 +46,7 @@ import {
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 
-const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
+const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, oauthSession } = useWalletAuth();
   const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
   const isPrivateView = activeSubMenuItem === "Private";
@@ -441,8 +441,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
           setSelectedPublicFolderPath(path);
         }
         toast.success(
-          `${
-            isPrivateView ? "Private" : "Public"
+          `${isPrivateView ? "Private" : "Public"
           } sync folder set successfully, syncing is now in progress.`
         );
         setIsSyncPathConfigured(true);
@@ -453,8 +452,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       } catch (error) {
         console.error("Failed to set sync folder:", error);
         toast.error(
-          `Failed to set sync folder: ${
-            error instanceof Error ? error.message : "Unknown error"
+          `Failed to set sync folder: ${error instanceof Error ? error.message : "Unknown error"
           }`
         );
       }
@@ -508,8 +506,7 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
     } catch (error) {
       console.error("Failed to skip sync folder setup:", error);
       toast.error(
-        `Failed to skip sync folder setup: ${
-          error instanceof Error ? error.message : "Unknown error"
+        `Failed to skip sync folder setup: ${error instanceof Error ? error.message : "Unknown error"
         }`
       );
     }
@@ -758,14 +755,14 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
       // For recent files, prioritize private path, then fall back to public
       const privatePath =
         selectedPrivateFolderPath !== null &&
-        selectedPrivateFolderPath !== undefined &&
-        selectedPrivateFolderPath !== ""
+          selectedPrivateFolderPath !== undefined &&
+          selectedPrivateFolderPath !== ""
           ? selectedPrivateFolderPath
           : null;
       const publicPath =
         selectedPublicFolderPath !== null &&
-        selectedPublicFolderPath !== undefined &&
-        selectedPublicFolderPath !== ""
+          selectedPublicFolderPath !== undefined &&
+          selectedPublicFolderPath !== ""
           ? selectedPublicFolderPath
           : null;
 
@@ -854,4 +851,4 @@ const Ipfs: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   return content;
 };
 
-export default Ipfs;
+export default FilesContainer;

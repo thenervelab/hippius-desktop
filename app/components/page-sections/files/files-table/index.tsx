@@ -5,6 +5,7 @@ import React, {
   useEffect,
   useCallback,
   memo,
+  useRef,
 } from "react";
 import {
   createColumnHelper,
@@ -208,6 +209,15 @@ const FilesTable: FC<FilesTableProps> = memo(
     totalPages,
     setCurrentPage,
   }) => {
+    // Use refs to store current values - header function will read from these
+    // This prevents stale closure captures in TanStack Table's cached header functions
+    const currentPageRef = useRef(currentPage);
+    const filesRef = useRef(files);
+
+    // Update refs on every render BEFORE columns are created
+    currentPageRef.current = currentPage;
+    filesRef.current = files;
+
     const { polkadotAddress } = useWalletAuth();
     const [sorting, setSorting] = useState<SortingState>([]);
     const [prevFileCount, setPrevFileCount] = useState<number>(0);
@@ -236,7 +246,6 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     const { mutate: deleteFiles, isPending: isDeleting } = useDeleteFile({
       files: filesToDelete,
-      isPrivateFolder,
     });
 
     const [localFileDetailsFile, setLocalFileDetailsFile] =
@@ -431,263 +440,276 @@ const FilesTable: FC<FilesTableProps> = memo(
       ]
     );
 
-    // Memoize columns with stable dependencies
-    const selectionColumn = useMemo(() => {
-      if (!isSelectionMode) return [];
-      return [
-        columnHelper.display({
-          id: "selection",
-          header: () => (
-            <div className="flex justify-center items-center h-full">
-              <SelectionHeaderColumn files={allFiles} />
-            </div>
-          ),
-          cell: ({ row }) => (
-            <div className="flex justify-center items-center h-full px-2">
-              <SelectionColumn row={row} />
-            </div>
-          ),
-        }),
-      ];
-    }, [isSelectionMode, allFiles]);
+    // Create a unique key that changes when page or files change
+    // This forces useMemo to re-run when user navigates pages
+    const pageKey = `${currentPage}-${files[0]?.actualFileName || 'empty'}`;
 
     // Create a stable memo of columns that doesn't depend on every prop
     const columns = useMemo(
-      () => [
-        ...selectionColumn,
-        columnHelper.accessor("name", {
-          header: "NAME",
-          enableSorting: true,
-          id: "name",
-          minSize: 200,
-          maxSize: 1000,
-          cell: (info) => {
-            const { fileFormat } = getFilePartsFromFileName(info.getValue());
-            const fileType = getFileTypeFromExtension(fileFormat || null);
+      () => {
+        // Create selection column inside useMemo to capture fresh values
+        const selectionColumn = !isSelectionMode ? [] : [
+          columnHelper.display({
+            id: `selection-page-${currentPage}`, // Unique ID per page
+            header: () => {
+              // CRITICAL: Read from refs to get latest values, not closure captures
+              const latestFiles = filesRef.current;
 
-            // Check if file has checkmark (locally synced)
-            const hasCheckmark = isLocalFile(info.row.original.source);
-            const canPreview = shouldAllowPreview(info.row.original, hasCheckmark, isPrivateFolder);
-
-            if (fileType === "video") {
               return (
-                <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                  {isSelectionMode || !canPreview ? (
-                    <NameCell
-                      className="px-4 py-[22px]"
-                      rawName={info.getValue()}
-                      actualName={info.row.original.actualFileName}
-                      cid={info.row.original.cid}
-                      isAssigned={info.row.original.isAssigned}
-                      fileType={fileType}
-                      isPreviewable={false}
-                      isFolder={info.row.original.isFolder}
-                      source={info.row.original.source}
-                      mainReqHash={info.row.original.mainReqHash}
-                    />
-                  ) : (
-                    <VideoDialogTrigger
-                      onClick={() => handleSetSelectedFile(info.row.original)}
-                      hasCheckmark={hasCheckmark}
-                    >
-                      <NameCell
-                        rawName={info.getValue()}
-                        actualName={info.row.original.actualFileName}
-                        cid={info.row.original.cid}
-                        isAssigned={info.row.original.isAssigned}
-                        fileType={fileType}
-                        isPreviewable={true}
-                        isFolder={info.row.original.isFolder}
-                        source={info.row.original.source}
-                        mainReqHash={info.row.original.mainReqHash}
-                      />
-                    </VideoDialogTrigger>
-                  )}
-                </NameCellWithCheckmark>
-              );
-            } else if (fileType === "image") {
-              return (
-                <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                  {isSelectionMode || !canPreview ? (
-                    <NameCell
-                      className="px-4 py-[22px]"
-                      rawName={info.getValue()}
-                      actualName={info.row.original.actualFileName}
-                      cid={info.row.original.cid}
-                      isAssigned={info.row.original.isAssigned}
-                      fileType={fileType}
-                      isPreviewable={false}
-                      isFolder={info.row.original.isFolder}
-                      source={info.row.original.source}
-                      mainReqHash={info.row.original.mainReqHash}
-                    />
-                  ) : (
-                    <ImageDialogTrigger
-                      onClick={() => handleSetSelectedFile(info.row.original)}
-                      hasCheckmark={hasCheckmark}
-                    >
-                      <NameCell
-                        rawName={info.getValue()}
-                        actualName={info.row.original.actualFileName}
-                        cid={info.row.original.cid}
-                        isAssigned={info.row.original.isAssigned}
-                        fileType={fileType}
-                        isPreviewable={true}
-                        isFolder={info.row.original.isFolder}
-                        source={info.row.original.source}
-                        mainReqHash={info.row.original.mainReqHash}
-                      />
-                    </ImageDialogTrigger>
-                  )}
-                </NameCellWithCheckmark>
-              );
-            } else if (fileType === "PDF") {
-              return (
-                <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                  {isSelectionMode || !canPreview ? (
-                    <NameCell
-                      className="px-4 py-[22px]"
-                      rawName={info.getValue()}
-                      actualName={info.row.original.actualFileName}
-                      cid={info.row.original.cid}
-                      isAssigned={info.row.original.isAssigned}
-                      fileType={fileType}
-                      isPreviewable={false}
-                      isFolder={info.row.original.isFolder}
-                      source={info.row.original.source}
-                      mainReqHash={info.row.original.mainReqHash}
-                    />
-                  ) : (
-                    <PdfDialogTrigger
-                      onClick={() => handleSetSelectedFile(info.row.original)}
-                      hasCheckmark={hasCheckmark}
-                    >
-                      <NameCell
-                        rawName={info.getValue()}
-                        actualName={info.row.original.actualFileName}
-                        cid={info.row.original.cid}
-                        isAssigned={info.row.original.isAssigned}
-                        fileType={fileType}
-                        isPreviewable={true}
-                        isFolder={info.row.original.isFolder}
-                        source={info.row.original.source}
-                        mainReqHash={info.row.original.mainReqHash}
-                      />
-                    </PdfDialogTrigger>
-                  )}
-                </NameCellWithCheckmark>
-              );
-            }
-            return (
-              <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                <NameCell
-                  className="px-4 py-[22px]"
-                  rawName={info.getValue()}
-                  actualName={info.row.original.actualFileName}
-                  cid={info.row.original.cid}
-                  isAssigned={info.row.original.isAssigned}
-                  fileType={fileType || "document"}
-                  isFolder={info.row.original.isFolder}
-                  source={info.row.original.source}
-                  mainReqHash={info.row.original.mainReqHash}
-                />
-              </NameCellWithCheckmark>
-            );
-          },
-        }),
-        columnHelper.accessor("size", {
-          header: "SIZE",
-          enableSorting: true,
-          id: "size",
-          cell: (cell) => {
-            const value = cell.getValue();
-            if (cell.row.original.tempData) return "...";
-            if (value === undefined || value === 0) return "Unknown";
-            return (
-              <div className="text-grey-20 text-base font-medium truncate">
-                {formatBytesFromBigInt(BigInt(value))}
-              </div>
-            );
-          },
-        }),
-        columnHelper.accessor("createdAt", {
-          header: "DATE UPLOADED",
-          enableSorting: true,
-          id: "date_uploaded",
-          cell: (cell) => {
-            const createdAt = cell.row.original.createdAt;
-            return createdAt === 0 ? (
-              <div className="truncate">Unknown</div>
-            ) : (
-              <div className="truncate">
-                <FormattedTimestamp timestamp={createdAt} />
-              </div>
-            );
-          },
-        }),
-        columnHelper.accessor(
-          (row) => {
-            const { fileFormat } = getFilePartsFromFileName(row.name);
-            const fileType = getFileTypeFromExtension(fileFormat || null);
-            return row.isFolder
-              ? "Folder"
-              : fileType
-                ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
-                : "Document";
-          },
-          {
-            header: "FILE TYPE",
-            id: "type",
-            enableSorting: true,
-            cell: ({ getValue }) => {
-              const value = getValue();
-              return (
-                <div className="flex flex-col">
-                  <div className="text-grey-70 text-base font-medium truncate">
-                    {value}
-                  </div>
+                <div className="flex justify-center items-center h-full">
+                  <SelectionHeaderColumn
+                    files={latestFiles}
+                  />
                 </div>
               );
             },
-          }
-        ),
-        columnHelper.display({
-          id: "actions",
-          header: "",
-          minSize: 40,
-          maxSize: 60,
-          enableResizing: false,
-          cell: ({ cell }) => {
-            const file = cell.row.original;
-            const { cid, name } = file;
-            const decodedCid = decodeHexCid(cid);
-            const { fileFormat } = getFilePartsFromFileName(name);
-            const fileType = getFileTypeFromExtension(fileFormat || null);
-            const hasCheckmark = isLocalFile(file.source);
-            const canPreview = shouldAllowPreview(file, hasCheckmark, isPrivateFolder); const menuItems = createTableItems(file, fileType, decodedCid, canPreview);
-
-            return (
-              <div className="flex justify-center items-center">
-                <TableActionMenu dropdownTitle="IPFS Options" items={menuItems}>
-                  <Button
-                    variant="ghost"
-                    size="md"
-                    className="h-8 w-8 p-0 text-grey-70 action-menu-area"
-                  >
-                    <MoreVertical className="size-4" />
-                  </Button>
-                </TableActionMenu>
+            cell: ({ row }) => (
+              <div className="flex justify-center items-center h-full px-2">
+                <SelectionColumn row={row} />
               </div>
-            );
-          },
-        }),
-      ],
+            ),
+          }),
+        ];
+        return [
+          ...selectionColumn,
+          columnHelper.accessor("name", {
+            header: "NAME",
+            enableSorting: true,
+            id: "name",
+            minSize: 200,
+            maxSize: 1000,
+            cell: (info) => {
+              const { fileFormat } = getFilePartsFromFileName(info.getValue());
+              const fileType = getFileTypeFromExtension(fileFormat || null);
+
+              // Check if file has checkmark (locally synced)
+              const hasCheckmark = isLocalFile(info.row.original.source);
+              const canPreview = shouldAllowPreview(info.row.original, hasCheckmark, isPrivateFolder);
+
+              if (fileType === "video") {
+                return (
+                  <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
+                    {isSelectionMode || !canPreview ? (
+                      <NameCell
+                        className="px-4 py-[22px]"
+                        rawName={info.getValue()}
+                        actualName={info.row.original.actualFileName}
+                        cid={info.row.original.cid}
+                        isAssigned={info.row.original.isAssigned}
+                        fileType={fileType}
+                        isPreviewable={false}
+                        isFolder={info.row.original.isFolder}
+                        source={info.row.original.source}
+                        mainReqHash={info.row.original.mainReqHash}
+                      />
+                    ) : (
+                      <VideoDialogTrigger
+                        onClick={() => handleSetSelectedFile(info.row.original)}
+                        hasCheckmark={hasCheckmark}
+                      >
+                        <NameCell
+                          rawName={info.getValue()}
+                          actualName={info.row.original.actualFileName}
+                          cid={info.row.original.cid}
+                          isAssigned={info.row.original.isAssigned}
+                          fileType={fileType}
+                          isPreviewable={true}
+                          isFolder={info.row.original.isFolder}
+                          source={info.row.original.source}
+                          mainReqHash={info.row.original.mainReqHash}
+                        />
+                      </VideoDialogTrigger>
+                    )}
+                  </NameCellWithCheckmark>
+                );
+              } else if (fileType === "image") {
+                return (
+                  <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
+                    {isSelectionMode || !canPreview ? (
+                      <NameCell
+                        className="px-4 py-[22px]"
+                        rawName={info.getValue()}
+                        actualName={info.row.original.actualFileName}
+                        cid={info.row.original.cid}
+                        isAssigned={info.row.original.isAssigned}
+                        fileType={fileType}
+                        isPreviewable={false}
+                        isFolder={info.row.original.isFolder}
+                        source={info.row.original.source}
+                        mainReqHash={info.row.original.mainReqHash}
+                      />
+                    ) : (
+                      <ImageDialogTrigger
+                        onClick={() => handleSetSelectedFile(info.row.original)}
+                        hasCheckmark={hasCheckmark}
+                      >
+                        <NameCell
+                          rawName={info.getValue()}
+                          actualName={info.row.original.actualFileName}
+                          cid={info.row.original.cid}
+                          isAssigned={info.row.original.isAssigned}
+                          fileType={fileType}
+                          isPreviewable={true}
+                          isFolder={info.row.original.isFolder}
+                          source={info.row.original.source}
+                          mainReqHash={info.row.original.mainReqHash}
+                        />
+                      </ImageDialogTrigger>
+                    )}
+                  </NameCellWithCheckmark>
+                );
+              } else if (fileType === "PDF") {
+                return (
+                  <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
+                    {isSelectionMode || !canPreview ? (
+                      <NameCell
+                        className="px-4 py-[22px]"
+                        rawName={info.getValue()}
+                        actualName={info.row.original.actualFileName}
+                        cid={info.row.original.cid}
+                        isAssigned={info.row.original.isAssigned}
+                        fileType={fileType}
+                        isPreviewable={false}
+                        isFolder={info.row.original.isFolder}
+                        source={info.row.original.source}
+                        mainReqHash={info.row.original.mainReqHash}
+                      />
+                    ) : (
+                      <PdfDialogTrigger
+                        onClick={() => handleSetSelectedFile(info.row.original)}
+                        hasCheckmark={hasCheckmark}
+                      >
+                        <NameCell
+                          rawName={info.getValue()}
+                          actualName={info.row.original.actualFileName}
+                          cid={info.row.original.cid}
+                          isAssigned={info.row.original.isAssigned}
+                          fileType={fileType}
+                          isPreviewable={true}
+                          isFolder={info.row.original.isFolder}
+                          source={info.row.original.source}
+                          mainReqHash={info.row.original.mainReqHash}
+                        />
+                      </PdfDialogTrigger>
+                    )}
+                  </NameCellWithCheckmark>
+                );
+              }
+              return (
+                <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
+                  <NameCell
+                    className="px-4 py-[22px]"
+                    rawName={info.getValue()}
+                    actualName={info.row.original.actualFileName}
+                    cid={info.row.original.cid}
+                    isAssigned={info.row.original.isAssigned}
+                    fileType={fileType || "document"}
+                    isFolder={info.row.original.isFolder}
+                    source={info.row.original.source}
+                    mainReqHash={info.row.original.mainReqHash}
+                  />
+                </NameCellWithCheckmark>
+              );
+            },
+          }),
+          columnHelper.accessor("size", {
+            header: "SIZE",
+            enableSorting: true,
+            id: "size",
+            cell: (cell) => {
+              const value = cell.getValue();
+              if (cell.row.original.tempData) return "...";
+              if (value === undefined || value === 0) return "Unknown";
+              return (
+                <div className="text-grey-20 text-base font-medium truncate">
+                  {formatBytesFromBigInt(BigInt(value))}
+                </div>
+              );
+            },
+          }),
+          columnHelper.accessor("createdAt", {
+            header: "DATE UPLOADED",
+            enableSorting: true,
+            id: "date_uploaded",
+            cell: (cell) => {
+              const createdAt = cell.row.original.createdAt;
+              return createdAt === 0 ? (
+                <div className="truncate">Unknown</div>
+              ) : (
+                <div className="truncate">
+                  <FormattedTimestamp timestamp={createdAt} />
+                </div>
+              );
+            },
+          }),
+          columnHelper.accessor(
+            (row) => {
+              const { fileFormat } = getFilePartsFromFileName(row.name);
+              const fileType = getFileTypeFromExtension(fileFormat || null);
+              return row.isFolder
+                ? "Folder"
+                : fileType
+                  ? fileType.charAt(0).toUpperCase() + fileType.slice(1)
+                  : "Document";
+            },
+            {
+              header: "FILE TYPE",
+              id: "type",
+              enableSorting: true,
+              cell: ({ getValue }) => {
+                const value = getValue();
+                return (
+                  <div className="flex flex-col">
+                    <div className="text-grey-70 text-base font-medium truncate">
+                      {value}
+                    </div>
+                  </div>
+                );
+              },
+            }
+          ),
+          columnHelper.display({
+            id: "actions",
+            header: "",
+            minSize: 40,
+            maxSize: 60,
+            enableResizing: false,
+            cell: ({ cell }) => {
+              const file = cell.row.original;
+              const { cid, name } = file;
+              const decodedCid = decodeHexCid(cid);
+              const { fileFormat } = getFilePartsFromFileName(name);
+              const fileType = getFileTypeFromExtension(fileFormat || null);
+              const hasCheckmark = isLocalFile(file.source);
+              const canPreview = shouldAllowPreview(file, hasCheckmark, isPrivateFolder); const menuItems = createTableItems(file, fileType, decodedCid, canPreview);
+
+              return (
+                <div className="flex justify-center items-center">
+                  <TableActionMenu dropdownTitle="IPFS Options" items={menuItems}>
+                    <Button
+                      variant="ghost"
+                      size="md"
+                      className="h-8 w-8 p-0 text-grey-70 action-menu-area"
+                    >
+                      <MoreVertical className="size-4" />
+                    </Button>
+                  </TableActionMenu>
+                </div>
+              );
+            },
+          }),
+        ];
+      },
       [
         handleSetSelectedFile,
         createTableItems,
-        selectionColumn,
         isSelectionMode,
-        isPrivateFolder]
+        isPrivateFolder,
+        files,
+        currentPage,
+        selectedFiles,
+        pageKey, // Add pageKey to force re-run when page/files change
+      ]
     );
 
 
@@ -861,17 +883,14 @@ const FilesTable: FC<FilesTableProps> = memo(
         getRowId: (row: FormattedUserFile) => row.actualFileName || row.name,
 
       }),
-      [columns, allFiles, sorting, handleSortingChange]
+      [columns, allFiles, sorting, handleSortingChange, currentPage, files, isSelectionMode]
     );
 
-    console.log("allfiles", allFiles);
-    console.log("files from files-table", files);
     const table = useReactTable(tableConfig);
 
     // Get sorted rows and manually paginate them
     const paginatedRows = useMemo(() => {
       const sortedRows = table.getRowModel().rows;
-      console.log('Sorted rows:', sortedRows.length, 'Current sorting state:', sorting);
       const pageSize = 12; // Use the same page size as the paginated data
       const start = (currentPage - 1) * pageSize;
       const end = start + pageSize;
@@ -1020,11 +1039,11 @@ const FilesTable: FC<FilesTableProps> = memo(
               files.length > 2 &&
               "mb-[90px]"
             )}
-            key={`pagination-${currentPage}-${files?.length}`}
+            key={`pagination-${currentPage}-${files?.length}-${isSelectionMode}`}
           >
-            <TableModule.Table className="w-full table-fixed">
-              <TableModule.THead>{headerRows}</TableModule.THead>
-              <TableModule.TBody>{tableBody}</TableModule.TBody>
+            <TableModule.Table className="w-full table-fixed" key={`table-${currentPage}-${isSelectionMode}`}>
+              <TableModule.THead key={`thead-${currentPage}`}>{headerRows}</TableModule.THead>
+              <TableModule.TBody key={`tbody-${currentPage}`}>{tableBody}</TableModule.TBody>
             </TableModule.Table>
           </TableModule.TableWrapper>
           <div
