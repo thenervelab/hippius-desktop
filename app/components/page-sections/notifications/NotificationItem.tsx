@@ -13,7 +13,6 @@ import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
 import { deleteNotification } from "@/app/lib/helpers/notificationsDb";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 interface NotificationItemProps {
   id?: number;
@@ -54,12 +53,9 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
   const router = useRouter();
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
-  const { polkadotAddress, oauthSession } = useWalletAuth();
 
   const handleLinkClick = (e: React.MouseEvent) => {
-    const userAddress = oauthSession?.substrateAddress || polkadotAddress;
-    if (!userAddress) return;
-    handleButtonLink(e, buttonLink, router, userAddress, setActiveSubMenuItem);
+    handleButtonLink(e, buttonLink, router, setActiveSubMenuItem);
   };
 
   const handleReadStatusToggle = () => {

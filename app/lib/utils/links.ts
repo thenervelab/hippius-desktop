@@ -40,14 +40,13 @@ export const handleButtonLink = (
   e: React.MouseEvent,
   buttonLink: string | undefined,
   router: AppRouterInstance,
-  polkadotAddress: string,
   setActiveSubMenuItem?: (item: string) => void,
 ) => {
   if (buttonLink) {
     e.preventDefault();
     e.stopPropagation();
     if (buttonLink.includes("Install")) {
-      checkForUpdates(false, polkadotAddress);
+      checkForUpdates();
     } else if (buttonLink.includes("BILLING")) {
       openLinkByKey(buttonLink);
     } else {

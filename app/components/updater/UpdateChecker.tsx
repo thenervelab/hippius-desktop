@@ -5,14 +5,9 @@ import React, { useEffect, useRef, useState, ReactNode } from "react";
 import { checkForUpdates } from "@/app/components/updater/checkForUpdates";
 import { useSetAtom, useAtomValue } from "jotai";
 import { refreshUnreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
-import {
-  updateDialogOpenAtom,
-  updateStore,
-  updateCheckCompleteAtom,
-} from "@/app/components/updater/updateStore";
+import { updateDialogOpenAtom, updateStore, updateCheckCompleteAtom } from "@/app/components/updater/updateStore";
 import PageLoader from "@/app/components/PageLoader";
 import UpdateDialogWrapper from "./UpdateDialogWrapper";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 interface UpdateCheckerProps {
   children?: ReactNode;
@@ -23,38 +18,32 @@ export default function UpdateChecker({ children }: UpdateCheckerProps) {
   const [showApp, setShowApp] = useState(false);
   const didRun = useRef(false);
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
-  const updateDialogOpen = useAtomValue(updateDialogOpenAtom, {
-    store: updateStore,
-  });
+  const updateDialogOpen = useAtomValue(updateDialogOpenAtom, { store: updateStore });
   const setUpdateCheckComplete = useSetAtom(updateCheckCompleteAtom);
-  const { polkadotAddress, oauthSession } = useWalletAuth();
 
   useEffect(() => {
     if (didRun.current) return;
 
     const runUpdateCheck = async () => {
       try {
-        const userAddress = oauthSession?.substrateAddress || polkadotAddress;
 
-        // Check for updates (app update check doesn't require user address)
-        await checkForUpdates(true, userAddress || "");
+        // Check for updates
+        await checkForUpdates(true);
 
-        // Refresh notification count if user is authenticated
-        if (userAddress) {
-          refreshUnread();
-        }
+        // Refresh notification count
+        refreshUnread();
 
-        console.log("Update check completed");
+        console.log('Update check completed');
       } catch (error) {
-        console.log("Update check failed:", error);
+        console.log('Update check failed:', error);
       } finally {
-        // Always mark check as complete, even if it failed
+        // Mark check as complete
         setCheckComplete(true);
         setUpdateCheckComplete(true);
 
         // If no dialog opened (no update), show app immediately
         if (!updateStore.get(updateDialogOpenAtom)) {
-          console.log("No update found, showing app");
+          console.log('No update found, showing app');
           setShowApp(true);
         }
       }
@@ -72,12 +61,12 @@ export default function UpdateChecker({ children }: UpdateCheckerProps) {
     }
 
     didRun.current = true;
-  }, [refreshUnread, setUpdateCheckComplete, polkadotAddress, oauthSession]);
+  }, [refreshUnread, setUpdateCheckComplete]);
 
   // Monitor dialog state to show app when dialog closes
   useEffect(() => {
     if (checkComplete && !updateDialogOpen) {
-      console.log("Update dialog closed or no update, showing app");
+      console.log('Update dialog closed or no update, showing app');
       setShowApp(true);
     }
   }, [checkComplete, updateDialogOpen]);
