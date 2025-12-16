@@ -27,15 +27,12 @@ export default function OAuthCallbackPage() {
     useEffect(() => {
         // Prevent multiple executions
         if (hasProcessed.current) {
-            console.log("[OAuthCallback] Already processed, skipping");
             return;
         }
 
         const handleCallback = async () => {
             try {
                 hasProcessed.current = true;
-                console.log("[OAuthCallback] Processing OAuth callback");
-
                 // FIRST: Check if user is already authenticated via localStorage
                 // This check happens before processing any parameters to handle app restarts
                 const storedSession = localStorage.getItem("hippius_oauth_session");
@@ -47,11 +44,9 @@ export default function OAuthCallbackPage() {
                         : parseInt(storedExpiry, 10);
 
                     if (Date.now() < expiryTime) {
-                        console.log("[OAuthCallback] Valid OAuth session already exists, redirecting to home");
                         router.replace("/");
                         return;
                     } else {
-                        console.log("[OAuthCallback] OAuth session expired, clearing and continuing");
                         localStorage.removeItem("hippius_oauth_session");
                         localStorage.removeItem("hippius_oauth_session_expiry");
                     }
@@ -65,10 +60,8 @@ export default function OAuthCallbackPage() {
                     const questionMarkCount = (currentUrl.match(/\?/g) || []).length;
 
                     if (questionMarkCount > 1) {
-                        console.log("[OAuthCallback] ⚠️ Detected malformed URL with multiple '?', fixing...");
                         // Replace all ? after the first one with &
                         const fixedUrl = currentUrl.replace(/\?/, "?FIRST?").replace(/\?/g, "&").replace(/\?FIRST\?/, "?");
-                        console.log("[OAuthCallback] Fixed URL:", fixedUrl);
 
                         // Parse the fixed URL
                         const url = new URL(fixedUrl);
@@ -90,7 +83,6 @@ export default function OAuthCallbackPage() {
                 // If no token and no code, user landed here without valid OAuth params
                 // Since we already checked for valid session at the start, redirect to login
                 if (!params.token && !params.code && !params.error) {
-                    console.log("[OAuthCallback] No OAuth parameters found, redirecting to login");
                     router.replace("/login");
                     return;
                 }
@@ -110,23 +102,14 @@ export default function OAuthCallbackPage() {
                     };
                 }
 
-                console.log("[OAuthCallback] Params:", {
-                    hasToken: !!params.token,
-                    hasCode: !!params.code,
-                    hasUser: !!params.user,
-                    hasError: !!params.error,
-                });
-
                 // Handle OAuth callback
                 const session = await oauthService.handleCallback(params);
 
-                console.log("[OAuthCallback] ✅ Session created successfully");
 
                 // Update auth context with OAuth session
                 await setOAuthSession(session);
 
                 // Add welcome notification for this user (built-in duplicate check)
-                console.log("[OAuthCallback] Creating welcome notification for:", session.substrateAddress);
                 await addNotification({
                     userAddress: session.substrateAddress!,
                     notificationType: "Hippius",
@@ -144,9 +127,6 @@ export default function OAuthCallbackPage() {
 
                 // Clean up - remove all OAuth-related session storage
                 sessionStorage.removeItem("oauth_redirect");
-                console.log("[OAuthCallback] Session storage cleared");
-
-                console.log("[OAuthCallback] Redirecting to:", redirectPath);
 
                 // Use replace to avoid back button issues
                 router.replace(redirectPath);
@@ -183,7 +163,6 @@ export default function OAuthCallbackPage() {
                                 onClick={() => {
                                     // Mark as manual navigation to prevent deep link re-processing
                                     sessionStorage.setItem("manual_navigation", "true");
-                                    console.log("[OAuthCallback] Set manual navigation flag, navigating to login");
                                     router.replace("/login");
                                 }}
                                 className="px-6 py-3 bg-primary-50 text-white rounded-lg font-medium hover:bg-primary-60 transition-colors"
