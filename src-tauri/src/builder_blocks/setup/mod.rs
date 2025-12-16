@@ -114,6 +114,17 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
+        (
+            "nebula_certificate",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("certificate_id", "INTEGER"),
+                ("expires_at", "TEXT"),
+                ("is_active", "BOOLEAN"),
+                ("created_at", "TEXT"),
+                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
     ];
 
     for (table_name, columns) in TABLE_SCHEMAS {

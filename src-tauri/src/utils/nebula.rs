@@ -11,12 +11,16 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use std::time::Duration;
 use tokio::task::JoinHandle;
+use chrono::{DateTime, Utc};
+use crate::utils::objectstore_tokens::get_temp_auth_key;
+use reqwest::header::AUTHORIZATION;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 const NEBULA_GITHUB_API: &str = "https://api.github.com/repos/slackhq/nebula/releases/latest";
 const NEBULA_VERSION_FILE: &str = "nebula_version.txt";
+const HIPPIUS_API_BASE: &str = "https://api.hippius.com/api";
 
 // Ping interval for keeping stats active (seconds)
 const PING_INTERVAL_SECS: u64 = 10;
@@ -95,6 +99,19 @@ struct NebulaConfig {
 #[derive(Debug, Deserialize)]
 struct LighthouseConfig {
     hosts: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct CertificateResponse {
+    certificate_id: i64,
+    ca: String,
+    cert: String,
+    key: String,
+    ip: String,
+    config: String,
+    is_active: Option<bool>,
+    expires_at: Option<String>,
+    created_at: Option<String>,
 }
 
 /// Get the Nebula binary directory in user's home
@@ -570,142 +587,331 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
         }
     }
     
-    // Setup certificates from API (using mock data for now)
-    let config_dir = get_nebula_config_dir().map_err(|e| e.to_string())?;
-    let ca_crt = config_dir.join("ca.crt");
+    // Setup certificates from API
+    println!("[Nebula] Checking certificate status...");
+    check_and_update_certificate().await.map_err(|e| e.to_string())?;
     
-    if !ca_crt.exists() {
-        println!("[Nebula] Setting up certificates from API...");
-        setup_nebula_from_api().await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+async fn get_api_auth_header() -> Result<String> {
+    // We need an account ID to get the temp auth key for API authentication.
+    // The temp auth key (OAuth token) is used for Hippius API calls.
+    // The master token is separate and used only for S3/Object Storage access.
+    
+    println!("[Nebula] Getting API auth header...");
+    
+    let pool = crate::DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    
+    // Try to find an account with a temp auth key
+    let account_row = sqlx::query("SELECT owner FROM objectstore_auth_scoped LIMIT 1")
+        .fetch_optional(pool)
+        .await?;
+        
+    let account_id = if let Some(row) = account_row {
+        let id = row.get::<String, _>("owner");
+        println!("[Nebula] Found account: {}", id);
+        id
     } else {
-        println!("[Nebula] Certificates already exist, skipping setup");
+        println!("[Nebula] ❌ No account found in objectstore_auth_scoped");
+        return Err(anyhow!("No account found to retrieve temp auth key"));
+    };
+
+    let temp_key = get_temp_auth_key(&account_id).await
+        .map_err(|e| {
+            println!("[Nebula] ❌ Failed to get temp auth key: {}", e);
+            anyhow!(e)
+        })?
+        .ok_or_else(|| {
+            println!("[Nebula] ❌ No temp auth key found for account {}", account_id);
+            anyhow!("No temp auth key found for account {}", account_id)
+        })?;
+
+    println!("[Nebula] ✅ Got temp auth key (length: {})", temp_key.len());
+    Ok(format!("Token {}", temp_key))
+}
+
+async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<CertificateResponse>> {
+    let client = Client::new();
+    let url = format!("{}/infrastructure/certificates/", HIPPIUS_API_BASE);
+    let response = client.get(&url)
+        .header(AUTHORIZATION, auth_header)
+        .send()
+        .await?;
+    if response.status() == 404 {
+        return Ok(None);
+    }
+    
+    if !response.status().is_success() {
+        return Err(anyhow!("Failed to fetch certificate: {}", response.status()));
+    }
+    
+    // The API might return a list or a single object? 
+    // User said "response is like: { ... }", implying a single object.
+    // But endpoint is "..._list". Let's assume it returns a list and we take the first one, 
+    // OR it returns a single object. 
+    // Based on user example: { "certificate_id": 0 ... } it looks like a single object.
+    // But if it's a list endpoint, maybe it returns [ { ... } ]?
+    // I'll try to parse as single first, then list.
+    
+    let text = response.text().await?;
+    println!("[Nebula] Fetch certificate response: {}", text);
+    
+    if let Ok(cert) = serde_json::from_str::<CertificateResponse>(&text) {
+        return Ok(Some(cert));
+    }
+    
+    // Try list
+    if let Ok(certs) = serde_json::from_str::<Vec<CertificateResponse>>(&text) {
+        return Ok(certs.into_iter().next());
+    }
+    
+    Err(anyhow!("Failed to parse certificate response: {}", text))
+}
+
+async fn request_certificate_from_api(auth_header: &str) -> Result<CertificateResponse> {
+    let client = Client::new();
+    let url = format!("{}/infrastructure/certificates/request/", HIPPIUS_API_BASE);
+    
+    let response = client.post(&url)
+        .header(AUTHORIZATION, auth_header)
+        .send()
+        .await?;
+    
+    let status = response.status();
+    println!("[Nebula] Request certificate status: {}", status);
+    
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_else(|_| "Could not read error body".to_string());
+        let error_msg = format!("Failed to request certificate (status {}): {}", status, error_body);
+        println!("[Nebula] ❌ {}", error_msg);
+        return Err(anyhow!(error_msg));
+    }
+    
+    let text = response.text().await?;
+    println!("[Nebula] Request certificate response body: {}", text);
+    
+    let cert: CertificateResponse = serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
+    println!("[Nebula] ✅ Certificate request successful");
+    Ok(cert)
+}
+
+async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResponse> {
+    let client = Client::new();
+    let url = format!("{}/infrastructure/certificates/renew/", HIPPIUS_API_BASE);
+    
+    println!("[Nebula] Renewing certificate from: {}", url);
+    
+    let response = client.post(&url)
+        .header(AUTHORIZATION, auth_header)
+        .send()
+        .await?;
+    
+    let status = response.status();
+    println!("[Nebula] Renew certificate status: {}", status);
+    
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_else(|_| "Could not read error body".to_string());
+        let error_msg = format!("Failed to renew certificate (status {}): {}", status, error_body);
+        println!("[Nebula] ❌ {}", error_msg);
+        return Err(anyhow!(error_msg));
+    }
+    
+    let text = response.text().await?;
+    println!("[Nebula] Renew certificate response body: {}", text);
+    
+    let cert: CertificateResponse = serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
+    println!("[Nebula] ✅ Certificate renewal successful");
+    Ok(cert)
+}
+
+async fn save_certificate_files(cert: &CertificateResponse) -> Result<()> {
+    let config_dir = get_nebula_config_dir()?;
+    fs::create_dir_all(&config_dir).await?;
+    
+    // Save certificate files
+    let ca_path = config_dir.join("ca.crt");
+    let cert_path = config_dir.join("host.crt");
+    let key_path = config_dir.join("host.key");
+    
+    fs::write(&ca_path, &cert.ca).await?;
+    fs::write(&cert_path, &cert.cert).await?;
+    fs::write(&key_path, &cert.key).await?;
+    
+    // Parse the config to update paths
+    let mut config: serde_yaml::Value = serde_yaml::from_str(&cert.config)
+        .map_err(|e| anyhow!("Failed to parse config YAML: {}", e))?;
+    
+    // Update the pki paths in the config
+    if let Some(pki) = config.get_mut("pki").and_then(|p| p.as_mapping_mut()) {
+        pki.insert("ca".into(), ca_path.to_string_lossy().into_owned().into());
+        pki.insert("cert".into(), cert_path.to_string_lossy().into_owned().into());
+        pki.insert("key".into(), key_path.to_string_lossy().into_owned().into());
+    }
+    
+    // Save the updated config
+    let updated_config = serde_yaml::to_string(&config)
+        .map_err(|e| anyhow!("Failed to serialize updated config: {}", e))?;
+    
+    fs::write(config_dir.join("config.yml"), updated_config).await?;
+    
+    println!("[Nebula] Saved certificate files to {}", config_dir.display());
+    Ok(())
+}
+
+async fn update_certificate_db(cert: &CertificateResponse) -> Result<()> {
+    let pool = crate::DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    
+    // We assume there's only one active certificate for the VPN
+    sqlx::query(
+        r#"
+        INSERT INTO nebula_certificate (id, certificate_id, expires_at, is_active, created_at, updated_at)
+        VALUES (1, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO UPDATE SET
+            certificate_id = excluded.certificate_id,
+            expires_at = excluded.expires_at,
+            is_active = excluded.is_active,
+            created_at = excluded.created_at,
+            updated_at = CURRENT_TIMESTAMP
+        "#
+    )
+    .bind(cert.certificate_id)
+    .bind(&cert.expires_at)
+    .bind(cert.is_active.unwrap_or(true))
+    .bind(&cert.created_at)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+async fn check_and_update_certificate() -> Result<()> {
+    let auth_header = get_api_auth_header().await?;
+    let pool = crate::DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    
+    // Check DB for existing certificate
+    let row = sqlx::query("SELECT expires_at FROM nebula_certificate WHERE id = 1")
+        .fetch_optional(pool)
+        .await?;
+        
+    let mut should_renew = false;
+    let mut should_request = false;
+    
+    if let Some(row) = row {
+        let expires_at_str: Option<String> = row.get("expires_at");
+        if let Some(expires_at_str) = expires_at_str {
+            if let Ok(expires_at) = DateTime::parse_from_rfc3339(&expires_at_str) {
+                 if Utc::now() > expires_at {
+                     println!("[Nebula] Certificate expired at {}, renewing...", expires_at);
+                     should_renew = true;
+                 } else {
+                     println!("[Nebula] Certificate valid until {}", expires_at);
+                     // Check if files exist, if not, we might need to re-fetch or just warn
+                     let config_dir = get_nebula_config_dir()?;
+                     if !config_dir.join("host.crt").exists() {
+                         println!("[Nebula] Certificate files missing but DB record exists. Re-fetching...");
+                         // We can try to fetch the existing one
+                         if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
+                             save_certificate_files(&cert).await?;
+                             update_certificate_db(&cert).await?;
+                         } else {
+                             // If fetch fails (e.g. 404), maybe we need to request new?
+                             println!("[Nebula] Could not fetch existing certificate, requesting new one...");
+                             should_request = true;
+                         }
+                     }
+                 }
+            } else {
+                println!("[Nebula] Failed to parse expiration date, assuming expired/invalid");
+                should_renew = true;
+            }
+        } else {
+            println!("[Nebula] Certificate record exists but no expiration date. Fetching from API...");
+            if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
+                save_certificate_files(&cert).await?;
+                update_certificate_db(&cert).await?;
+                
+                if let Some(expires_at_str) = &cert.expires_at {
+                     if let Ok(expires_at) = DateTime::parse_from_rfc3339(expires_at_str) {
+                         if Utc::now() > expires_at {
+                             println!("[Nebula] Fetched certificate is expired, renewing...");
+                             should_renew = true;
+                         }
+                     }
+                }
+            } else {
+                println!("[Nebula] Could not fetch certificate details from API. Renewing...");
+                should_renew = true;
+            }
+        }
+    } else {
+        println!("[Nebula] No certificate record in DB");
+        // Check if we have one in API
+        if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
+            println!("[Nebula] Found existing certificate in API");
+            save_certificate_files(&cert).await?;
+            update_certificate_db(&cert).await?;
+            
+            // recursive check to ensure it's not expired?
+            // The fetch response should have expires_at. 
+            // If it's expired, we'll catch it on next run or we can check now.
+            if let Some(expires_at_str) = &cert.expires_at {
+                 if let Ok(expires_at) = DateTime::parse_from_rfc3339(expires_at_str) {
+                     if Utc::now() > expires_at {
+                         println!("[Nebula] Fetched certificate is expired, renewing...");
+                         should_renew = true;
+                     }
+                 }
+            }
+        } else {
+            println!("[Nebula] No certificate in API, requesting new one...");
+            should_request = true;
+        }
+    }
+    
+    println!("[Nebula] Status check complete. Renew: {}, Request: {}", should_renew, should_request);
+    
+    if should_renew {
+        println!("[Nebula] calling renew_certificate_from_api...");
+        let cert = renew_certificate_from_api(&auth_header).await?;
+        // Renew response might not have expires_at, so we might need to fetch again?
+        // User said: "response is like : { ... }" for renew, same structure as request.
+        // And request response: "response is like : { ... }"
+        // But GET response has "expires_at".
+        // If renew/request don't return expires_at, we should fetch it.
+        
+        let mut final_cert = cert;
+        if final_cert.expires_at.is_none() {
+             println!("[Nebula] Renew/Request response missing expiration, fetching details...");
+             if let Some(fetched) = fetch_certificate_from_api(&auth_header).await? {
+                 final_cert = fetched;
+             }
+        }
+        
+        save_certificate_files(&final_cert).await?;
+        update_certificate_db(&final_cert).await?;
+        println!("[Nebula] Certificate renewed successfully");
+    } else if should_request {
+        println!("[Nebula] calling request_certificate_from_api...");
+        let cert = request_certificate_from_api(&auth_header).await?;
+        
+        let mut final_cert = cert;
+        if final_cert.expires_at.is_none() {
+             println!("[Nebula] Request response missing expiration, fetching details...");
+             if let Some(fetched) = fetch_certificate_from_api(&auth_header).await? {
+                 final_cert = fetched;
+             }
+        }
+        
+        save_certificate_files(&final_cert).await?;
+        update_certificate_db(&final_cert).await?;
+        println!("[Nebula] Certificate requested successfully");
     }
     
     Ok(())
 }
 
-/// Setup Nebula using certificates and config from API
-/// For now, uses mock data until API is ready
-async fn setup_nebula_from_api() -> Result<()> {
-    let config_dir = get_nebula_config_dir()?;
-    fs::create_dir_all(&config_dir).await?;
-    
-    println!("[Nebula] Using API credentials (mock data)");
-    
-    // Mock API response - replace this with actual API call later
-    let ca_cert = r#"-----BEGIN NEBULA CERTIFICATE-----
-CkEKD0hpcHBpdXNWTjEsIEluYyj+lZDJBjD+mKiUBzogi5DLE8kKgr6AJ0E3uSMc
-mHwyFrvUMIOLzMDl+i0j+mxAARJAieLMGaFk9mYVA4Q46+GkDf6DTRp1hrtRL7w8
-sQaU5S1vK2TWa1tI4wP89LdxHOfxgOEIvf5fpeYSIZdKTkRXCA==
------END NEBULA CERTIFICATE-----
-"#;
-    
-    let host_cert = r#"-----BEGIN NEBULA CERTIFICATE-----
-CmwKDmhpcHBpdXMta2V5LTAxEgqfgICiBoCAgP4PKMGNtskGMMGn1MoGOiD2fxDq
-doBwGRspvSSI19zszkw+uWbq756XkqQLqSOtREogyzVeS1g6yQLRYYTdGGQa+cp3
-xp07HNvv7hAEZHy17OUSQDMCKFL5Es3zLHAjHIyXiuS1BVBvnytX/h1lxZlHzdDJ
-Q5d7u2gTy459pq/7XVvl/Cf5T5MoxmCc/t/6lemM4QU=
------END NEBULA CERTIFICATE-----
-"#;
-    
-    let host_key = r#"-----BEGIN NEBULA X25519 PRIVATE KEY-----
-+V3Z9jiGMdRF9hH16v9avHIVXlawg3FHZHlR5D69nB0=
------END NEBULA X25519 PRIVATE KEY-----
-"#;
-    
-    let nebula_ip = "100.64.0.31";
-    
-    // Write certificates
-    let ca_crt_path = config_dir.join("ca.crt");
-    let host_crt_path = config_dir.join("host.crt");
-    let host_key_path = config_dir.join("host.key");
-    
-    fs::write(&ca_crt_path, ca_cert).await?;
-    fs::write(&host_crt_path, host_cert).await?;
-    fs::write(&host_key_path, host_key).await?;
-    
-    println!("[Nebula] Certificates written to: {}", config_dir.display());
-    
-    // Generate config file with correct paths
-    let config_content = format!(r#"pki:
-  ca: {}
-  cert: {}
-  key: {}
 
-# Map lighthouse nebula IPs to their public IPs
-static_host_map:
-  "100.64.0.1": ["51.83.22.71:4242"]
-  "100.64.0.2": ["139.99.219.137:4242"]
-  "100.64.0.3": ["15.235.44.178:4242"]
-
-lighthouse:
-  am_lighthouse: false
-  interval: 60
-  hosts:
-    - "100.64.0.1"
-    - "100.64.0.2"
-    - "100.64.0.3"
-
-listen:
-  host: 0.0.0.0
-  port: 4242
-
-punchy:
-  punch: true
-  respond: true
-
-tun:
-  disabled: false
-  dev: nebula1
-  drop_local_broadcast: false
-  drop_multicast: false
-  tx_queue: 500
-  mtu: 1300
-
-logging:
-  level: info
-  format: text
-
-# Nebula overlay network firewall
-firewall:
-  conntrack:
-    tcp_timeout: 12m
-    udp_timeout: 3m
-    default_timeout: 10m
-
-  outbound:
-    - port: any
-      proto: any
-      host: any
-
-  inbound:
-    - port: any
-      proto: any
-      host: any
-
-    # HCC API Services
-    - port: 9999
-      proto: tcp
-      host: any
-
-    # Allow ICMP ping
-    - port: any
-      proto: icmp
-      host: any
-"#,
-        ca_crt_path.display(),
-        host_crt_path.display(),
-        host_key_path.display()
-    );
-    
-    let config_file = config_dir.join("config.yml");
-    fs::write(&config_file, config_content.as_bytes()).await?;
-    
-    println!("[Nebula] Config file written: {}", config_file.display());
-    println!("[Nebula] Node IP: {}", nebula_ip);
-    
-    Ok(())
-}
 
 #[tauri::command]
 pub async fn finish_setup() -> Result<(), String> {
@@ -1628,5 +1834,3 @@ pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
     
     Ok(is_installed)
 }
-
-// TODO ! : use api call to get certificate and config and update config file path before saving
