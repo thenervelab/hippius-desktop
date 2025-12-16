@@ -311,10 +311,11 @@ export async function updateIsAboveHalfCredit(isAboveHalfCredit: boolean) {
 }
 export async function listNotifications(userAddress: string, limit = 50) {
   const db = await getDb();
+  // Merge user-specific notifications with system notifications (like updates)
   const res = db.exec(
     `SELECT *
        FROM notifications
-      WHERE userAddress = ?
+      WHERE (userAddress = ? OR userAddress = 'system')
         AND (isDeleted IS NULL OR isDeleted = 0)
       ORDER BY notificationCreationTime DESC
       LIMIT ?`,
@@ -337,9 +338,11 @@ export async function markUnread(id: number) {
 
 export async function markAllRead(userAddress: string) {
   const db = await getDb();
+  // Mark both user-specific and system notifications as read
   db.run(
     `UPDATE notifications SET isUnread = 0 
-     WHERE userAddress = ? AND isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`,
+     WHERE (userAddress = ? OR userAddress = 'system') 
+     AND isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`,
     [userAddress]
   );
   await saveBytes(db.export());
@@ -348,9 +351,11 @@ export async function markAllRead(userAddress: string) {
 
 export async function unreadCount(userAddress: string): Promise<number> {
   const db = await getDb();
+  // Count both user-specific and system notifications
   const res = db.exec(
     `SELECT COUNT(*) FROM notifications 
-     WHERE userAddress = ? AND isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`,
+     WHERE (userAddress = ? OR userAddress = 'system') 
+     AND isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`,
     [userAddress]
   );
   return res[0]?.values[0][0] as number;
@@ -366,9 +371,11 @@ export async function hippusVersionNotificationExists(
   version: string
 ): Promise<boolean> {
   const db = await getDb();
+  // Check for system-wide update notifications
   const res = db.exec(
     `SELECT COUNT(*) FROM notifications
-       WHERE notificationType = 'Hippius'
+       WHERE userAddress = 'system'
+         AND notificationType = 'Hippius'
          AND notificationSubtype = ?
          AND (isDeleted IS NULL OR isDeleted = 0)`,
     [version]
@@ -398,6 +405,23 @@ export async function deleteAllNotifications(userAddress: string) {
     [now, userAddress]
   );
   await saveBytes(db.export());
+  return true;
+}
+
+// Delete system notification for a specific version (e.g., after update is installed)
+export async function deleteSystemNotificationByVersion(version: string) {
+  const db = await getDb();
+  const now = Date.now();
+  db.run(
+    `UPDATE notifications SET isDeleted = 1, deletedAt = ? 
+     WHERE userAddress = 'system' 
+     AND notificationType = 'Hippius' 
+     AND notificationSubtype = ? 
+     AND (isDeleted IS NULL OR isDeleted = 0)`,
+    [now, version]
+  );
+  await saveBytes(db.export());
+  console.log(`[NotificationsDB] System notification for version ${version} marked as deleted`);
   return true;
 }
 

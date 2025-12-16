@@ -123,7 +123,7 @@ export function useTrayInit(polkadotAddress: string) {
           id: INSTALL_UPDATE,
           text: "Install Update",
           action: async () => {
-            await checkForUpdates(false, polkadotAddress);
+            await checkForUpdates();
           },
         });
       }
