@@ -64,7 +64,7 @@ const VirtualMachines: FC = () => {
     if (activeTab === "SSH Keys") {
       setOpenCreateSSHKeyModal(true);
     } else if (activeTab === "Instances") {
-      router.push("/dashboard/vm/create");
+      router.push("/vm/create");
     }
   };
 
@@ -120,13 +120,15 @@ const VirtualMachines: FC = () => {
             </div>
           </div>
           {/* Tab navigation */}
-          <TabList
-            tabs={tabs}
-            activeTab={activeTab}
-            onTabChange={handleTabChange}
-            className="w-full "
-            width="w-full sm:min-w-[148px]"
-          />
+          <div className="border border-grey-80 rounded p-1 bg-grey-100">
+            <TabList
+              tabs={tabs}
+              activeTab={activeTab}
+              onTabChange={handleTabChange}
+              className="w-full "
+              width="w-full sm:min-w-[148px]"
+            />
+          </div>
         </div>
 
         <div className="flex items-center gap-x-4">

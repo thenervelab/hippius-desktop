@@ -34,7 +34,7 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({ onDeleteKey }) => {
     setCurrentPage,
     currentPage,
     totalPages,
-  } = usePagination(queryData || [], 10);
+  } = usePagination(queryData || [], 12);
 
   // Get columns with the deletion handler
   const desktopColumns = getDesktopColumns(onDeleteKey);

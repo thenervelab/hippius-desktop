@@ -44,10 +44,7 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
     <div className="w-full">
       <div className="flex sm:justify-between sm:items-center mb-4 sm:mb-6 flex-col gap-2 sm:flex-row">
         <div className="flex items-center gap-2 text-base sm:text-[22px] font-medium text-grey-10">
-          <Link
-            href="/dashboard/vm"
-            className="text-grey-10 hover:text-grey-40"
-          >
+          <Link href="/vm" className="text-grey-10 hover:text-grey-40">
             <Icons.ArrowLeft className="size-6" />
           </Link>
           <h1 className="text-nowrap">Instance Details</h1>
@@ -56,13 +53,15 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
         </div>
 
         <div className="flex items-center gap-4">
-          <TabList
-            tabs={tabs}
-            activeTab={activeTab}
-            onTabChange={onTabChange}
-            className="w-full "
-            width="w-full sm:min-w-[148px]"
-          />
+          <div className="border border-grey-80 rounded p-1 bg-grey-100">
+            <TabList
+              tabs={tabs}
+              activeTab={activeTab}
+              onTabChange={onTabChange}
+              className="w-full "
+              width="w-full sm:min-w-[148px]"
+            />
+          </div>
           <div className="hidden sm:block">
             <TableActionMenu
               dropdownTitle="Instance Options"

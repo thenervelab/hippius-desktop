@@ -10,8 +10,8 @@ import CreateSSHKeyModal from "../ssh-keys-table/create-ssh-key-modal";
 import { MOCK_SSH_KEYS } from "../ssh-keys-table/mock-data";
 import Step1Configuration from "./step1-configuration";
 import Step2Summary from "./step2-summary";
-import { Button } from "@/components/ui/button/NewButton";
-import { Button as Button2 } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
+import { Button as Button2 } from "@/components/ui/button/NewButton";
 
 type FieldName =
   | "instanceName"

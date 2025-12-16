@@ -67,7 +67,7 @@ const InstancesTable: FC<InstancesTableProps> = ({ onDeleteInstance }) => {
     setCurrentPage,
     currentPage,
     totalPages,
-  } = usePagination(queryData || [], 10);
+  } = usePagination(queryData || [], 12);
 
   // Instance control hooks
   const { handleStartStopInstance, StartStopConfirmModal } =

@@ -75,7 +75,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
           </div>
 
           {/* Message */}
-          <div className="font-medium text-base text-grey-20 text-center mb-4 ">
+          <div className="font-medium text-base text-grey-20 max-w-[320px] flex mx-auto w-full text-center mb-4 ">
             {text}
           </div>
 

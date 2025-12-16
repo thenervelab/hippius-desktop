@@ -10,7 +10,9 @@ export const metadata: Metadata = {
 export default function VirtualMachinePage() {
   return (
     <DashboardTitleWrapper mainText="Virtual Machines">
-      <VirtualMachines />
+      <div className="mt-6">
+        <VirtualMachines />
+      </div>
     </DashboardTitleWrapper>
   );
 }

@@ -13,7 +13,7 @@ interface UseDeleteInstanceOptions {
 export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
   const {
     redirectOnDelete = false,
-    redirectPath = "/dashboard/vm",
+    redirectPath = "vm",
     onDeleteSuccess,
   } = options || {};
 

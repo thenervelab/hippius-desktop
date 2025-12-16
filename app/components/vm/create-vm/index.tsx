@@ -66,7 +66,7 @@ const CreateVM: React.FC = () => {
     setOpenCreateVMModal(false);
     // Handle VM creation API call here
     // Redirect to VM table page
-    router.push("/dashboard/vm");
+    router.push("/vm");
   };
 
   const handleBack = () => {
@@ -117,13 +117,15 @@ const CreateVM: React.FC = () => {
         </div>
         {/* Category Tabs */}
         <div className="hidden sm:block">
-          <TabList
-            tabs={categories}
-            activeTab={activeCategory}
-            onTabChange={setActiveCategory}
-            className="w-full"
-            width="w-full"
-          />
+          <div className="border border-grey-80 rounded p-1 bg-grey-100">
+            <TabList
+              tabs={categories}
+              activeTab={activeCategory}
+              onTabChange={setActiveCategory}
+              className="w-full"
+              width="w-full"
+            />
+          </div>
         </div>
       </div>
 

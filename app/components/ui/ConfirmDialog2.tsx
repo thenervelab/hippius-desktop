@@ -96,12 +96,13 @@ const ConfirmDialog2: React.FC<ConfirmDialogProps> = ({
           >
             {button}
           </CardButton>
-          <Button
-            className="bg-grey-100  border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-[56px] hover:bg-grey-80 transition"
+          <CardButton
+            variant="secondary"
+            className="bg-grey-100 border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-12 hover:bg-grey-80 transition"
             onClick={onBack}
           >
             Go Back
-          </Button>
+          </CardButton>
         </div>
       </DialogContainer>
     </Dialog.Root>
