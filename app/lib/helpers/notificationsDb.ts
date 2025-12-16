@@ -44,20 +44,37 @@ const NOTIFICATION_PREFERENCES_SCHEMA = `
 async function getDb(): Promise<initSqlJsType.Database> {
   const db = await initHippiusDesktopDB();
 
+  // Check if notifications table exists and has userAddress column
+  const tableExists = db.exec(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name='notifications'`
+  );
+
+  if (tableExists.length > 0) {
+    // Table exists, check if userAddress column exists
+    const columns = db.exec(`PRAGMA table_info(notifications)`);
+    const hasUserAddress = columns[0]?.values.some(
+      (col) => col[1] === 'userAddress'
+    );
+
+    if (!hasUserAddress) {
+      // Old schema without userAddress - drop and recreate
+      console.log('[NotificationsDB] Old notifications table detected without userAddress column. Dropping and recreating...');
+      db.run(`DROP TABLE IF EXISTS notifications`);
+      await saveBytes(db.export());
+    }
+  }
+
+  // Create tables with correct schema
   db.run(NOTIFICATION_SCHEMA);
   db.run(APP_STATE_SCHEMA);
   db.run(NOTIFICATION_PREFERENCES_SCHEMA);
 
-  // Migration: Add isDeleted, deletedAt, and userAddress columns if they don't exist
+  // Migration for other columns (for users who have userAddress but missing these)
   try {
     db.run(`ALTER TABLE notifications ADD COLUMN isDeleted INTEGER DEFAULT 0`);
   } catch { }
   try {
     db.run(`ALTER TABLE notifications ADD COLUMN deletedAt INTEGER`);
-  } catch { }
-  try {
-    db.run(`ALTER TABLE notifications ADD COLUMN userAddress TEXT`);
-    await saveBytes(db.export());
   } catch { }
 
   const exists = db.exec(`SELECT 1 FROM app_state WHERE id = 1`);
