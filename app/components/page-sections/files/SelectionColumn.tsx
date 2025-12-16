@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from 'react';
+import React from 'react';
 import { Menu } from 'lucide-react';
 import FileCheckbox from './files-table/FileCheckbox';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
