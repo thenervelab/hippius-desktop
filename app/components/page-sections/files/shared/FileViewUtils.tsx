@@ -9,8 +9,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { decodeHexCid } from "@/app/lib/utils/decodeHexCid";
 import { FileDetail } from "@/app/(pages)/UnpinFilesDialog";
-import { useAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 export interface FileViewSharedProps {
   files: FormattedUserFile[];
@@ -55,9 +53,6 @@ export function useFileViewShared(
   const { files, showUnpinnedDialog } = props;
   // Ensure files is always an array to prevent undefined errors
   const safeFiles = files || [];
-  const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
-
-  const isPrivateFolder = activeSubMenuItem === "Private";
 
   const [fileToDelete, setFileToDelete] =
     useState<FormattedUserFile | null>(null);
@@ -65,7 +60,6 @@ export function useFileViewShared(
   const { mutateAsync: deleteFileMutation, isPending: isDeleting } =
     useDeleteFile({
       files: fileToDelete ? [fileToDelete] : [],
-      isPrivateFolder,
     });
 
   const [selectedFile, setSelectedFile] =

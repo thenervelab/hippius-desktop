@@ -11,6 +11,8 @@ interface FileSelectionContextProps {
     selectAllFiles: (files: FormattedUserFile[]) => void;
     unselectAllFiles: () => void;
     enterSelectionModeAndSelectFile: (file: FormattedUserFile) => void;
+    addFilesToSelection: (files: FormattedUserFile[]) => void;
+    removeFilesFromSelection: (files: FormattedUserFile[]) => void;
 }
 
 const FileSelectionContext = createContext<FileSelectionContextProps | undefined>(undefined);
@@ -44,29 +46,16 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     const toggleFileSelection = useCallback((file: FormattedUserFile) => {
         // Only allow selection of files that can be deleted (isAssigned)
         if (!file.isAssigned) {
-            console.log('File not assigned, cannot select:', file.name, file.isAssigned);
             return;
         }
 
-        console.log('Toggle selection for:', {
-            name: file.name,
-            actualFileName: file.actualFileName,
-            isFolder: file.isFolder
-        });
-
         setSelectedFiles(prevSelected => {
-            console.log('Current selected files:', prevSelected.map(f => ({ name: f.name, actualFileName: f.actualFileName })));
             const isSelected = prevSelected.some(f => f.actualFileName === file.actualFileName);
-            console.log('Is currently selected:', isSelected);
 
             if (isSelected) {
-                const newSelection = prevSelected.filter(f => f.actualFileName !== file.actualFileName);
-                console.log('After deselection:', newSelection.map(f => ({ name: f.name, actualFileName: f.actualFileName })));
-                return newSelection;
+                return prevSelected.filter(f => f.actualFileName !== file.actualFileName);
             } else {
-                const newSelection = [...prevSelected, file];
-                console.log('After selection:', newSelection.map(f => ({ name: f.name, actualFileName: f.actualFileName })));
-                return newSelection;
+                return [...prevSelected, file];
             }
         });
     }, []);
@@ -96,18 +85,34 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
             return;
         }
 
-        console.log("Entering selection mode with file:", {
-            name: file.name,
-            actualFileName: file.actualFileName,
-            isFolder: file.isFolder,
-            isAssigned: file.isAssigned
-        });
-
         // Set selection mode and select the file in one atomic operation
         setIsSelectionMode(true);
         setSelectedFiles([file]);
+    }, []);
 
-        console.log("Selection mode activated with file:", file.actualFileName);
+    const addFilesToSelection = useCallback((files: FormattedUserFile[]) => {
+        // Only add files that can be deleted (isAssigned)
+        const deletableFiles = files.filter(file => file.isAssigned);
+
+        setSelectedFiles(prevSelected => {
+            // Create a set of already selected file names for efficient lookup
+            const selectedFileNames = new Set(prevSelected.map(f => f.actualFileName));
+
+            // Add only files that aren't already selected
+            const newFiles = deletableFiles.filter(file => !selectedFileNames.has(file.actualFileName));
+
+            return [...prevSelected, ...newFiles];
+        });
+    }, []);
+
+    const removeFilesFromSelection = useCallback((files: FormattedUserFile[]) => {
+        setSelectedFiles(prevSelected => {
+            // Create a set of file names to remove for efficient lookup
+            const fileNamesToRemove = new Set(files.map(f => f.actualFileName));
+
+            // Keep only files that are not in the removal list
+            return prevSelected.filter(file => !fileNamesToRemove.has(file.actualFileName));
+        });
     }, []);
 
     // Memoize the context value to prevent unnecessary re-renders
@@ -120,7 +125,9 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
         clearSelection,
         selectAllFiles,
         unselectAllFiles,
-        enterSelectionModeAndSelectFile
+        enterSelectionModeAndSelectFile,
+        addFilesToSelection,
+        removeFilesFromSelection
     }), [
         isSelectionMode,
         selectedFiles,
@@ -130,7 +137,9 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
         clearSelection,
         selectAllFiles,
         unselectAllFiles,
-        enterSelectionModeAndSelectFile
+        enterSelectionModeAndSelectFile,
+        addFilesToSelection,
+        removeFilesFromSelection
     ]);
 
     return (

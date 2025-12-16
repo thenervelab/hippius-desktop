@@ -86,6 +86,10 @@ export function calculateDelta<T extends Record<string, any>>(
         } else {
           // Subsequent items: delta = current - previous
           delta = bigIntValue - previousValue;
+          // If delta is negative, set it to 0 (no negative deltas allowed)
+          if (delta < BigInt(0)) {
+            delta = BigInt(0);
+          }
         }
 
         // Update previous value for next iteration

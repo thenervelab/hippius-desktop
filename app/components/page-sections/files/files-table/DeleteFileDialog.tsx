@@ -2,20 +2,16 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Icons, P, Button } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import React, { useMemo } from "react";
+import React from "react";
 import { toast } from "sonner";
 
 const DeleteFileDialog: React.FC<{
   fileToDelete: FormattedUserFile | null;
   setFileToDelete: (v: FormattedUserFile | null) => void;
 }> = ({ setFileToDelete, fileToDelete }) => {
-  const isPrivateFolder = useMemo(() => {
-    return fileToDelete?.type?.toLowerCase() === 'private';
-  }, [fileToDelete]);
 
   const { mutateAsync: deleteFile, isPending: isDeleting } = useDeleteFile({
-    files: fileToDelete ? [fileToDelete] : [],
-    isPrivateFolder
+    files: fileToDelete ? [fileToDelete] : []
   });
 
   return (

@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback } from 'react';
+import React from 'react';
 import { Menu } from 'lucide-react';
 import FileCheckbox from './files-table/FileCheckbox';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
@@ -33,28 +33,29 @@ SelectionColumn.displayName = 'SelectionColumn';
 const SelectionHeaderColumnComponent: React.FC<{
     files: FormattedUserFile[];
 }> = ({ files }) => {
-    const { isSelectionMode, selectedFiles, selectAllFiles, unselectAllFiles } = useFileSelection();
+    const { isSelectionMode, selectedFiles, addFilesToSelection, removeFilesFromSelection } = useFileSelection();
 
-    // Memoize deletableFiles to prevent infinite re-renders
-    const deletableFiles = useMemo(() => {
-        return files.filter(file => file.isAssigned);
-    }, [files]);
+    // Calculate deletable files directly without memo to avoid staleness
+    const deletableFiles = files.filter(file => file.isAssigned);
 
-    // Use stable count values and memoize the calculation
-    const allSelected = useMemo(() => {
-        const deletableCount = deletableFiles.length;
-        const selectedCount = selectedFiles.length;
-        return deletableCount > 0 && selectedCount === deletableCount;
-    }, [deletableFiles.length, selectedFiles.length]);
+    // Check if all files on the CURRENT PAGE are selected
+    const allSelected = deletableFiles.length > 0 && deletableFiles.every(file =>
+        selectedFiles.some(selectedFile =>
+            selectedFile.actualFileName === file.actualFileName
+        )
+    );
 
-    const toggleSelectAll = useCallback(() => {
+    // Remove useCallback to prevent stale closure - always use fresh props
+    const toggleSelectAll = () => {
+        // Get absolutely fresh snapshot at click time
+        const currentPageDeletableFiles = files.filter(file => file.isAssigned);
+
         if (allSelected) {
-            unselectAllFiles();
+            removeFilesFromSelection(currentPageDeletableFiles);
         } else {
-            // Only select files that have isAssigned as true
-            selectAllFiles(deletableFiles);
+            addFilesToSelection(currentPageDeletableFiles);
         }
-    }, [allSelected, unselectAllFiles, selectAllFiles, deletableFiles]);
+    };
 
     if (!isSelectionMode) return null;
 
@@ -68,7 +69,8 @@ const SelectionHeaderColumnComponent: React.FC<{
     );
 };
 
-export const SelectionHeaderColumn = React.memo(SelectionHeaderColumnComponent);
+// Remove React.memo to ensure component always receives fresh props
+export const SelectionHeaderColumn = SelectionHeaderColumnComponent;
 SelectionHeaderColumn.displayName = 'SelectionHeaderColumn';
 
 export const SelectionToggle: React.FC = () => {
