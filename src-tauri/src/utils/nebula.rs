@@ -1531,65 +1531,6 @@ fn get_nebula_config_dir() -> Result<PathBuf> {
     Ok(home.join(".hippius").join("nebula").join("config"))
 }
 
-/// Generate a Nebula CA certificate
-pub async fn generate_ca_certificate(
-    name: &str,
-    duration_days: u32,
-) -> Result<()> {
-    let nebula_cert_binary = get_nebula_cert_binary_path()?;
-    
-    // Check if nebula-cert binary exists
-    if !nebula_cert_binary.exists() {
-        return Err(anyhow!(
-            "nebula-cert binary not found at: {}. Please restart the app to download it.",
-            nebula_cert_binary.display()
-        ));
-    }
-    
-    let config_dir = get_nebula_config_dir()?;
-    
-    // Ensure config directory exists
-    println!("[Nebula] Creating config directory: {}", config_dir.display());
-    fs::create_dir_all(&config_dir).await?;
-    
-    let ca_crt = config_dir.join("ca.crt");
-    let ca_key = config_dir.join("ca.key");
-    
-    println!("[Nebula] Generating CA certificate: {}", name);
-    println!("[Nebula] Using binary: {}", nebula_cert_binary.display());
-    
-    let output = tokio::process::Command::new(&nebula_cert_binary)
-        .args(&[
-            "ca",
-            "-name",
-            name,
-            "-duration",
-            &format!("{}h", duration_days * 24),
-            "-out-crt",
-            ca_crt.to_str().unwrap(),
-            "-out-key",
-            ca_key.to_str().unwrap(),
-        ])
-        .output()
-        .await?;
-    
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(anyhow!(
-            "CA generation failed.\nStderr: {}\nStdout: {}", 
-            stderr,
-            stdout
-        ));
-    }
-    
-    println!("[Nebula] CA certificate generated successfully");
-    println!("[Nebula]   Certificate: {}", ca_crt.display());
-    println!("[Nebula]   Key: {}", ca_key.display());
-    
-    Ok(())
-}
-
 /// Generate a Nebula node certificate
 pub async fn generate_node_certificate(
     name: &str,
@@ -1854,7 +1795,9 @@ pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
             if let Some(expires_at_str) = expires_at_str {
                 if let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(&expires_at_str) {
                     let now = chrono::Utc::now();
-                    if expires_at > now.into() {
+                    // Convert expires_at to UTC for comparison
+                    let expires_at_utc = expires_at.with_timezone(&chrono::Utc);
+                    if expires_at_utc > now {
                         return Ok(true);
                     }
                     println!("[Nebula] Certificate expired on: {}", expires_at);
