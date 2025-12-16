@@ -2,9 +2,10 @@ import { Account } from "@/lib/types";
 import { formatBytes } from "./formatBytes";
 
 import {
-  WEEKDAYS_SHORT,
+  WEEKDAYS_FULL,
   ChartPoint,
   MONTHS,
+  MONTHS_FULL,
 } from "./getFormatDataForCreditsUsageChart";
 
 // Helper: get all dates in a range (inclusive)
@@ -84,8 +85,8 @@ export function aggregateBytesByMonth(chartPoints: ChartPoint[]): ChartPoint[] {
         formattedBalance: formatBytes(totalUsage),
         timestamp: "",
         x: new Date(year, month, 1),
-        dayLabel: MONTHS[month],
-        bandLabel: MONTHS[month],
+        dayLabel: MONTHS_FULL[month],
+        bandLabel: MONTHS_FULL[month],
       };
     })
     .sort((a, b) => a.x.getTime() - b.x.getTime());
@@ -131,10 +132,10 @@ export const formatStorageForChartByRange = (
     return mapBytesToDateRange(
       chartPoints,
       weekDates,
-      (date) => WEEKDAYS_SHORT[date.getDay()]
+      (date) => WEEKDAYS_FULL[date.getDay()]
     ).map((point) => ({
       ...point,
-      bandLabel: WEEKDAYS_SHORT[point.x.getDay()],
+      bandLabel: WEEKDAYS_FULL[point.x.getDay()],
     }));
   }
 
@@ -212,8 +213,8 @@ function aggregateBytesByMonthFullYear(points: ChartPoint[]): ChartPoint[] {
       balance: totalUsage,
       formattedBalance: formatBytes(totalUsage),
       timestamp: normalizeDate(new Date(currentYear, monthIndex, 1)),
-      dayLabel: MONTHS[monthIndex],
-      bandLabel: MONTHS[monthIndex],
+      dayLabel: MONTHS_FULL[monthIndex],
+      bandLabel: MONTHS_FULL[monthIndex],
     });
   }
 
