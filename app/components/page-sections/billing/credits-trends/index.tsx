@@ -153,7 +153,7 @@ const CreditsTrends: React.FC<{
                       },
                     ]}
                     renderTooltip={(td) => (
-                      <BalanceTrendsTooltip tooltipData={td} />
+                      <BalanceTrendsTooltip tooltipData={td} timeRange={timeRange} />
                     )}
                   />
                 </div>

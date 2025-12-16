@@ -5,21 +5,35 @@ const numberFmt = (val: number) => val.toFixed(10) || "0.00";
 
 const CreditsTrendsTooltip: React.FC<{
   tooltipData?: TooltipData<ChartPoint>;
-}> = ({ tooltipData }) => {
+  timeRange?: string;
+}> = ({ tooltipData, timeRange }) => {
   if (!tooltipData?.nearestDatum) return null;
 
   const { datum } = tooltipData.nearestDatum;
 
   // date line
-  const dateDisplay =
-    datum.bandLabel ??
-    (datum.x instanceof Date
-      ? datum.x.toLocaleDateString("en-US", {
+  let dateDisplay = "";
+  if (datum.bandLabel) {
+    dateDisplay = datum.bandLabel;
+  } else if (datum.x instanceof Date) {
+    // Format based on time range
+    if (timeRange === "last7days") {
+      dateDisplay = datum.x.toLocaleDateString("en-US", {
+        weekday: "long",
+      });
+    } else if (timeRange === "year") {
+      dateDisplay = datum.x.toLocaleDateString("en-US", {
+        month: "long",
+        year: "numeric",
+      });
+    } else {
+      dateDisplay = datum.x.toLocaleDateString("en-US", {
         month: "short",
         day: "numeric",
         year: "numeric",
-      })
-      : "");
+      });
+    }
+  }
 
   return (
     <div className="">

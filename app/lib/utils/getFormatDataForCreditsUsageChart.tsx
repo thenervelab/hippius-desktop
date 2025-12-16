@@ -11,6 +11,7 @@ export interface ChartPoint {
 }
 
 export const WEEKDAYS_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+export const WEEKDAYS_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 export const MONTHS = [
   "Jan",
@@ -25,6 +26,21 @@ export const MONTHS = [
   "Oct",
   "Nov",
   "Dec",
+];
+
+export const MONTHS_FULL = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 // Helper: get all dates in a range (inclusive)
@@ -131,8 +147,8 @@ export function aggregateCreditsByMonth(
         ),
         timestamp: "",
         x: new Date(year, month, 1),
-        dayLabel: MONTHS[month],
-        bandLabel: MONTHS[month],
+        dayLabel: MONTHS_FULL[month],
+        bandLabel: MONTHS_FULL[month],
       };
     })
     .sort((a, b) => a.x.getTime() - b.x.getTime());
@@ -183,10 +199,10 @@ export const formatAccountsForChartByRange = (
     return mapCreditsToDateRange(
       chartPoints,
       weekDates,
-      (date) => WEEKDAYS_SHORT[date.getDay()]
+      (date) => WEEKDAYS_FULL[date.getDay()]
     ).map((point) => ({
       ...point,
-      bandLabel: WEEKDAYS_SHORT[point.x.getDay()],
+      bandLabel: WEEKDAYS_FULL[point.x.getDay()],
     }));
   }
 

@@ -7,16 +7,17 @@ import React, {
   useMemo,
   useRef,
 } from "react";
+import { useRouter } from "next/navigation";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Icons, RefreshButton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import {
-  FormattedUserIpfsFile,
+  FormattedUserFile,
   parseMinerIds,
-} from "@/lib/hooks/use-user-ipfs-files";
-import FilesContent from "@/components/page-sections/files/ipfs/FilesContent";
+} from "@/app/lib/hooks/use-user-files";
+import FilesContent from "@/app/components/page-sections/files/FilesContent";
 import { toast } from "sonner";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import { FileTypes } from "@/lib/types/fileTypes";
@@ -25,17 +26,17 @@ import {
   generateActiveFilters,
 } from "@/lib/utils/fileFilterUtils";
 import { SearchInput } from "@/components/ui";
-import FilterChips from "@/components/page-sections/files/ipfs/filter-chips";
+import FilterChips from "@/app/components/page-sections/files/filter-chips";
 import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
-import { downloadIpfsFolder } from "@/lib/utils/downloadIpfsFolder";
-import AddFileToFolderButton from "@/components/page-sections/files/ipfs/AddFileToFolderButton";
+import { downloadFolder } from "@/app/lib/utils/downloadFolder";
+import AddFileToFolderButton from "@/app/components/page-sections/files/AddFileToFolderButton";
 import {
   getViewModePreference,
   saveViewModePreference,
 } from "@/lib/utils/userPreferencesDb";
 import { getFolderPathArray } from "@/app/utils/folderPathUtils";
-import AddFolderToFolderButton from "@/components/page-sections/files/ipfs/AddFolderToFolderButton";
+import AddFolderToFolderButton from "@/app/components/page-sections/files/AddFolderToFolderButton";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { usePagination } from "@/lib/hooks";
@@ -46,6 +47,7 @@ import {
 } from "@/lib/utils/syncPathUtils";
 import { useAtomValue } from "jotai";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import FolderBreadcrumb from "./FolderBreadcrumb";
 
 interface FileEntry {
   file_name: string;
@@ -74,10 +76,11 @@ export default function FolderView({
   mainFolderActualName,
   subFolderPath,
 }: FolderViewProps) {
+  const router = useRouter();
   const { getParam } = useUrlParams();
   const { polkadotAddress } = useWalletAuth();
   const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
-  const [files, setFiles] = useState<FormattedUserIpfsFile[]>([]);
+  const [files, setFiles] = useState<FormattedUserFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
@@ -154,47 +157,45 @@ export default function FolderView({
 
         console.log("Fetched folder contents:", fileEntries);
 
-        const formattedFiles = fileEntries.map(
-          (entry): FormattedUserIpfsFile => {
-            const isErasureCodedFolder = entry.file_name.endsWith(
-              ".folder.ec_metadata"
-            );
-            const isErasureCoded =
-              !isErasureCodedFolder && entry.file_name.endsWith(".ec_metadata");
-            const isFolder =
-              !isErasureCodedFolder && entry.file_name.endsWith(".folder");
+        const formattedFiles = fileEntries.map((entry): FormattedUserFile => {
+          const isErasureCodedFolder = entry.file_name.endsWith(
+            ".folder.ec_metadata"
+          );
+          const isErasureCoded =
+            !isErasureCodedFolder && entry.file_name.endsWith(".ec_metadata");
+          const isFolder =
+            !isErasureCodedFolder && entry.file_name.endsWith(".folder");
 
-            let displayName = entry.file_name;
-            if (isErasureCodedFolder) {
-              displayName = entry.file_name.slice(
-                0,
-                -".folder.ec_metadata".length
-              );
-            } else if (isErasureCoded) {
-              displayName = entry.file_name.slice(0, -".ec_metadata".length);
-            } else if (isFolder) {
-              displayName = entry.file_name.slice(0, -".folder".length);
-            }
-            return {
-              cid: entry.cid,
-              name: displayName || "Unnamed File",
-              actualFileName: entry.file_name,
-              size: entry.file_size,
-              type: isPrivateFolder ? "private" : "public",
-              fileHash: entry.file_hash,
-              isAssigned: true,
-              source: entry.source || "Unknown",
-              createdAt: Number(entry.created_at),
-              minerIds: parseMinerIds(entry.miner_ids),
-              lastChargedAt: Number(entry.last_charged_at),
-              isErasureCoded,
-              isFolder: isFolder || entry.is_folder,
-              parentFolderId: folderCid,
-              parentFolderName: folderName,
-              mainReqHash: entry.main_req_hash,
-            };
+          let displayName = entry.file_name;
+          if (isErasureCodedFolder) {
+            displayName = entry.file_name.slice(
+              0,
+              -".folder.ec_metadata".length
+            );
+          } else if (isErasureCoded) {
+            displayName = entry.file_name.slice(0, -".ec_metadata".length);
+          } else if (isFolder) {
+            displayName = entry.file_name.slice(0, -".folder".length);
           }
-        );
+          return {
+            cid: entry.cid,
+            name: displayName || "Unnamed File",
+            actualFileName: entry.file_name,
+            size: entry.file_size,
+            type: isPrivateFolder ? "private" : "public",
+            fileHash: entry.file_hash,
+            isAssigned: true,
+            source: entry.source || "Unknown",
+            createdAt: Number(entry.created_at),
+            minerIds: parseMinerIds(entry.miner_ids),
+            lastChargedAt: Number(entry.last_charged_at),
+            isErasureCoded,
+            isFolder: isFolder || entry.is_folder,
+            parentFolderId: folderCid,
+            parentFolderName: folderName,
+            mainReqHash: entry.main_req_hash,
+          };
+        });
 
         setFiles(formattedFiles);
       } catch (error) {
@@ -260,7 +261,8 @@ export default function FolderView({
         }
       })();
     }
-  }, [syncPathRefreshTrigger, isPrivateFolder]); const handleRefresh = () => {
+  }, [syncPathRefreshTrigger, isPrivateFolder]);
+  const handleRefresh = () => {
     loadFolderContents(false);
   };
 
@@ -285,7 +287,7 @@ export default function FolderView({
 
       // Download folder
       setIsDownloading(true);
-      const result = await downloadIpfsFolder({
+      const result = await downloadFolder({
         folderCid,
         folderName,
         polkadotAddress: polkadotAddress ?? "",
@@ -305,15 +307,14 @@ export default function FolderView({
     } catch (error) {
       console.error("Error downloading folder:", error);
       toast.error(
-        `Failed to download folder: ${error instanceof Error ? error.message : String(error)
+        `Failed to download folder: ${
+          error instanceof Error ? error.message : String(error)
         }`
       );
     } finally {
       setIsDownloading(false);
     }
   };
-
-
 
   const handleSearchChange = useCallback((value: string) => {
     setSearchTerm(value);
@@ -369,14 +370,17 @@ export default function FolderView({
   // Check if sync path is empty (user skipped setup)
   const isSyncPathEmpty = syncFolderPath === "";
 
+  const folderSource = getParam("folderSource");
+  const mainReqHash = getParam("mainReqHash");
+
   return (
     <FileSelectionProvider>
       <div className="w-full relative mt-6">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <button
               className="flex gap-2 font-semibold text-lg items-center"
-              onClick={() => window.history.back()}
+              onClick={() => router.push("/files")}
             >
               <Icons.ArrowLeft className="size-5 text-grey-10" />
               Back
@@ -422,8 +426,6 @@ export default function FolderView({
               </button>
             </div>
 
-
-
             {/* Only show upload buttons if sync path is configured */}
             {!isSyncPathEmpty && !isLoadingSyncPath && (
               <>
@@ -466,7 +468,12 @@ export default function FolderView({
             </button>
           </div>
         </div>
-
+        <FolderBreadcrumb
+          mainFolderActualName={mainFolderActualName}
+          subFolderPath={subFolderPath}
+          folderSource={folderSource}
+          mainReqHash={mainReqHash}
+        />
         {activeFilters.length > 0 && (
           <FilterChips
             filters={activeFilters}

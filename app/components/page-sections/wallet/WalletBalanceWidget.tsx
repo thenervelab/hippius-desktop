@@ -27,7 +27,8 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
   const { data: balanceInfo, isLoading, error, refetch } = useHippiusBalance();
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
-  const { mnemonic, polkadotAddress } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
+  const mnemonic = ""
 
   const handleSendBalance = () => {
     if (!balanceInfo?.data?.free) {

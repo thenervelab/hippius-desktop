@@ -148,6 +148,9 @@ fn main() {
             utils::nebula::verify_nebula,
             utils::nebula::finish_setup,
             utils::nebula::start_nebula,
+            save_temp_auth_key_command,
+            has_master_token_command,
+            request_master_token_command
         ]);
 
     let builder = setup(builder);

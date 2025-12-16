@@ -10,7 +10,7 @@ import {
   DEFAULT_TIMING_OPTION,
 } from "@/lib/utils/storageCostUtils";
 import pricingJson from "@/app/utils/data/pricing-cfg.json";
-import { useUserIpfsFiles } from "@/app/lib/hooks/use-user-ipfs-files";
+import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 
 export default function DetailList() {
   const {
@@ -24,7 +24,7 @@ export default function DetailList() {
     data: filesData,
     isLoading: isFilesLoading,
     error: filesError,
-  } = useUserIpfsFiles();
+  } = useUserFiles();
 
   const handleRefreshCredits = async () => {
     try {

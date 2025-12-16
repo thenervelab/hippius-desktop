@@ -8,7 +8,7 @@ import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { cn } from "@/lib/utils";
 import InfoTooltip from "@/components/ui/info-tooltip";
-import FileSyncTypeBadge from "../components/page-sections/files/ipfs/files-table/FileSyncTypeBadge";
+import FileSyncTypeBadge from "../components/page-sections/files/files-table/FileSyncTypeBadge";
 
 // Constants for block time calculation
 const BLOCKS_PER_EPOCH = 100; // Half epoch is 100 blocks

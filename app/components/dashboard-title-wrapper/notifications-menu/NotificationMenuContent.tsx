@@ -22,6 +22,7 @@ import {
 } from "@/app/components/sidebar/sideBarAtoms";
 import { deleteAllNotifications } from "@/app/lib/helpers/notificationsDb";
 import ArchiveAllConfirmationDialog from "@/components/page-sections/notifications/ArchiveAllConfirmationDialog";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 interface Props {
   count: number;
@@ -37,6 +38,7 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
+  const { polkadotAddress, oauthSession } = useWalletAuth();
 
   const notificationOptions = useMemo(
     () => [
@@ -99,7 +101,9 @@ const NotificationMenuContent: React.FC<Props> = ({ count, onClose }) => {
   const handleArchiveAllConfirm = async () => {
     setIsArchiving(true);
     try {
-      await deleteAllNotifications();
+      const userAddress = oauthSession?.substrateAddress || polkadotAddress;
+      if (!userAddress) return;
+      await deleteAllNotifications(userAddress);
       await refresh();
       await refreshUnread();
       toast.success("All notifications deleted");

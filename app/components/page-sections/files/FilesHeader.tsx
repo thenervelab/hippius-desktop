@@ -1,0 +1,384 @@
+"use client";
+
+import { FC, useState } from "react";
+import { Icons, RefreshButton, SearchInput } from "@/components/ui";
+import { cn } from "@/lib/utils";
+import AddButton from "./AddFileButton";
+import StorageStateList from "./storage-stats";
+import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
+import FilterChips from "./filter-chips";
+import FolderUploadDialog from "./FolderUploadDialog";
+import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
+import { toast } from "sonner";
+import { useLocalStorage } from "@/lib/hooks/useLocalStorage";
+import { openPath } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import DeleteAllFilesConfirmationDialog from "./DeleteAllFilesConfirmationDialog";
+import { useAtomValue } from "jotai";
+import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
+import { List } from "lucide-react";
+import StartSyncingButton from "@/app/components/StartSyncingButton";
+import FilterPills from "./FilterPills";
+import { FileTypes } from "@/lib/types/fileTypes";
+import ManageButton from "./ManageButton";
+
+interface FilesHeaderProps {
+  isRecentFiles?: boolean;
+  isRefetching?: boolean;
+  isFetching?: boolean;
+  formattedStorageSize: string;
+  allFilteredDataLength: number;
+  viewMode: "list" | "card";
+  setViewMode: (mode: "list" | "card") => void;
+  searchTerm: string;
+  handleSearchChange: (value: string) => void;
+  activeFilters: ActiveFilter[];
+  handleRemoveFilter: (filter: ActiveFilter) => void;
+  refetchUserFiles: () => void;
+  addButtonRef: React.RefObject<{
+    openWithFiles(files: FileList): void;
+  } | null>;
+  privateFileCount?: number;
+  publicFileCount?: number;
+  syncFolderPath?: string;
+  isSyncPathEmpty?: boolean;
+  onStartSyncing?: () => void;
+  hasNoSyncPaths?: boolean;
+  onNavigateToSettings?: () => void;
+  isPrivateView?: boolean; // For recent files to determine upload type
+  // New filter props
+  selectedFileTypes: FileTypes[];
+  selectedDate: string;
+  selectedFileSizes: number[];
+  onFileTypesChange: (types: FileTypes[]) => void;
+  onDateChange: (date: string) => void;
+  onFileSizesChange: (sizes: number[]) => void;
+}
+
+const FilesHeader: FC<FilesHeaderProps> = ({
+  isRecentFiles = false,
+  isRefetching = false,
+  isFetching = false,
+  formattedStorageSize,
+  allFilteredDataLength,
+  viewMode,
+  setViewMode,
+  searchTerm,
+  handleSearchChange,
+  activeFilters,
+  handleRemoveFilter,
+  refetchUserFiles,
+  addButtonRef,
+  syncFolderPath,
+  isSyncPathEmpty = false,
+  onStartSyncing,
+  hasNoSyncPaths = false,
+  onNavigateToSettings,
+  isPrivateView,
+  // New filter props
+  selectedFileTypes,
+  selectedDate,
+  selectedFileSizes,
+  onFileTypesChange,
+  onDateChange,
+  onFileSizesChange,
+}) => {
+  const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  const [syncFolderPermissionGranted, setSyncFolderPermissionGranted] =
+    useLocalStorage("hippius-sync-folder-permission", false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const { navigateToFilesView } = useFilesNavigation();
+  const { push } = useNavigationLoader();
+  const { polkadotAddress } = useWalletAuth();
+  const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
+  const currentScope =
+    activeSubMenuItem || (isRecentFiles ? "Private" : "Public");
+
+  const handleViewAllFiles = () => {
+    navigateToFilesView();
+    push("/files");
+  };
+
+  const handleManageBucketClick = () => {
+    push("/tokens");
+  };
+
+  const handleOpenSyncFolder = async () => {
+    try {
+      if (!syncFolderPath) {
+        toast.error("Sync folder not configured");
+        return;
+      }
+
+      await openPath(syncFolderPath);
+
+      if (!syncFolderPermissionGranted) {
+        setSyncFolderPermissionGranted(true);
+      }
+    } catch (e) {
+      console.error("Failed to open sync folder:", e);
+
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      if (
+        errorMessage.includes("permission") ||
+        errorMessage.includes("denied")
+      ) {
+        toast.error(
+          "Permission to open folders was denied. Please try again and allow folder access."
+        );
+        setSyncFolderPermissionGranted(false);
+      } else {
+        toast.error(`Failed to open folder: ${errorMessage}`);
+      }
+    }
+  };
+
+  const handleDeleteAllFiles = async () => {
+    if (!polkadotAddress) {
+      toast.error("Account ID not available");
+      return;
+    }
+
+    setIsDeleting(true);
+    setIsDeleteDialogOpen(false);
+
+    // Create a loading toast that will be updated later
+    const toastId = toast.loading(
+      `Deleting all ${currentScope.toLowerCase()} files...`
+    );
+
+    try {
+      await invoke("wipe_s3_objects", {
+        accountId: polkadotAddress,
+        scope: currentScope.toLowerCase(),
+      });
+
+      // Update the toast to success
+      toast.success(
+        `All ${currentScope.toLowerCase()} files have been deleted`,
+        { id: toastId }
+      );
+      refetchUserFiles(); // Refresh the file list
+    } catch (error) {
+      console.error("Failed to delete files:", error);
+      // Update the toast to error
+      toast.error(
+        `Failed to delete files: ${error instanceof Error ? error.message : String(error)
+        }`,
+        { id: toastId }
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+
+
+  return (
+    <>
+      {!isRecentFiles && (
+        <div className="flex items-center justify-between gap-4">
+          <StorageStateList
+            storageUsed={formattedStorageSize}
+            numberOfFiles={allFilteredDataLength || 0}
+          />
+          <div className="flex items-center gap-2">
+            <SearchInput
+              className="h-9"
+              value={searchTerm}
+              onChange={handleSearchChange}
+              placeholder="Search file"
+            />
+            <button
+              onClick={() => setIsDeleteDialogOpen(true)}
+              className="flex items-center justify-center gap-1 h-9 px-2 py-2 min-w-[150px] rounded bg-error-50 border border-error-60 text-white hover:bg-error-60 active:bg-error-70 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-error-50"
+            >
+              <Icons.Trash className="size-4" />
+              <span className="ml-1">Delete All Files</span>
+            </button>
+            <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
+              <button
+                className={cn(
+                  "p-1 rounded",
+                  viewMode === "list"
+                    ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                    : "bg-grey-100 text-grey-70"
+                )}
+                onClick={() => setViewMode("list")}
+                aria-label="List View"
+              >
+                <List className="size-5" />
+              </button>
+              <button
+                className={cn(
+                  "p-1 rounded",
+                  viewMode === "card"
+                    ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                    : "bg-grey-100 text-grey-70"
+                )}
+                onClick={() => setViewMode("card")}
+                aria-label="Card View"
+              >
+                <Icons.Category className="size-5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="flex justify-between items-center w-full gap-6 flex-wrap mt-4">
+        {isRecentFiles ? (
+          <h2 className="text-lg font-medium text-grey-10">Recent Files</h2>
+        ) : (
+          <FilterPills
+            selectedFileTypes={selectedFileTypes}
+            selectedDate={selectedDate}
+            selectedFileSizes={selectedFileSizes}
+            onFileTypesChange={onFileTypesChange}
+            onDateChange={onDateChange}
+            onFileSizesChange={onFileSizesChange}
+          />
+        )}
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <RefreshButton
+            refetching={isRefetching || isFetching}
+            onClick={() => refetchUserFiles()}
+          />
+          <ManageButton
+            text="Manage"
+            isLoading={isRefetching || isFetching}
+            onClick={handleManageBucketClick}
+          />
+          {isRecentFiles && (
+            <>
+              <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
+                <button
+                  className={cn(
+                    "p-1 rounded",
+                    viewMode === "list"
+                      ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                      : "bg-grey-100 text-grey-70"
+                  )}
+                  onClick={() => setViewMode("list")}
+                  aria-label="List View"
+                >
+                  <List className="size-5" />
+                </button>
+                <button
+                  className={cn(
+                    "p-1 rounded",
+                    viewMode === "card"
+                      ? "bg-primary-100 border border-primary-80 text-primary-40 rounded"
+                      : "bg-grey-100 text-grey-70"
+                  )}
+                  onClick={() => setViewMode("card")}
+                  aria-label="Card View"
+                >
+                  <Icons.Category className="size-5" />
+                </button>
+              </div>
+              <button
+                onClick={handleViewAllFiles}
+                className="px-2 py-2 items-center flex bg-grey-90  border border-grey-80 rounded hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-grey-10 leading-5 text-[14px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+              >
+                View All Files
+                <Icons.ArrowRight className="size-[14px] ml-1" />
+              </button>
+            </>
+          )}
+
+
+          <>
+            {/* Folder Upload button - disabled for recent files with no sync paths */}
+            {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
+              <button
+                onClick={() => setIsFolderUploadOpen(true)}
+                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+              >
+                <Icons.FolderAdd className="size-4" />
+                <span className="ml-1">Add Folder</span>
+              </button>
+            )}
+            {isRecentFiles && hasNoSyncPaths && (
+              <button
+                disabled
+                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 opacity-50 cursor-not-allowed text-sm font-medium"
+              >
+                <Icons.FolderAdd className="size-4" />
+                <span className="ml-1">Add Folder</span>
+              </button>
+            )}
+
+            {/* Open Sync Folder button - disabled for recent files with no sync paths */}
+            <button
+              onClick={isRecentFiles && hasNoSyncPaths ? onNavigateToSettings : handleOpenSyncFolder}
+              disabled={isRecentFiles && hasNoSyncPaths ? false : (!syncFolderPath || isSyncPathEmpty)}
+              className="flex items-center justify-between gap-1 h-9 px-2 py-2 bg-grey-100 text-sm font-meidum text-grey-10 border border-grey-80 rounded disabled:opacity-50 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50 disabled:hover:bg-grey-100 disabled:hover:text-grey-10"
+              title={isRecentFiles && hasNoSyncPaths ? "Configure sync folders" : (syncFolderPath || "Sync folder not configured")}
+            >
+              <Icons.Folder className="size-4" />
+              <span className="ml-1">Open Sync Folder</span>
+            </button>
+
+            {/* Add File button - disabled for recent files with no sync paths */}
+            {isRecentFiles && hasNoSyncPaths ? (
+              <button
+                disabled
+                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 opacity-50 cursor-not-allowed text-sm font-medium"
+              >
+                <Icons.AddCircle className="size-4" />
+                <span className="ml-1">Add Files</span>
+              </button>
+            ) : (
+              !isSyncPathEmpty && (
+                <AddButton
+                  ref={addButtonRef}
+                  className="h-9"
+                  isPrivateView={isPrivateView}
+                />
+              )
+            )}
+
+            {/* Start Syncing button - show for empty sync paths or no sync paths */}
+            {(isSyncPathEmpty || (isRecentFiles && hasNoSyncPaths)) && (
+              <StartSyncingButton
+                className="h-9"
+                onClick={isRecentFiles && hasNoSyncPaths ? onNavigateToSettings : onStartSyncing}
+              />
+            )}
+          </>
+        </div>
+      </div>
+
+      {/* Active Filters Display */}
+      {activeFilters.length > 0 && !isRecentFiles && (
+        <FilterChips
+          filters={activeFilters}
+          onRemoveFilter={handleRemoveFilter}
+          className="mt-4 mb-2"
+        />
+      )}
+
+      {/* Folder Upload Dialog */}
+      <FolderUploadDialog
+        open={isFolderUploadOpen}
+        onClose={() => setIsFolderUploadOpen(false)}
+        onRefresh={refetchUserFiles}
+      />
+
+      {/* Delete All Files Confirmation Dialog */}
+      <DeleteAllFilesConfirmationDialog
+        open={isDeleteDialogOpen}
+        onClose={() => setIsDeleteDialogOpen(false)}
+        onConfirm={handleDeleteAllFiles}
+        loading={isDeleting}
+        scope={currentScope}
+      />
+    </>
+  );
+};
+
+export default FilesHeader;

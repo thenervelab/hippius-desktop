@@ -14,6 +14,15 @@ export interface ChartPoint {
 }
 
 export const WEEKDAYS_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+export const WEEKDAYS_FULL = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
 export const MONTHS = [
   "Jan",
   "Feb",
@@ -27,6 +36,20 @@ export const MONTHS = [
   "Oct",
   "Nov",
   "Dec",
+];
+export const MONTHS_FULL = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 export function getAllDatesInRange(start: Date, end: Date): Date[] {
@@ -125,10 +148,10 @@ export const formatAccountsForChartByRange = (
     return fillDataWithCarryForward(
       chartPoints,
       weekDates,
-      (date) => WEEKDAYS_SHORT[date.getDay()]
+      (date) => WEEKDAYS_FULL[date.getDay()]
     ).map((pt) => ({
       ...pt,
-      bandLabel: WEEKDAYS_SHORT[pt.x.getDay()],
+      bandLabel: WEEKDAYS_FULL[pt.x.getDay()],
     }));
   }
 
@@ -173,7 +196,7 @@ export const formatAccountsForChartByRange = (
         // Use the most recent data point for each month
         monthlyData.set(month, {
           ...point,
-          bandLabel: MONTHS[month],
+          bandLabel: MONTHS_FULL[month],
         });
       }
     });
@@ -185,7 +208,12 @@ export const formatAccountsForChartByRange = (
 
       // If we have data for this month, use it
       if (monthlyData.has(m)) {
-        result.push(monthlyData.get(m)!);
+        const monthPoint = monthlyData.get(m)!;
+        result.push({
+          ...monthPoint,
+          bandLabel: MONTHS_FULL[m],
+          dayLabel: MONTHS_FULL[m],
+        });
       } else {
         // Otherwise carry forward from the previous month
         const lastPoint = result.length > 0 ? result[result.length - 1] : null;
@@ -196,8 +224,8 @@ export const formatAccountsForChartByRange = (
           credit: lastPoint ? lastPoint.credit : 0,
           formattedCredit: lastPoint ? lastPoint.formattedCredit : "0",
           timestamp: lastPoint ? lastPoint.timestamp : "",
-          dayLabel: MONTHS[m],
-          bandLabel: MONTHS[m],
+          dayLabel: MONTHS_FULL[m],
+          bandLabel: MONTHS_FULL[m],
         });
       }
     }

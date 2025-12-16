@@ -192,7 +192,7 @@ const StorageUsageTrends: React.FC<{
                       }),
                     }}
                     renderTooltip={(tooltipData) => (
-                      <StorageUsedTooltip tooltipData={tooltipData} />
+                      <StorageUsedTooltip tooltipData={tooltipData} timeRange={timeRange} />
                     )}
                   />
                 </div>

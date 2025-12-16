@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  FormattedUserIpfsFile,
+  FormattedUserFile,
   parseMinerIds,
-} from "@/lib/hooks/use-user-ipfs-files";
+} from "@/app/lib/hooks/use-user-files";
 import { hexToCid } from "@/lib/utils/hexToCid";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useRef } from "react";
@@ -26,21 +26,20 @@ export type UserProfileFile = {
   deleted: boolean;
 };
 
-// Use the same response structure as useUserIpfsFiles
+// Use the same response structure as useUserFiles
 export type RecentFilesResponse = {
   recent?: UserProfileFile[];
   uploading?: UserProfileFile[];
 };
 
 // Remove fastHash and implement a compact deterministic signature for the formatted files
-function makeFilesSignature(files: Array<FormattedUserIpfsFile>): string {
+function makeFilesSignature(files: Array<FormattedUserFile>): string {
   // Only include the fields that affect rendering and ordering
   // Sorting by lastChargedAt desc is already applied before this signature
   return files
     .map(
       (f) =>
-        `${f.cid}|${f.name}|${f.lastChargedAt}|${f.size}|${
-          f.isFolder ? 1 : 0
+        `${f.cid}|${f.name}|${f.lastChargedAt}|${f.size}|${f.isFolder ? 1 : 0
         }|${f.type}|${f.isAssigned ? 1 : 0}`
     )
     .join("||");
@@ -52,18 +51,18 @@ const useRecentFiles = () => {
 
   // Track last signature and last data reference to preserve referential equality
   const lastSignatureRef = useRef<string>("");
-  const lastDataRef = useRef<Array<FormattedUserIpfsFile>>([]);
+  const lastDataRef = useRef<Array<FormattedUserFile>>([]);
 
   return useQuery({
     queryKey,
-    queryFn: async (): Promise<Array<FormattedUserIpfsFile>> => {
+    queryFn: async (): Promise<Array<FormattedUserFile>> => {
       if (!polkadotAddress) {
         console.log("No wallet connected, returning empty recent files array");
         return [];
       }
 
       try {
-        // Use the same invoke pattern as useUserIpfsFiles
+        // Use the same invoke pattern as useUserFiles
         const response = await invoke<RecentFilesResponse>(
           "get_sync_activity",
           {
@@ -87,9 +86,9 @@ const useRecentFiles = () => {
           return [];
         }
 
-        // Format the data exactly like useUserIpfsFiles does
+        // Format the data exactly like useUserFiles does
         const formattedFiles = nonDeletedFiles.map(
-          (file): FormattedUserIpfsFile => {
+          (file): FormattedUserFile => {
             const isErasureCodedFolder = file.fileName?.endsWith(
               ".folder.ec_metadata"
             );
@@ -138,7 +137,7 @@ const useRecentFiles = () => {
             index === self.findIndex((f) => f.name === file.name)
         );
 
-        // Sort by timestamp (newest first) - same as useUserIpfsFiles
+        // Sort by timestamp (newest first) - same as useUserFiles
         return uniqueFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
       } catch (error) {
         console.error("Error fetching recent files:", error);

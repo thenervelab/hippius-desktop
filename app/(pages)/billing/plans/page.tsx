@@ -19,9 +19,8 @@ import CancelSubscriptionDialog, {
 } from "@/app/components/page-sections/billing/CancelSubscriptionDialog";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
 import ButtonCard from "@/app/components/ui/button/CardButton";
-import { getAuthHeaders } from "@/app/lib/services/authService";
-import { ensureBillingAuth } from "@/app/lib/hooks/api/useBillingAuth";
-import { API_CONFIG } from "@/app/lib/helpers/sessionStore";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { API_CONFIG } from "@/lib/config";
 import DashboardTitleWrapper from "@/app/components/dashboard-title-wrapper";
 import { GoBackButton } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -33,6 +32,7 @@ import pricingJson from "@/app/utils/data/pricing-cfg.json";
 import SectionHeader from "@/app/components/page-sections/settings/SectionHeader";
 
 export default function PlansPage() {
+  const { oauthSession } = useWalletAuth();
   const {
     subscriptionPlans: plans,
     isLoadingPlans,
@@ -110,37 +110,29 @@ export default function PlansPage() {
       return;
     }
 
+    if (!oauthSession?.token) {
+      toast.error("Not authenticated");
+      return;
+    }
+
     setSelectedPlanId(planId);
     setIsSubscribing(true);
 
     try {
-      // Ensure authentication is valid
-      const authOk = await ensureBillingAuth();
-      if (!authOk.ok) {
-        toast.error(authOk.error || "Authentication failed");
-        setIsSubscribing(false);
-        setSelectedPlanId(null);
-        return;
-      }
-
-      const headers = await getAuthHeaders();
-      if (!headers) {
-        toast.error("Not authenticated");
-        setIsSubscribing(false);
-        setSelectedPlanId(null);
-        return;
-      }
-
       const selectedPlan = plans.find((plan) => plan.id === planId);
       if (!selectedPlan) {
         throw new Error("Selected plan not found");
       }
 
       const response = await fetch(
-        `${API_CONFIG.baseUrl}/api/billing/stripe/create-subscription/`,
+        `${API_CONFIG.baseUrl}${API_CONFIG.billing.createSubscription}`,
         {
           method: "POST",
-          headers,
+          headers: {
+            Authorization: `Token ${oauthSession.token}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
           body: JSON.stringify({
             price_id: selectedPlan.price_id,
             success_url: `${window.location.origin}/billing/success`,
@@ -245,7 +237,7 @@ export default function PlansPage() {
   }
 
   return (
-    <DashboardTitleWrapper mainText="">
+    <DashboardTitleWrapper mainText="Billing">
       <div className="container py-8">
         <div className="mb-4">
           <GoBackButton href="/billing" />
@@ -354,8 +346,8 @@ export default function PlansPage() {
                       {isLoading
                         ? "Processing..."
                         : currentActivePlan
-                        ? "Your Active Plan"
-                        : "Subscribe"}
+                          ? "Your Active Plan"
+                          : "Subscribe"}
                     </ButtonCard>
                   </div>
 

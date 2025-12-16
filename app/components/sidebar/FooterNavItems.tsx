@@ -17,14 +17,14 @@ const FooterNavItem: React.FC<FooterNavItemProps> = ({
   label,
   collapsed,
   className,
-  inView
+  inView,
 }) => {
   const { logout } = useWalletAuth();
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   return (
     <div
       className={cn(
-        " transition-all  duration-300  relative group cursor-pointer",
+        "transition-all duration-300 relative group cursor-pointer py-2",
         "hover:bg-gray-100 hover:text-red-500 text-error-60",
         className
       )}
@@ -37,7 +37,7 @@ const FooterNavItem: React.FC<FooterNavItemProps> = ({
       <RevealTextLine
         reveal={inView}
         parentClassName="block"
-        className="flex items-center py-1.5 px-3.5 h-8"
+        className="flex items-center px-3.5"
       >
         <span className="size-4 flex-shrink-0">{icon}</span>
         {!collapsed && (

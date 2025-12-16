@@ -31,19 +31,19 @@ export const ONBOARDING_SCREENS = [
     imageMarginBottom: "mb-[75px]",
     imageClassName: "px-4",
   },
+  // {
+  //   id: 3,
+  //   titleText: "Secure Your Access Key with a New Passcode",
+  //   description:
+  //     "Your passcode encrypts your access key and secures your data. You can change it anytime to stay in control and keep your account safe.",
+  //   screentTitleText: "Secure Access Key",
+  //   bulletPoints: ["Extra Layer of Security", "Faster Login", "User Control"],
+  //   imagePath: "/assets/onboarding/passcode.png",
+  //   imageMarginBottom: "mb-[75px]",
+  //   imageClassName: "px-4",
+  // },
   {
     id: 3,
-    titleText: "Secure Your Access Key with a New Passcode",
-    description:
-      "Your passcode encrypts your access key and secures your data. You can change it anytime to stay in control and keep your account safe.",
-    screentTitleText: "Secure Access Key",
-    bulletPoints: ["Extra Layer of Security", "Faster Login", "User Control"],
-    imagePath: "/assets/onboarding/passcode.png",
-    imageMarginBottom: "mb-[75px]",
-    imageClassName: "px-4",
-  },
-  {
-    id: 4,
     titleText: "Upload Securely with API Keys",
     description:
       "Add API keys with upload and delete permissions. Then you can use each API Key's seed to securely upload files to your S3 storage.",
@@ -57,19 +57,19 @@ export const ONBOARDING_SCREENS = [
     imageMarginBottom: "mb-[75px]",
     imageClassName: "pl-4",
   },
-  {
-    id: 5,
-    titleText: "Your unique key for protecting data integrity and access",
-    description:
-      "Your encryption key locks down your files. Keep it safe—only you can regenerate it and use it to encrypt uploads and decrypt downloads.",
-    screentTitleText: "Secure Your Files with Encryption",
-    bulletPoints: [
-      "Secure File Storage",
-      "Encryption Backed Security",
-      "Decrypt and Download on Demand",
-    ],
-    imagePath: "/assets/onboarding/encryption-key.png",
-    imageMarginBottom: "mb-[75px]",
-    imageClassName: "px-4",
-  },
+  // {
+  //   id: 4,
+  //   titleText: "Your unique key for protecting data integrity and access",
+  //   description:
+  //     "Your encryption key locks down your files. Keep it safe—only you can regenerate it and use it to encrypt uploads and decrypt downloads.",
+  //   screentTitleText: "Secure Your Files with Encryption",
+  //   bulletPoints: [
+  //     "Secure File Storage",
+  //     "Encryption Backed Security",
+  //     "Decrypt and Download on Demand",
+  //   ],
+  //   imagePath: "/assets/onboarding/encryption-key.png",
+  //   imageMarginBottom: "mb-[75px]",
+  //   imageClassName: "px-4",
+  // },
 ];

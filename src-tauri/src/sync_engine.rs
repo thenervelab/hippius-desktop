@@ -106,7 +106,6 @@ pub fn prunefile_id(account_id: &str, path_hash: &str, private: &str) -> String 
     let account_key = account_key(account_id);
     let mut hasher = Sha256::new();
     hasher.update(b"hippius_manifest_v1");
-    hasher.update(b"hippius_manifest_v1");
     hasher.update(b":");
     hasher.update(path_hash.as_bytes());
     hasher.update(b":");
@@ -619,10 +618,6 @@ async fn publish_conflict_object_with_bumps(
     let mut used_key = desired_key.to_string();
     let mut bump_idx: u32 = 2;
     let mut attempt = 0usize;
-    println!(
-        "[Sync] trying to upload conflict object with bumps: {}",
-        used_key
-    );
     println!(
         "[Sync] trying to upload conflict object with bumps: {}",
         used_key
@@ -1249,10 +1244,6 @@ pub async fn sync_once_cas(
             "[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!",
             local.len()
         );
-        eprintln!(
-            "[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!",
-            local.len()
-        );
     }
 
     /* ---- Phase 3 Preamble: REMOTE -> LOCAL (diff vs remote) --------------------------- */
@@ -1311,10 +1302,6 @@ pub async fn sync_once_cas(
             }
             Some(pe) => {
                 if !pe.present {
-                    println!(
-                        "[Sync] Scheduling upload for '{}': marked as not present in prune",
-                        lk
-                    );
                     println!(
                         "[Sync] Scheduling upload for '{}': marked as not present in prune",
                         lk
@@ -1401,11 +1388,6 @@ pub async fn sync_once_cas(
     // Early-exit optimization: skip sync if no operations needed
     // Check this BEFORE executing ops to avoid unnecessary S3 API calls
     let ops_l2r_count = ops_l2r.len();
-    println!(
-        "[Sync] Phase 1 operations queued: {} uploads/deletes",
-        ops_l2r_count
-    );
-
     println!(
         "[Sync] Phase 1 operations queued: {} uploads/deletes",
         ops_l2r_count
@@ -2020,11 +2002,6 @@ pub async fn sync_once_cas(
 
     // Early-exit if no operations needed (both phases)
     let ops_adopt_count = ops_adopt.len();
-    println!(
-        "[Sync] Phase 3 operations queued: {} downloads/renames/deletes",
-        ops_adopt_count
-    );
-
     println!(
         "[Sync] Phase 3 operations queued: {} downloads/renames/deletes",
         ops_adopt_count

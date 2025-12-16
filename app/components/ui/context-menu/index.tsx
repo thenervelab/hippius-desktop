@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Copy, Download, LinkIcon, Share, Trash2 } from "lucide-react";
 import { Icons } from "@/components/ui";
-import { FormattedUserIpfsFile } from "@/lib/hooks/use-user-ipfs-files";
+import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { toast } from "sonner";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
@@ -23,13 +23,13 @@ import { useMemo } from "react";
 interface ContextMenuProps {
   x: number;
   y: number;
-  file: FormattedUserIpfsFile | null;
+  file: FormattedUserFile | null;
   onClose: () => void;
-  onDelete?: (file: FormattedUserIpfsFile) => void;
-  onSelectFile?: (file: FormattedUserIpfsFile) => void;
-  onShowFileDetails?: (file: FormattedUserIpfsFile) => void;
+  onDelete?: (file: FormattedUserFile) => void;
+  onSelectFile?: (file: FormattedUserFile) => void;
+  onShowFileDetails?: (file: FormattedUserFile) => void;
   onFileDownload: (
-    file: FormattedUserIpfsFile,
+    file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
 }

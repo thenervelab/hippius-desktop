@@ -11,7 +11,7 @@ import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
-import Ipfs from "@/components/page-sections/files/ipfs";
+import Ipfs from "@/app/components/page-sections/files/FilesContainer";
 import { Icons } from "@/components/ui";
 // import NebulaTest from "../../DemoIpfsUpload";
 

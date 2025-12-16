@@ -35,18 +35,18 @@ export default function RootLayout({
         className={`${digitalFonts.className} ${geistSans.className} ${geistSans.variable} bg-grey-100 text-grey-10 antialiased font-sans`}
       >
         <Providers>
-          <UpdateChecker>
-            <WalletAuthProvider>
+          <WalletAuthProvider>
+            <UpdateChecker>
               <PreAuthProvider>
                 <NextTopLoader color="#3167DD" showSpinner={false} />
                 <NavigationLoaderProvider>
-                  <Suspense fallback={<PageLoader />}>
-                    <SplashWrapper preventClose={false}>
+                  <SplashWrapper preventClose={false}>
+                    <Suspense fallback={<PageLoader />}>
                       <div className="flex min-h-screen h-screen">
                         {children}
                       </div>
-                    </SplashWrapper>
-                  </Suspense>
+                    </Suspense>
+                  </SplashWrapper>
 
                   <Toaster
                     position="bottom-right"
@@ -57,8 +57,8 @@ export default function RootLayout({
                   />
                 </NavigationLoaderProvider>
               </PreAuthProvider>
-            </WalletAuthProvider>
-          </UpdateChecker>
+            </UpdateChecker>
+          </WalletAuthProvider>
         </Providers>
       </body>
     </html>

@@ -196,7 +196,10 @@ const CreditUsageTrends: React.FC<{
                       }),
                     }}
                     renderTooltip={(tooltipData) => (
-                      <CreditUsedTooltip tooltipData={tooltipData} />
+                      <CreditUsedTooltip
+                        tooltipData={tooltipData}
+                        timeRange={timeRange}
+                      />
                     )}
                   />
                 </div>

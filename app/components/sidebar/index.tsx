@@ -16,7 +16,6 @@ import { InView } from "react-intersection-observer";
 import FooterNavItem from "./FooterNavItems";
 import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
 import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
-import { openAppLink } from "@/app/lib/utils/links";
 import CheckForUpdateDialog from "../updater/CheckForUpdateDialog";
 import { useState } from "react";
 
@@ -31,10 +30,6 @@ const Sidebar: React.FC = () => {
 
   const toggleSidebar = () => {
     setCollapsed(!collapsed);
-  };
-
-  const submitABug = () => {
-    openAppLink("https://github.com/thenervelab/hippius-desktop/issues/new");
   };
 
   const openSettingsWithDefaultTab = () => {
@@ -140,32 +135,8 @@ const Sidebar: React.FC = () => {
                 />
               ))}
             </div>
-            <div className="mt-2 py-2 border-t border-grey-80">
-              <div
-                className={cn(
-                  " transition-all  duration-300  relative group cursor-pointer",
-                  "hover:bg-gray-100 hover:text-primary-40 text-grey-40"
-                )}
-                onClick={() => setOpen(true)}
-              >
-                <RevealTextLine
-                  reveal={inView}
-                  parentClassName="block"
-                  className="flex items-center py-1.5 px-3.5 h-8"
-                >
-                  <span className="size-4 flex-shrink-0">
-                    <Icons.Repeat />
-                  </span>
-                  {!collapsed && (
-                    <span className="text-sm font-medium whitespace-nowrap ml-1.5 overflow-hidden transition-opacity duration-300">
-                      Check for Update
-                    </span>
-                  )}
-                </RevealTextLine>
-              </div>
-            </div>
 
-            <div className="py-2 border-y border-gray-80  w-full">
+            <div className="py-3 border-b border-gray-80 w-full">
               {footerNavItems.map((item) => (
                 <FooterNavItem
                   key={item.label}
@@ -181,7 +152,7 @@ const Sidebar: React.FC = () => {
               reveal={inView}
               className={cn(
                 "flex w-full text-xs font-digital text-grey-40 transition-all duration-300 border-b border-gray-80",
-                collapsed ? "justify-center p-2" : "px-4 py-2"
+                collapsed ? "justify-center p-2" : "px-4 py-3"
               )}
             >
               <>
@@ -195,8 +166,32 @@ const Sidebar: React.FC = () => {
                 )}
               </>
             </RevealTextLine>
+            <div className="py-3">
+              <div
+                className={cn(
+                  "transition-all duration-300 relative group cursor-pointer py-2",
+                  "hover:bg-gray-100 hover:text-primary-40 text-grey-40"
+                )}
+                onClick={() => setOpen(true)}
+              >
+                <RevealTextLine
+                  reveal={inView}
+                  parentClassName="block"
+                  className="flex items-center  px-3.5"
+                >
+                  <span className="size-4 flex-shrink-0">
+                    <Icons.TrendUp />
+                  </span>
+                  {!collapsed && (
+                    <span className="text-sm font-medium whitespace-nowrap ml-1.5 overflow-hidden transition-opacity duration-300">
+                      Update App
+                    </span>
+                  )}
+                </RevealTextLine>
+              </div>
+            </div>
 
-            <RevealTextLine
+            {/* <RevealTextLine
               reveal={inView}
               className={cn(
                 "flex w-full text-xs text-grey-70 transition-all duration-300 font-medium hover:text-primary-50 cursor-pointer",
@@ -209,7 +204,7 @@ const Sidebar: React.FC = () => {
                   {!collapsed ? "Submit a Bug" : "Bug"}
                 </span>
               </>
-            </RevealTextLine>
+            </RevealTextLine> */}
           </div>
         )}
       </InView>

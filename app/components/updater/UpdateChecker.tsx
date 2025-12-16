@@ -8,6 +8,7 @@ import { refreshUnreadCountAtom } from "@/components/page-sections/notifications
 import { updateDialogOpenAtom, updateStore, updateCheckCompleteAtom } from "@/app/components/updater/updateStore";
 import PageLoader from "@/app/components/PageLoader";
 import UpdateDialogWrapper from "./UpdateDialogWrapper";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 interface UpdateCheckerProps {
   children?: ReactNode;
@@ -20,16 +21,18 @@ export default function UpdateChecker({ children }: UpdateCheckerProps) {
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const updateDialogOpen = useAtomValue(updateDialogOpenAtom, { store: updateStore });
   const setUpdateCheckComplete = useSetAtom(updateCheckCompleteAtom);
+  const { polkadotAddress, oauthSession } = useWalletAuth();
 
   useEffect(() => {
     if (didRun.current) return;
 
     const runUpdateCheck = async () => {
       try {
-        console.log('Starting update check...');
 
+        const userAddress = oauthSession?.substrateAddress || polkadotAddress;
+        if (!userAddress) return;
         // Check for updates
-        await checkForUpdates(true);
+        await checkForUpdates(true, userAddress);
 
         // Refresh notification count
         refreshUnread();

@@ -11,6 +11,7 @@ import { InView } from "react-intersection-observer";
 import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 interface NotificationDetailViewProps {
   selectedNotification: {
@@ -34,6 +35,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
 }) => {
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
   const router = useRouter();
+  const { polkadotAddress, oauthSession } = useWalletAuth();
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -75,7 +77,9 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   };
 
   const handleLinkClick = (e: React.MouseEvent) => {
-    handleButtonLink(e, actionLink, router, setActiveSubMenuItem);
+    const userAddress = oauthSession?.substrateAddress || polkadotAddress;
+    if (!userAddress) return;
+    handleButtonLink(e, actionLink, router, userAddress, setActiveSubMenuItem);
   };
 
   return (

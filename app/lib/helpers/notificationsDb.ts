@@ -6,6 +6,7 @@ import { initHippiusDesktopDB, saveBytes } from "./hippiusDesktopDB";
 const NOTIFICATION_SCHEMA = `
   CREATE TABLE IF NOT EXISTS notifications (
     id                       INTEGER PRIMARY KEY,
+    userAddress              TEXT NOT NULL,
     notificationType         TEXT,
     notificationSubtype      TEXT,
     notificationTitleText    TEXT,
@@ -17,6 +18,8 @@ const NOTIFICATION_SCHEMA = `
     isDeleted                INTEGER DEFAULT 0,
     deletedAt                INTEGER
   );
+  CREATE INDEX IF NOT EXISTS idx_notifications_userAddress ON notifications(userAddress);
+  CREATE INDEX IF NOT EXISTS idx_notifications_userAddress_deleted ON notifications(userAddress, isDeleted);
 `;
 
 const APP_STATE_SCHEMA = `
@@ -45,14 +48,17 @@ async function getDb(): Promise<initSqlJsType.Database> {
   db.run(APP_STATE_SCHEMA);
   db.run(NOTIFICATION_PREFERENCES_SCHEMA);
 
-  // Migration: Add isDeleted and deletedAt columns if they don't exist
+  // Migration: Add isDeleted, deletedAt, and userAddress columns if they don't exist
   try {
     db.run(`ALTER TABLE notifications ADD COLUMN isDeleted INTEGER DEFAULT 0`);
+  } catch { }
+  try {
     db.run(`ALTER TABLE notifications ADD COLUMN deletedAt INTEGER`);
+  } catch { }
+  try {
+    db.run(`ALTER TABLE notifications ADD COLUMN userAddress TEXT`);
     await saveBytes(db.export());
-  } catch (e) {
-    console.log("error", e)
-  }
+  } catch { }
 
   const exists = db.exec(`SELECT 1 FROM app_state WHERE id = 1`);
   if (!exists.length) {
@@ -157,6 +163,7 @@ export async function getEnabledNotificationTypes(): Promise<string[]> {
 /* notifications CRUD */
 
 export async function addNotification({
+  userAddress,
   notificationType,
   notificationSubtype = "",
   notificationTitleText,
@@ -164,6 +171,7 @@ export async function addNotification({
   notificationLinkText,
   notificationLink,
 }: {
+  userAddress: string;
   notificationType: string;
   notificationSubtype?: string;
   notificationTitleText: string;
@@ -172,13 +180,30 @@ export async function addNotification({
   notificationLink: string;
 }) {
   const db = await getDb();
+
+  // Special check for welcome notification - prevent duplicates (including deleted ones)
+  if (notificationSubtype === "Welcome") {
+    const existing = db.exec(
+      `SELECT COUNT(*) FROM notifications 
+       WHERE userAddress = ? 
+       AND notificationSubtype = 'Welcome'`,
+      [userAddress]
+    );
+    const count = existing[0]?.values[0][0] as number;
+    if (count > 0) {
+      console.log(`[NotificationsDB] Welcome notification already exists for ${userAddress} (including deleted), skipping`);
+      return;
+    }
+  }
+
   db.run(
     `INSERT INTO notifications
-       (notificationType, notificationSubtype, notificationTitleText,
+       (userAddress, notificationType, notificationSubtype, notificationTitleText,
         notificationDescription, notificationLinkText, notificationLink,
         isUnread, notificationCreationTime)
-     VALUES (?, ?, ?, ?, ?, ?, 1, strftime('%s','now')*1000)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, strftime('%s','now')*1000)`,
     [
+      userAddress,
       notificationType,
       notificationSubtype,
       notificationTitleText,
@@ -188,6 +213,7 @@ export async function addNotification({
     ]
   );
   await saveBytes(db.export());
+  console.log(`[NotificationsDB] Added notification for ${userAddress}: ${notificationSubtype || notificationType}`);
 }
 
 export async function isFirstTime(): Promise<boolean> {
@@ -266,15 +292,16 @@ export async function updateIsAboveHalfCredit(isAboveHalfCredit: boolean) {
   ]);
   await saveBytes(db.export());
 }
-export async function listNotifications(limit = 50) {
+export async function listNotifications(userAddress: string, limit = 50) {
   const db = await getDb();
   const res = db.exec(
     `SELECT *
        FROM notifications
-      WHERE (isDeleted IS NULL OR isDeleted = 0)
+      WHERE userAddress = ?
+        AND (isDeleted IS NULL OR isDeleted = 0)
       ORDER BY notificationCreationTime DESC
       LIMIT ?`,
-    [limit]
+    [userAddress, limit]
   );
   return res[0]?.values ?? [];
 }
@@ -291,16 +318,24 @@ export async function markUnread(id: number) {
   await saveBytes(db.export());
 }
 
-export async function markAllRead() {
+export async function markAllRead(userAddress: string) {
   const db = await getDb();
-  db.run(`UPDATE notifications SET isUnread = 0 WHERE isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`);
+  db.run(
+    `UPDATE notifications SET isUnread = 0 
+     WHERE userAddress = ? AND isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`,
+    [userAddress]
+  );
   await saveBytes(db.export());
   return true;
 }
 
-export async function unreadCount(): Promise<number> {
+export async function unreadCount(userAddress: string): Promise<number> {
   const db = await getDb();
-  const res = db.exec(`SELECT COUNT(*) FROM notifications WHERE isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`);
+  const res = db.exec(
+    `SELECT COUNT(*) FROM notifications 
+     WHERE userAddress = ? AND isUnread = 1 AND (isDeleted IS NULL OR isDeleted = 0)`,
+    [userAddress]
+  );
   return res[0]?.values[0][0] as number;
 }
 
@@ -336,14 +371,24 @@ export async function deleteNotification(id: number) {
   return true;
 }
 
-// Soft delete all notifications
-export async function deleteAllNotifications() {
+// Soft delete all notifications for a specific user
+export async function deleteAllNotifications(userAddress: string) {
   const db = await getDb();
   const now = Date.now();
   db.run(
-    `UPDATE notifications SET isDeleted = 1, deletedAt = ? WHERE (isDeleted IS NULL OR isDeleted = 0)`,
-    [now]
+    `UPDATE notifications SET isDeleted = 1, deletedAt = ? 
+     WHERE userAddress = ? AND (isDeleted IS NULL OR isDeleted = 0)`,
+    [now, userAddress]
   );
   await saveBytes(db.export());
+  return true;
+}
+
+// Clear all notifications from database (for testing/reset)
+export async function clearAllNotifications() {
+  const db = await getDb();
+  db.run(`DELETE FROM notifications`);
+  await saveBytes(db.export());
+  console.log('[NotificationsDB] All notifications cleared from database');
   return true;
 }

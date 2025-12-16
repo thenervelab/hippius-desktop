@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { hexToCid } from "@/lib/utils/hexToCid";
-import { UserProfileFile } from "./use-user-ipfs-files";
+import { UserProfileFile } from "./use-user-files";
 import { FileDetail } from "@/app/(pages)/UnpinFilesDialog";
 import {
   getPrivateSyncPath,

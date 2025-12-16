@@ -204,7 +204,7 @@ function AreaLineChart<T extends object>({
                 strokeDasharray: "4 4",
               }}
               unstyled
-              className="p-4 absolute bg-white border border-grey-80 rounded-lg text-grey-70 font-medium shadow-tooltip text-xs"
+              className="p-4 absolute bg-white border border-grey-80 rounded-lg text-grey-70 font-medium shadow-tooltip text-xs z-50"
               renderTooltip={({ tooltipData }) => {
                 return renderTooltip(tooltipData);
               }}

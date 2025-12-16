@@ -4,7 +4,7 @@ import {
   SmartAffordableStorage,
   EarnWithRefferals,
 } from "@/components/ui/icons";
-import CircularShield from "@/components/ui/icons/CircularShield";
+// import CircularShield from "@/components/ui/icons/CircularShield";
 
 export const SWIPE_CONTENT = [
   {
@@ -38,13 +38,13 @@ export const SWIPE_CONTENT = [
       "Generate a unique referral code and share it with anyone—earn ongoing rewards based on referred users’ usage, all tracked on the blockchain",
     icon: <EarnWithRefferals className="xl:h-[270px] h-[160px] w-full" />,
   },
-  {
-    heading: "Your Secret Phrase: The Key to Your Account",
-    text: "Simple, Secure, Fully Yours",
-    subText:
-      "No third-party logins here! Your unique word phrase (mnemonic) unlocks a decentralized world. We don’t store it, so keep it safe and take full control.",
-    icon: (
-      <CircularShield className="xl:size-[270px] size-[160px] text-primary-80" />
-    ),
-  },
+  // {
+  //   heading: "Your Secret Phrase: The Key to Your Account",
+  //   text: "Simple, Secure, Fully Yours",
+  //   subText:
+  //     "No third-party logins here! Your unique word phrase (mnemonic) unlocks a decentralized world. We don’t store it, so keep it safe and take full control.",
+  //   icon: (
+  //     <CircularShield className="xl:size-[270px] size-[160px] text-primary-80" />
+  //   ),
+  // },
 ];
