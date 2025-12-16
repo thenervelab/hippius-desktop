@@ -1,11 +1,7 @@
 use crate::DB_POOL;
-use crate::commands::syncing::{decrypt_phrase, load_encryption_key};
 use crate::sync_shared::collect_files_recursively;
 use crate::utils::sync::{get_private_sync_path, get_public_sync_path};
 use hex;
-use sp_core::Pair;
-use sp_core::crypto::Ss58Codec;
-use sp_core::sr25519;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,7 +32,7 @@ pub fn get_file_name_variations(base_name: &str) -> Vec<String> {
 }
 
 #[allow(dead_code)]
-pub async fn unpin_user_file_by_name(file_name: &str, _seed_phrase: &str) -> Result<(), String> {
+pub async fn unpin_user_file_by_name(file_name: &str) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
         let variations = get_file_name_variations(file_name);
         let mut last_error = None;
@@ -80,7 +76,6 @@ pub async fn unpin_user_file_by_name(file_name: &str, _seed_phrase: &str) -> Res
 
 pub async fn delete_and_unpin_user_file_records_by_name(
     file_name: &str,
-    _seed_phrase: &str,
     is_public: bool,
     should_delete_folder: bool,
 ) -> Result<u64, String> {
@@ -105,7 +100,6 @@ pub async fn delete_and_unpin_user_file_records_by_name(
 #[tauri::command]
 pub async fn delete_and_unpin_file_by_name(
     file_name: String,
-    seed_phrase: String,
 ) -> Result<u64, String> {
     println!("[-] Deleting file by name '{}'", file_name);
     println!("file_name : {}", file_name);
@@ -123,25 +117,45 @@ pub async fn delete_and_unpin_file_by_name(
             }
         }
     }
-    delete_and_unpin_user_file_records_by_name(&file_name, &seed_phrase, is_public, true).await
+    delete_and_unpin_user_file_records_by_name(&file_name, is_public, true).await
 }
 
 // Helper function for recursive directory copy
 fn copy_dir(src: &Path, dst: &Path) {
-    if let Ok(entries) = std::fs::read_dir(src) {
+    // Prevent copying a folder into its own subtree (avoids infinite nesting)
+    if dst.starts_with(src) {
+        eprintln!(
+            "[copy_dir] Destination {:?} is inside source {:?}; skipping copy to avoid recursion",
+            dst, src
+        );
+        return;
+    }
+
+    let mut stack: Vec<(PathBuf, PathBuf)> = vec![(src.to_path_buf(), dst.to_path_buf())];
+
+    while let Some((src_dir, dst_dir)) = stack.pop() {
+        if let Err(e) = std::fs::create_dir_all(&dst_dir) {
+            eprintln!("[copy_dir] Failed to create directory {:?}: {}", dst_dir, e);
+            continue;
+        }
+
+        let entries = match std::fs::read_dir(&src_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("[copy_dir] Failed to read directory {:?}: {}", src_dir, e);
+                continue;
+            }
+        };
+
         for entry in entries.flatten() {
             let path = entry.path();
             let file_name = match path.file_name() {
                 Some(name) => name,
                 None => continue,
             };
-            let dest_path = dst.join(file_name);
+            let dest_path = dst_dir.join(file_name);
             if path.is_dir() {
-                if let Err(e) = std::fs::create_dir_all(&dest_path) {
-                    eprintln!("Failed to create subfolder: {}", e);
-                    continue;
-                }
-                copy_dir(&path, &dest_path);
+                stack.push((path, dest_path));
             } else if path.is_file() {
                 if let Err(e) = std::fs::copy(&path, &dest_path) {
                     eprintln!("Failed to copy file to sync folder: {}", e);
@@ -188,6 +202,13 @@ pub async fn copy_to_sync_and_add_to_db(
     let dest_path = sync_folder.join(&file_name);
     let dest_path_str = dest_path.to_string_lossy().to_string();
     let dest_path_str_clone = dest_path_str.clone();
+    if is_folder && dest_path.starts_with(original_path) {
+        eprintln!(
+            "[copy_to_sync_and_add_to_db] Refusing to copy folder {:?} into its own subdirectory {:?}",
+            original_path, dest_path
+        );
+        return;
+    }
 
     let cid_vec = metadata_cid.as_bytes().to_vec();
     let file_hash = hex::encode(cid_vec);
@@ -206,34 +227,12 @@ pub async fn copy_to_sync_and_add_to_db(
     };
     println!("File size in bytes: {}", file_size_in_bytes);
     if let Some(pool) = DB_POOL.get() {
-        // Get sub-account to construct bucket_name
-        let bucket_name = match sqlx::query_as::<_, (String,)>(
-            "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1",
-        )
-        .bind(account_id)
-        .fetch_optional(pool)
-        .await
-        {
-            Ok(Some((sub_account_seed_phrase,))) => {
-                // Try to decrypt if we have a key, otherwise use as-is
-                let maybe_key = load_encryption_key(pool).await;
-                let phrase = if let Some(key) = &maybe_key {
-                    decrypt_phrase(&sub_account_seed_phrase, key)
-                        .unwrap_or_else(|| sub_account_seed_phrase.clone())
-                } else {
-                    sub_account_seed_phrase
-                };
-                // Convert seed phrase to SS58 address
-                if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
-                    let ss58 = pair.public().to_ss58check();
-                    format!("{}-{}", ss58, if is_public { "public" } else { "private" })
-                } else {
-                    eprintln!("Failed to convert seed phrase to SS58 address");
-                    String::new()
-                }
-            }
-            _ => String::new(),
-        };
+        // For master-token auth, derive bucket name directly from account_id + scope (skip sub-accounts).
+        let bucket_name = format!(
+            "{}-{}",
+            account_id,
+            if is_public { "public" } else { "private" }
+        );
 
         // Check if file already exists in user_profiles
         let exists: Option<(String,)> = sqlx::query_as(
@@ -492,6 +491,13 @@ pub async fn copy_to_sync_folder(
             .to_string_lossy()
             .to_string();
         let dest_path = target_folder.join(&file_name);
+        if is_folder && dest_path.starts_with(original_path) {
+            eprintln!(
+                "[copy_to_sync_folder] Refusing to copy folder {:?} into its own subdirectory {:?}",
+                original_path, dest_path
+            );
+            return;
+        }
 
         // --- Track this file/folder to prevent redundant watcher events ---
         let dest_path_str = dest_path.to_string_lossy().to_string();
@@ -529,34 +535,12 @@ pub async fn copy_to_sync_folder(
         };
         println!("File size in bytes: {}", file_size_in_bytes);
         if let Some(pool) = DB_POOL.get() {
-            // Get sub-account to construct bucket_name
-            let bucket_name = match sqlx::query_as::<_, (String,)>(
-                "SELECT sub_account_seed_phrase FROM sub_accounts WHERE account_id = ? LIMIT 1",
-            )
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await
-            {
-                Ok(Some((sub_account_seed_phrase,))) => {
-                    // Try to decrypt if we have a key, otherwise use as-is
-                    let maybe_key = load_encryption_key(pool).await;
-                    let phrase = if let Some(key) = &maybe_key {
-                        decrypt_phrase(&sub_account_seed_phrase, key)
-                            .unwrap_or_else(|| sub_account_seed_phrase.clone())
-                    } else {
-                        sub_account_seed_phrase
-                    };
-                    // Convert seed phrase to SS58 address
-                    if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
-                        let ss58 = pair.public().to_ss58check();
-                        format!("{}-{}", ss58, if is_public { "public" } else { "private" })
-                    } else {
-                        eprintln!("Failed to convert seed phrase to SS58 address");
-                        String::new()
-                    }
-                }
-                _ => String::new(),
-            };
+            // For master-token auth, derive bucket name directly from account_id + scope (skip sub-accounts).
+            let bucket_name = format!(
+                "{}-{}",
+                account_id,
+                if is_public { "public" } else { "private" }
+            );
 
             // Check if folder record already exists
             let exists: Option<(String,)> = sqlx::query_as(

@@ -6,6 +6,8 @@
     "permissions": [
         "core:default",
         "opener:default",
+        "deep-link:default",
+        "deep-link:allow-register",
         "fs:default",
         {
             "identifier": "opener:allow-open-path",
@@ -79,6 +81,8 @@
         "core:window:allow-set-size",
         "core:window:allow-center",
         "core:window:allow-show",
-        "core:window:allow-set-resizable"
+        "core:window:allow-set-resizable",
+        "core:window:allow-set-fullscreen",
+        "core:window:allow-is-fullscreen"
     ]
 }

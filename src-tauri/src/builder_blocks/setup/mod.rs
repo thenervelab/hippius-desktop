@@ -3,6 +3,8 @@ use dirs;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Manager, Wry};
+#[cfg(target_os = "linux")]
+use tauri_plugin_deep_link::DeepLinkExt;
 
 async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Drop faulty is_first_run table if it exists (old schema with CHECK (id = 1))
@@ -92,6 +94,26 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
+        (
+            "objectstore_auth",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("temp_auth_key", "TEXT"),
+                ("master_access_key_id", "TEXT"),
+                ("master_secret", "TEXT"),
+                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
+        (
+            "objectstore_auth_scoped",
+            &[
+                ("owner", "TEXT PRIMARY KEY"),
+                ("temp_auth_key", "TEXT"),
+                ("master_access_key_id", "TEXT"),
+                ("master_secret", "TEXT"),
+                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
     ];
 
     for (table_name, columns) in TABLE_SCHEMAS {
@@ -146,18 +168,55 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS sync_paths (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL,
             path TEXT NOT NULL,
-            type TEXT NOT NULL UNIQUE,
-            timestamp INTEGER NOT NULL
+            type TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            UNIQUE(owner, type)
         )",
     )
     .execute(pool)
     .await?;
 
+    // Ensure owner column exists for legacy installs
+    let cols = sqlx::query("PRAGMA table_info(sync_paths)")
+        .fetch_all(pool)
+        .await?;
+    let has_owner = cols.iter().any(|row| {
+        let name: String = row.get("name");
+        name == "owner"
+    });
+    if !has_owner {
+        sqlx::query("ALTER TABLE sync_paths ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+            .execute(pool)
+            .await?;
+        // rebuild uniqueness via index
+        let _ = sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS sync_paths_owner_type_idx ON sync_paths(owner, type)",
+        )
+        .execute(pool)
+        .await;
+    }
+
+    // If a legacy UNIQUE constraint exists on sync_paths.type, rebuild table to use UNIQUE(owner, type)
+    migrate_sync_paths_unique_constraint(pool).await?;
+
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS wss_endpoint (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             endpoint TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Per-account bucket policies
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS bucket_policies_scoped (
+            owner TEXT PRIMARY KEY,
+            sync_policy TEXT NOT NULL DEFAULT 'upload_only' CHECK(sync_policy IN ('mirror_local_deletes', 'restore_from_remote', 'local_only_deletes', 'upload_only')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
@@ -232,9 +291,82 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+async fn migrate_sync_paths_unique_constraint(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    // Detect a legacy unique index on "type" only
+    let index_rows = sqlx::query("PRAGMA index_list(sync_paths)")
+        .fetch_all(pool)
+        .await?;
+
+    let mut has_legacy_unique = false;
+    for row in index_rows {
+        let unique: i64 = row.get("unique");
+        let name: String = row.get("name");
+        if unique == 1 {
+            let cols = sqlx::query(&format!("PRAGMA index_info({})", name)).fetch_all(pool).await?;
+            let col_names: Vec<String> = cols.into_iter().map(|r| r.get("name")).collect();
+            if col_names.len() == 1 && col_names[0] == "type" {
+                has_legacy_unique = true;
+                break;
+            }
+        }
+    }
+
+    if !has_legacy_unique {
+        return Ok(());
+    }
+
+    println!("[Setup] Migrating sync_paths to drop legacy UNIQUE(type) constraint");
+    let mut tx = pool.begin().await?;
+
+    // Ensure the new table exists with the correct schema
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_paths_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL DEFAULT '',
+            path TEXT NOT NULL,
+            type TEXT NOT NULL,
+            timestamp INTEGER NOT NULL
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Copy data; if owner column was absent, COALESCE to ''
+    sqlx::query(
+        "INSERT OR IGNORE INTO sync_paths_new (owner, path, type, timestamp)
+         SELECT COALESCE(owner, ''), path, type, timestamp FROM sync_paths",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Replace old table
+    sqlx::query("DROP TABLE IF EXISTS sync_paths").execute(&mut *tx).await?;
+    sqlx::query("ALTER TABLE sync_paths_new RENAME TO sync_paths")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS sync_paths_owner_type_idx ON sync_paths(owner, type)",
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
             println!("[Setup] .setup() closure called in setup.rs");
+
+            // Register deep links for Linux at runtime (required for dev)
+            #[cfg(target_os = "linux")]
+            {
+                println!("[Setup] Registering deep links for Linux...");
+                match app.deep_link().register_all() {
+                    Ok(_) => println!("[Setup] Deep links registered successfully for Linux"),
+                    Err(e) => eprintln!("[Setup] Failed to register deep links: {}", e),
+                }
+            }
 
             let _handle = app.handle().clone();
             let win = app.get_webview_window("main").expect("main window not found");

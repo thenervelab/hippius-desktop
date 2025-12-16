@@ -869,6 +869,7 @@ pub struct BootCtx {
     pub repo: PathBuf,
     pub compose_files: Vec<PathBuf>,
     pub project: String,
+    pub gateway_port: u16,
     pub s3_endpoint: String,
 }
 
@@ -893,19 +894,19 @@ pub async fn boot_stack() -> Result<BootCtx> {
     ensure_repo_env_files(&repo)?;
     ensure_external_networks()?;
 
-    let s3_port = choose_free_port()?;
-    let s3_endpoint = format!("http://127.0.0.1:{s3_port}");
+    let gateway_port = choose_free_port()?;
+    let s3_endpoint = format!("http://127.0.0.1:{gateway_port}");
 
-    let compose_files = prepare_compose_files(&repo, s3_port).await?;
+    let compose_files = prepare_compose_files(&repo, gateway_port).await?;
     let project = up_stack_multi(&repo, &compose_files).await?;
 
     // If anything fails after this point, ensure we don't leak containers.
     let early_guard = ComposeTeardownGuard::new(&repo, &compose_files, &project);
 
-    wait_for_api_ready_multi(
+    wait_for_gateway_ready(
         "127.0.0.1",
-        s3_port,
-        Duration::from_secs(120),
+        gateway_port,
+        Duration::from_secs(150),
         &repo,
         &compose_files,
         &project,
@@ -919,6 +920,7 @@ pub async fn boot_stack() -> Result<BootCtx> {
         repo,
         compose_files,
         project,
+        gateway_port,
         s3_endpoint,
     })
 }
@@ -1125,7 +1127,7 @@ fn choose_free_port() -> Result<u16> {
 
 /* -------- Compose chain (Windows-safe) -------- */
 
-async fn write_sanitized_compose(repo_dir: &Path, s3_host_port: u16) -> Result<PathBuf> {
+async fn write_sanitized_compose(repo_dir: &Path, gateway_host_port: u16) -> Result<PathBuf> {
     let yaml = format!(
         r#"
 services:
@@ -1133,16 +1135,90 @@ services:
     image: postgres:15
     environment:
       POSTGRES_DB: hippius
-      POSTGRES_USER: hippius
-      POSTGRES_PASSWORD: hippius
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hippius -d hippius"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hippius"]
       interval: 5s
       timeout: 3s
       retries: 60
 
   redis:
-    image: redis:7
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  redis-accounts:
+    image: redis:7-alpine
+    command:
+      [
+        "redis-server",
+        "--save",
+        "60 1",
+        "--save",
+        "300 10",
+        "--save",
+        "900 100",
+        "--appendonly",
+        "yes",
+        "--appendfsync",
+        "everysec",
+      ]
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  redis-chain:
+    image: redis:7-alpine
+    command:
+      [
+        "redis-server",
+        "--save",
+        "60 1",
+        "--save",
+        "300 10",
+        "--save",
+        "900 100",
+        "--appendonly",
+        "yes",
+        "--appendfsync",
+        "everysec",
+      ]
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  redis-rate-limiting:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "1gb"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "PING"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  redis-queues:
+    image: redis:7-alpine
+    command:
+      [
+        "redis-server",
+        "--maxmemory",
+        "2gb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+        "--appendonly",
+        "yes",
+        "--appendfsync",
+        "everysec",
+      ]
     healthcheck:
       test: ["CMD", "redis-cli", "PING"]
       interval: 5s
@@ -1166,9 +1242,19 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ipfs:
+      redis-accounts:
         condition: service_healthy
-
+      redis-chain:
+        condition: service_healthy
+      redis-rate-limiting:
+        condition: service_healthy
+      redis-queues:
+        condition: service_healthy
+      ipfs:
+        condition: service_started
+    env_file:
+      - .env.defaults
+      - .env
     environment:
       HOST: "0.0.0.0"
       PORT: "8000"
@@ -1176,76 +1262,28 @@ services:
       DEBUG: "false"
       LOG_LEVEL: "INFO"
       ENABLE_API_DOCS: "false"
-      ENABLE_AUDIT_LOGGING: "false"
-      ENABLE_STRICT_VALIDATION: "false"
-      ENABLE_REQUEST_PROFILING: "false"
+      ENABLE_MONITORING: "false"
       ENABLE_BANHAMMER: "false"
-      ALLOWED_ORIGINS: "*"
-      METRICS_ENABLED: "false"
-      LEGACY_SDK_COMPAT: "true"
-
+      HIPPIUS_BYPASS_CREDIT_CHECK: "true"
+      PUBLISH_TO_CHAIN: "false"
+      HIPPIUS_IPFS_STORE_URL: "http://ipfs:5001"
+      HIPPIUS_IPFS_GET_URL: "http://ipfs:8080"
+      DATABASE_URL: "postgresql://postgres:postgres@db:5432/hippius?sslmode=disable"
+      HIPPIUS_KEYSTORE_DATABASE_URL: "postgresql://postgres:postgres@db:5432/hippius?sslmode=disable"
+      REDIS_URL: "redis://redis:6379/0"
+      REDIS_ACCOUNTS_URL: "redis://redis-accounts:6379/0"
+      REDIS_CHAIN_URL: "redis://redis-chain:6379/0"
+      REDIS_RATE_LIMITING_URL: "redis://redis-rate-limiting:6379/0"
+      REDIS_QUEUES_URL: "redis://redis-queues:6379/0"
+      HIPPIUS_REDIS_CACHE_URL: "redis://redis:6379/0"
+      HIPPIUS_REDIS_METRICS_URL: "redis://redis:6379/0"
+      HIPPIUS_REDIS_QUEUES_URL: "redis://redis-queues:6379/0"
+      HIPPIUS_QUEUE_REDIS_URL: "redis://redis-queues:6379/0"
+      QUEUE_REDIS_URL: "redis://redis-queues:6379/0"
       FRONTEND_HMAC_SECRET: "dev-only-frontend-hmac"
       BACKEND_HMAC_SECRET: "dev-only-backend-hmac"
-      BACKEND_HMAC_KEY: "local-dev-only"
-      RATE_LIMIT_ENABLED: "false"
-      RATE_LIMIT_PER_MINUTE: "1000000"
-      RATE_LIMIT_BURST: "1000000"
-      MAX_REQUEST_SIZE_MB: "128"
-
-      DATABASE_URL: "postgresql://hippius:hippius@db:5432/hippius?sslmode=disable"
-      PGSSLMODE: "disable"
-      HIPPIUS_KEYSTORE_DATABASE_URL: "postgresql://hippius:hippius@db:5432/hippius?sslmode=disable"
-      KEYSTORE_DATABASE_URL: "postgresql://hippius:hippius@db:5432/hippius?sslmode=disable"
-
-      REDIS_URL:               "redis://redis:6379/0"
-      REDIS_ACCOUNTS_URL:      "redis://redis:6379/0"
-      REDIS_CHAIN_URL:         "redis://redis:6379/1"
-      REDIS_RATE_LIMITING_URL: "redis://redis:6379/2"
-      REDIS_QUEUES_URL:        "redis://redis:6379/3"
-      REDIS_CACHE_URL:         "redis://redis:6379/4"
-      REDIS_METRICS_URL:       "redis://redis:6379/0"
-
-      HIPPIUS_REDIS_CACHE_URL:   "redis://redis:6379/4"
-      HIPPIUS_REDIS_METRICS_URL: "redis://redis:6379/0"
-      HIPPIUS_REDIS_QUEUES_URL:  "redis://redis:6379/3"
-      QUEUE_REDIS_URL:           "redis://redis:6379/3"
-      HIPPIUS_QUEUE_REDIS_URL:   "redis://redis:6379/3"
-
-      HIPPIUS_IPFS_STORE_URL: "http://ipfs:5001"
-      HIPPIUS_IPFS_GET_URL:   "http://ipfs:8080"
-      IPFS_API_URL:           "http://ipfs:5001"
-      IPFS_GATEWAY_URL:       "http://ipfs:8080"
-
-      HIPPIUS_CRYPTO_SUITE_ID: "hip-enc/legacy"
-      HIPPIUS_TARGET_STORAGE_VERSION: "3"
-
-      DBMATE_MIGRATIONS_DIR:     "/app/hippius_s3/sql/migrations"
-      HIPPIUS_DB_MIGRATIONS_DIR: "/app/hippius_s3/sql/migrations"
-      MIGDIR:                    "/app/hippius_s3/sql/migrations"
-
-      HIPPIUS_BYPASS_CREDIT_CHECK: "true"
-      HIPPIUS_ENABLE_PUBLIC_READ:  "true"
-      PUBLISH_TO_CHAIN:            "false"
-
-      HIPPIUS_SUBSTRATE_URL:  "ws://127.0.0.1:9944"
-      HIPPIUS_VALIDATOR_REGION: "local"
-      RESUBMISSION_SEED_PHRASE: "dev-only"
-
-      CACHET_API_URL: "http://cachet.invalid"
-      CACHET_API_KEY: "dev-key"
-      CACHET_COMPONENT_ID: "1"
-      CACHET_ENABLED: "false"
-
-      MIN_BUCKET_NAME_LENGTH: "3"
-      MAX_BUCKET_NAME_LENGTH: "63"
-      MAX_OBJECT_KEY_LENGTH:  "1024"
-      MAX_METADATA_SIZE:      "2048"
-
-      SENTRY_DSN: ""
-      OTEL_EXPORTER_OTLP_ENDPOINT: ""
-      LOKI_URL: ""
-      LOKI_ENABLED: "false"
-
+      BACKEND_HMAC_KEY: "local-dev"
+      HIPPIUS_API_BASE_URL: "http://api:8000/api"
     entrypoint:
       - /bin/bash
       - -lc
@@ -1258,9 +1296,145 @@ services:
           export DBMATE_MIGRATIONS_DIR=/app/hippius_s3/sql/migrations
           export MIGDIR=/app/hippius_s3/sql/migrations
           exec /bin/bash /tmp/start-api.sh
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import http.client,sys; c=http.client.HTTPConnection('localhost',8000,timeout=2); c.request('GET','/'); r=c.getresponse(); sys.exit(0 if 200 <= r.status < 500 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+    ports: []
 
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    working_dir: /app
+    depends_on:
+      api:
+        condition: service_healthy
+      downloader:
+        condition: service_started
+      uploader:
+        condition: service_started
+    command:
+      - "/bin/bash"
+      - "-lc"
+      - |
+          set -euo pipefail
+          tr -d '\r' </app/gateway/start-gateway.sh > /tmp/start-gateway.sh
+          chmod +x /tmp/start-gateway.sh
+          exec /bin/bash /tmp/start-gateway.sh
+    env_file:
+      - .env.defaults
+      - .env
+    environment:
+      GATEWAY_BACKEND_URL: "http://api:8000"
+      GATEWAY_PORT: "8080"
+      HIPPIUS_BYPASS_CREDIT_CHECK: "true"
+      ENABLE_BANHAMMER: "false"
+      FRONTEND_HMAC_SECRET: "dev-only-frontend-hmac"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import http.client,sys; c=http.client.HTTPConnection('localhost',8080,timeout=2); c.request('GET','/health'); r=c.getresponse(); sys.exit(0 if 200 <= r.status < 500 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
     ports:
-      - "127.0.0.1:{s3_host_port}:8000"
+      - "127.0.0.1:{gateway_host_port}:8080"
+
+  uploader:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    env_file:
+      - .env.defaults
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redis-queues:
+        condition: service_healthy
+      ipfs:
+        condition: service_started
+    environment:
+      WORKER_SCRIPT: workers/run_uploader_in_loop.py
+      ENABLE_WATCHFILES: "false"
+
+  downloader:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    env_file:
+      - .env.defaults
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redis-queues:
+        condition: service_healthy
+    environment:
+      WORKER_SCRIPT: workers/run_downloader_in_loop.py
+      ENABLE_WATCHFILES: "false"
+
+  unpinner:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    env_file:
+      - .env.defaults
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redis-queues:
+        condition: service_healthy
+    environment:
+      WORKER_SCRIPT: workers/run_unpinner_in_loop.py
+      ENABLE_WATCHFILES: "false"
+
+  janitor:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    env_file:
+      - .env.defaults
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      WORKER_SCRIPT: workers/run_janitor_in_loop.py
+      ENABLE_WATCHFILES: "false"
+
+  account-cacher:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    env_file:
+      - .env.defaults
+      - .env
+    depends_on:
+      redis-accounts:
+        condition: service_healthy
+    environment:
+      WORKER_SCRIPT: workers/run_account_cacher_in_loop.py
+      ENABLE_WATCHFILES: "false"
 "#,
     );
     let path = repo_dir.join("docker-compose.sanitized.yml");
@@ -1370,7 +1544,7 @@ fn sanitize_redis_conf_mounts(input: &Path) -> Result<PathBuf> {
     Ok(out_path)
 }
 
-async fn prepare_compose_files(repo_dir: &Path, s3_host_port: u16) -> Result<Vec<PathBuf>> {
+async fn prepare_compose_files(repo_dir: &Path, gateway_host_port: u16) -> Result<Vec<PathBuf>> {
     let base = repo_dir.join("docker-compose.yml");
     let e2e = repo_dir.join("docker-compose.e2e.yml");
 
@@ -1393,9 +1567,29 @@ async fn prepare_compose_files(repo_dir: &Path, s3_host_port: u16) -> Result<Vec
         let yaml_port = format!(
             r#"
 services:
-  api:
+  gateway:
     ports:
-      - "127.0.0.1:{s3_host_port}:8000"
+      - "127.0.0.1:{gateway_host_port}:8080"
+  api:
+    ports: []
+  db:
+    ports: []
+  ipfs:
+    ports: []
+  redis:
+    ports: []
+  redis-accounts:
+    ports: []
+  redis-chain:
+    ports: []
+  redis-rate-limiting:
+    ports: []
+  redis-queues:
+    ports: []
+  mock-hippius-api:
+    ports: []
+  toxiproxy:
+    ports: []
 "#
         );
         fs::write(&override_port, yaml_port)?;
@@ -1406,12 +1600,12 @@ services:
         ) {
             return Ok(vec![use_base, use_e2e, override_port]);
         } else {
-            eprintln!("[compose] validation failed; falling back to minimal compose");
-            let single = write_sanitized_compose(repo_dir, s3_host_port).await?;
+            eprintln!("[compose] validation failed; falling back to sanitized compose");
+            let single = write_sanitized_compose(repo_dir, gateway_host_port).await?;
             return Ok(vec![single]);
         }
     } else {
-        let single = write_sanitized_compose(repo_dir, s3_host_port).await?;
+        let single = write_sanitized_compose(repo_dir, gateway_host_port).await?;
         Ok(vec![single])
     }
 }
@@ -1421,6 +1615,7 @@ fn compose_env_defaults() -> Vec<(&'static str, &'static str)> {
         ("FRONTEND_HMAC_SECRET", "x"),
         ("BACKEND_HMAC_SECRET", "x"),
         ("BACKEND_HMAC_KEY", "x"),
+        ("HOST_BIND_IP", "127.0.0.1"),
         ("RATE_LIMIT_ENABLED", "false"),
         ("RATE_LIMIT_PER_MINUTE", "60000"),
         ("RATE_LIMIT_BURST", "60000"),
@@ -1545,7 +1740,7 @@ async fn down_stack_multi(repo_dir: &Path, files: &[PathBuf], project: &str) -> 
     Ok(())
 }
 
-async fn wait_for_api_ready_multi(
+async fn wait_for_gateway_ready(
     host: &str,
     port: u16,
     timeout: Duration,
@@ -1555,19 +1750,20 @@ async fn wait_for_api_ready_multi(
 ) -> Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let deadline = time::Instant::now() + timeout;
+    let req = format!(
+        "GET /health HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+    );
 
     loop {
         match tokio::net::TcpStream::connect((host, port)).await {
             Ok(mut stream) => {
-                let req =
-                    format!("GET / HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
                 let _ = stream.write_all(req.as_bytes()).await;
                 let mut buf = vec![0u8; 1024];
                 if let Ok(n) = stream.read(&mut buf).await {
                     if n > 0 {
                         if let Some(code) = parse_http_status(&String::from_utf8_lossy(&buf[..n])) {
-                            if code >= 200 || code == 403 {
-                                eprintln!("[ready] hippius-s3 responded with HTTP {}", code);
+                            if (200..=299).contains(&code) {
+                                eprintln!("[ready] hippius gateway responded with HTTP {}", code);
                                 return Ok(());
                             }
                         }
@@ -1580,10 +1776,22 @@ async fn wait_for_api_ready_multi(
             let _ = compose_cmd_multi(
                 repo_dir,
                 compose_files,
+                &["--project-name", project, "logs", "--tail=200", "gateway"],
+            )
+            .status();
+            let _ = compose_cmd_multi(
+                repo_dir,
+                compose_files,
                 &["--project-name", project, "logs", "--tail=200", "api"],
             )
             .status();
-            anyhow::bail!("hippius-s3 didn't become ready");
+            let _ = compose_cmd_multi(
+                repo_dir,
+                compose_files,
+                &["--project-name", project, "ps"],
+            )
+            .status();
+            anyhow::bail!("hippius gateway didn't become ready");
         }
         time::sleep(Duration::from_millis(350)).await;
     }

@@ -10,7 +10,6 @@ use crate::utils::s3_client::make_s3_client;
 use aws_sdk_s3::Client;
 use log::error;
 use serde_json::json;
-use sp_core::{Pair, crypto::Ss58Codec, sr25519};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter};
 use tokio::{
@@ -20,7 +19,6 @@ use tokio::{
 
 use crate::{
     DB_POOL,
-    commands::syncing::{decrypt_phrase, load_encryption_key},
     constants::folder_sync::SyncStatusResponse,
     sync_engine::{DeletePolicy, prunefile_id, sync_once_cas},
     utils::{
@@ -133,7 +131,6 @@ async fn handle_fs_events(
 pub async fn start_private_folder_sync(
     app_handle: AppHandle,
     account_id: String,
-    _seed_phrase: String,
     deletion_policy: DeletePolicy,
 ) {
     {
@@ -201,58 +198,6 @@ pub async fn start_private_folder_sync(
         }
     }
 
-    // Resolve sub-account SS58 from DB (unchanged logic)
-    let sub_account = loop {
-        match DB_POOL.get() {
-            Some(pool) => {
-                match sqlx::query_as::<_, (String,)>(
-                    r#"
-                    SELECT sub_account_seed_phrase
-                    FROM sub_accounts
-                    WHERE account_id = ?
-                    LIMIT 1
-                    "#,
-                )
-                .bind(&account_id)
-                .fetch_optional(pool)
-                .await
-                {
-                    Ok(Some((sub_account_seed_phrase,))) => {
-                        let maybe_key = load_encryption_key(pool).await;
-                        let phrase = if let Some(key) = &maybe_key {
-                            decrypt_phrase(&sub_account_seed_phrase, key)
-                                .unwrap_or_else(|| sub_account_seed_phrase.clone())
-                        } else {
-                            sub_account_seed_phrase
-                        };
-                        if let Ok((pair, _)) = sr25519::Pair::from_phrase(&phrase, None) {
-                            let ss58 = pair.public().to_ss58check();
-                            break ss58;
-                        } else {
-                            eprintln!("[BucketName] Failed to convert seed phrase to SS58 address");
-                            tokio::time::sleep(Duration::from_secs(15)).await;
-                        }
-                    }
-                    Ok(None) => {
-                        println!(
-                            "[BucketName] No sub-account found for account {}, waiting 15 seconds...",
-                            account_id
-                        );
-                        tokio::time::sleep(Duration::from_secs(15)).await;
-                    }
-                    Err(e) => {
-                        eprintln!("[BucketName] Error querying sub-accounts: {}", e);
-                        tokio::time::sleep(Duration::from_secs(15)).await;
-                    }
-                }
-            }
-            None => {
-                eprintln!("[BucketName] Database pool not available, waiting 15 seconds...");
-                tokio::time::sleep(Duration::from_secs(15)).await;
-            }
-        }
-    };
-
     // Get bucket name and path hash
     let (bucket_name, path_hash) = match crate::sync_shared::get_bucket_name(
         &account_id,
@@ -267,7 +212,7 @@ pub async fn start_private_folder_sync(
         }
     };
 
-    let prunefile_id = prunefile_id(&sub_account, &path_hash, "private");
+    let prunefile_id = prunefile_id(&account_id, &path_hash, "private");
 
     // Build client
     let s3 = make_s3_client().await;
@@ -311,9 +256,8 @@ pub async fn start_private_folder_sync(
     // Immediately request an initial sync
     signal.trigger();
 
-    // 3s minimum interval; 30s heartbeat tick when idle (reduced from 5s to prevent excessive syncs)
     const MIN_INTERVAL: Duration = Duration::from_secs(3);
-    const HEARTBEAT: Duration = Duration::from_secs(30);
+    const HEARTBEAT: Duration = Duration::from_secs(5);
 
     let mut last_run_end = Instant::now() - HEARTBEAT;
     let mut running = false;
@@ -470,14 +414,13 @@ pub async fn start_private_folder_sync(
 pub async fn start_private_folder_sync_tauri(
     app_handle: AppHandle,
     account_id: String,
-    seed_phrase: String,
     policy: DeletePolicy,
 ) {
     println!(
         "[PrivateFolderSync] Starting sync for private, policy {:?}",
         policy
     );
-    start_private_folder_sync(app_handle, account_id, seed_phrase, policy).await;
+    start_private_folder_sync(app_handle, account_id, policy).await;
 }
 
 async fn process_batch(events: &[FsEvent], pool: &SqlitePool, owner: &str, bucket_name: &str) {

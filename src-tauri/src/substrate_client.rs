@@ -112,24 +112,3 @@ pub async fn update_wss_endpoint(new_endpoint: String) -> Result<(), String> {
         Err("Failed to update WSS endpoint".to_string())
     }
 }
-
-// Test connection to a WSS endpoint without updating the database
-pub async fn test_wss_endpoint(endpoint: String) -> Result<bool, String> {
-    if !endpoint.starts_with("ws://") && !endpoint.starts_with("wss://") {
-        return Err("Invalid WSS endpoint format. Must start with ws:// or wss://".to_string());
-    }
-
-    match OnlineClient::<PolkadotConfig>::from_url(&endpoint).await {
-        Ok(_) => {
-            println!(
-                "[Substrate] Successfully tested connection to: {}",
-                endpoint
-            );
-            Ok(true)
-        }
-        Err(e) => {
-            eprintln!("[Substrate] Failed to connect to {}: {}", endpoint, e);
-            Err(format!("Connection test failed: {}", e))
-        }
-    }
-}

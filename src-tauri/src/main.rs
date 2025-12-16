@@ -29,6 +29,7 @@ use commands::accounts::{
     create_encryption_key, export_app_data, get_all_subaccount_addresses, get_encryption_keys,
     import_app_data, import_key, reset_app,
 };
+use commands::objectstore_auth::{request_master_token_command, save_temp_auth_key_command, has_master_token_command};
 use commands::ipfs_commands::{
     add_file_to_private_folder, add_file_to_public_folder, add_folder_to_private_folder,
     add_folder_to_public_folder, delete_file, download_and_decrypt_file,
@@ -39,7 +40,7 @@ use commands::ipfs_commands::{
     wipe_s3_objects, write_file
 };
 use commands::substrate_tx::{
-    get_sync_path, get_wss_endpoint, set_sync_path, test_wss_endpoint_command,
+    get_sync_path, get_wss_endpoint, set_sync_path,
     transfer_balance_tauri, update_wss_endpoint_command,
 };
 use once_cell::sync::OnceCell;
@@ -74,14 +75,16 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            println!("Another instance attempted to start");
+        // Single instance plugin with deep link integration - must be BEFORE deep_link plugin
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            println!("[SingleInstance] Another instance attempted to start with argv: {:?}", argv);
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             encrypt_and_upload_file,
             download_and_decrypt_file,
@@ -123,7 +126,6 @@ fn main() {
             get_user_total_file_size,
             get_wss_endpoint,
             update_wss_endpoint_command,
-            test_wss_endpoint_command,
             add_folder_to_public_folder,
             remove_folder_from_public_folder,
             add_folder_to_private_folder,

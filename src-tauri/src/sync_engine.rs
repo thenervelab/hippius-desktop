@@ -14,6 +14,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs as tokio_fs;
 use tokio::time::{Duration, sleep};
 
+/// Short, deterministic key derived from the main account id to namespace per-user data.
+pub fn account_key(account_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(account_id.as_bytes());
+    let digest = hasher.finalize();
+    hex::encode(&digest)[..8].to_string()
+}
+
 /* =============================== Policy ===================================== */
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,13 +102,15 @@ pub fn pruned_key_for(prunefile_id: &str) -> String {
     format!("{}/clients/{}/pruned.json", MANIFEST_ROOT, prunefile_id)
 }
 
-pub fn prunefile_id(sub_account: &str, path_hash: &str, private: &str) -> String {
+pub fn prunefile_id(account_id: &str, path_hash: &str, private: &str) -> String {
+    let account_key = account_key(account_id);
     let mut hasher = Sha256::new();
+    hasher.update(b"hippius_manifest_v1");
     hasher.update(b"hippius_manifest_v1");
     hasher.update(b":");
     hasher.update(path_hash.as_bytes());
     hasher.update(b":");
-    hasher.update(sub_account.as_bytes());
+    hasher.update(account_key.as_bytes());
     hasher.update(b":");
     hasher.update(private.as_bytes());
     let digest = hasher.finalize();
@@ -200,37 +210,44 @@ fn sha256_file(p: &Path) -> io::Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn visit_dir(map: &mut HashMap<String, FileMeta>, root: &Path, dir: &Path) -> io::Result<()> {
-    if let Some(rel) = rel_key(root, dir) {
-        if rel.starts_with(MANIFEST_FOLDER) || rel == MANIFEST_ROOT {
-            return Ok(());
+fn visit_dir(map: &mut HashMap<String, FileMeta>, root: &Path, start: &Path) -> io::Result<()> {
+    let mut stack = vec![start.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        if let Some(rel) = rel_key(root, &dir) {
+            if rel.starts_with(MANIFEST_FOLDER) || rel == MANIFEST_ROOT {
+                continue;
+            }
         }
-    }
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let p = entry.path();
-        if p.is_dir() {
-            visit_dir(map, root, &p)?;
-        } else if p.is_file() {
-            if let Some(key) = rel_key(root, &p) {
-                if key.starts_with(MANIFEST_FOLDER) || is_ignored_key(&key) {
-                    continue;
+
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            let p = entry.path();
+
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.is_file() {
+                if let Some(key) = rel_key(root, &p) {
+                    if key.starts_with(MANIFEST_FOLDER) || is_ignored_key(&key) {
+                        continue;
+                    }
+                    let cid = sha256_file(&p).unwrap_or_default();
+                    map.insert(
+                        key.clone(),
+                        FileMeta {
+                            path: key,
+                            etag: String::new(),
+                            cid,
+                            deletion_count: 0,
+                            resurrection_count: 0,
+                            renamed_to: None,
+                        },
+                    );
                 }
-                let cid = sha256_file(&p).unwrap_or_default();
-                map.insert(
-                    key.clone(),
-                    FileMeta {
-                        path: key,
-                        etag: String::new(),
-                        cid,
-                        deletion_count: 0,
-                        resurrection_count: 0,
-                        renamed_to: None,
-                    },
-                );
             }
         }
     }
+
     Ok(())
 }
 
@@ -602,6 +619,10 @@ async fn publish_conflict_object_with_bumps(
     let mut used_key = desired_key.to_string();
     let mut bump_idx: u32 = 2;
     let mut attempt = 0usize;
+    println!(
+        "[Sync] trying to upload conflict object with bumps: {}",
+        used_key
+    );
     println!(
         "[Sync] trying to upload conflict object with bumps: {}",
         used_key
@@ -1228,6 +1249,10 @@ pub async fn sync_once_cas(
             "[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!",
             local.len()
         );
+        eprintln!(
+            "[Sync] WARNING: Prune state is EMPTY but local has {} files - all will be treated as NEW!",
+            local.len()
+        );
     }
 
     /* ---- Phase 3 Preamble: REMOTE -> LOCAL (diff vs remote) --------------------------- */
@@ -1286,6 +1311,10 @@ pub async fn sync_once_cas(
             }
             Some(pe) => {
                 if !pe.present {
+                    println!(
+                        "[Sync] Scheduling upload for '{}': marked as not present in prune",
+                        lk
+                    );
                     println!(
                         "[Sync] Scheduling upload for '{}': marked as not present in prune",
                         lk
@@ -1372,6 +1401,11 @@ pub async fn sync_once_cas(
     // Early-exit optimization: skip sync if no operations needed
     // Check this BEFORE executing ops to avoid unnecessary S3 API calls
     let ops_l2r_count = ops_l2r.len();
+    println!(
+        "[Sync] Phase 1 operations queued: {} uploads/deletes",
+        ops_l2r_count
+    );
+
     println!(
         "[Sync] Phase 1 operations queued: {} uploads/deletes",
         ops_l2r_count
@@ -1991,6 +2025,11 @@ pub async fn sync_once_cas(
         ops_adopt_count
     );
 
+    println!(
+        "[Sync] Phase 3 operations queued: {} downloads/renames/deletes",
+        ops_adopt_count
+    );
+
     if ops_l2r_count == 0 && ops_adopt_count == 0 {
         println!("[Sync] No changes detected, skipping sync cycle");
         return Ok(());
@@ -2083,7 +2122,7 @@ pub async fn sync_once_cas(
                                 let pe_etag = pe.adopted_remote_etag.clone();
 
                                 let pe_snap_orig = prune_origin.entry(path.clone()).or_default();
-                                let pe_o_etag = pe_snap_orig.adopted_remote_etag.clone();
+                                let _pe_o_etag = pe_snap_orig.adopted_remote_etag.clone();
 
                                 let me_last_cid = remote_prev_cid.clone();
 
