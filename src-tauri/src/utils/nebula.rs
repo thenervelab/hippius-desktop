@@ -1825,6 +1825,7 @@ pub async fn check_nebula_update() -> Result<Option<String>, String> {
 pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
     let pool = crate::DB_POOL.get().ok_or("Database not initialized".to_string())?;
     
+    // First check if binary is installed
     let is_installed: bool = sqlx::query("SELECT is_nebula_binary_installed FROM nebula_binary_status WHERE id = 1")
         .fetch_optional(pool)
         .await
@@ -1832,5 +1833,45 @@ pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
         .map(|row| row.get("is_nebula_binary_installed"))
         .unwrap_or(false);
     
-    Ok(is_installed)
+    if !is_installed {
+        return Ok(false);
+    }
+    
+    // Check if we have a valid certificate
+    let cert_status = sqlx::query(
+        "SELECT expires_at, is_active FROM nebula_certificate WHERE id = 1"
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    
+    if let Some(row) = cert_status {
+        let expires_at_str: Option<String> = row.get("expires_at");
+        let is_active: Option<bool> = row.get("is_active");
+        
+        // Check if certificate is active and not expired
+        if is_active.unwrap_or(false) {
+            if let Some(expires_at_str) = expires_at_str {
+                if let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(&expires_at_str) {
+                    let now = chrono::Utc::now();
+                    if expires_at > now.into() {
+                        return Ok(true);
+                    }
+                    println!("[Nebula] Certificate expired on: {}", expires_at);
+                }
+            } else {
+                println!("[Nebula] Certificate has no expiration date");
+            }
+        } else {
+            println!("[Nebula] Certificate is not active");
+        }
+    } else {
+        println!("[Nebula] No certificate found in database");
+    }
+    
+    // If we get here, either:
+    // 1. No certificate exists
+    // 2. Certificate is expired
+    // 3. Certificate is not active
+    Ok(false)
 }
