@@ -1354,61 +1354,101 @@ pub async fn get_nebula_ip() -> Result<String, String> {
     Ok(ip.to_string())
 }
 
-#[tauri::command]
-pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
-    // Platform-specific implementations for accurate TUN interface statistics
+/// Tries to find the Nebula network interface by checking common names and IP ranges
+async fn find_nebula_interface() -> Option<String> {
+    // First try to find by common interface names
+    let common_names = ["tun0", "tun1", "tun2", "utun0", "utun1"];
     
-    #[cfg(target_os = "linux")]
-    {
-        // Linux: Read directly from /sys/class/net (most reliable for TUN interfaces)
-        let tx_bytes = read_sys_net_stat("nebula1", "tx_bytes").await?;
-        let rx_bytes = read_sys_net_stat("nebula1", "rx_bytes").await?;
-        
-        let mb_tx = tx_bytes as f64 / (1024.0 * 1024.0);
-        let mb_rx = rx_bytes as f64 / (1024.0 * 1024.0);
-        
-        
-        Ok(NebulaStats {
-            udp_tx_bytes: mb_tx,
-            udp_rx_bytes: mb_rx,
-        })
-    }
-    
-    #[cfg(target_os = "macos")]
-    {
-        // macOS: Use netstat command for accurate stats
-        match get_macos_interface_stats("utun").await {
-            Ok((tx, rx)) => {
-                let mb_tx = tx as f64 / (1024.0 * 1024.0);
-                let mb_rx = rx as f64 / (1024.0 * 1024.0);
-                
-                println!("[Nebula Stats] TX: {} bytes ({:.3} MB), RX: {} bytes ({:.3} MB)", 
-                         tx, mb_tx, rx, mb_rx);
-                
-                Ok(NebulaStats {
-                    udp_tx_bytes: mb_tx,
-                    udp_rx_bytes: mb_rx,
-                })
-            }
-            Err(e) => {
-                // Fallback to sysinfo if netstat fails
-                println!("[Nebula Stats] netstat failed ({}), falling back to sysinfo", e);
-                get_stats_via_sysinfo()
-            }
+    // Check each common name
+    for iface in &common_names {
+        if let Ok(_) = read_sys_net_stat(iface, "tx_bytes").await {
+            println!("[Nebula] Found interface by name: {}", iface);
+            return Some(iface.to_string());
         }
     }
     
-    #[cfg(target_os = "windows")]
+    // If not found by name, try to find by IP range (Nebula uses 100.64.0.0/10 by default)
+    #[cfg(target_os = "linux")]
     {
-        // Windows: Use sysinfo (works better on Windows than Linux for TUN)
-        get_stats_via_sysinfo()
+        use std::process::Command;
+        
+        // Run ip -o -4 addr show to find interfaces with Nebula IPs
+        if let Ok(output) = Command::new("ip")
+            .args(["-o", "-4", "addr", "show"])
+            .output() {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                for line in output_str.lines() {
+                    if line.contains("100.64.") {
+                        // Extract interface name (it's the second field in the output)
+                        if let Some(iface) = line.split_whitespace().nth(1) {
+                            let iface = iface.trim_end_matches(':');
+                            println!("[Nebula] Found interface by IP range: {}", iface);
+                            return Some(iface.to_string());
+                        }
+                    }
+                }
+            }
     }
     
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    // On macOS, try to find the interface with the Nebula IP
+    #[cfg(target_os = "macos")]
     {
-        // Other platforms: fallback to sysinfo
-        get_stats_via_sysinfo()
+        use std::process::Command;
+        
+        if let Ok(output) = Command::new("ifconfig")
+            .arg("-a")
+            .output() {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                let mut current_iface = None;
+                
+                for line in output_str.lines() {
+                    // Check for interface line (starts with non-whitespace)
+                    if !line.starts_with('\t') && !line.starts_with(' ') && line.ends_with(':') {
+                        current_iface = Some(line.split(':').next().unwrap_or("").trim());
+                    } 
+                    // Check for Nebula IP in the interface details
+                    else if let Some(iface) = current_iface {
+                        if line.contains("100.64.") {
+                            println!("[Nebula] Found interface by IP range: {}", iface);
+                            return Some(iface.to_string());
+                        }
+                    }
+                }
+            }
     }
+    
+    None
+}
+
+#[tauri::command]
+pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
+    // Try to find the Nebula interface dynamically
+    if let Some(iface) = find_nebula_interface().await {
+        println!("[Nebula Stats] Using interface: {}", iface);
+        
+        // Try to read stats from the detected interface
+        if let (Ok(tx_bytes), Ok(rx_bytes)) = tokio::join!(
+            read_sys_net_stat(&iface, "tx_bytes"),
+            read_sys_net_stat(&iface, "rx_bytes")
+        ) {
+            let mb_tx = tx_bytes as f64 / (1024.0 * 1024.0);
+            let mb_rx = rx_bytes as f64 / (1024.0 * 1024.0);
+            
+            let stats = NebulaStats {
+                udp_tx_bytes: mb_tx,
+                udp_rx_bytes: mb_rx,
+            };
+            
+            println!("[Nebula Stats] {} - TX: {:.3} MB, RX: {:.3} MB", 
+                iface, stats.udp_tx_bytes, stats.udp_rx_bytes);
+            
+            return Ok(stats);
+        }
+    }
+    
+    // Fall back to sysinfo if we couldn't determine the interface or read stats
+    println!("[Nebula Stats] Could not determine Nebula interface, falling back to sysinfo");
+    get_stats_via_sysinfo()
 }
 
 /// Fallback stats reader using sysinfo crate
@@ -1418,7 +1458,6 @@ fn get_stats_via_sysinfo() -> Result<NebulaStats, String> {
     let mut current_tx = 0;
     let mut current_rx = 0;
     
-    // Look for nebula interface (nebula1, utun*, etc.)
     for (interface_name, data) in &networks {
         if interface_name.contains("nebula") || interface_name.contains("utun") {
             current_tx += data.transmitted();
@@ -1596,151 +1635,6 @@ pub async fn generate_node_certificate(
     println!("[Nebula] Node certificate generated successfully");
     println!("[Nebula]   Certificate: {}", node_crt.display());
     println!("[Nebula]   Key: {}", node_key.display());
-    
-    Ok(())
-}
-
-/// Generate a basic Nebula config file
-pub async fn generate_config_file(
-    node_name: &str,
-    lighthouse_ip: Option<&str>,
-    is_lighthouse: bool,
-) -> Result<()> {
-    let config_dir = get_nebula_config_dir()?;
-    let config_file = config_dir.join(format!("{}.yml", node_name));
-    
-    let ca_crt = config_dir.join("ca.crt");
-    let node_crt = config_dir.join(format!("{}.crt", node_name));
-    let node_key = config_dir.join(format!("{}.key", node_name));
-    
-    let config_content = if is_lighthouse {
-        format!(r#"# Nebula Lighthouse Configuration
-pki:
-  ca: {}
-  cert: {}
-  key: {}
-
-static_host_map:
-  # Add your public IP here if this lighthouse is behind NAT
-  # "192.168.100.1": ["public.ip.address:4242"]
-
-lighthouse:
-  am_lighthouse: true
-  interval: 60
-
-listen:
-  host: 0.0.0.0
-  port: 4242
-
-punchy:
-  punch: true
-  respond: true
-
-tun:
-  dev: nebula1
-  drop_local_broadcast: false
-  drop_multicast: false
-
-logging:
-  level: info
-  format: text
-
-firewall:
-  conntrack:
-    tcp_timeout: 12m
-    udp_timeout: 3m
-    default_timeout: 10m
-
-  outbound:
-    - port: any
-      proto: any
-      host: any
-
-  inbound:
-    - port: any
-      proto: any
-      host: any
-
-stats:
-  listen: 127.0.0.1:4243
-  path: /metrics
-  namespace: nebula
-  interval: 10s
-"#,
-            ca_crt.display(),
-            node_crt.display(),
-            node_key.display()
-        )
-    } else {
-        let lighthouse_hosts = lighthouse_ip
-            .map(|ip| format!("  - \"{}\"", ip))
-            .unwrap_or_else(|| "  # - \"192.168.100.1\"".to_string());
-        
-        format!(r#"# Nebula Node Configuration
-pki:
-  ca: {}
-  cert: {}
-  key: {}
-
-static_host_map:
-  # Map lighthouse nebula IP to its public address
-  # "192.168.100.1": ["lighthouse.public.ip:4242"]
-
-lighthouse:
-  am_lighthouse: false
-  interval: 60
-  hosts:
-{}
-
-listen:
-  host: 0.0.0.0
-  port: 4242
-
-punchy:
-  punch: true
-  respond: true
-
-tun:
-  dev: nebula1
-  drop_local_broadcast: false
-  drop_multicast: false
-
-logging:
-  level: info
-  format: text
-
-firewall:
-  conntrack:
-    tcp_timeout: 12m
-    udp_timeout: 3m
-    default_timeout: 10m
-
-  outbound:
-    - port: any
-      proto: any
-      host: any
-
-  inbound:
-    - port: any
-      proto: any
-      host: any
-
-stats:
-  listen: 127.0.0.1:4243
-  path: /metrics
-  namespace: nebula
-  interval: 10s
-"#,
-            ca_crt.display(),
-            node_crt.display(),
-            node_key.display(),
-            lighthouse_hosts
-        )
-    };
-    
-    fs::write(&config_file, config_content.as_bytes()).await?;
-    
-    println!("[Nebula] Config file generated: {}", config_file.display());
     
     Ok(())
 }
