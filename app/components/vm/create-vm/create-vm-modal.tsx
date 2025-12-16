@@ -1,0 +1,450 @@
+"use client";
+
+import React, { useEffect, useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { CloseCircle } from "@/components/ui/icons";
+import { toast } from "sonner";
+import { motion, AnimatePresence } from "framer-motion";
+import { VMTemplate } from "./vm-template-card";
+import CreateSSHKeyModal from "../ssh-keys-table/create-ssh-key-modal";
+import { MOCK_SSH_KEYS } from "../ssh-keys-table/mock-data";
+import Step1Configuration from "./step1-configuration";
+import Step2Summary from "./step2-summary";
+import { Button } from "@/components/ui/button/NewButton";
+import { Button as Button2 } from "@/components/ui/button";
+
+type FieldName =
+  | "instanceName"
+  | "numberOfInstances"
+  | "operatingSystem"
+  | "image"
+  | "sshKey";
+
+type FieldErrors = Partial<Record<FieldName, string>>;
+
+export interface VMConfigurationData {
+  instanceName: string;
+  numberOfInstances: number;
+  operatingSystem: string;
+  image: string;
+  sshKey: string;
+}
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+  // eslint-disable-next-line no-unused-vars
+  onSubmit: (data: VMConfigurationData) => void;
+  template: VMTemplate | null;
+  isLoading?: boolean;
+};
+
+const operatingSystems = [
+  { value: "ubuntu", label: "Ubuntu" },
+  { value: "debian", label: "Debian" },
+  { value: "centos", label: "CentOS" },
+  { value: "rocky", label: "Rocky Linux" },
+  { value: "fedora", label: "Fedora" },
+];
+
+const allImages = [
+  { value: "ubuntu-22.04", label: "Ubuntu 22.04 LTS", os: "ubuntu" },
+  { value: "ubuntu-20.04", label: "Ubuntu 20.04 LTS", os: "ubuntu" },
+  { value: "debian-12", label: "Debian 12", os: "debian" },
+  { value: "debian-11", label: "Debian 11", os: "debian" },
+  { value: "centos-stream-9", label: "CentOS Stream 9", os: "centos" },
+  { value: "rocky-9", label: "Rocky Linux 9", os: "rocky" },
+  { value: "fedora-38", label: "Fedora 38", os: "fedora" },
+];
+
+const CreateVMModal: React.FC<Props> = ({
+  open,
+  onClose,
+  onSubmit,
+  template,
+  isLoading = false,
+}) => {
+  const [currentStep, setCurrentStep] = useState(1);
+  const [direction, setDirection] = useState(0); // -1 for back, 1 for forward
+
+  const [instanceName, setInstanceName] = useState("");
+  const [numberOfInstances, setNumberOfInstances] = useState("");
+  const [operatingSystem, setOperatingSystem] = useState("");
+  const [image, setImage] = useState("");
+  const [sshKey, setSshKey] = useState("");
+  const [errors, setErrors] = useState<FieldErrors>({});
+
+  const [openCreateSSHKeyModal, setOpenCreateSSHKeyModal] = useState(false);
+  const [isStepTransitioning, setIsStepTransitioning] = useState(false);
+  const stepTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+
+  // Filter images based on selected operating system
+  const filteredImages = operatingSystem
+    ? allImages.filter((img) => img.os === operatingSystem)
+    : allImages;
+
+  // Convert SSH keys to options format
+  const sshKeyOptions = MOCK_SSH_KEYS.map((key) => ({
+    value: key.id,
+    label: key.keyName,
+  }));
+
+  const resetForm = () => {
+    setCurrentStep(1);
+    setInstanceName("");
+    setNumberOfInstances("");
+    setOperatingSystem("");
+    setImage("");
+    setSshKey("");
+    setDirection(0);
+    setErrors({});
+    setIsStepTransitioning(false);
+
+    if (stepTransitionTimeoutRef.current) {
+      clearTimeout(stepTransitionTimeoutRef.current);
+      stepTransitionTimeoutRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (stepTransitionTimeoutRef.current) {
+        clearTimeout(stepTransitionTimeoutRef.current);
+        stepTransitionTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  const goToStep = (nextStep: 1 | 2, nextDirection: number) => {
+    if (stepTransitionTimeoutRef.current) {
+      clearTimeout(stepTransitionTimeoutRef.current);
+      stepTransitionTimeoutRef.current = null;
+    }
+
+    setIsStepTransitioning(true);
+    setDirection(nextDirection);
+    setCurrentStep(nextStep);
+
+    stepTransitionTimeoutRef.current = setTimeout(() => {
+      setIsStepTransitioning(false);
+      stepTransitionTimeoutRef.current = null;
+    }, 350);
+  };
+
+  const clearFieldError = (field: FieldName) => {
+    setErrors((prev) => {
+      if (!prev[field]) return prev;
+      const updated = { ...prev };
+      delete updated[field];
+      return updated;
+    });
+  };
+
+  const handleInstanceNameChange = (value: string) => {
+    setInstanceName(value);
+    clearFieldError("instanceName");
+  };
+
+  const handleNumberOfInstancesChange = (value: string) => {
+    setNumberOfInstances(value);
+    clearFieldError("numberOfInstances");
+  };
+
+  const handleOSChange = (value: string) => {
+    const isCurrentImageValidForOS = allImages.some(
+      (img) => img.value === image && img.os === value
+    );
+
+    setOperatingSystem(value);
+    if (!isCurrentImageValidForOS) {
+      setImage(""); // Clear image selection when OS changes (unless still compatible)
+    }
+    clearFieldError("operatingSystem");
+    if (isCurrentImageValidForOS) {
+      clearFieldError("image");
+    }
+  };
+
+  const handleImageChange = (value: string) => {
+    setImage(value);
+    clearFieldError("image");
+  };
+
+  const handleSshKeyChange = (value: string) => {
+    setSshKey(value);
+    clearFieldError("sshKey");
+  };
+
+  const handleNext = () => {
+    const newErrors: FieldErrors = {};
+
+    if (!instanceName.trim()) {
+      newErrors.instanceName = "Instance Name is required";
+    }
+    if (!numberOfInstances.trim()) {
+      newErrors.numberOfInstances = "Number of Instances is required";
+    }
+    if (!operatingSystem) {
+      newErrors.operatingSystem = "Operating System is required";
+    }
+    if (!image) {
+      newErrors.image = "Image is required";
+    }
+    if (!sshKey) {
+      newErrors.sshKey = "SSH Key is required";
+    }
+
+    if (Object.keys(newErrors).length) {
+      setErrors(newErrors);
+      return;
+    }
+
+    setErrors({});
+    goToStep(2, 1);
+  };
+
+  const handleBack = () => {
+    goToStep(1, -1);
+  };
+
+  const handleSubmit = () => {
+    toast.success("Virtual Machine Created Successfully");
+
+    onSubmit({
+      instanceName,
+      numberOfInstances: parseInt(numberOfInstances),
+      operatingSystem,
+      image,
+      sshKey,
+    });
+
+    resetForm();
+  };
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  const handleCreateSSHKey = (data: { keyName: string }) => {
+    console.log("Creating SSH key:", data);
+    setOpenCreateSSHKeyModal(false);
+    // After creating, you would typically add the new key to the list
+  };
+
+  const variants = {
+    enter: (direction: number) => ({
+      opacity: 0,
+      x: direction > 0 ? 20 : -20,
+    }),
+    center: {
+      opacity: 1,
+      x: 0,
+    },
+    exit: (direction: number) => ({
+      opacity: 0,
+      x: direction > 0 ? -20 : 20,
+    }),
+  };
+
+  const getSelectedImageLabel = () => {
+    const selectedImage = allImages.find((img) => img.value === image);
+    return selectedImage?.label || "";
+  };
+
+  const getSelectedOSLabel = () => {
+    const selectedOS = operatingSystems.find(
+      (os) => os.value === operatingSystem
+    );
+    return selectedOS?.label || "";
+  };
+
+  return (
+    <>
+      <Dialog.Root open={open} onOpenChange={(o) => !o && handleClose()}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
+          <Dialog.Content asChild>
+            <div
+              className="
+              fixed left-1/2 top-1/2 z-50
+              w-full max-w-sm sm:max-w-[450px]
+              -translate-x-1/2 -translate-y-1/2
+            "
+            >
+              <motion.div
+                layout={isStepTransitioning ? "size" : false}
+                transition={{
+                  layout: { duration: 0.3, ease: "easeInOut" },
+                }}
+                onLayoutAnimationComplete={() => setIsStepTransitioning(false)}
+                className="
+                w-full
+                max-h-[90vh]
+                bg-white rounded-[8px]
+                shadow-[0px_12px_36px_rgba(0,0,0,0.14)]
+                border border-grey-80
+                overflow-hidden flex flex-col min-h-0
+              "
+              >
+                {/* Header */}
+                <div className="border-b border-grey-80 flex gap-2 items-center justify-between px-4 py-3">
+                  <h2 className="flex-1 text-2xl font-medium text-grey-10">
+                    {template?.name || "Create Virtual Machine"}
+                  </h2>
+                  <Dialog.Close asChild>
+                    <button
+                      aria-label="Close"
+                      className="text-grey-10 hover:text-grey-20"
+                    >
+                      <CloseCircle className="size-6" />
+                    </button>
+                  </Dialog.Close>
+                </div>
+
+                {/* Step Header */}
+                <div className="flex items-center justify-between px-4 py-3">
+                  <h3 className="text-lg font-medium text-grey-10">
+                    {currentStep === 1 ? "Model Configuration" : "Summary"}
+                  </h3>
+                  <div className="bg-primary-100 border border-primary-80 rounded px-2 py-1">
+                    <p className="text-xs font-medium text-primary-40">
+                      Step {currentStep} of 2
+                    </p>
+                  </div>
+                </div>
+
+                {/* Animated Content */}
+                <motion.div
+                  className={[
+                    "relative px-4 flex-1 min-h-0 overflow-x-hidden",
+                    isStepTransitioning
+                      ? "overflow-y-hidden pointer-events-none"
+                      : "overflow-y-auto",
+                    "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:w-0 [&::-webkit-scrollbar]:h-0",
+                  ].join(" ")}
+                  initial={false}
+                >
+                  <AnimatePresence
+                    initial={false}
+                    custom={direction}
+                    mode="popLayout"
+                  >
+                    {currentStep === 1 ? (
+                      <motion.div
+                        key="step1"
+                        custom={direction}
+                        variants={variants}
+                        initial="enter"
+                        animate="center"
+                        exit="exit"
+                        transition={{
+                          x: {
+                            type: "tween",
+                            duration: 0.3,
+                            ease: "easeInOut",
+                          },
+                          opacity: { duration: 0.25 },
+                        }}
+                      >
+                        <Step1Configuration
+                          instanceName={instanceName}
+                          setInstanceName={handleInstanceNameChange}
+                          numberOfInstances={numberOfInstances}
+                          setNumberOfInstances={handleNumberOfInstancesChange}
+                          operatingSystem={operatingSystem}
+                          handleOSChange={handleOSChange}
+                          image={image}
+                          setImage={handleImageChange}
+                          sshKey={sshKey}
+                          setSshKey={handleSshKeyChange}
+                          operatingSystems={operatingSystems}
+                          filteredImages={filteredImages}
+                          sshKeyOptions={sshKeyOptions}
+                          onCreateSSHKey={() => setOpenCreateSSHKeyModal(true)}
+                          errors={errors}
+                        />
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key="step2"
+                        custom={direction}
+                        variants={variants}
+                        initial="enter"
+                        animate="center"
+                        exit="exit"
+                        transition={{
+                          x: {
+                            type: "tween",
+                            duration: 0.3,
+                            ease: "easeInOut",
+                          },
+                          opacity: { duration: 0.25 },
+                        }}
+                      >
+                        <Step2Summary
+                          template={template}
+                          instanceName={instanceName}
+                          operatingSystemLabel={getSelectedOSLabel()}
+                          imageLabel={getSelectedImageLabel()}
+                        />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </motion.div>
+
+                {/* Actions */}
+                <div className="px-4 pb-4 pt-2 space-y-3">
+                  {currentStep === 1 ? (
+                    <Button
+                      className={`flex gap-x-2 items-center  h-[60px] w-full`}
+                      onClick={handleNext}
+                      disabled={isLoading}
+                    >
+                      {" "}
+                      <div className="font-medium text-base leading-[22px] tracking-tight">
+                        Next
+                      </div>
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        className={`flex gap-x-2 items-center  h-[60px] w-full`}
+                        onClick={handleSubmit}
+                        disabled={isLoading}
+                      >
+                        {" "}
+                        <div className="font-medium text-base leading-[22px] tracking-tight">
+                          {isLoading ? "Starting..." : "Start Virtual Machine"}
+                        </div>
+                      </Button>
+
+                      <Button2
+                        className="bg-grey-100  border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-[56px] hover:bg-grey-80 transition"
+                        onClick={handleBack}
+                        disabled={isLoading}
+                      >
+                        Go Back
+                      </Button2>
+                    </>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* SSH Key Creation Modal */}
+      <CreateSSHKeyModal
+        open={openCreateSSHKeyModal}
+        onClose={() => setOpenCreateSSHKeyModal(false)}
+        onSubmit={handleCreateSSHKey}
+      />
+    </>
+  );
+};
+
+export default CreateVMModal;

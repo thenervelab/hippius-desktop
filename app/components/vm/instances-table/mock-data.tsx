@@ -1,0 +1,241 @@
+import { Instance } from "./index";
+
+export const MOCK_INSTANCES: Instance[] = [
+  {
+    id: "vm-1",
+    name: "Virtual Machine 0",
+    minerId: "0x38a20780122b02ba0de4bc0e7e293a59e64c98ae",
+    template: {
+      model: "B3-32-FLEX",
+      cpu: "41 GB CPU",
+      ram: "32 GB RAM",
+      gpu: "50 GB GPU",
+      processor: "8 vCores",
+      storage: "200 GB",
+      bandwidth: "200 Mbps",
+      price: "USD 4.13 per hour",
+    },
+    image: {
+      os: "Linux",
+      version: "Linux 24.04",
+    },
+    ipAddress: "10.0.0.254",
+    network: {
+      ipv4: "10.0.0.254",
+      ipv4Gateway: "10.0.0.100",
+      ipv6: "192.168.1.123",
+      ipv6Gateway: "192.168.0.200",
+      sshLogin: "ssh ubuntu@hotmail.com",
+      sshKey: "dubs",
+    },
+    status: "Running",
+  },
+  {
+    id: "vm-2",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Ubuntu",
+      version: "Ubuntu 24.04",
+    },
+    ipAddress: "120.4.199.254",
+    status: "Stopped",
+  },
+  {
+    id: "vm-3",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Linux",
+      version: "Linux 24.04",
+    },
+    ipAddress: "236.178.229.134",
+    status: "Starting",
+  },
+  {
+    id: "vm-4",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Ubuntu",
+      version: "Ubuntu 24.04",
+    },
+    ipAddress: "123.152.99.118",
+    status: "Stopped",
+  },
+  {
+    id: "vm-5",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Linux",
+      version: "Linux 24.04",
+    },
+    ipAddress: "4.151.89.136",
+    status: "Pending",
+  },
+  {
+    id: "vm-6",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Ubuntu",
+      version: "Ubuntu 24.04",
+    },
+    ipAddress: "196.69.80.124",
+    status: "Starting",
+  },
+  {
+    id: "vm-7",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Linux",
+      version: "Linux 24.04",
+    },
+    ipAddress: "25.40.31.161",
+    status: "Running",
+  },
+  {
+    id: "vm-8",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Ubuntu",
+      version: "Ubuntu 24.04",
+    },
+    ipAddress: "19.10.17.89",
+    status: "Stopping",
+  },
+  {
+    id: "vm-9",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Linux",
+      version: "Linux 24.04",
+    },
+    ipAddress: "226.253.139.27",
+    status: "Running",
+  },
+  {
+    id: "vm-10",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Linux",
+      version: "Linux 24.04",
+    },
+    ipAddress: "118.100.254.148",
+    status: "Stopping",
+  },
+  {
+    id: "vm-11",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Linux",
+      version: "Linux 24.04",
+    },
+    ipAddress: "95.126.206.226",
+    status: "Failed",
+  },
+  {
+    id: "vm-12",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Linux",
+      version: "Linux 24.04",
+    },
+    ipAddress: "61.139.82.146",
+    status: "Pending",
+  },
+  {
+    id: "vm-13",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Ubuntu",
+      version: "Ubuntu 24.04",
+    },
+    ipAddress: "62.26.134.247",
+    status: "Failed",
+  },
+  {
+    id: "vm-14",
+    name: "Virtual Machine 0",
+    minerId: "0x688724bc433f63f32",
+    template: {
+      cpu: "41 GB CPU",
+      ram: "30 GB RAM",
+      gpu: "50 GB GPU",
+    },
+    image: {
+      os: "Ubuntu",
+      version: "Ubuntu 24.04",
+    },
+    ipAddress: "180.140.172.216",
+    status: "Pending",
+  },
+];
