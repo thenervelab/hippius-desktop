@@ -34,7 +34,7 @@ const VPNMenuContent = () => {
       });
       return;
     }
-    if (checked && (credits !== undefined && !isCreditsLoading && !isFetching)) {
+    if (checked && credits !== undefined) {
       const creditsNumber = Number(credits) / Math.pow(10, 18);
       if (creditsNumber < 10) {
         toast.error("Insufficient Credits", {
