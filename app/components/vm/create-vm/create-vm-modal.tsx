@@ -6,12 +6,15 @@ import { CloseCircle } from "@/components/ui/icons";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { VMTemplate } from "./vm-template-card";
-import CreateSSHKeyModal from "../ssh-keys-table/create-ssh-key-modal";
-import { MOCK_SSH_KEYS } from "../ssh-keys-table/mock-data";
+import CreateSSHKeyModal, {
+  CreateSSHKeyData,
+} from "../ssh-keys-table/create-ssh-key-modal";
 import Step1Configuration from "./step1-configuration";
 import Step2Summary from "./step2-summary";
 import { Button } from "@/components/ui/button";
 import { Button as Button2 } from "@/components/ui/button/NewButton";
+import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
+import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
 
 type FieldName =
   | "instanceName"
@@ -80,15 +83,29 @@ const CreateVMModal: React.FC<Props> = ({
     null
   );
 
+  // Fetch SSH keys from API
+  const {
+    data: sshKeysData,
+    isLoading: isLoadingSSHKeys,
+    refetch: refetchSSHKeys,
+  } = useSSHKeys({
+    page: 1,
+    page_size: 100, // Get all keys for dropdown
+  });
+
+  // Use create SSH key mutation
+  const { mutateAsync: createSSHKey, isPending: isCreatingSSHKey } =
+    useCreateSSHKey();
+
   // Filter images based on selected operating system
   const filteredImages = operatingSystem
     ? allImages.filter((img) => img.os === operatingSystem)
     : allImages;
 
   // Convert SSH keys to options format
-  const sshKeyOptions = MOCK_SSH_KEYS.map((key) => ({
-    value: key.id,
-    label: key.keyName,
+  const sshKeyOptions = (sshKeysData?.results || []).map((key) => ({
+    value: key.id.toString(),
+    label: key.name,
   }));
 
   const resetForm = () => {
@@ -228,10 +245,26 @@ const CreateVMModal: React.FC<Props> = ({
     onClose();
   };
 
-  const handleCreateSSHKey = (data: { keyName: string }) => {
-    console.log("Creating SSH key:", data);
-    setOpenCreateSSHKeyModal(false);
-    // After creating, you would typically add the new key to the list
+  const handleCreateSSHKey = async (data: CreateSSHKeyData) => {
+    try {
+      const newKey = await createSSHKey({
+        name: data.keyName,
+        public_key: data.publicKey,
+      });
+      toast.success("SSH Key created successfully!");
+      setOpenCreateSSHKeyModal(false);
+      // Refetch SSH keys to update the dropdown
+      await refetchSSHKeys();
+      // Automatically select the newly created key
+      if (newKey?.id) {
+        setSshKey(newKey.id.toString());
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to create SSH key"
+      );
+      throw error; // Re-throw so modal knows it failed
+    }
   };
 
   const variants = {
@@ -442,6 +475,7 @@ const CreateVMModal: React.FC<Props> = ({
         open={openCreateSSHKeyModal}
         onClose={() => setOpenCreateSSHKeyModal(false)}
         onSubmit={handleCreateSSHKey}
+        isLoading={isCreatingSSHKey}
       />
     </>
   );

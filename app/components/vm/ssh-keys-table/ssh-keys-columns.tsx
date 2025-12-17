@@ -4,34 +4,43 @@ import { MoreVertical } from "lucide-react";
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { CopyableCell } from "../../ui/alt-table";
+import { formatDate } from "@/app/lib/utils/formatters/formatDate";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { Icons } from "../../ui";
 
 const columnHelper = createColumnHelper<SSHKey>();
 
 export const getDesktopColumns = (onDelete?: (sshKey: SSHKey) => void) => [
-  columnHelper.accessor("keyName", {
+  columnHelper.accessor("name", {
     header: "KEY NAME",
     cell: (d) => <span className="text-grey-20 text-base">{d.getValue()}</span>,
   }),
-  columnHelper.accessor("sshKey", {
-    header: "SSH KEY",
+  columnHelper.accessor("public_key", {
+    header: "PUBLIC KEY",
     cell: (d) => (
       <div className="overflow-hidden">
         <CopyableCell
-          title="Copy SSH Key"
-          toastMessage="SSH Key Copied Successfully!"
+          title="Copy Public Key"
+          toastMessage="Public Key Copied Successfully!"
           copyAbleText={d.getValue()}
-          numberOfCharactersFromStartAndEnd={45}
+          numberOfCharactersFromStartAndEnd={30}
           className=" h-full"
         />
       </div>
     ),
   }),
-  columnHelper.accessor("dateCreated", {
-    header: "DATE CREATED",
+  columnHelper.accessor("fingerprint", {
+    header: "FINGERPRINT",
+    cell: (d) => <span className="text-grey-20 text-base">{d.getValue()}</span>,
+  }),
+  columnHelper.accessor("created", {
+    header: "CREATED AT",
+    cell: (d) => formatDate(d.getValue()),
+  }),
+  columnHelper.accessor("last_used", {
+    header: "LAST USED",
     cell: (d) => (
-      <span className="text-grey-20 text-base ">{d.getValue()}</span>
+      <span>{d.getValue() ? formatDate(d.getValue()) : "Never"}</span>
     ),
   }),
   columnHelper.display({

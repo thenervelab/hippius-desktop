@@ -1,16 +1,18 @@
 "use client";
 
 import AbstractIconWrapper from "../ui/abstract-icon-wrapper";
-import { FC, useState } from "react";
+import { FC, useEffect, useState } from "react";
 
 import { toast } from "sonner";
 import RefreshButton from "../ui/refresh-button";
 import { useRouter } from "next/navigation";
 import InstancesTable from "./instances-table";
 import SSHKeysTable, { SSHKey } from "./ssh-keys-table";
-import CreateSSHKeyModal from "./ssh-keys-table/create-ssh-key-modal";
+import CreateSSHKeyModal, {
+  CreateSSHKeyData,
+} from "./ssh-keys-table/create-ssh-key-modal";
 import { MOCK_VM_TEMPLATES } from "./create-vm/mock-templates";
-import VMTemplateCard, { VMTemplate } from "./create-vm/vm-template-card";
+import VMTemplateCard from "./create-vm/vm-template-card";
 import * as TableModule from "@/components/ui/alt-table";
 import { useDeleteInstance } from "./hooks/useDeleteInstance";
 import { Icons, SearchInput } from "../ui";
@@ -18,6 +20,8 @@ import TabList, { TabOption } from "../ui/tabs/TabList";
 import { usePagination } from "@/app/lib/hooks";
 import DeleteConfirmationDialog from "../DeleteConfirmationDialog";
 import CreateButton from "../ui/button/CreateButton";
+import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
+import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 
 export interface CreateTokenFields {
   name: string;
@@ -30,9 +34,46 @@ const VirtualMachines: FC = () => {
   const [openCreateSSHKeyModal, setOpenCreateSSHKeyModal] = useState(false);
   const [openDeleteSSHKeyModal, setOpenDeleteSSHKeyModal] = useState(false);
   const [openDeleteTemplateModal, setOpenDeleteTemplateModal] = useState(false);
+  const [sshKeySearchTerm, setSSHKeySearchTerm] = useState("");
+  const [debouncedSSHKeySearchTerm, setDebouncedSSHKeySearchTerm] =
+    useState("");
+  const [sshKeyRefreshTrigger, setSSHKeyRefreshTrigger] = useState(0);
+  const [isSSHKeyRefetching, setIsSSHKeyRefetching] = useState(false);
+  const [selectedSSHKeyToDelete, setSelectedSSHKeyToDelete] =
+    useState<SSHKey | null>(null);
+  const [isDeletingInProgress, setIsDeletingInProgress] = useState(false);
+
+  // Debounce SSH key search term with 500ms delay
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSSHKeySearchTerm(sshKeySearchTerm);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [sshKeySearchTerm]);
 
   // Use delete instance hook
   const { handleDeleteInstance, DeleteInstanceModal } = useDeleteInstance();
+
+  // Use create SSH key mutation
+  const { mutateAsync: createSSHKey, isPending: isCreatingSSHKey } =
+    useCreateSSHKey();
+
+  // Use delete SSH key mutation
+  const { mutate: deleteSSHKey } = useDeleteSSHKey({
+    onSuccess: () => {
+      toast.success("SSH Key deleted successfully!");
+      setOpenDeleteSSHKeyModal(false);
+      setSelectedSSHKeyToDelete(null);
+      setIsDeletingInProgress(false);
+      // Trigger refresh of SSH keys table
+      setSSHKeyRefreshTrigger((prev) => prev + 1);
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to delete SSH key");
+      setIsDeletingInProgress(false);
+    },
+  });
 
   const {
     paginatedData: templates,
@@ -64,24 +105,41 @@ const VirtualMachines: FC = () => {
     if (activeTab === "SSH Keys") {
       setOpenCreateSSHKeyModal(true);
     } else if (activeTab === "Instances") {
-      router.push("/vm/create");
+      router.push("/dashboard/vm/create");
     }
   };
 
-  const handleCreateSSHKey = () => {
-    setOpenCreateSSHKeyModal(false);
+  const handleCreateSSHKey = async (data: CreateSSHKeyData) => {
+    try {
+      await createSSHKey({
+        name: data.keyName,
+        public_key: data.publicKey,
+      });
+      toast.success("SSH Key created successfully!");
+      setOpenCreateSSHKeyModal(false);
+      // Trigger refresh of SSH keys table
+      setSSHKeyRefreshTrigger((prev) => prev + 1);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to create SSH key"
+      );
+      throw error; // Re-throw so modal knows it failed
+    }
   };
 
   const handleDeleteSSHKey = (sshKey: SSHKey) => {
+    setSelectedSSHKeyToDelete(sshKey);
     setOpenDeleteSSHKeyModal(true);
   };
 
   const handleConfirmDeleteSSHKey = () => {
-    setOpenDeleteSSHKeyModal(false);
-    toast.success("SSH Key Deleted");
+    if (selectedSSHKeyToDelete && !isDeletingInProgress) {
+      setIsDeletingInProgress(true);
+      deleteSSHKey(selectedSSHKeyToDelete.id);
+    }
   };
 
-  const handleDeleteTemplate = (template: VMTemplate) => {
+  const handleDeleteTemplate = () => {
     setOpenDeleteTemplateModal(true);
   };
 
@@ -126,11 +184,11 @@ const VirtualMachines: FC = () => {
               activeTab={activeTab}
               onTabChange={handleTabChange}
               className="w-full "
+              gap="gap-1"
               width="w-full sm:min-w-[148px]"
             />
           </div>
         </div>
-
         <div className="flex items-center gap-x-4">
           {activeTab === "Instances" && (
             <>
@@ -148,8 +206,16 @@ const VirtualMachines: FC = () => {
           )}
           {activeTab === "SSH Keys" && (
             <>
-              <SearchInput placeholder="Search for a key" className="h-9" />
-              <RefreshButton refetching={false} onClick={() => {}} />
+              <SearchInput
+                placeholder="Search for a key"
+                className="h-9"
+                value={sshKeySearchTerm}
+                onChange={(value) => setSSHKeySearchTerm(value)}
+              />
+              <RefreshButton
+                refetching={isSSHKeyRefetching}
+                onClick={() => setSSHKeyRefreshTrigger((prev) => prev + 1)}
+              />
               <CreateButton
                 text="New SSH Key"
                 isLoading={false}
@@ -173,13 +239,20 @@ const VirtualMachines: FC = () => {
           )}
         </div>
       </div>
+
       {/* Display content based on activeTab */}
       <div className="mt-6">
         <div className="animate-in fade-in duration-300">
           {activeTab === "Instances" ? (
             <InstancesTable onDeleteInstance={handleDeleteInstance} />
           ) : activeTab === "SSH Keys" ? (
-            <SSHKeysTable onDeleteKey={handleDeleteSSHKey} />
+            <SSHKeysTable
+              onDeleteKey={handleDeleteSSHKey}
+              searchTerm={debouncedSSHKeySearchTerm}
+              refreshTrigger={sshKeyRefreshTrigger}
+              onRefetchingChange={setIsSSHKeyRefetching}
+              onCreateNew={handleModalOpen}
+            />
           ) : activeTab === "Templates" ? (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
@@ -214,20 +287,30 @@ const VirtualMachines: FC = () => {
         open={openCreateSSHKeyModal}
         onClose={() => setOpenCreateSSHKeyModal(false)}
         onSubmit={handleCreateSSHKey}
+        isLoading={isCreatingSSHKey}
       />
       {/* Delete SSH Key Confirmation */}
       <DeleteConfirmationDialog
         open={openDeleteSSHKeyModal}
         onClose={() => {
-          setOpenDeleteSSHKeyModal(false);
+          if (!isDeletingInProgress) {
+            setOpenDeleteSSHKeyModal(false);
+            setSelectedSSHKeyToDelete(null);
+          }
         }}
         onBack={() => {
-          setOpenDeleteSSHKeyModal(false);
+          if (!isDeletingInProgress) {
+            setOpenDeleteSSHKeyModal(false);
+            setSelectedSSHKeyToDelete(null);
+          }
         }}
         onDelete={handleConfirmDeleteSSHKey}
-        button="Delete SSH Key"
-        text="Are you sure you want to delete this SSH key? This action is permanent."
+        button={isDeletingInProgress ? "Deleting..." : "Delete SSH Key"}
+        text={`Are you sure you want to delete SSH key "${
+          selectedSSHKeyToDelete?.name || "this key"
+        }"? This action is permanent.`}
         heading="Delete SSH Key"
+        disableButton={isDeletingInProgress}
       />
       {/* Delete Template Confirmation */}
       <DeleteConfirmationDialog

@@ -4,37 +4,79 @@ import {
   getSortedRowModel,
 } from "@tanstack/react-table";
 import * as TableModule from "@/components/ui/alt-table";
-import { FC } from "react";
+import { FC, useMemo, useState, useEffect } from "react";
+import { Key } from "lucide-react";
 import { P } from "../../ui/typography";
 import { cn } from "@/lib/utils";
 import { getDesktopColumns } from "./ssh-keys-columns";
-import { MOCK_SSH_KEYS } from "./mock-data";
-import { usePagination } from "@/app/lib/hooks";
-import NoEntriesFound from "../../ui/alt-table/NoEntriesFound";
+import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
+import NoDataFound from "../../ui/NoDataFound";
 
 export interface SSHKey {
-  id: string;
-  keyName: string;
-  sshKey: string;
-  dateCreated: string;
+  id: number;
+  name: string;
+  public_key: string;
+  fingerprint: string;
+  created: string;
+  last_used: string;
 }
 
 interface SSHKeysTableProps {
   onDeleteKey?: (sshKey: SSHKey) => void;
+  searchTerm?: string;
+  refreshTrigger?: number;
+  onRefetchingChange?: (isRefetching: boolean) => void;
+  onCreateNew?: () => void;
 }
 
-const SSHKeysTable: FC<SSHKeysTableProps> = ({ onDeleteKey }) => {
-  const queryData = MOCK_SSH_KEYS;
-  const isLoading = false;
-  const isRefetching = false;
-  const error = "";
+const SSHKeysTable: FC<SSHKeysTableProps> = ({
+  onDeleteKey,
+  searchTerm = "",
+  refreshTrigger,
+  onRefetchingChange,
+  onCreateNew,
+}) => {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(10);
 
   const {
-    paginatedData: data,
-    setCurrentPage,
-    currentPage,
-    totalPages,
-  } = usePagination(queryData || [], 12);
+    data: apiData,
+    isLoading,
+    error,
+    isRefetching,
+    refetch,
+  } = useSSHKeys({
+    page: currentPage,
+    page_size: pageSize,
+    search: searchTerm,
+  });
+
+  const data = apiData?.results || [];
+
+  // Calculate total pages based on API response
+  const totalPages = useMemo(() => {
+    if (!apiData?.count) return 1;
+    return Math.ceil(apiData.count / pageSize);
+  }, [apiData?.count, pageSize]);
+
+  // Reset to first page when search term changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
+
+  // Trigger refetch when refreshTrigger changes
+  useEffect(() => {
+    if (refreshTrigger !== undefined && refreshTrigger > 0) {
+      refetch();
+    }
+  }, [refreshTrigger, refetch]);
+
+  // Notify parent of refetching state changes
+  useEffect(() => {
+    if (onRefetchingChange) {
+      onRefetchingChange(isRefetching);
+    }
+  }, [isRefetching, onRefetchingChange]);
 
   // Get columns with the deletion handler
   const desktopColumns = getDesktopColumns(onDeleteKey);
@@ -55,7 +97,7 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({ onDeleteKey }) => {
               Oops an error occured...
             </P>
           </div>
-        ) : isLoading || isRefetching || !data ? (
+        ) : isLoading || isRefetching ? (
           <TableModule.Table>
             <TableModule.THead>
               {table.getHeaderGroups().map((headerGroup) => (
@@ -74,13 +116,27 @@ const SSHKeysTable: FC<SSHKeysTableProps> = ({ onDeleteKey }) => {
               <TableModule.SkeletonTableRow
                 rowClassName="h-[69px]"
                 rows={10}
-                columns={4}
-                columnWidths={["180px", "400px", "180px", "70px"]}
+                columns={6}
+                columnWidths={[
+                  "150px",
+                  "250px",
+                  "150px",
+                  "150px",
+                  "150px",
+                  "70px",
+                ]}
               />
             </TableModule.TBody>
           </TableModule.Table>
-        ) : !data.length ? (
-          <NoEntriesFound />
+        ) : !data || data.length === 0 ? (
+          <NoDataFound
+            icon={Key}
+            title="No SSH Keys Found"
+            description="You currently do not have any SSH keys. Create your first SSH key to securely access your virtual machines."
+            buttonText="New SSH Key"
+            onButtonClick={onCreateNew || (() => {})}
+            showButton={!!onCreateNew}
+          />
         ) : (
           <TableModule.Table>
             <TableModule.THead>
