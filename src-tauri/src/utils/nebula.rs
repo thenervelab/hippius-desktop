@@ -16,7 +16,7 @@ use crate::utils::objectstore_tokens::get_temp_auth_key;
 use reqwest::header::AUTHORIZATION;
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, MetadataExt};
 
 const NEBULA_GITHUB_API: &str = "https://api.github.com/repos/slackhq/nebula/releases/latest";
 const NEBULA_VERSION_FILE: &str = "nebula_version.txt";
@@ -1375,13 +1375,16 @@ pub async fn get_nebula_ip() -> Result<String, String> {
 /// Tries to find the Nebula network interface by checking common names and IP ranges
 async fn find_nebula_interface() -> Option<String> {
     // First try to find by common interface names
-    let common_names = ["tun0", "tun1", "tun2", "utun0", "utun1"];
-    
-    // Check each common name
-    for iface in &common_names {
-        if let Ok(_) = read_sys_net_stat(iface, "tx_bytes").await {
-            println!("[Nebula] Found interface by name: {}", iface);
-            return Some(iface.to_string());
+    #[cfg(target_os = "linux")]
+    {
+        let common_names = ["tun0", "tun1", "tun2", "utun0", "utun1"];
+        
+        // Check each common name
+        for iface in &common_names {
+            if let Ok(_) = read_sys_net_stat(iface, "tx_bytes").await {
+                println!("[Nebula] Found interface by name: {}", iface);
+                return Some(iface.to_string());
+            }
         }
     }
     
@@ -1445,22 +1448,43 @@ pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
         println!("[Nebula Stats] Using interface: {}", iface);
         
         // Try to read stats from the detected interface
-        if let (Ok(tx_bytes), Ok(rx_bytes)) = tokio::join!(
-            read_sys_net_stat(&iface, "tx_bytes"),
-            read_sys_net_stat(&iface, "rx_bytes")
-        ) {
-            let mb_tx = tx_bytes as f64 / (1024.0 * 1024.0);
-            let mb_rx = rx_bytes as f64 / (1024.0 * 1024.0);
-            
-            let stats = NebulaStats {
-                udp_tx_bytes: mb_tx,
-                udp_rx_bytes: mb_rx,
-            };
-            
-            println!("[Nebula Stats] {} - TX: {:.3} MB, RX: {:.3} MB", 
-                iface, stats.udp_tx_bytes, stats.udp_rx_bytes);
-            
-            return Ok(stats);
+        #[cfg(target_os = "linux")]
+        {
+            if let (Ok(tx_bytes), Ok(rx_bytes)) = tokio::join!(
+                read_sys_net_stat(&iface, "tx_bytes"),
+                read_sys_net_stat(&iface, "rx_bytes")
+            ) {
+                let mb_tx = tx_bytes as f64 / (1024.0 * 1024.0);
+                let mb_rx = rx_bytes as f64 / (1024.0 * 1024.0);
+                
+                let stats = NebulaStats {
+                    udp_tx_bytes: mb_tx,
+                    udp_rx_bytes: mb_rx,
+                };
+                
+                println!("[Nebula Stats] {} - TX: {:.3} MB, RX: {:.3} MB", 
+                    iface, stats.udp_tx_bytes, stats.udp_rx_bytes);
+                
+                return Ok(stats);
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok((tx_bytes, rx_bytes)) = get_macos_interface_stats(&iface).await {
+                let mb_tx = tx_bytes as f64 / (1024.0 * 1024.0);
+                let mb_rx = rx_bytes as f64 / (1024.0 * 1024.0);
+                
+                let stats = NebulaStats {
+                    udp_tx_bytes: mb_tx,
+                    udp_rx_bytes: mb_rx,
+                };
+                
+                println!("[Nebula Stats] {} - TX: {:.3} MB, RX: {:.3} MB", 
+                    iface, stats.udp_tx_bytes, stats.udp_rx_bytes);
+                
+                return Ok(stats);
+            }
         }
     }
     
