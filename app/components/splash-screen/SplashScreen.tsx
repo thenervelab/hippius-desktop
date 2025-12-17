@@ -8,23 +8,34 @@ import {
 import { InView } from "react-intersection-observer";
 import Link from "next/link";
 import AnimatedRings from "./AnimatedRings";
-import { PHASE_CONTENT } from "./SplashContent";
+import { PHASE_CONTENT, UPDATE_CHECK_CONTENT } from "./SplashContent";
 import AnimatedProgressIcon from "./AnimatedIcons";
 import { AnimatePresence, motion } from "framer-motion";
+import ProgressDisplay from "./ProgressDisplay";
+import ProgressBarDisplay from "./ProgressBarDisplay";
 import { useAtomValue } from "jotai";
-import { stepAtom } from "./atoms";
 import {
-  updateCheckCompleteAtom,
+  stepAtom,
+  nebulaInstalledAtom,
+  isUpdateCheckPhaseAtom,
+  phaseAtom,
+} from "./atoms";
+import {
   updateDialogOpenAtom,
   updateStore,
 } from "@/app/components/updater/updateStore";
 
 const SplashScreen = () => {
   const step = useAtomValue(stepAtom);
-  const updateCheckComplete = useAtomValue(updateCheckCompleteAtom);
+  const phase = useAtomValue(phaseAtom);
+  const isUpdateCheckPhase = useAtomValue(isUpdateCheckPhaseAtom);
   const updateDialogOpen = useAtomValue(updateDialogOpenAtom, {
     store: updateStore,
   });
+  const nebulaInstalled = useAtomValue(nebulaInstalledAtom);
+
+  // Show progress bar only if nebula is not installed (or status unknown yet)
+  const showProgressBar = nebulaInstalled === false;
 
   const contentArr = Object.values(PHASE_CONTENT);
 
@@ -58,7 +69,9 @@ const SplashScreen = () => {
         </div>
         <InView triggerOnce>
           {({ inView, ref }) => (
-            <div ref={ref}>{inView && <AnimatedRings />}</div>
+            <div ref={ref}>
+              {inView && <AnimatedRings showProgressBar={showProgressBar} />}
+            </div>
           )}
         </InView>
         {/* No other UI elements when update dialog is open */}
@@ -67,17 +80,15 @@ const SplashScreen = () => {
   }
 
   // Normal splash screen logic when update dialog is not open
-  const showProgress = step >= 0 && step < contentArr.length;
+  const showProgress = phase !== null;
 
-  // During update check, show custom content
-  const isUpdateMode = !updateCheckComplete;
-  const progressData = isUpdateMode
-    ? {
-        status: "Checking for Updates",
-        subStatus: "Please wait while we check for new version...",
-        icon: <Icons.CheckingIPFS className="h-[140px] w-[230px]" />,
-      }
+  // Get progress data - use UPDATE_CHECK_CONTENT during update phase, otherwise use PHASE_CONTENT
+  const progressData = isUpdateCheckPhase
+    ? UPDATE_CHECK_CONTENT
     : contentArr[step];
+
+  // Key for AnimatePresence - use "update-check" during that phase, otherwise step number
+  const animationKey = isUpdateCheckPhase ? "update-check" : step;
 
   return (
     <div className="flex grow flex-col items-center w-full h-full justify-center bg-primary-10 relative overflow-hidden">
@@ -107,7 +118,9 @@ const SplashScreen = () => {
       </div>
       <InView triggerOnce>
         {({ inView, ref }) => (
-          <div ref={ref}>{inView && <AnimatedRings />}</div>
+          <div ref={ref}>
+            {inView && <AnimatedRings showProgressBar={showProgressBar} />}
+          </div>
         )}
       </InView>
       {!showProgress && (
@@ -131,14 +144,24 @@ const SplashScreen = () => {
           )}
         </InView>
       )}
-      {showProgress && (
+      {showProgress && showProgressBar && (
         <AnimatedProgressIcon
           status={progressData?.status}
           icon={progressData?.icon}
-          step={step}
+          step={isUpdateCheckPhase ? -1 : step}
+          showProgressBar={showProgressBar}
+        />
+      )}
+      {showProgress && !showProgressBar && (
+        <AnimatedProgressIcon
+          status={progressData?.status}
+          icon={<Icons.SplashHippiusLogo className="h-[73px] w-[74px]" />}
+          step={isUpdateCheckPhase ? -1 : step}
+          showProgressBar={showProgressBar}
         />
       )}
 
+      {/* Show percentage and status text only when nebula is not installed */}
       {showProgress && (
         <InView triggerOnce>
           {({ inView, ref }) => (
@@ -146,12 +169,17 @@ const SplashScreen = () => {
               ref={ref}
               className="flex flex-col text-lg items-center absolute z-20
             justify-center gap-y-2 duration-300"
-              style={{ top: "72%" }}
+              style={{ top: showProgressBar ? "72%" : "56%" }}
             >
+              {showProgressBar && (
+                <RevealTextLine rotate reveal={inView}>
+                  <ProgressDisplay />
+                </RevealTextLine>
+              )}
               <RevealTextLine reveal={inView} className="delay-300">
                 <AnimatePresence mode="wait">
                   <motion.div
-                    key={step}
+                    key={animationKey}
                     initial={{ opacity: 0, y: 30 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -30 }}
@@ -163,13 +191,10 @@ const SplashScreen = () => {
                   </motion.div>
                 </AnimatePresence>
               </RevealTextLine>
-              <RevealTextLine
-                reveal={inView}
-                className="delay-400  [@media(max-height:750px)]:mb-[15%] lg:mb-[27%] mb-4"
-              >
+              <RevealTextLine reveal={inView} className="delay-400">
                 <AnimatePresence mode="wait">
                   <motion.div
-                    key={step}
+                    key={animationKey}
                     initial={{ opacity: 0, y: 30 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -30 }}
@@ -180,6 +205,22 @@ const SplashScreen = () => {
                     </span>
                   </motion.div>
                 </AnimatePresence>
+              </RevealTextLine>
+            </div>
+          )}
+        </InView>
+      )}
+
+      {/* Progress bar positioned absolutely at fixed bottom position - only when nebula not installed */}
+      {showProgress && showProgressBar && (
+        <InView triggerOnce>
+          {({ inView, ref }) => (
+            <div
+              ref={ref}
+              className="absolute z-20 bottom-[8%] left-1/2 -translate-x-1/2"
+            >
+              <RevealTextLine reveal={inView} className="delay-500">
+                <ProgressBarDisplay />
               </RevealTextLine>
             </div>
           )}

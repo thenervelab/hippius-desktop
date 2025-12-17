@@ -24,7 +24,6 @@ const geistSans = Geist({
   subsets: ["latin"],
 });
 
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -41,7 +40,7 @@ export default function RootLayout({
               <PreAuthProvider>
                 <NextTopLoader color="#3167DD" showSpinner={false} />
                 <NavigationLoaderProvider>
-                  <SplashWrapper skipSplash={false}>
+                  <SplashWrapper preventClose={false}>
                     <Suspense fallback={<PageLoader />}>
                       <div className="flex min-h-screen h-screen">
                         {children}

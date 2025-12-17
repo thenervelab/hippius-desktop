@@ -167,4 +167,5 @@ export { default as EstimatedTime } from "./EstimatedTime";
 export { default as ArrowDown } from "./ArrowDown";
 export { default as MoneyTick } from "./MoneyTick";
 export { default as UnknownFile } from "./UnknownFile";
-
+export { default as Globe } from "./Globe";
+export { default as SplashHippiusLogo } from "./SplashHippiusLogo";
