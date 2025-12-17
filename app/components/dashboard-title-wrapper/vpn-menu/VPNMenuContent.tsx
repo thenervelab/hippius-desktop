@@ -24,11 +24,11 @@ const VPNMenuContent = () => {
   const [isConnected, setIsConnected] = useAtom(vpnConnectedAtom);
   const [isLoading, setIsLoading] = useAtom(vpnLoadingAtom);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
-  const { data: credits } = useUserCredits();
+  const { data: credits, isLoading: isCreditsLoading } = useUserCredits();
 
   const handleToggle = async (checked: boolean) => {
     // Check if user has at least 10 credits before enabling VPN
-    if (checked && credits !== undefined) {
+    if (checked && (credits !== undefined || isCreditsLoading)) {
       const creditsNumber = Number(credits) / Math.pow(10, 18);
       if (creditsNumber < 10) {
         toast.error("Insufficient Credits", {
