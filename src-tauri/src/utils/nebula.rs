@@ -114,10 +114,30 @@ struct CertificateResponse {
     created_at: Option<String>,
 }
 
+/// Get the current account ID from the database
+async fn get_current_account_id() -> Result<String> {
+    let pool = crate::DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
+    let account_row = sqlx::query("SELECT owner FROM objectstore_auth_scoped LIMIT 1")
+        .fetch_optional(pool)
+        .await?;
+    
+    if let Some(row) = account_row {
+        Ok(row.get::<String, _>("owner"))
+    } else {
+        Err(anyhow!("No account found"))
+    }
+}
+
 /// Get the Nebula binary directory in user's home
 fn get_nebula_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
     Ok(home.join(".hippius").join("nebula"))
+}
+
+/// Get the Nebula config directory for a specific account
+fn get_nebula_config_dir(account_id: &str) -> Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
+    Ok(home.join(".hippius").join("nebula").join("config").join(account_id))
 }
 
 /// Get the path to the Nebula binary
@@ -594,28 +614,15 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-async fn get_api_auth_header() -> Result<String> {
+async fn get_api_auth_header() -> Result<(String, String)> {
     // We need an account ID to get the temp auth key for API authentication.
     // The temp auth key (OAuth token) is used for Hippius API calls.
     // The master token is separate and used only for S3/Object Storage access.
     
     println!("[Nebula] Getting API auth header...");
     
-    let pool = crate::DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
-    
-    // Try to find an account with a temp auth key
-    let account_row = sqlx::query("SELECT owner FROM objectstore_auth_scoped LIMIT 1")
-        .fetch_optional(pool)
-        .await?;
-        
-    let account_id = if let Some(row) = account_row {
-        let id = row.get::<String, _>("owner");
-        println!("[Nebula] Found account: {}", id);
-        id
-    } else {
-        println!("[Nebula] ❌ No account found in objectstore_auth_scoped");
-        return Err(anyhow!("No account found to retrieve temp auth key"));
-    };
+    let account_id = get_current_account_id().await?;
+    println!("[Nebula] Found account: {}", account_id);
 
     let temp_key = get_temp_auth_key(&account_id).await
         .map_err(|e| {
@@ -628,7 +635,7 @@ async fn get_api_auth_header() -> Result<String> {
         })?;
 
     println!("[Nebula] ✅ Got temp auth key (length: {})", temp_key.len());
-    Ok(format!("Token {}", temp_key))
+    Ok((format!("Token {}", temp_key), account_id))
 }
 
 async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<CertificateResponse>> {
@@ -725,8 +732,8 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
     Ok(cert)
 }
 
-async fn save_certificate_files(cert: &CertificateResponse) -> Result<()> {
-    let config_dir = get_nebula_config_dir()?;
+async fn save_certificate_files(cert: &CertificateResponse, account_id: &str) -> Result<()> {
+    let config_dir = get_nebula_config_dir(account_id)?;
     fs::create_dir_all(&config_dir).await?;
     
     // Save certificate files
@@ -786,7 +793,7 @@ async fn update_certificate_db(cert: &CertificateResponse) -> Result<()> {
 }
 
 async fn check_and_update_certificate() -> Result<()> {
-    let auth_header = get_api_auth_header().await?;
+    let (auth_header, account_id) = get_api_auth_header().await?;
     let pool = crate::DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
     
     // Check DB for existing certificate
@@ -807,12 +814,12 @@ async fn check_and_update_certificate() -> Result<()> {
                  } else {
                      println!("[Nebula] Certificate valid until {}", expires_at);
                      // Check if files exist, if not, we might need to re-fetch or just warn
-                     let config_dir = get_nebula_config_dir()?;
+                     let config_dir = get_nebula_config_dir(&account_id)?;
                      if !config_dir.join("host.crt").exists() {
                          println!("[Nebula] Certificate files missing but DB record exists. Re-fetching...");
                          // We can try to fetch the existing one
                          if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
-                             save_certificate_files(&cert).await?;
+                             save_certificate_files(&cert, &account_id).await?;
                              update_certificate_db(&cert).await?;
                          } else {
                              // If fetch fails (e.g. 404), maybe we need to request new?
@@ -828,7 +835,7 @@ async fn check_and_update_certificate() -> Result<()> {
         } else {
             println!("[Nebula] Certificate record exists but no expiration date. Fetching from API...");
             if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
-                save_certificate_files(&cert).await?;
+                save_certificate_files(&cert, &account_id).await?;
                 update_certificate_db(&cert).await?;
                 
                 if let Some(expires_at_str) = &cert.expires_at {
@@ -849,7 +856,7 @@ async fn check_and_update_certificate() -> Result<()> {
         // Check if we have one in API
         if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
             println!("[Nebula] Found existing certificate in API");
-            save_certificate_files(&cert).await?;
+            save_certificate_files(&cert, &account_id).await?;
             update_certificate_db(&cert).await?;
             
             // recursive check to ensure it's not expired?
@@ -888,7 +895,7 @@ async fn check_and_update_certificate() -> Result<()> {
              }
         }
         
-        save_certificate_files(&final_cert).await?;
+        save_certificate_files(&final_cert, &account_id).await?;
         update_certificate_db(&final_cert).await?;
         println!("[Nebula] Certificate renewed successfully");
     } else if should_request {
@@ -903,7 +910,7 @@ async fn check_and_update_certificate() -> Result<()> {
              }
         }
         
-        save_certificate_files(&final_cert).await?;
+        save_certificate_files(&final_cert, &account_id).await?;
         update_certificate_db(&final_cert).await?;
         println!("[Nebula] Certificate requested successfully");
     }
@@ -955,7 +962,9 @@ pub async fn start_nebula_internal() -> Result<(), String> {
     }
 
     let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
-    let config_dir = get_nebula_config_dir().map_err(|e| e.to_string())?;
+    
+    let account_id = get_current_account_id().await.map_err(|e| e.to_string())?;
+    let config_dir = get_nebula_config_dir(&account_id).map_err(|e| e.to_string())?;
     
     // Use config.yml (from API) instead of hostname-based config
     let config_file = config_dir.join("config.yml");
@@ -1193,7 +1202,15 @@ pub async fn stop_nebula() -> Result<(), String> {
 
 /// Read lighthouse IPs from the Nebula config file
 async fn read_lighthouse_ips_from_config() -> Vec<String> {
-    let config_dir = match get_nebula_config_dir() {
+    let account_id = match get_current_account_id().await {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("[Nebula Ping] Failed to get account ID: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let config_dir = match get_nebula_config_dir(&account_id) {
         Ok(dir) => dir,
         Err(e) => {
             eprintln!("[Nebula Ping] Failed to get config dir: {}", e);
@@ -1310,7 +1327,8 @@ pub async fn get_nebula_version() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn get_nebula_ip() -> Result<String, String> {
-    let config_dir = get_nebula_config_dir().map_err(|e| e.to_string())?;
+    let account_id = get_current_account_id().await.map_err(|e| e.to_string())?;
+    let config_dir = get_nebula_config_dir(&account_id).map_err(|e| e.to_string())?;
     // Use host.crt from API instead of hostname-based cert
     let crt_path = config_dir.join("host.crt");
     
@@ -1563,12 +1581,7 @@ pub async fn get_nebula_status() -> Result<NebulaStatus, String> {
 }
 
 
-/// Get the Nebula config directory
-fn get_nebula_config_dir() -> Result<PathBuf> {
-    // Use ~/.hippius/nebula/config on all platforms to avoid permission issues
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
-    Ok(home.join(".hippius").join("nebula").join("config"))
-}
+
 
 /// Generate a Nebula node certificate
 pub async fn generate_node_certificate(
@@ -1578,7 +1591,8 @@ pub async fn generate_node_certificate(
     duration_days: u32,
 ) -> Result<()> {
     let nebula_cert_binary = get_nebula_cert_binary_path()?;
-    let config_dir = get_nebula_config_dir()?;
+    let account_id = get_current_account_id().await?;
+    let config_dir = get_nebula_config_dir(&account_id)?;
     
     let ca_crt = config_dir.join("ca.crt");
     let ca_key = config_dir.join("ca.key");
