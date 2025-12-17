@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { InView } from "react-intersection-observer";
 import { RevealTextLine } from "@/components/ui";
@@ -7,14 +7,27 @@ type AnimatedProgressIconProps = {
   icon: React.ReactNode;
   status: string;
   step: number;
+  showProgressBar?: boolean;
 };
 
 export default function AnimatedProgressIcon({
   icon,
   status,
   step,
+  showProgressBar = true,
 }: AnimatedProgressIconProps) {
-  const presenceKey = `${step}-${status}`;
+  const hasAnimatedRef = useRef(false);
+
+  // If showProgressBar is false and we've already animated, use a static key to prevent re-animation
+  const presenceKey =
+    !showProgressBar && hasAnimatedRef.current
+      ? "static-icon"
+      : `${step}-${status}`;
+
+  // Mark as animated on first render when showProgressBar is false
+  if (!showProgressBar && !hasAnimatedRef.current) {
+    hasAnimatedRef.current = true;
+  }
 
   return (
     <InView triggerOnce>
