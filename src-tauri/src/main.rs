@@ -142,6 +142,8 @@ fn main() {
             utils::nebula::get_nebula_binary_installed_status,
             commands::vpn_enabled::get_vpn_status,
             commands::vpn_enabled::toggle_vpn_status,
+            commands::vpn_enabled::get_autoconnect_status,
+            commands::vpn_enabled::toggle_autoconnect_status,
             utils::nebula::check_nebula_requirements,
             utils::nebula::download_nebula,
             utils::nebula::install_nebula,

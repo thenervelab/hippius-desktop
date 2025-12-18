@@ -792,7 +792,7 @@ async fn update_certificate_db(cert: &CertificateResponse) -> Result<()> {
     Ok(())
 }
 
-async fn check_and_update_certificate() -> Result<()> {
+pub async fn check_and_update_certificate() -> Result<()> {
     let (auth_header, account_id) = get_api_auth_header().await?;
     let pool = crate::DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
     

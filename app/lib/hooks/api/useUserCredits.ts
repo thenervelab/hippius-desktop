@@ -12,10 +12,9 @@ export function useUserCredits() {
 
   return useQuery<bigint | undefined>({
     queryKey: ["user-credits", oauthSession?.userId],
-    refetchInterval: 30_000,
     refetchOnWindowFocus: false,
     enabled: !!oauthSession?.token,
-
+    staleTime: Infinity, // Keep data fresh indefinitely - only refetch when manually invalidated
     queryFn: async () => {
       if (!oauthSession?.token) {
         throw new Error("No authentication token available");
