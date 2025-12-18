@@ -29,7 +29,7 @@ export function getCurrentUpdate(): Update | null {
   return currentUpdateObject;
 }
 
-export async function checkForUpdates(notifyOnce = false, userAddress?: string) {
+export async function checkForUpdates(notifyOnce = false) {
   let downloadToastId: string | number | undefined;
 
   try {
@@ -45,9 +45,9 @@ export async function checkForUpdates(notifyOnce = false, userAddress?: string) 
 
     // Optional in-app notification
     const notified = await hippusVersionNotificationExists(version);
-    if (!notified && userAddress) {
+    if (!notified) {
       await addNotification({
-        userAddress: userAddress,
+        userAddress: "system",
         notificationType: "Hippius",
         notificationSubtype: version,
         notificationTitleText: "Update Available",

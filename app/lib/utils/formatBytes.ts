@@ -6,9 +6,9 @@ export function formatBytes(bytes: number, decimals: number = 2): string {
   const dm = decimals < 0 ? 0 : decimals;
   const sizes = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
 
-  const i = Math.min(
-    sizes.length - 1,
-    Math.floor(Math.log(bytes) / Math.log(k))
+  const i = Math.max(
+    0,
+    Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k)))
   );
 
   const value = bytes / Math.pow(k, i);

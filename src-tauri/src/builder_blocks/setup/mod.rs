@@ -16,6 +16,22 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // Define the expected table schemas
     const TABLE_SCHEMAS: &[(&str, &[(&str, &str)])] = &[
         (
+            "vpn_status",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("is_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
+        (
+            "nebula_binary_status",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("is_nebula_binary_installed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
+        (
             "user_profiles",
             &[
                 ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -95,6 +111,17 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("temp_auth_key", "TEXT"),
                 ("master_access_key_id", "TEXT"),
                 ("master_secret", "TEXT"),
+                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
+        (
+            "nebula_certificate",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("certificate_id", "INTEGER"),
+                ("expires_at", "TEXT"),
+                ("is_active", "BOOLEAN"),
+                ("created_at", "TEXT"),
                 ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
@@ -373,13 +400,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             tauri::async_runtime::spawn(async move {
                 println!("[Setup] async block started in setup.rs");
                 
-                // Ensure Nebula is installed and up-to-date
-                println!("[Setup] Checking Nebula installation...");
-                if let Err(e) = crate::utils::nebula::ensure_nebula_installed(_handle.clone()).await {
-                    eprintln!("[Setup] Nebula installation failed: {}", e);
-                    // Continue with app setup even if Nebula fails
-                }
-                
                 // Database initialization
                 let home_dir = dirs::home_dir().expect("Failed to get home directory");
                 let db_dir = home_dir.join(".hippius");
@@ -467,7 +487,60 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     }
                 }
 
+                // Initialize VPN status if it doesn't exist
+                let vpn_status_exists: Option<(i64,)> = sqlx::query_as(
+                    "SELECT COUNT(*) as count FROM vpn_status"
+                )
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+                if let Some((count,)) = vpn_status_exists {
+                    if count == 0 {
+                        println!("[Setup] No VPN status found, creating default entry...");
+                        if let Err(e) = sqlx::query(
+                            "INSERT INTO vpn_status (id, is_enabled) VALUES (1, FALSE)"
+                        )
+                        .execute(&pool)
+                        .await {
+                            eprintln!("[Setup] Failed to create default VPN status: {}", e);
+                        } else {
+                            println!("[Setup] Default VPN status created successfully");
+                        }
+                    } else {
+                        println!("[Setup] VPN status entry already exists");
+                    }
+                }
+
+                // Initialize Nebula binary status if it doesn't exist
+                let nebula_binary_status_exists: Option<(i64,)> = sqlx::query_as(
+                    "SELECT COUNT(*) as count FROM nebula_binary_status"
+                )
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+                if let Some((count,)) = nebula_binary_status_exists {
+                    if count == 0 {
+                        println!("[Setup] No Nebula binary status found, creating default entry...");
+                        if let Err(e) = sqlx::query(
+                            "INSERT INTO nebula_binary_status (id, is_nebula_binary_installed) VALUES (1, FALSE)"
+                        )
+                        .execute(&pool)
+                        .await {
+                            eprintln!("[Setup] Failed to create default Nebula binary status: {}", e);
+                        } else {
+                            println!("[Setup] Default Nebula binary status created successfully");
+                        }
+                    } else {
+                        println!("[Setup] Nebula binary status entry already exists");
+                    }
+                }
+
                 println!("[Setup] Database initialized successfully");
+
+                // Nebula installation is now handled by the frontend splash screen
+                // via granular commands (check_nebula_requirements, etc.)
             });
             Ok(())
         })

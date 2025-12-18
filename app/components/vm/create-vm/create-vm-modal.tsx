@@ -518,7 +518,7 @@ const CreateVMModal: React.FC<Props> = ({
                         <div className="font-medium text-base leading-[22px] tracking-tight">
                           {isCreatingVM
                             ? "Creating..."
-                            : "Start Virtual Machine"}
+                            : "Create Virtual Machine"}
                         </div>
                       </Button>
 
