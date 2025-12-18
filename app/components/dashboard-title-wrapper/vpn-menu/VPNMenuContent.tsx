@@ -1,18 +1,15 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAtom } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
-import * as Dialog from "@radix-ui/react-dialog";
-import { relaunch } from "@tauri-apps/plugin-process";
 import VPNSwitch from "./VPNSwitch";
 import VPNStatusIndicator from "./VPNStatusIndicator";
 import { vpnConnectedAtom, vpnLoadingAtom } from "./vpnAtoms";
 import { RevealTextLine } from "@/app/components/ui";
 import { InView } from "react-intersection-observer";
-import { CloseCircle } from "@/app/components/ui/icons";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { toast } from "sonner";
 
@@ -23,7 +20,6 @@ interface VpnStatus {
 const VPNMenuContent = () => {
   const [isConnected, setIsConnected] = useAtom(vpnConnectedAtom);
   const [isLoading, setIsLoading] = useAtom(vpnLoadingAtom);
-  const [showRestartDialog, setShowRestartDialog] = useState(false);
   const {
     data: credits,
     isFetching,
@@ -53,16 +49,6 @@ const VPNMenuContent = () => {
       const status = await invoke<VpnStatus>("toggle_vpn_status");
       console.log("VPN status after toggle:", status);
       console.log("Checked value:", checked);
-      if (checked) {
-        // Check if nebula binary is installed
-        const isInstalled = await invoke<boolean>(
-          "get_nebula_binary_installed_status"
-        );
-        if (!isInstalled) {
-          setShowRestartDialog(true);
-          return;
-        }
-      }
       setIsConnected(status.is_enabled);
     } catch (error) {
       console.error("Failed to toggle VPN status:", error);
@@ -71,18 +57,6 @@ const VPNMenuContent = () => {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleRestart = async () => {
-    try {
-      await relaunch();
-    } catch (error) {
-      console.error("Failed to restart app:", error);
-    }
-  };
-
-  const handleDialogClose = async (open: boolean) => {
-    setShowRestartDialog(open);
   };
 
   return (
@@ -190,48 +164,6 @@ const VPNMenuContent = () => {
             </div>
           </div>
 
-          {/* Restart Dialog */}
-          <Dialog.Root
-            open={showRestartDialog}
-            onOpenChange={handleDialogClose}
-            modal={true}
-          >
-            <Dialog.Portal>
-              <Dialog.Overlay className="bg-white/70 backdrop-blur-sm fixed inset-0 z-[9999] flex items-center justify-center data-[state=open]:animate-fade-in-0.3" />
-              <Dialog.Content className="fixed top-1/2 left-1/2 w-[90%] max-w-sm -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-2xl z-[10000] focus:outline-none">
-                <div className="flex justify-between items-center mb-4">
-                  <Dialog.Title className="text-xl font-semibold text-black">
-                    Restart Required
-                  </Dialog.Title>
-                  <Dialog.Close asChild>
-                    <button onClick={() => handleDialogClose(false)}>
-                      <CloseCircle className="size-6 text-black" />
-                    </button>
-                  </Dialog.Close>
-                </div>
-                <p className="mb-6 text-black">
-                  The VPN binary needs to be installed. Please restart the
-                  application to complete the setup.
-                </p>
-                <div className="flex justify-end space-x-2">
-                  <Dialog.Close asChild>
-                    <button
-                      onClick={() => handleDialogClose(false)}
-                      className="px-4 py-2 border rounded text-black"
-                    >
-                      Cancel
-                    </button>
-                  </Dialog.Close>
-                  <button
-                    onClick={handleRestart}
-                    className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
-                  >
-                    Restart Now
-                  </button>
-                </div>
-              </Dialog.Content>
-            </Dialog.Portal>
-          </Dialog.Root>
         </div>
       )}
     </InView>

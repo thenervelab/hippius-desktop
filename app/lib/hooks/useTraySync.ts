@@ -143,17 +143,6 @@ export function useTrayInit(polkadotAddress: string) {
         text: isVpnEnabled ? "VPN: Turn Off" : "VPN: Turn On",
         action: async () => {
           try {
-            // Check if Nebula binary is installed when turning on
-            const currentStatus = await getVpnStatus();
-            if (!currentStatus) {
-              const isInstalled = await checkNebulaInstalled();
-              if (!isInstalled) {
-                logTrayAction("VPN binary not installed, setup required");
-                // Could emit an event to show restart dialog in the main app
-                return;
-              }
-            }
-
             const newStatus = await toggleVpnStatus();
             setVpnState(newStatus); // Update Jotai atom
             await updateVpnMenuItem();
@@ -233,14 +222,6 @@ async function toggleVpnStatus(): Promise<boolean> {
   }
 }
 
-async function checkNebulaInstalled(): Promise<boolean> {
-  try {
-    return await invoke<boolean>("get_nebula_binary_installed_status");
-  } catch (error) {
-    console.error("[Tray] Failed to check Nebula installation:", error);
-    return false;
-  }
-}
 
 async function updateVpnMenuItem() {
   try {
@@ -268,15 +249,6 @@ async function updateVpnMenuItem() {
       text: label,
       action: async () => {
         try {
-          const currentStatus = await getVpnStatus();
-          if (!currentStatus) {
-            const isInstalled = await checkNebulaInstalled();
-            if (!isInstalled) {
-              logTrayAction("VPN binary not installed, setup required");
-              return;
-            }
-          }
-
           const newStatus = await toggleVpnStatus();
           if (vpnStateSetter) {
             vpnStateSetter(newStatus);
@@ -292,10 +264,10 @@ async function updateVpnMenuItem() {
     const items = await menu.items();
     const updateItemIndex = items.findIndex((i) => i.id === INSTALL_UPDATE);
     const insertPosition = updateItemIndex >= 0 ? updateItemIndex + 1 : 0;
-    
+
     await menu.insert(newVpnItem, insertPosition);
     vpnToggleItem = newVpnItem;
-    
+
     logTrayAction("VPN menu item recreated successfully", { label, position: insertPosition });
   } catch (error) {
     console.error("[Tray] Failed to update VPN menu item:", error);
@@ -470,13 +442,13 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
 
   const tick = async () => {
     const currentStatus = await getVpnStatus();
-    
+
     // Update atom if status changed
     if (lastKnownStatus !== currentStatus && vpnStateSetter) {
       vpnStateSetter(currentStatus);
       lastKnownStatus = currentStatus;
     }
-    
+
     await updateVpnMenuItem();
   };
 
