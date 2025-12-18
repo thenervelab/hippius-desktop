@@ -28,21 +28,21 @@ const VPNMenuContent = () => {
 
   const handleToggle = async (checked: boolean) => {
     // Check if user has at least 10 credits before enabling VPN
-    if (checked && (isCreditsLoading || isFetching)) {
-      toast.error("Credits Loading", {
-        description: "Please wait while we load your credits balance.",
-      });
-      return;
-    }
-    if (checked && credits !== undefined) {
-      const creditsNumber = Number(credits) / Math.pow(10, 18);
-      if (creditsNumber < 10) {
-        toast.error("Insufficient Credits", {
-          description: "You need at least 10 credits to use the VPN feature.",
-        });
-        return;
-      }
-    }
+    // if (checked && (isCreditsLoading || isFetching)) {
+    //   toast.error("Credits Loading", {
+    //     description: "Please wait while we load your credits balance.",
+    //   });
+    //   return;
+    // }
+    // if (checked && credits !== undefined) {
+    //   const creditsNumber = Number(credits) / Math.pow(10, 18);
+    //   if (creditsNumber < 10) {
+    //     toast.error("Insufficient Credits", {
+    //       description: "You need at least 10 credits to use the VPN feature.",
+    //     });
+    //     return;
+    //   }
+    // }
 
     setIsLoading(true);
     try {
@@ -166,7 +166,7 @@ const VPNMenuContent = () => {
                 <VPNSwitch
                   checked={isConnected}
                   onCheckedChange={handleToggle}
-                  disabled={isLoading}
+                  loading={isLoading}
                 />
               </div>
 
