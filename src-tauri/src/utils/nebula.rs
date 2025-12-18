@@ -635,7 +635,6 @@ async fn get_api_auth_header() -> Result<(String, String)> {
         })?;
 
     println!("[Nebula] ✅ Got temp auth key (length: {})", temp_key.len());
-    println!("[Nebula] ✅ Got temp auth key (length: {})", temp_key);
     Ok((format!("Token {}", temp_key), account_id))
 }
 
@@ -710,34 +709,8 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
     
     println!("[Nebula] Renewing certificate from: {}", url);
     
-    // Extract the token from the auth header (removing 'Token ' prefix)
-    let token = auth_header.trim_start_matches("Token ");
-    
-    // First, make a GET request to get the CSRF token
-    let csrf_response = client.get(&url)
-        .header(AUTHORIZATION, auth_header)
-        .send()
-        .await?;
-        
-    // Extract CSRF token from cookies or headers (adjust this based on your API)
-    let csrf_token = csrf_response.headers()
-        .get("set-cookie")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|c| {
-            c.split(';')
-             .find(|part| part.trim().starts_with("csrftoken="))
-             .map(|part| part.trim().trim_start_matches("csrftoken=").to_string())
-        })
-        .unwrap_or_default();
-        
-    println!("[Nebula] Got CSRF token: {}", csrf_token);
-    
-    // Now make the POST request with both auth and CSRF token
     let response = client.post(&url)
         .header(AUTHORIZATION, auth_header)
-        .header("X-CSRFTOKEN", csrf_token)
-        .header("Content-Type", "application/json")
-        .body("{}")  // Empty JSON body as in curl example
         .send()
         .await?;
     
@@ -819,7 +792,7 @@ async fn update_certificate_db(cert: &CertificateResponse) -> Result<()> {
     Ok(())
 }
 
-async fn check_and_update_certificate() -> Result<()> {
+pub async fn check_and_update_certificate() -> Result<()> {
     let (auth_header, account_id) = get_api_auth_header().await?;
     let pool = crate::DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
     

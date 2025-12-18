@@ -38,7 +38,7 @@ export const PHASE_CONTENT: Record<string, AppSetupPhaseContent> = {
   installing_nebula: {
     icon: <Icons.InitializeRepo className="h-[222px] w-[110px]" />,
     status: "Installing Tools",
-    subStatus: "Setting up tools for Hippius Mesh...",
+    subStatus: "Installing Hippius Mesh Tools. Enter your password to continue...",
     command: "install_nebula",
   },
   verifying_installation: {
