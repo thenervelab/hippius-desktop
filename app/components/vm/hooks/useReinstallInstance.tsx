@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { toast } from "sonner";
-import { Instance } from "../instances-table";
 import ConfirmDialog2 from "../../ui/ConfirmDialog2";
 import { Icons } from "../../ui";
+import { Instance } from "../instances-table";
 
 interface UseReinstallInstanceOptions {
   onSuccess?: () => void;
@@ -12,13 +12,10 @@ export const useReinstallInstance = (options?: UseReinstallInstanceOptions) => {
   const { onSuccess } = options || {};
 
   const [openConfirmModal, setOpenConfirmModal] = useState(false);
-  const [selectedInstance, setSelectedInstance] = useState<Instance | null>(
-    null
-  );
 
   const handleReinstallInstance = (instance?: Instance) => {
     if (instance) {
-      setSelectedInstance(instance);
+      console.log("Preparing to reinstall instance:", instance);
     }
     setOpenConfirmModal(true);
   };
@@ -30,7 +27,6 @@ export const useReinstallInstance = (options?: UseReinstallInstanceOptions) => {
 
       toast.success("Instance Reinstalled Successfully");
       setOpenConfirmModal(false);
-      setSelectedInstance(null);
 
       // Call custom success handler if provided
       onSuccess?.();
@@ -42,7 +38,6 @@ export const useReinstallInstance = (options?: UseReinstallInstanceOptions) => {
 
   const handleCancel = () => {
     setOpenConfirmModal(false);
-    setSelectedInstance(null);
   };
 
   const ReinstallConfirmModal = () => (

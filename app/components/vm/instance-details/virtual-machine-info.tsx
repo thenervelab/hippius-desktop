@@ -72,6 +72,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
   };
 
   const handleChangeImage = (data: ChangeImageData) => {
+    console.log("Change Image Data:", data);
     setOpenChangeImageModal(false);
     setOpenChangeInstanceModal(true);
   };

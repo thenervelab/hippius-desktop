@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useEffect } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import InstanceHeader from "./instance-header";
 import VirtualMachineInfo from "./virtual-machine-info";
 import NetworksInfo from "./networks-info";
@@ -137,7 +137,8 @@ const InstanceDetails: React.FC = () => {
             Instance not found
           </h2>
           <p className="text-grey-60 mt-2">
-            The instance you're looking for doesn't exist or has been deleted.
+            The instance you&apos;re looking for doesn&apos;t exist or has been
+            deleted.
           </p>
         </div>
       </div>

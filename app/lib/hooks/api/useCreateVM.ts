@@ -7,7 +7,6 @@ import {
 } from "@tanstack/react-query";
 import { API_CONFIG } from "@/lib/config";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { error } from "console";
 
 export interface CreateVMRequest {
   flavor_id: number;
