@@ -520,14 +520,26 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     }
                 }
 
-                // Reset VPN status to FALSE on startup
-                println!("[Setup] Resetting VPN status to FALSE on startup...");
-                if let Err(e) = sqlx::query(
-                    "UPDATE vpn_status SET is_enabled = FALSE WHERE id = 1"
-                )
-                .execute(&pool)
-                .await {
-                    eprintln!("[Setup] Failed to reset VPN status: {}", e);
+                // Check if autoconnect is enabled
+                let autoconnect_enabled: bool = sqlx::query("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
+                    .fetch_optional(&pool)
+                    .await
+                    .unwrap_or(None)
+                    .map(|row| row.get("is_enabled"))
+                    .unwrap_or(false);
+
+                if !autoconnect_enabled {
+                    // Reset VPN status to FALSE on startup
+                    println!("[Setup] Resetting VPN status to FALSE on startup...");
+                    if let Err(e) = sqlx::query(
+                        "UPDATE vpn_status SET is_enabled = FALSE WHERE id = 1"
+                    )
+                    .execute(&pool)
+                    .await {
+                        eprintln!("[Setup] Failed to reset VPN status: {}", e);
+                    }
+                } else {
+                    println!("[Setup] Autoconnect enabled, skipping VPN status reset");
                 }
 
                 // Ensure Nebula is stopped
