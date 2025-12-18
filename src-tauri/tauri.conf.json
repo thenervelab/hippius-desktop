@@ -1,101 +1,103 @@
 {
-    "$schema": "https://schema.tauri.app/config/2",
-    "productName": "Hippius",
-    "version": "0.1.71",
-    "identifier": "hippius.com",
-    "build": {
-        "beforeDevCommand": "pnpm dev",
-        "devUrl": "http://localhost:3000",
-        "beforeBuildCommand": "pnpm build",
-        "frontendDist": "../out"
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hippius",
+  "version": "0.1.72",
+  "identifier": "hippius.com",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../out"
+  },
+  "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
     },
-    "plugins": {
-        "fs": {
-            "requireLiteralLeadingDot": false
-        },
-        "updater": {
-            "active": true,
-            "windows": {
-                "installMode": "passive"
-            },
-            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0MTFGQjM3MDcyRjIzNEYKUldSUEl5OEhOL3NSNUdYMmxpUG1WUWtiTWd1TDRjMkt6aXBveFdmYmx3TjJTd01UUW1IMmJGZUgK",
-            "endpoints": [
-                "https://github.com/thenervelab/hippius-desktop/releases/latest/download/latest.json"
-            ],
-            "dangerousInsecureTransportProtocol": false
-        },
-        "deep-link": {
-            "desktop": {
-                "schemes": ["hippiusapp"]
-            }
-        },
-        "shell": {
-            "open": true
-        }
+    "updater": {
+      "active": true,
+      "windows": {
+        "installMode": "passive"
+      },
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0MTFGQjM3MDcyRjIzNEYKUldSUEl5OEhOL3NSNUdYMmxpUG1WUWtiTWd1TDRjMkt6aXBveFdmYmx3TjJTd01UUW1IMmJGZUgK",
+      "endpoints": [
+        "https://github.com/thenervelab/hippius-desktop/releases/latest/download/latest.json"
+      ],
+      "dangerousInsecureTransportProtocol": false
     },
-    "app": {
-        "windows": [{
-            "dragDropEnabled": false,
-            "title": "Hippius",
-            "width": 1320,
-            "height": 1000,
-            "visible": true,
-            "center": true,
-            "resizable": true,
-            "devtools": true
-        }],
-        "withGlobalTauri": true,
-        "security": {
-            "capabilities": ["default"],
-            "csp": null,
-            "assetProtocol": {
-                "enable": true,
-                "scope": ["$HOME/**", "%USERPROFILE%/**", "$RESOURCE/**"]
-            }
-        }
+    "deep-link": {
+      "desktop": {
+        "schemes": ["hippiusapp"]
+      }
     },
-    "bundle": {
-        "active": true,
-        "targets": ["dmg", "msi", "deb", "app", "nsis"],
-        "icon": [
-            "icons/32x32.png",
-            "icons/128x128.png",
-            "icons/128x128@2x.png",
-            "icons/icon.icns",
-            "icons/icon.ico"
-        ],
-        "createUpdaterArtifacts": true,
-        "resources": [
-            "icons",
-            "icons/icon.png",
-            "icons/TrayIcon.png",
-            "icons/SyncingTrayIcon.png",
-            "icons/SyncCompletedTrayIcon.png",
-            "icons/*.png",
-            "icons/generic-image.png"
-        ],
-        "macOS": {
-            "entitlements": "entitlements.plist",
-            "exceptionDomain": "hippius.com",
-            "frameworks": [],
-            "providerShortName": "Hippius",
-            "signingIdentity": null,
-            "hardenedRuntime": true,
-            "minimumSystemVersion": "10.13.0"
-        },
-        "windows": {
-            "certificateThumbprint": null,
-            "digestAlgorithm": "sha256",
-            "timestampUrl": "http://timestamp.digicert.com",
-            "wix": {
-                "language": "en-US"
-            },
-            "nsis": {
-                "installerIcon": "icons/icon.ico",
-                "headerImage": "installer/header.bmp",
-                "sidebarImage": "installer/sidebar.bmp",
-                "displayLanguageSelector": false
-            }
-        }
+    "shell": {
+      "open": true
     }
+  },
+  "app": {
+    "windows": [
+      {
+        "dragDropEnabled": false,
+        "title": "Hippius",
+        "width": 1320,
+        "height": 1000,
+        "visible": true,
+        "center": true,
+        "resizable": true,
+        "devtools": true
+      }
+    ],
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": ["default"],
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$HOME/**", "%USERPROFILE%/**", "$RESOURCE/**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "msi", "deb", "app", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "resources": [
+      "icons",
+      "icons/icon.png",
+      "icons/TrayIcon.png",
+      "icons/SyncingTrayIcon.png",
+      "icons/SyncCompletedTrayIcon.png",
+      "icons/*.png",
+      "icons/generic-image.png"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "exceptionDomain": "hippius.com",
+      "frameworks": [],
+      "providerShortName": "Hippius",
+      "signingIdentity": null,
+      "hardenedRuntime": true,
+      "minimumSystemVersion": "10.13.0"
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "wix": {
+        "language": "en-US"
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "displayLanguageSelector": false
+      }
+    }
+  }
 }
