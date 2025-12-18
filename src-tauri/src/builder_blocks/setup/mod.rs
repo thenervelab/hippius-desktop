@@ -125,14 +125,6 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
-        (
-            "autoconnect_vpn_enabled",
-            &[
-                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
-                ("is_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
-                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
-            ],
-        ),
     ];
 
     for (table_name, columns) in TABLE_SCHEMAS {
@@ -520,34 +512,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     }
                 }
 
-                // Check if autoconnect is enabled
-                let autoconnect_enabled: bool = sqlx::query("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
-                    .fetch_optional(&pool)
-                    .await
-                    .unwrap_or(None)
-                    .map(|row| row.get("is_enabled"))
-                    .unwrap_or(false);
-
-                if !autoconnect_enabled {
-                    // Reset VPN status to FALSE on startup
-                    println!("[Setup] Resetting VPN status to FALSE on startup...");
-                    if let Err(e) = sqlx::query(
-                        "UPDATE vpn_status SET is_enabled = FALSE WHERE id = 1"
-                    )
-                    .execute(&pool)
-                    .await {
-                        eprintln!("[Setup] Failed to reset VPN status: {}", e);
-                    }
-                } else {
-                    println!("[Setup] Autoconnect enabled, skipping VPN status reset");
-                }
-
-                // Ensure Nebula is stopped
-                println!("[Setup] Ensuring Nebula is stopped on startup...");
-                if let Err(e) = crate::utils::nebula::stop_nebula().await {
-                    eprintln!("[Setup] Failed to stop Nebula: {}", e);
-                }
-
                 // Initialize Nebula binary status if it doesn't exist
                 let nebula_binary_status_exists: Option<(i64,)> = sqlx::query_as(
                     "SELECT COUNT(*) as count FROM nebula_binary_status"
@@ -570,31 +534,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                         }
                     } else {
                         println!("[Setup] Nebula binary status entry already exists");
-                    }
-                }
-
-                // Initialize autoconnect VPN status if it doesn't exist
-                let autoconnect_exists: Option<(i64,)> = sqlx::query_as(
-                    "SELECT COUNT(*) as count FROM autoconnect_vpn_enabled"
-                )
-                .fetch_optional(&pool)
-                .await
-                .unwrap_or(Some((0,)));
-
-                if let Some((count,)) = autoconnect_exists {
-                    if count == 0 {
-                        println!("[Setup] No autoconnect VPN status found, creating default entry...");
-                        if let Err(e) = sqlx::query(
-                            "INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)"
-                        )
-                        .execute(&pool)
-                        .await {
-                            eprintln!("[Setup] Failed to create default autoconnect VPN status: {}", e);
-                        } else {
-                            println!("[Setup] Default autoconnect VPN status created successfully");
-                        }
-                    } else {
-                        println!("[Setup] Autoconnect VPN status entry already exists");
                     }
                 }
 
