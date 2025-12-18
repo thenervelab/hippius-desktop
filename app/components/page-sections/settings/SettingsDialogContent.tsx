@@ -12,6 +12,7 @@ import CustomizeRPC from "./CustomizeRPC";
 import FileDeletionBehaviour from "./FileDeletionBehaviour";
 import OAuthTokenSection from "./OAuthTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
+import VPNSettings from "./VPNSettings";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -40,6 +41,10 @@ const SettingsDialogContent: React.FC = () => {
     {
       tabName: "Customize RPC",
       icon: <Icons.Box className="size-4" />,
+    },
+    {
+      tabName: "VPN Settings",
+      icon: <Icons.ShieldSecurity className="size-4" />,
     },
   ];
 
@@ -133,6 +138,19 @@ const SettingsDialogContent: React.FC = () => {
                   parentClassName="w-full"
                 >
                   <CustomizeRPC />
+                </RevealTextLine>
+              </div>
+            )}
+
+            {activeTab === "VPN Settings" && (
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <VPNSettings />
                 </RevealTextLine>
               </div>
             )}
