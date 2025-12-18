@@ -41,6 +41,15 @@ pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
     // Toggle the status
     let new_status = !current.is_enabled;
     
+    // If enabling, check and update certificate first
+    if new_status {
+        println!("[VPN] Checking certificate status before enabling...");
+        if let Err(e) = crate::utils::nebula::check_and_update_certificate().await {
+            eprintln!("[VPN] Certificate check failed: {}", e);
+            return Err(format!("Failed to verify/renew certificate: {}", e));
+        }
+    }
+
     // Update in database
     sqlx::query(
         "UPDATE vpn_status SET is_enabled = ?, last_updated = CURRENT_TIMESTAMP WHERE id = 1",
@@ -68,6 +77,58 @@ pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
     }
     
     Ok(VpnStatus {
+        is_enabled: new_status,
+    })
+}
+
+#[derive(Serialize)]
+pub struct AutoconnectStatus {
+    is_enabled: bool,
+}
+
+/// Get the current Autoconnect VPN status
+#[tauri::command]
+pub async fn get_autoconnect_status() -> Result<AutoconnectStatus, String> {
+    let pool = DB_POOL.get().ok_or("Database pool not available")?;
+    
+    match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some((is_enabled,))) => Ok(AutoconnectStatus { is_enabled }),
+        Ok(None) => {
+            // This should never happen due to our initialization, but handle it just in case
+            let _ = sqlx::query("INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
+                .execute(pool)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(AutoconnectStatus { is_enabled: false })
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Toggle the Autoconnect VPN status
+#[tauri::command]
+pub async fn toggle_autoconnect_status() -> Result<AutoconnectStatus, String> {
+    let pool = DB_POOL.get().ok_or("Database pool not available")?;
+    
+    // First get the current status
+    let current = get_autoconnect_status().await?;
+    
+    // Toggle the status
+    let new_status = !current.is_enabled;
+    
+    // Update in database
+    sqlx::query(
+        "UPDATE autoconnect_vpn_enabled SET is_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+    )
+    .bind(new_status)
+    .execute(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    
+    Ok(AutoconnectStatus {
         is_enabled: new_status,
     })
 }
