@@ -88,11 +88,15 @@ export function WalletAuthProvider({
     async (accountId?: string | null, token?: string | null) => {
       if (!accountId || !token) return;
       try {
-        // Always save/update the temp auth key so we have the latest one for API calls
-        await invoke("save_temp_auth_key_command", {
+        const hasMaster = await invoke<boolean>("has_master_token_command", {
           accountId,
-          tempAuthKey: token,
         });
+        if (!hasMaster) {
+          await invoke("save_temp_auth_key_command", {
+            accountId,
+            tempAuthKey: token,
+          });
+        }
       } catch (err) {
         console.error("[WalletAuth] Failed to persist temp auth key:", err);
       }

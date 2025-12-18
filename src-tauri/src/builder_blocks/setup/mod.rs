@@ -512,22 +512,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     }
                 }
 
-                // Reset VPN status to FALSE on startup
-                println!("[Setup] Resetting VPN status to FALSE on startup...");
-                if let Err(e) = sqlx::query(
-                    "UPDATE vpn_status SET is_enabled = FALSE WHERE id = 1"
-                )
-                .execute(&pool)
-                .await {
-                    eprintln!("[Setup] Failed to reset VPN status: {}", e);
-                }
-
-                // Ensure Nebula is stopped
-                println!("[Setup] Ensuring Nebula is stopped on startup...");
-                if let Err(e) = crate::utils::nebula::stop_nebula().await {
-                    eprintln!("[Setup] Failed to stop Nebula: {}", e);
-                }
-
                 // Initialize Nebula binary status if it doesn't exist
                 let nebula_binary_status_exists: Option<(i64,)> = sqlx::query_as(
                     "SELECT COUNT(*) as count FROM nebula_binary_status"

@@ -34,6 +34,13 @@ const VPNStatusIndicator = () => {
 
   useEffect(() => {
     fetchData();
+    const interval = setInterval(() => {
+      invoke<NebulaStats>("get_nebula_stats")
+        .then(setStats)
+        .catch(console.error);
+    }, 2000);
+
+    return () => clearInterval(interval);
   }, []);
 
   return (
