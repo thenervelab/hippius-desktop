@@ -1,5 +1,5 @@
 import { Icons } from "@/components/ui";
-import { LockKeyhole, LockKeyholeOpen, Share2Icon } from "lucide-react";
+import { LockKeyhole, LockKeyholeOpen, Server, Share2Icon } from "lucide-react";
 import Support from "../ui/icons/Support";
 
 export interface SubMenuItemData {
@@ -46,6 +46,11 @@ export const navItems: NavItemData[] = [
         icon: <LockKeyholeOpen className="size-4" />,
       },
     ],
+  },
+  {
+    label: "Virtual Machines",
+    path: "/vm",
+    icon: <Server className="size-4" />,
   },
   // {
   //   label: "Wallet",

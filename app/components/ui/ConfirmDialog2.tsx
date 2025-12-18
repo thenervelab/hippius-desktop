@@ -1,30 +1,33 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import React from "react";
 import { ArrowLeft } from "lucide-react";
+import { CardButton, Graphsheet, Icons } from ".";
+import DialogContainer from "./DialogContainer";
 
-import DialogContainer from "./ui/DialogContainer";
-import { CardButton, Graphsheet, Icons } from "./ui";
-
-export interface DeleteConfirmationDialogProps {
+export interface ConfirmDialogProps {
   open: boolean;
   onClose: () => void;
-  onDelete: () => void;
+  onConfirm: () => void;
   onBack: () => void;
   button: string;
   text: string;
   heading: string;
   disableButton?: boolean;
+  icon?: React.ReactNode;
+  iconBgColor?: string;
 }
 
-const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
+const ConfirmDialog2: React.FC<ConfirmDialogProps> = ({
   open,
   onClose,
-  onDelete,
+  onConfirm,
   onBack,
   button,
   text,
   heading,
   disableButton = false,
+  icon,
+  iconBgColor = "bg-error-50",
 }) => {
   return (
     <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -54,8 +57,10 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
                 className="absolute w-full h-full duration-500 opacity-30 z-0"
               />
               <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
-              <div className="h-8 w-8 bg-error-50 rounded-lg flex items-center justify-center z-20">
-                <Icons.Trash className="size-6 text-grey-100" />
+              <div
+                className={`h-8 w-8 ${iconBgColor} rounded-lg flex items-center justify-center z-20`}
+              >
+                {icon || <Icons.Trash className="size-6 text-grey-100" />}
               </div>
             </div>
             <span>{heading}</span>
@@ -75,7 +80,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
           </div>
 
           {/* Message */}
-          <div className="font-medium text-base text-grey-20 max-w-[320px] flex mx-auto w-full text-center mb-4 ">
+          <div className="font-medium text-base text-grey-50 max-w-[320px] flex mx-auto w-full text-center mb-4 ">
             {text}
           </div>
 
@@ -83,8 +88,8 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
           <CardButton
             className="bg-primary-50 py-4 hover:bg-primary-40 transition text-white w-full font-medium"
             size={"lg"}
-            variant={"primary"}
-            onClick={onDelete}
+            variant={"dialog"}
+            onClick={onConfirm}
             appendToStart
             disabled={disableButton}
           >
@@ -103,4 +108,4 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
   );
 };
 
-export default DeleteConfirmationDialog;
+export default ConfirmDialog2;

@@ -19,6 +19,7 @@ export const CopyableCell: React.FC<{
   linkClass?: string;
   showCopyAbleText?: boolean;
   isJustifyCenter?: boolean;
+  numberOfCharactersFromStartAndEnd?: number;
 }> = ({
   copyAbleText,
   link,
@@ -33,58 +34,89 @@ export const CopyableCell: React.FC<{
   checkIconClassName,
   className,
   isTable,
-  linkClass
+  linkClass,
+  numberOfCharactersFromStartAndEnd,
 }) => {
-    const { isMobile, isLaptop, isDesktop, isLargeDesktop } = useBreakpoint();
-    console.log("forSmallScreen", forSmallScreen);
-    console.log("isTable", isTable);
+  const { isMobile, isTablet, isLaptop, isDesktop, isLargeDesktop } =
+    useBreakpoint();
+  console.log("forSmallScreen", forSmallScreen);
+  console.log("isTable", isTable);
 
-    const display = forSmallScreen
-      ? shortenCopyAbleText(copyAbleText)
-      : shortenCopyAbleText(copyAbleText, {
-        isMobile,
-        isLaptop,
-        isDesktop,
-        isLargeDesktop,
-        isTable
-      });
-    return (
-      <CopyText
-        text={copyAbleText}
-        title={title}
-        toastMessage={toastMessage}
-        copyIconClassName={copyIconClassName}
-        buttonClass={buttonClass}
-        checkIconClassName={checkIconClassName}
-        className={className}
-        isJustifyCenter={isJustifyCenter}
-      >
-        {link ? (
-          <div
-            className={cn(
-              "text-grey-20 hover:text-primary-50 cursor-pointer",
-              linkClass
-            )}
-            onClick={async () => {
-              try {
-                await openUrl(link);
-              } catch (error) {
-                console.error("Failed to open Explorer:", error);
-              }
-            }}
+  let display;
+
+  // For CIDs or similar long strings, use the truncation style provided
+  if (numberOfCharactersFromStartAndEnd) {
+    display = shortenCopyAbleText(copyAbleText, {
+      style: "middle",
+      startLen:
+        numberOfCharactersFromStartAndEnd > 30 && isLargeDesktop
+          ? numberOfCharactersFromStartAndEnd
+          : isMobile
+          ? 8
+          : isTablet
+          ? 10
+          : isLaptop
+          ? 12
+          : 20,
+      endLen:
+        numberOfCharactersFromStartAndEnd > 30 && isLargeDesktop
+          ? numberOfCharactersFromStartAndEnd
+          : isMobile
+          ? 5
+          : isTablet
+          ? 7
+          : isLaptop
+          ? 10
+          : 15,
+    });
+  } else if (forSmallScreen) {
+    display = shortenCopyAbleText(copyAbleText);
+  } else {
+    display = shortenCopyAbleText(copyAbleText, {
+      isMobile,
+      isLaptop,
+      isDesktop,
+      isLargeDesktop,
+      isTable,
+    });
+  }
+  return (
+    <CopyText
+      text={copyAbleText}
+      title={title}
+      toastMessage={toastMessage}
+      copyIconClassName={copyIconClassName}
+      buttonClass={buttonClass}
+      checkIconClassName={checkIconClassName}
+      className={className}
+      isJustifyCenter={isJustifyCenter}
+    >
+      {link ? (
+        <div
+          className={cn(
+            "text-grey-20 hover:text-primary-50 cursor-pointer",
+            linkClass
+          )}
+          onClick={async () => {
+            try {
+              await openUrl(link);
+            } catch (error) {
+              console.error("Failed to open Explorer:", error);
+            }
+          }}
+        >
+          {display}
+        </div>
+      ) : (
+        showCopyAbleText && (
+          <span
+            onClick={(e) => e.stopPropagation()}
+            className={cn(textColor ? textColor : "text-grey-20")}
           >
             {display}
-          </div>
-        ) : (
-          showCopyAbleText && (
-            <span
-              onClick={(e) => e.stopPropagation()}
-              className={cn(textColor ? textColor : "text-grey-20")}
-            >
-              {display}
-            </span>
-          )
-        )}
-      </CopyText>
-    );
-  };
+          </span>
+        )
+      )}
+    </CopyText>
+  );
+};
