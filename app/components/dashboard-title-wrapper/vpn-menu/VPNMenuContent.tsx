@@ -46,6 +46,21 @@ const VPNMenuContent = () => {
       setIsConnected(status.is_enabled);
 
     } catch (error) {
+      let backendMessage: string;
+      if (error instanceof Error) {
+        backendMessage = error.message;
+      } else if (typeof error === "string") {
+        backendMessage = error;
+      } else {
+        try {
+          backendMessage = String(error);
+        } catch {
+          backendMessage = "An unknown error occurred";
+        }
+      }
+      toast.error("Failed to toggle VPN", {
+        description: backendMessage,
+      });
       console.error("Failed to toggle VPN status:", error);
       // Revert on error
       setIsConnected(!checked);
