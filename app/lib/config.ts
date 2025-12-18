@@ -37,6 +37,18 @@ export const API_CONFIG = {
       revoke: (id: string) =>
         `/api/infrastructure/tokens/service/${id}/revoke/`,
     },
+    vm: {
+      flavors: "/api/infrastructure/vm/flavors/",
+      images: "/api/infrastructure/vm/images/",
+      spawn: "/api/infrastructure/vm/spawn/",
+      instances: "/api/infrastructure/vm/instances/",
+      instance: (id: number) => `/api/infrastructure/vm/instances/${id}/`,
+      reboot: (id: number) => `/api/infrastructure/vm/instances/${id}/reboot/`,
+      start: (id: number) => `/api/infrastructure/vm/instances/${id}/start/`,
+      stop: (id: number) => `/api/infrastructure/vm/instances/${id}/stop/`,
+      terminate: (id: number) =>
+        `/api/infrastructure/vm/instances/${id}/terminate/`,
+    },
   },
 } as const;
 

@@ -5,7 +5,7 @@ import ActiveTabBg from "./ActiveTabBg";
 
 export interface TabItemProps {
   label: string;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   isActive: boolean;
   onClick: () => void;
   width?: string;
@@ -20,7 +20,7 @@ const TabItem: React.FC<TabItemProps> = ({
   onClick,
   width = "min-w-[148px]",
   height = "h-[36px]",
-  isJustifyStart = false
+  isJustifyStart = false,
 }) => {
   return (
     <div
@@ -42,9 +42,10 @@ const TabItem: React.FC<TabItemProps> = ({
         )}
       >
         <span>
-          {React.cloneElement(icon as React.ReactElement<any>, {
-            className: "size-[18px]"
-          })}
+          {icon &&
+            React.cloneElement(icon as React.ReactElement<any>, {
+              className: "size-[18px]",
+            })}
         </span>
         <span className="font-medium text-[14px]">{label}</span>
       </div>

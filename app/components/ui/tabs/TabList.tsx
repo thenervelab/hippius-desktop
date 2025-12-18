@@ -4,7 +4,7 @@ import TabItem from "./TabItem";
 
 export interface TabOption {
   tabName: string;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
 }
 
 interface TabListProps {
@@ -26,7 +26,7 @@ const TabList: React.FC<TabListProps> = ({
   width = "min-w-[148px]",
   height = "h-[36px]",
   gap = "gap-4",
-  isJustifyStart = false
+  isJustifyStart = false,
 }) => {
   return (
     <div className={cn("flex ", gap, className)}>
