@@ -2,37 +2,38 @@
 
 import * as Switch from "@radix-ui/react-switch";
 import cn from "@/app/lib/utils/cn";
+import { Loader2 } from "lucide-react";
 
 type VPNSwitchProps = {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
-  disabled?: boolean;
+  loading?: boolean;
 };
 
 const VPNSwitch = ({
   checked,
   onCheckedChange,
-  disabled = false,
+  loading = false,
 }: VPNSwitchProps) => {
-  return (
+  return loading ? (
     <div className="flex items-center gap-2">
+      <span className="text-grey-50 font-semibold text-sm leading-5 tracking-[-0.28px]">Loading</span>
+      <Loader2 className="size-4 animate-spin text-primary-50" />
+    </div>
+  ) :
+    (<div className="flex items-center gap-2">
       <span
-        className={cn(
-          "font-semibold text-sm leading-5 tracking-[-0.28px]",
-          disabled ? "text-grey-70" : "text-grey-50"
-        )}
+        className="font-semibold text-sm leading-5 tracking-[-0.28px] text-grey-50"
       >
         OFF
       </span>
       <Switch.Root
         className={cn(
-          "w-[40px] h-[24px] rounded-full relative shadow-none outline-none transition-colors duration-200 ease-in-out",
-          disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
+          "w-[40px] h-[24px] rounded-full relative shadow-none outline-none transition-colors duration-200 ease-in-out cursor-pointer",
           checked ? "bg-primary-50 border border-primary-80" : "bg-grey-90"
         )}
         checked={checked}
         onCheckedChange={onCheckedChange}
-        disabled={disabled}
       >
         <Switch.Thumb
           className={cn(
@@ -46,17 +47,12 @@ const VPNSwitch = ({
       <span
         className={cn(
           "font-semibold text-sm leading-5 tracking-[-0.28px]",
-          disabled
-            ? "text-grey-70"
-            : checked
-            ? "text-primary-50"
-            : "text-grey-50"
+          checked ? "text-primary-50" : "text-grey-50"
         )}
       >
         ON
       </span>
-    </div>
-  );
+    </div>)
 };
 
 export default VPNSwitch;
