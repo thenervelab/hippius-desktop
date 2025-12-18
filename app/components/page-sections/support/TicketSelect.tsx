@@ -34,14 +34,17 @@ export default function TicketSelect({
     <Select value={value} onValueChange={onValueChange} disabled={disabled}>
       <SelectTrigger
         className="
-          w-full flex items-center justify-between relative
+          w-full flex items-center justify-between  relative
           bg-grey-100 border border-grey-80 rounded-[8px]
           px-4 py-3 text-base font-medium text-grey-60
           h-[56px] focus:outline-none focus:border-grey-80
           disabled:opacity-50 disabled:cursor-not-allowed
         "
       >
-        <SelectValue placeholder={placeholder}>
+        <SelectValue
+          className="text-start self-start"
+          placeholder={placeholder}
+        >
           {selectedOption ? selectedOption.label : placeholder}
         </SelectValue>
         <ChevronDown className="absolute size-5 right-4 top-1/2 -translate-y-1/2 text-grey-60 pointer-events-none" />

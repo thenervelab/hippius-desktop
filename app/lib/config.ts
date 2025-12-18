@@ -40,6 +40,8 @@ export const API_CONFIG = {
     vm: {
       flavors: "/api/infrastructure/vm/flavors/",
       images: "/api/infrastructure/vm/images/",
+      spawn: "/api/infrastructure/vm/spawn/",
+      instances: "/api/infrastructure/vm/instances/",
     },
   },
 } as const;

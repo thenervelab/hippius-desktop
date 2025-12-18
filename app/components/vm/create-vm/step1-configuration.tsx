@@ -68,7 +68,7 @@ const Step1Configuration: React.FC<Step1Props> = ({
       </div>
 
       {/* Operating System and Image Row */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         {/* Operating System */}
         <div>
           <label className="text-sm font-medium text-grey-70">

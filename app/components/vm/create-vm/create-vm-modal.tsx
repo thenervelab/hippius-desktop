@@ -16,6 +16,7 @@ import { Button as Button2 } from "@/components/ui/button/NewButton";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
 import useVMImages from "@/app/lib/hooks/api/useVMImages";
+import useCreateVM from "@/app/lib/hooks/api/useCreateVM";
 
 type FieldName = "instanceName" | "operatingSystem" | "image" | "sshKey";
 
@@ -75,6 +76,9 @@ const CreateVMModal: React.FC<Props> = ({
   // Use create SSH key mutation
   const { mutateAsync: createSSHKey, isPending: isCreatingSSHKey } =
     useCreateSSHKey();
+
+  // Use create VM mutation
+  const { mutateAsync: createVM, isPending: isCreatingVM } = useCreateVM();
 
   // Extract unique operating systems from VM images
   const operatingSystems = React.useMemo(() => {
@@ -236,17 +240,68 @@ const CreateVMModal: React.FC<Props> = ({
     goToStep(1, -1);
   };
 
-  const handleSubmit = () => {
-    toast.success("Virtual Machine Created Successfully");
+  const handleSubmit = async () => {
+    try {
+      // Find the selected image ID from the slug
+      const selectedImage = vmImages?.find((img) => img.slug === image);
+      if (!selectedImage) {
+        toast.error("Selected image not found", {
+          duration: Infinity,
+          closeButton: true,
+        });
+        return;
+      }
 
-    onSubmit({
-      instanceName,
-      operatingSystem,
-      image,
-      sshKey,
-    });
+      // Find the selected SSH key's public key
+      const selectedSSHKey = sshKeysData?.results?.find(
+        (key) => key.id.toString() === sshKey
+      );
+      if (!selectedSSHKey) {
+        toast.error("Selected SSH key not found", {
+          duration: Infinity,
+          closeButton: true,
+        });
+        return;
+      }
 
-    resetForm();
+      // Get the flavor ID from the template
+      if (!template) {
+        toast.error("No VM template selected", {
+          duration: Infinity,
+          closeButton: true,
+        });
+        return;
+      }
+
+      // Create the VM
+      await createVM({
+        flavor_id: Number(template.id),
+        image_id: selectedImage.id,
+        ssh_public_key: selectedSSHKey.public_key,
+        name: instanceName,
+      });
+
+      toast.success("Virtual Machine Created Successfully");
+
+      // Pass data to parent component
+      onSubmit({
+        instanceName,
+        operatingSystem,
+        image,
+        sshKey,
+      });
+
+      resetForm();
+    } catch (error) {
+      // Display error toast that persists until manually dismissed
+      const errorMessage =
+        error instanceof Error ? error.message : "Failed to create VM";
+      toast.error(errorMessage, {
+        duration: Infinity,
+        closeButton: true,
+      });
+      console.error("Error creating VM:", error);
+    }
   };
 
   const handleClose = () => {
@@ -312,7 +367,7 @@ const CreateVMModal: React.FC<Props> = ({
             <div
               className="
               fixed left-1/2 top-1/2 z-50
-              w-full max-w-sm sm:max-w-[450px]
+              w-full max-w-sm sm:max-w-[490px]
               -translate-x-1/2 -translate-y-1/2
             "
             >
@@ -443,7 +498,9 @@ const CreateVMModal: React.FC<Props> = ({
                     <Button
                       className={`flex gap-x-2 items-center  h-[60px] w-full`}
                       onClick={handleNext}
-                      disabled={isLoading}
+                      disabled={
+                        isLoading || isLoadingImages || isLoadingSSHKeys
+                      }
                     >
                       {" "}
                       <div className="font-medium text-base leading-[22px] tracking-tight">
@@ -455,18 +512,20 @@ const CreateVMModal: React.FC<Props> = ({
                       <Button
                         className={`flex gap-x-2 items-center  h-[60px] w-full`}
                         onClick={handleSubmit}
-                        disabled={isLoading}
+                        disabled={isLoading || isCreatingVM}
                       >
                         {" "}
                         <div className="font-medium text-base leading-[22px] tracking-tight">
-                          {isLoading ? "Starting..." : "Start Virtual Machine"}
+                          {isCreatingVM
+                            ? "Creating..."
+                            : "Start Virtual Machine"}
                         </div>
                       </Button>
 
                       <Button2
                         className="bg-grey-100  border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-[56px] hover:bg-grey-80 transition"
                         onClick={handleBack}
-                        disabled={isLoading}
+                        disabled={isLoading || isCreatingVM}
                       >
                         Go Back
                       </Button2>

@@ -43,13 +43,8 @@ const VirtualMachines: FC = () => {
   const [selectedSSHKeyToDelete, setSelectedSSHKeyToDelete] =
     useState<SSHKey | null>(null);
   const [isDeletingInProgress, setIsDeletingInProgress] = useState(false);
-  const {
-    data: flavors,
-    isLoading: isFlavorsLoading,
-    refetch: refetchFlavors,
-    isFetching: isFlavorsRefetching,
-  } = useVMFlavors();
-  const flavorsLoading = isFlavorsLoading || isFlavorsRefetching;
+  const { data: flavors, isLoading: isFlavorsLoading } = useVMFlavors();
+  const flavorsLoading = isFlavorsLoading;
 
   // Transform flavors API data to template format with categories
   const templatesFromFlavors =
@@ -268,23 +263,23 @@ const VirtualMachines: FC = () => {
               />
             </>
           )}
-          {activeTab === "Templates" && (
+          {/* {activeTab === "Templates" && (
             <>
-              {/* <SearchInput
+              <SearchInput
                 placeholder="Search for a template"
                 className="h-9"
-              /> */}
+              />
               <RefreshButton
                 refetching={isFlavorsRefetching}
                 onClick={() => refetchFlavors()}
               />
-              {/* <CreateButton
+              <CreateButton
                 text="New Template"
                 isLoading={false}
                 onClick={handleModalOpen}
-              /> */}
+              />
             </>
-          )}
+          )} */}
         </div>
       </div>
 
