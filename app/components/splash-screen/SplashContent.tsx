@@ -46,7 +46,7 @@ export const PHASE_CONTENT: Record<string, AppSetupPhaseContent> = {
       <Icons.ConfiguringCORS className="h-[130px] w-[145px] animate-spin-fast" />
     ),
     status: "Verifying Tools",
-    subStatus: "Confirming tools for Hippius Mesh...",
+    subStatus: "Installing Hippius Mesh Tools. Enter your password to continue...",
     command: "verify_nebula",
   },
   ready: {

@@ -17,13 +17,15 @@ import {
   syncPercentAtom,
   lastUpdatedPercentAtom,
 } from "@/app/lib/store/syncAtoms";
-import { useAtomValue, useAtom } from "jotai";
+import { useAtomValue, useAtom, useSetAtom } from "jotai";
+import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
 const QUIT_ID = "quit";
 const SYNC_ID = "sync";
 const INSTALL_UPDATE = "install-update";
+const VPN_TOGGLE_ID = "vpn-toggle";
 const SYNC_ITEM_PREFIX = "sync-activity-item:";
 
 // add cached icon paths + state
@@ -38,6 +40,7 @@ let trayIconState: "default" | "syncing" | "completed" = "default";
 /* ─ State kept across React reloads ───────────────────────────── */
 let menuPromise: Promise<Menu> | null = null;
 let syncItem: MenuItem | null = null;
+let vpnToggleItem: MenuItem | null = null;
 const syncRowItems = new Map<string, MenuItem>(); // rows under header
 
 // Cache last rendered "rows signature" to avoid flicker
@@ -74,6 +77,10 @@ type SyncActivityRow = {
   deleted: boolean;
 };
 
+interface VpnStatus {
+  is_enabled: boolean;
+}
+
 // Cache for resolved generic icons
 const iconPathCache: Record<string, string | undefined | null> = {};
 
@@ -84,6 +91,7 @@ export function useTrayInit(polkadotAddress: string) {
   const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
     lastUpdatedPercentAtom
   );
+  const setVpnConnected = useSetAtom(vpnConnectedAtom);
 
   // Effect to update tray when sync percent changes
   useEffect(() => {
@@ -97,7 +105,7 @@ export function useTrayInit(polkadotAddress: string) {
   useEffect(() => {
     if (menuPromise) return;
 
-    menuPromise = (async () => {
+    menuPromise = (async (setVpnState: (enabled: boolean) => void) => {
       // resolve all three icons once
       const [defPath, syncPath, completedPath] = await Promise.all([
         resolveResource(DEFAULT_TRAY_ICON),
@@ -128,6 +136,33 @@ export function useTrayInit(polkadotAddress: string) {
         });
       }
 
+      // VPN toggle item
+      const isVpnEnabled = await getVpnStatus();
+      vpnToggleItem = await MenuItem.new({
+        id: VPN_TOGGLE_ID,
+        text: isVpnEnabled ? "VPN: Turn Off" : "VPN: Turn On",
+        action: async () => {
+          try {
+            // Check if Nebula binary is installed when turning on
+            const currentStatus = await getVpnStatus();
+            if (!currentStatus) {
+              const isInstalled = await checkNebulaInstalled();
+              if (!isInstalled) {
+                logTrayAction("VPN binary not installed, setup required");
+                // Could emit an event to show restart dialog in the main app
+                return;
+              }
+            }
+
+            const newStatus = await toggleVpnStatus();
+            setVpnState(newStatus); // Update Jotai atom
+            await updateVpnMenuItem();
+          } catch (error) {
+            console.error("[Tray] VPN toggle failed:", error);
+          }
+        },
+      });
+
       // Quit item - create this early but add it last
       const quit = await MenuItem.new({
         id: QUIT_ID,
@@ -139,7 +174,10 @@ export function useTrayInit(polkadotAddress: string) {
 
       // Build the initial menu
       const menu = await Menu.new({
-        items: [...(installUpdateMenuItem ? [installUpdateMenuItem] : [])],
+        items: [
+          ...(installUpdateMenuItem ? [installUpdateMenuItem] : []),
+          vpnToggleItem,
+        ],
       });
 
       if (!existingTray) {
@@ -157,17 +195,111 @@ export function useTrayInit(polkadotAddress: string) {
       // Start watcher for sync activity after menu exists
       startSyncActivityWatcher(polkadotAddress);
 
+      // Start VPN status watcher with state setter
+      startVpnStatusWatcher(setVpnState);
+
       // Add quit item at the end
       await menu.append(quit);
 
       return menu;
-    })();
-  }, []);
+    })(setVpnConnected);
+  }, [setVpnConnected]);
 }
 
 // Add these explicit debug logs
 function logTrayAction(action: string, details?: unknown) {
   console.log(`[Tray] ${action}`, details ? details : "");
+}
+
+/* ─ VPN Helper Functions ──────────────────────────────────────── */
+async function getVpnStatus(): Promise<boolean> {
+  try {
+    const status = await invoke<VpnStatus>("get_vpn_status");
+    return status.is_enabled;
+  } catch (error) {
+    console.error("[Tray] Failed to get VPN status:", error);
+    return false;
+  }
+}
+
+async function toggleVpnStatus(): Promise<boolean> {
+  try {
+    const status = await invoke<VpnStatus>("toggle_vpn_status");
+    logTrayAction("VPN toggled", { is_enabled: status.is_enabled });
+    return status.is_enabled;
+  } catch (error) {
+    console.error("[Tray] Failed to toggle VPN:", error);
+    throw error;
+  }
+}
+
+async function checkNebulaInstalled(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("get_nebula_binary_installed_status");
+  } catch (error) {
+    console.error("[Tray] Failed to check Nebula installation:", error);
+    return false;
+  }
+}
+
+async function updateVpnMenuItem() {
+  try {
+    const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
+    if (!menu) return;
+
+    const isEnabled = await getVpnStatus();
+    const label = isEnabled ? "VPN: Turn Off" : "VPN: Turn On";
+
+    logTrayAction("Updating VPN menu item", { isEnabled, label });
+
+    // Remove old item if exists
+    if (vpnToggleItem) {
+      try {
+        await menu.remove(vpnToggleItem);
+        logTrayAction("Removed old VPN menu item");
+      } catch (error) {
+        logTrayAction("Failed to remove old VPN item", error);
+      }
+    }
+
+    // Recreate the menu item with new text
+    const newVpnItem = await MenuItem.new({
+      id: VPN_TOGGLE_ID,
+      text: label,
+      action: async () => {
+        try {
+          const currentStatus = await getVpnStatus();
+          if (!currentStatus) {
+            const isInstalled = await checkNebulaInstalled();
+            if (!isInstalled) {
+              logTrayAction("VPN binary not installed, setup required");
+              return;
+            }
+          }
+
+          const newStatus = await toggleVpnStatus();
+          if (vpnStateSetter) {
+            vpnStateSetter(newStatus);
+          }
+          await updateVpnMenuItem();
+        } catch (error) {
+          console.error("[Tray] VPN toggle failed:", error);
+        }
+      },
+    });
+
+    // Insert at the correct position (after update item if exists, otherwise at position 0)
+    const items = await menu.items();
+    const updateItemIndex = items.findIndex((i) => i.id === INSTALL_UPDATE);
+    const insertPosition = updateItemIndex >= 0 ? updateItemIndex + 1 : 0;
+    
+    await menu.insert(newVpnItem, insertPosition);
+    vpnToggleItem = newVpnItem;
+    
+    logTrayAction("VPN menu item recreated successfully", { label, position: insertPosition });
+  } catch (error) {
+    console.error("[Tray] Failed to update VPN menu item:", error);
+  }
 }
 
 // helper to toggle tray icon
@@ -323,6 +455,39 @@ export async function setTraySyncPercent(percent: number | null) {
   // logTrayAction("setTraySyncPercent is deprecated, use syncPercentAtom instead", { percent });
   // Just forward to the internal implementation for now
   await updateTraySyncPercent(percent);
+}
+
+/* ─ VPN Status watcher ─────────────────────────────────────────── */
+let vpnStateSetter: ((enabled: boolean) => void) | null = null;
+
+function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
+  if (setVpnState) {
+    vpnStateSetter = setVpnState;
+  }
+
+  const INTERVAL_MS = 5000; // Check every 5 seconds
+  let lastKnownStatus: boolean | null = null;
+
+  const tick = async () => {
+    const currentStatus = await getVpnStatus();
+    
+    // Update atom if status changed
+    if (lastKnownStatus !== currentStatus && vpnStateSetter) {
+      vpnStateSetter(currentStatus);
+      lastKnownStatus = currentStatus;
+    }
+    
+    await updateVpnMenuItem();
+  };
+
+  void tick();
+  const h = setInterval(tick, INTERVAL_MS);
+  if (typeof window !== "undefined") {
+    // @ts-expect-error custom watcher handle
+    if (window.__hippiusVpnWatcher) clearInterval(window.__hippiusVpnWatcher);
+    // @ts-expect-error custom watcher handle
+    window.__hippiusVpnWatcher = h;
+  }
 }
 
 /* ─ Sync Activity watcher (debounced & diffed) ────────────────── */

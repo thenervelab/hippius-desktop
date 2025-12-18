@@ -50,15 +50,19 @@ const VPNMenuContent = () => {
 
     setIsLoading(true);
     try {
-      // Check if nebula binary is installed
-      const isInstalled = await invoke<boolean>(
-        "get_nebula_binary_installed_status"
-      );
-      if (!isInstalled) {
-        setShowRestartDialog(true);
-        return;
-      }
       const status = await invoke<VpnStatus>("toggle_vpn_status");
+      console.log("VPN status after toggle:", status);
+      console.log("Checked value:", checked);
+      if (checked) {
+        // Check if nebula binary is installed
+        const isInstalled = await invoke<boolean>(
+          "get_nebula_binary_installed_status"
+        );
+        if (!isInstalled) {
+          setShowRestartDialog(true);
+          return;
+        }
+      }
       setIsConnected(status.is_enabled);
     } catch (error) {
       console.error("Failed to toggle VPN status:", error);
