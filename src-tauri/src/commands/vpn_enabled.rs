@@ -41,6 +41,15 @@ pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
     // Toggle the status
     let new_status = !current.is_enabled;
     
+    // If enabling, check and update certificate first
+    if new_status {
+        println!("[VPN] Checking certificate status before enabling...");
+        if let Err(e) = crate::utils::nebula::check_and_update_certificate().await {
+            eprintln!("[VPN] Certificate check failed: {}", e);
+            return Err(format!("Failed to verify/renew certificate: {}", e));
+        }
+    }
+
     // Update in database
     sqlx::query(
         "UPDATE vpn_status SET is_enabled = ?, last_updated = CURRENT_TIMESTAMP WHERE id = 1",
