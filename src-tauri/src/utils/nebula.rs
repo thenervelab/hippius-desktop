@@ -1394,6 +1394,9 @@ pub async fn get_nebula_ip() -> Result<String, String> {
 
 /// Tries to find the Nebula network interface by checking common names and IP ranges
 async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
+    let target_ip = search_ip.unwrap_or("100.64.");
+    println!("[Nebula] Searching for interface with IP: {}", target_ip);
+
     // First try to find by common interface names
     #[cfg(target_os = "linux")]
     {
@@ -1419,7 +1422,6 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
             .output() {
                 let output_str = String::from_utf8_lossy(&output.stdout);
                 for line in output_str.lines() {
-                    let target_ip = search_ip.unwrap_or("100.64.");
                     if line.contains(target_ip) {
                         // Extract interface name (it's the second field in the output)
                         if let Some(iface) = line.split_whitespace().nth(1) {
@@ -1437,6 +1439,8 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
     {
         use std::process::Command;
         
+        // Method 1: ifconfig
+        println!("[Nebula] Trying ifconfig...");
         if let Ok(output) = Command::new("ifconfig")
             .arg("-a")
             .output() {
@@ -1445,15 +1449,46 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
                 
                 for line in output_str.lines() {
                     // Check for interface line (starts with non-whitespace)
-                    if !line.starts_with('\t') && !line.starts_with(' ') && line.ends_with(':') {
+                    if !line.starts_with('\t') && !line.starts_with(' ') && line.contains(':') {
                         current_iface = Some(line.split(':').next().unwrap_or("").trim());
                     } 
                     // Check for Nebula IP in the interface details
                     else if let Some(iface) = current_iface {
-                        let target_ip = search_ip.unwrap_or("100.64.");
                         if line.contains(target_ip) {
-                            println!("[Nebula] Found interface by IP range: {}", iface);
+                            println!("[Nebula] Found interface by ifconfig: {}", iface);
                             return Some(iface.to_string());
+                        }
+                    }
+                }
+            }
+
+        // Method 2: netstat -rn (Routing table)
+        // This is often more reliable for finding which interface hosts an IP
+        println!("[Nebula] Trying netstat -rn...");
+        if let Ok(output) = Command::new("netstat")
+            .args(&["-rn", "-f", "inet"])
+            .output() {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                // Look for lines containing the IP
+                // Example: 100.64.0.1/32      link#15            UCS             utun4
+                // Or:      100.64.0.1         100.64.0.1         UH              utun4
+                for line in output_str.lines() {
+                    if line.contains(target_ip) {
+                        // The interface is usually the last column or one of the last
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if let Some(last) = parts.last() {
+                            if last.starts_with("utun") || last.starts_with("tun") {
+                                println!("[Nebula] Found interface by netstat: {}", last);
+                                return Some(last.to_string());
+                            }
+                        }
+                        // Sometimes it's the second to last if there are flags
+                        if parts.len() > 1 {
+                             let second_last = parts[parts.len() - 2];
+                             if second_last.starts_with("utun") || second_last.starts_with("tun") {
+                                println!("[Nebula] Found interface by netstat (2nd last): {}", second_last);
+                                return Some(second_last.to_string());
+                             }
                         }
                     }
                 }
@@ -1468,6 +1503,12 @@ pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
     // Try to get the Nebula IP from the certificate to help find the interface
     let nebula_ip = get_nebula_ip_internal().await.ok();
     let search_ip = nebula_ip.as_deref();
+    
+    if let Some(ip) = search_ip {
+        println!("[Nebula Stats] Retrieved Nebula IP: {}", ip);
+    } else {
+        println!("[Nebula Stats] Failed to retrieve Nebula IP from certificate, using default search");
+    }
 
     // Try to find the Nebula interface dynamically
     if let Some(iface) = find_nebula_interface(search_ip).await {
@@ -1588,17 +1629,40 @@ async fn get_macos_interface_stats(interface_prefix: &str, search_ip: Option<&st
         let parts: Vec<&str> = line.split_whitespace().collect();
         
         // netstat format: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes
-        if parts.len() >= 10 && parts[0].starts_with(interface_prefix) {
+        if parts.len() >= 7 && parts[0].starts_with(interface_prefix) {
             // Check if this is the Nebula interface by looking for the IP
+            // The IP can be in different columns depending on output format
             let target_ip = search_ip.unwrap_or("100.64");
-            if parts.len() > 3 && parts[3].starts_with(target_ip) {
-                let ibytes = parts[6].parse::<u64>()
-                    .map_err(|e| format!("Failed to parse ibytes: {}", e))?;
-                let obytes = parts[9].parse::<u64>()
-                    .map_err(|e| format!("Failed to parse obytes: {}", e))?;
+            let mut found_ip = false;
+            
+            for part in &parts {
+                if part.starts_with(target_ip) {
+                    found_ip = true;
+                    break;
+                }
+            }
+            
+            if found_ip {
+                // Ibytes is usually column 6 (0-indexed) or 7
+                // Obytes is usually column 9 or 10
+                // We need to be careful.
+                // Standard format: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
+                // utun4 1300 <Link#15> ...
+                // utun4 1300 100.64.0.1 100.64.0.1 ...
                 
-                println!("[Nebula Stats] Found interface: {}, IP: {}", parts[0], parts[3]);
-                return Ok((obytes, ibytes)); // TX, RX
+                // Let's try to find Ibytes and Obytes based on position relative to end if possible
+                // Or just assume standard positions if we found the IP
+                
+                // Try standard positions first
+                if parts.len() >= 10 {
+                    let ibytes_res = parts[6].parse::<u64>();
+                    let obytes_res = parts[9].parse::<u64>();
+                    
+                    if let (Ok(ibytes), Ok(obytes)) = (ibytes_res, obytes_res) {
+                        println!("[Nebula Stats] Found interface stats: {}, IP: {}, TX: {}, RX: {}", parts[0], target_ip, obytes, ibytes);
+                        return Ok((obytes, ibytes)); // TX, RX
+                    }
+                }
             }
         }
     }
