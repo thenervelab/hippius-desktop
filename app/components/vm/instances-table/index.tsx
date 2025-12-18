@@ -8,66 +8,49 @@ import { FC } from "react";
 import { P } from "../../ui/typography";
 import { cn } from "@/lib/utils";
 import { getDesktopColumns } from "./instances-columns";
-import { MOCK_INSTANCES } from "./mock-data";
 import { useStartStopInstance } from "../hooks/useStartStopInstance";
+import useVMInstances from "@/app/lib/hooks/api/useVMInstances";
+import { VMFlavorResponse } from "@/app/lib/hooks/api/useVMFlavors";
 import { useRebootInstance } from "../hooks/useRebootInstance";
 import { useReinstallInstance } from "../hooks/useReinstallInstance";
 import { usePagination } from "@/app/lib/hooks";
-import NoEntriesFound from "../../ui/alt-table/NoEntriesFound";
+import NoDataFound from "../../ui/NoDataFound";
+import { Server } from "lucide-react";
 
 export interface Instance {
-  id: string;
+  id: number;
+  uuid: string | null;
   name: string;
-  minerId: string;
-  template: {
-    model?: string;
-    cpu: string;
-    ram: string;
-    gpu: string;
-    processor?: string;
-    storage?: string;
-    bandwidth?: string;
-    price?: string;
-  };
-  image: {
-    os: "Linux" | "Ubuntu";
-    version: string;
-  };
-  ipAddress: string;
-  network?: {
-    ipv4: string;
-    ipv4Gateway: string;
-    ipv6: string;
-    ipv6Gateway: string;
-    sshLogin: string;
-    sshKey: string;
-  };
-  status:
-    | "Running"
-    | "Connected"
-    | "Stopped"
-    | "Starting"
-    | "Pending"
-    | "Stopping"
-    | "Failed";
+  status: string;
+  flavor: string;
+  image: string;
+  public_ip: string | null;
+  nebula_ip: string | null;
+  created_at: string;
 }
 
 interface InstancesTableProps {
   onDeleteInstance?: (instance: Instance) => void;
+  onCreateNew?: () => void;
+  flavors?: VMFlavorResponse[];
+  isFlavorsLoading?: boolean;
 }
 
-const InstancesTable: FC<InstancesTableProps> = ({ onDeleteInstance }) => {
-  const queryData = MOCK_INSTANCES;
-  const isLoading = false;
-  const isRefetching = false;
-  const error = "";
+const InstancesTable: FC<InstancesTableProps> = ({
+  onDeleteInstance,
+  onCreateNew,
+  flavors,
+  isFlavorsLoading,
+}) => {
+  const { data: instances, isLoading, error, isRefetching } = useVMInstances();
 
+  // Use client-side pagination
   const {
     paginatedData: data,
     setCurrentPage,
     currentPage,
     totalPages,
-  } = usePagination(queryData || [], 12);
+  } = usePagination(instances || [], 10);
 
   // Instance control hooks
   const { handleStartStopInstance, StartStopConfirmModal } =
@@ -78,6 +61,7 @@ const InstancesTable: FC<InstancesTableProps> = ({ onDeleteInstance }) => {
 
   // Get columns with the handlers
   const desktopColumns = getDesktopColumns(
+    flavors,
     onDeleteInstance,
     handleStartStopInstance,
     handleRebootInstance,
@@ -97,10 +81,10 @@ const InstancesTable: FC<InstancesTableProps> = ({ onDeleteInstance }) => {
         {error ? (
           <div className="w-full h-[800px] flex items-center justify-center p-6">
             <P className="text-error-70 font-medium">
-              Oops an error occured...
+              Oops an error occurred...
             </P>
           </div>
-        ) : isLoading || isRefetching || !data ? (
+        ) : isLoading || isRefetching || isFlavorsLoading ? (
           <TableModule.Table>
             <TableModule.THead>
               {table.getHeaderGroups().map((headerGroup) => (
@@ -119,20 +103,29 @@ const InstancesTable: FC<InstancesTableProps> = ({ onDeleteInstance }) => {
               <TableModule.SkeletonTableRow
                 rowClassName="h-[69px]"
                 rows={10}
-                columns={6}
+                columns={8}
                 columnWidths={[
-                  "180px",
-                  "220px",
-                  "200px",
+                  "100px",
+                  "160px",
                   "140px",
-                  "140px",
-                  "70px",
+                  "100px",
+                  "100px",
+                  "90px",
+                  "100px",
+                  "50px",
                 ]}
               />
             </TableModule.TBody>
           </TableModule.Table>
         ) : !data.length ? (
-          <NoEntriesFound />
+          <NoDataFound
+            icon={Server}
+            title="No VM Instances Found"
+            description="You currently do not have any virtual machine instances. Create your first VM to get started with cloud computing."
+            buttonText="Create VM"
+            onButtonClick={onCreateNew || (() => {})}
+            showButton={!!onCreateNew}
+          />
         ) : (
           <TableModule.Table>
             <TableModule.THead>

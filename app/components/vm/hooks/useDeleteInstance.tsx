@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 import { Instance } from "../instances-table";
 import DeleteConfirmationDialog from "../../DeleteConfirmationDialog";
+import useTerminateVM from "@/app/lib/hooks/api/useTerminateVM";
 
 interface UseDeleteInstanceOptions {
   redirectOnDelete?: boolean;
@@ -18,10 +20,19 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
   } = options || {};
 
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [openDeleteModal, setOpenDeleteModal] = useState(false);
   const [selectedInstance, setSelectedInstance] = useState<Instance | null>(
     null
   );
+
+  // Use the terminate VM mutation
+  const { mutateAsync: terminateVM, isPending: isDeleting } = useTerminateVM({
+    onSuccess: () => {
+      // Invalidate and refetch VM instances
+      queryClient.invalidateQueries({ queryKey: ["vm-instances"] });
+    },
+  });
 
   const handleDeleteInstance = (instance?: Instance) => {
     if (instance) {
@@ -31,9 +42,10 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
   };
 
   const handleConfirmDelete = async () => {
+    if (!selectedInstance) return;
+
     try {
-      // TODO: Replace with actual API call
-      // await deleteInstanceAPI(selectedInstance?.id);
+      await terminateVM(selectedInstance.id);
 
       toast.success("Virtual Machine Deleted Successfully");
       setOpenDeleteModal(false);
@@ -47,7 +59,9 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
         router.push(redirectPath);
       }
     } catch (error) {
-      toast.error("Failed to delete instance");
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete instance"
+      );
       console.error("Delete instance error:", error);
     }
   };
@@ -63,9 +77,10 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
       onClose={handleCancelDelete}
       onBack={handleCancelDelete}
       onDelete={handleConfirmDelete}
-      button="Delete Instance"
+      button={isDeleting ? "Deleting..." : "Delete Instance"}
       text="Are you sure you want to delete this instance? This action is permanent and all data will be lost."
       heading="Delete Instance"
+      disableButton={isDeleting}
     />
   );
 

@@ -287,7 +287,12 @@ const VirtualMachines: FC = () => {
       <div className="mt-6">
         <div className="animate-in fade-in duration-300">
           {activeTab === "Instances" ? (
-            <InstancesTable onDeleteInstance={handleDeleteInstance} />
+            <InstancesTable
+              onDeleteInstance={handleDeleteInstance}
+              onCreateNew={handleModalOpen}
+              flavors={flavors}
+              isFlavorsLoading={isFlavorsLoading}
+            />
           ) : activeTab === "SSH Keys" ? (
             <SSHKeysTable
               onDeleteKey={handleDeleteSSHKey}

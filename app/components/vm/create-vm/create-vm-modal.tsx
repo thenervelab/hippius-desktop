@@ -17,6 +17,7 @@ import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
 import useVMImages from "@/app/lib/hooks/api/useVMImages";
 import useCreateVM from "@/app/lib/hooks/api/useCreateVM";
+import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 
 type FieldName = "instanceName" | "operatingSystem" | "image" | "sshKey";
 
@@ -80,11 +81,16 @@ const CreateVMModal: React.FC<Props> = ({
   // Use create VM mutation
   const { mutateAsync: createVM, isPending: isCreatingVM } = useCreateVM();
 
+  // Fetch user credits
+  const {
+    data: credits,
+    isFetching: isCreditsFetching,
+    isLoading: isCreditsLoading,
+  } = useUserCredits();
+
   // Extract unique operating systems from VM images
   const operatingSystems = React.useMemo(() => {
     if (!vmImages) return [];
-
-    const osSet = new Set<string>();
     const osMap = new Map<string, string>();
 
     vmImages.forEach((img) => {
@@ -242,6 +248,29 @@ const CreateVMModal: React.FC<Props> = ({
 
   const handleSubmit = async () => {
     try {
+      // Check if credits are loading
+      if (isCreditsLoading || isCreditsFetching) {
+        toast.error("Credits Loading", {
+          description: "Please wait while we load your credits balance.",
+          duration: Infinity,
+          closeButton: true,
+        });
+        return;
+      }
+
+      // Check if user has at least 10 credits
+      if (credits !== undefined) {
+        const creditsNumber = Number(credits) / Math.pow(10, 18);
+        if (creditsNumber < 10) {
+          toast.error("Insufficient Credits", {
+            description: "You need at least 10 credits to create a VM.",
+            duration: Infinity,
+            closeButton: true,
+          });
+          return;
+        }
+      }
+
       // Find the selected image ID from the slug
       const selectedImage = vmImages?.find((img) => img.slug === image);
       if (!selectedImage) {
@@ -512,7 +541,12 @@ const CreateVMModal: React.FC<Props> = ({
                       <Button
                         className={`flex gap-x-2 items-center  h-[60px] w-full`}
                         onClick={handleSubmit}
-                        disabled={isLoading || isCreatingVM}
+                        disabled={
+                          isLoading ||
+                          isCreatingVM ||
+                          isCreditsLoading ||
+                          isCreditsFetching
+                        }
                       >
                         {" "}
                         <div className="font-medium text-base leading-[22px] tracking-tight">

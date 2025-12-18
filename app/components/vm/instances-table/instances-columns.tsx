@@ -2,17 +2,20 @@ import { createColumnHelper } from "@tanstack/react-table";
 import { Instance } from "./index";
 import { MoreVertical } from "lucide-react";
 import React from "react";
-import TemplateCell from "./template-cell";
-import ImageCell from "./image-cell";
 import StatusCell from "./status-cell";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { Icons } from "../../ui";
+import { formatDate } from "@/app/lib/utils/formatters/formatDate";
+import ImageCell from "./image-cell";
+import TemplateCell from "./template-cell";
+import { VMFlavorResponse } from "@/app/lib/hooks/api/useVMFlavors";
 
 const columnHelper = createColumnHelper<Instance>();
 
 export const getDesktopColumns = (
+  flavors: VMFlavorResponse[] | undefined,
   onDelete?: (instance: Instance) => void,
   onStartStop?: (instance: Instance, status: string) => void,
   onReboot?: (instance: Instance) => void,
@@ -32,21 +35,79 @@ export const getDesktopColumns = (
       );
     },
   }),
-  columnHelper.accessor("template", {
-    header: "MODELS",
-    cell: (d) => <TemplateCell value={d.getValue()} />,
+  columnHelper.accessor("flavor", {
+    header: "TEMPLATE",
+    cell: (d) => {
+      const flavorName = d.getValue();
+      const flavor = flavors?.find(
+        (f) => f.name.toLowerCase() === flavorName.toLowerCase()
+      );
+
+      if (!flavor) {
+        return <span className="text-grey-60 text-xs">{flavorName}</span>;
+      }
+
+      return (
+        <TemplateCell
+          value={{
+            name: flavor.display_name,
+            cpu: `${flavor.cpu_cores} vCore${flavor.cpu_cores > 1 ? "s" : ""}`,
+            ram: `${(flavor.memory_mb / 1024).toFixed(0)} GB`,
+            gpu: `${flavor.data_disk_gb} GB Storage`,
+          }}
+        />
+      );
+    },
   }),
   columnHelper.accessor("image", {
     header: "IMAGE",
-    cell: (d) => <ImageCell value={d.getValue()} />,
+    cell: (d) => {
+      const imageName = d.getValue();
+      // Extract OS and version from image name
+      let os: "AlmaLinux" | "Debian" | "Rocky Linux" | "Ubuntu";
+      let version: string;
+
+      if (imageName.startsWith("AlmaLinux")) {
+        os = "AlmaLinux";
+        version = imageName.replace("AlmaLinux ", "");
+      } else if (imageName.startsWith("Debian")) {
+        os = "Debian";
+        version = imageName.replace("Debian ", "");
+      } else if (imageName.startsWith("Rocky Linux")) {
+        os = "Rocky Linux";
+        version = imageName.replace("Rocky Linux ", "");
+      } else if (imageName.startsWith("Ubuntu")) {
+        os = "Ubuntu";
+        version = imageName.replace("Ubuntu ", "");
+      } else {
+        // Fallback for unknown OS
+        const parts = imageName.split(" ");
+        os = "Rocky Linux"; // Default fallback
+        version = parts.slice(1).join(" ") || imageName;
+      }
+
+      return <ImageCell value={{ os, version }} />;
+    },
   }),
-  columnHelper.accessor("ipAddress", {
-    header: "IP ADDRESS",
-    cell: (d) => <span className="text-grey-20 text-base">{d.getValue()}</span>,
+  columnHelper.accessor("public_ip", {
+    header: "PUBLIC IP",
+    cell: (d) => (
+      <span className="text-grey-20 text-base">{d.getValue() || "—"}</span>
+    ),
+  }),
+  columnHelper.accessor("nebula_ip", {
+    header: "NEBULA IP",
+    cell: (d) => (
+      <span className="text-grey-20 text-base">{d.getValue() || "—"}</span>
+    ),
   }),
   columnHelper.accessor("status", {
     header: "STATUS",
     cell: (d) => <StatusCell value={d.getValue()} />,
+  }),
+  columnHelper.accessor("created_at", {
+    header: "CREATED AT",
+    cell: (d) => formatDate(d.getValue()),
   }),
   columnHelper.display({
     id: "actions",
@@ -76,13 +137,13 @@ export const getDesktopColumns = (
             },
             {
               icon:
-                instance.status === "Stopped" ? (
+                instance.status.toLowerCase() === "stopped" ? (
                   <Icons.PlayCircle className="size-4" />
                 ) : (
                   <Icons.StopCircle className="size-4" />
                 ),
               itemTitle:
-                instance.status === "Stopped"
+                instance.status.toLowerCase() === "stopped"
                   ? "Start Instance"
                   : "Stop Instance",
               onItemClick: () =>

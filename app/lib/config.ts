@@ -42,6 +42,11 @@ export const API_CONFIG = {
       images: "/api/infrastructure/vm/images/",
       spawn: "/api/infrastructure/vm/spawn/",
       instances: "/api/infrastructure/vm/instances/",
+      reboot: (id: number) => `/api/infrastructure/vm/instances/${id}/reboot/`,
+      start: (id: number) => `/api/infrastructure/vm/instances/${id}/start/`,
+      stop: (id: number) => `/api/infrastructure/vm/instances/${id}/stop/`,
+      terminate: (id: number) =>
+        `/api/infrastructure/vm/instances/${id}/terminate/`,
     },
   },
 } as const;

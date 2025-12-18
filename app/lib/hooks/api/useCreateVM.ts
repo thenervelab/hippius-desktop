@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { API_CONFIG } from "@/lib/config";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { error } from "console";
 
 export interface CreateVMRequest {
   flavor_id: number;
@@ -72,7 +73,11 @@ export default function useCreateVM(
           throw new Error(message);
         }
 
-        throw new Error(`HTTP ${response.status}: Failed to create VM`);
+        throw new Error(
+          `HTTP ${response.status}: Failed to create VM instance ${
+            errorData.message ? `- ${errorData.message}` : ""
+          }`
+        );
       }
 
       return response.json() as Promise<CreateVMResponse>;
