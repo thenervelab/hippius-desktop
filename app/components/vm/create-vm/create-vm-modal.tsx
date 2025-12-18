@@ -15,19 +15,14 @@ import { Button } from "@/components/ui/button";
 import { Button as Button2 } from "@/components/ui/button/NewButton";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
+import useVMImages from "@/app/lib/hooks/api/useVMImages";
 
-type FieldName =
-  | "instanceName"
-  | "numberOfInstances"
-  | "operatingSystem"
-  | "image"
-  | "sshKey";
+type FieldName = "instanceName" | "operatingSystem" | "image" | "sshKey";
 
 type FieldErrors = Partial<Record<FieldName, string>>;
 
 export interface VMConfigurationData {
   instanceName: string;
-  numberOfInstances: number;
   operatingSystem: string;
   image: string;
   sshKey: string;
@@ -42,24 +37,6 @@ type Props = {
   isLoading?: boolean;
 };
 
-const operatingSystems = [
-  { value: "ubuntu", label: "Ubuntu" },
-  { value: "debian", label: "Debian" },
-  { value: "centos", label: "CentOS" },
-  { value: "rocky", label: "Rocky Linux" },
-  { value: "fedora", label: "Fedora" },
-];
-
-const allImages = [
-  { value: "ubuntu-22.04", label: "Ubuntu 22.04 LTS", os: "ubuntu" },
-  { value: "ubuntu-20.04", label: "Ubuntu 20.04 LTS", os: "ubuntu" },
-  { value: "debian-12", label: "Debian 12", os: "debian" },
-  { value: "debian-11", label: "Debian 11", os: "debian" },
-  { value: "centos-stream-9", label: "CentOS Stream 9", os: "centos" },
-  { value: "rocky-9", label: "Rocky Linux 9", os: "rocky" },
-  { value: "fedora-38", label: "Fedora 38", os: "fedora" },
-];
-
 const CreateVMModal: React.FC<Props> = ({
   open,
   onClose,
@@ -71,7 +48,6 @@ const CreateVMModal: React.FC<Props> = ({
   const [direction, setDirection] = useState(0); // -1 for back, 1 for forward
 
   const [instanceName, setInstanceName] = useState("");
-  const [numberOfInstances, setNumberOfInstances] = useState("");
   const [operatingSystem, setOperatingSystem] = useState("");
   const [image, setImage] = useState("");
   const [sshKey, setSshKey] = useState("");
@@ -82,6 +58,9 @@ const CreateVMModal: React.FC<Props> = ({
   const stepTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   );
+
+  // Fetch VM images from API
+  const { data: vmImages, isLoading: isLoadingImages } = useVMImages();
 
   // Fetch SSH keys from API
   const {
@@ -97,21 +76,60 @@ const CreateVMModal: React.FC<Props> = ({
   const { mutateAsync: createSSHKey, isPending: isCreatingSSHKey } =
     useCreateSSHKey();
 
+  // Extract unique operating systems from VM images
+  const operatingSystems = React.useMemo(() => {
+    if (!vmImages) return [];
+
+    const osSet = new Set<string>();
+    const osMap = new Map<string, string>();
+
+    vmImages.forEach((img) => {
+      const osName = img.name.split(" ")[0]; // Extract OS name (e.g., "Ubuntu" from "Ubuntu 22.04 LTS")
+      const osKey = osName.toLowerCase();
+      if (!osMap.has(osKey)) {
+        osMap.set(osKey, osName);
+      }
+    });
+
+    return Array.from(osMap.entries()).map(([value, label]) => ({
+      value,
+      label,
+    }));
+  }, [vmImages]);
+
   // Filter images based on selected operating system
-  const filteredImages = operatingSystem
-    ? allImages.filter((img) => img.os === operatingSystem)
-    : allImages;
+  const filteredImages = React.useMemo(() => {
+    if (!vmImages) return [];
+
+    if (!operatingSystem) {
+      return vmImages.map((img) => ({
+        value: img.slug,
+        label: img.name,
+      }));
+    }
+
+    return vmImages
+      .filter((img) => img.name.toLowerCase().startsWith(operatingSystem))
+      .map((img) => ({
+        value: img.slug,
+        label: img.name,
+      }));
+  }, [vmImages, operatingSystem]);
 
   // Convert SSH keys to options format
-  const sshKeyOptions = (sshKeysData?.results || []).map((key) => ({
-    value: key.id.toString(),
-    label: key.name,
-  }));
+  const sshKeyOptions = React.useMemo(() => {
+    if (!sshKeysData?.results?.length) {
+      return [];
+    }
+    return sshKeysData.results.map((key) => ({
+      value: key.id.toString(),
+      label: key.name,
+    }));
+  }, [sshKeysData]);
 
   const resetForm = () => {
     setCurrentStep(1);
     setInstanceName("");
-    setNumberOfInstances("");
     setOperatingSystem("");
     setImage("");
     setSshKey("");
@@ -164,14 +182,9 @@ const CreateVMModal: React.FC<Props> = ({
     clearFieldError("instanceName");
   };
 
-  const handleNumberOfInstancesChange = (value: string) => {
-    setNumberOfInstances(value);
-    clearFieldError("numberOfInstances");
-  };
-
   const handleOSChange = (value: string) => {
-    const isCurrentImageValidForOS = allImages.some(
-      (img) => img.value === image && img.os === value
+    const isCurrentImageValidForOS = vmImages?.some(
+      (img) => img.slug === image && img.name.toLowerCase().startsWith(value)
     );
 
     setOperatingSystem(value);
@@ -199,9 +212,6 @@ const CreateVMModal: React.FC<Props> = ({
 
     if (!instanceName.trim()) {
       newErrors.instanceName = "Instance Name is required";
-    }
-    if (!numberOfInstances.trim()) {
-      newErrors.numberOfInstances = "Number of Instances is required";
     }
     if (!operatingSystem) {
       newErrors.operatingSystem = "Operating System is required";
@@ -231,7 +241,6 @@ const CreateVMModal: React.FC<Props> = ({
 
     onSubmit({
       instanceName,
-      numberOfInstances: parseInt(numberOfInstances),
       operatingSystem,
       image,
       sshKey,
@@ -283,7 +292,7 @@ const CreateVMModal: React.FC<Props> = ({
   };
 
   const getSelectedImageLabel = () => {
-    const selectedImage = allImages.find((img) => img.value === image);
+    const selectedImage = filteredImages.find((img) => img.value === image);
     return selectedImage?.label || "";
   };
 
@@ -385,8 +394,6 @@ const CreateVMModal: React.FC<Props> = ({
                         <Step1Configuration
                           instanceName={instanceName}
                           setInstanceName={handleInstanceNameChange}
-                          numberOfInstances={numberOfInstances}
-                          setNumberOfInstances={handleNumberOfInstancesChange}
                           operatingSystem={operatingSystem}
                           handleOSChange={handleOSChange}
                           image={image}
@@ -397,6 +404,8 @@ const CreateVMModal: React.FC<Props> = ({
                           filteredImages={filteredImages}
                           sshKeyOptions={sshKeyOptions}
                           onCreateSSHKey={() => setOpenCreateSSHKeyModal(true)}
+                          isLoadingImages={isLoadingImages}
+                          isLoadingSSHKeys={isLoadingSSHKeys}
                           errors={errors}
                         />
                       </motion.div>

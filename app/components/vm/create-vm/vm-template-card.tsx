@@ -21,6 +21,7 @@ interface VMTemplateCardProps {
   onSelect?: (template: VMTemplate) => void;
   onDelete?: (template: VMTemplate) => void;
   showSetupButton?: boolean;
+  hideMenu?: boolean;
 }
 
 const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
@@ -28,6 +29,7 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
   onSelect,
   onDelete,
   showSetupButton = true,
+  hideMenu = false,
 }) => {
   return (
     <div className="bg-white border border-grey-80 rounded-lg overflow-hidden flex flex-col gap-4 p-0">
@@ -37,7 +39,7 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
         <p className="flex-1 font-medium leading-6 text-lg text-grey-10 tracking-tight">
           {template.name}
         </p>
-        {!showSetupButton && onDelete && (
+        {!hideMenu && !showSetupButton && onDelete && (
           <TableActionMenu
             dropdownTitle="Template Options"
             items={[
@@ -101,10 +103,14 @@ const VMTemplateCard: React.FC<VMTemplateCardProps> = ({
             <p className="font-medium leading-5 text-sm text-grey-70 tracking-tight">
               {template.storage}
             </p>
-            <div className="size-1 rounded-full bg-grey-80" />
-            <p className="font-medium leading-5 text-sm text-grey-70 tracking-tight">
-              {template.bandwidth}
-            </p>
+            {template.bandwidth && (
+              <>
+                <div className="size-1 rounded-full bg-grey-80" />
+                <p className="font-medium leading-5 text-sm text-grey-70 tracking-tight">
+                  {template.bandwidth}
+                </p>
+              </>
+            )}
           </div>
         </div>
 

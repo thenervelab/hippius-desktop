@@ -18,6 +18,7 @@ interface TicketSelectProps {
   onValueChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
   placeholder?: string;
+  disabled?: boolean;
 }
 
 export default function TicketSelect({
@@ -25,17 +26,19 @@ export default function TicketSelect({
   onValueChange,
   options,
   placeholder = "Select option",
+  disabled = false,
 }: TicketSelectProps) {
   const selectedOption = options.find((opt) => opt.value === value);
 
   return (
-    <Select value={value} onValueChange={onValueChange}>
+    <Select value={value} onValueChange={onValueChange} disabled={disabled}>
       <SelectTrigger
         className="
           w-full flex items-center justify-between relative
           bg-grey-100 border border-grey-80 rounded-[8px]
           px-4 py-3 text-base font-medium text-grey-60
           h-[56px] focus:outline-none focus:border-grey-80
+          disabled:opacity-50 disabled:cursor-not-allowed
         "
       >
         <SelectValue placeholder={placeholder}>

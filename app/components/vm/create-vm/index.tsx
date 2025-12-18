@@ -4,7 +4,7 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import VMTemplateCard, { VMTemplate } from "./vm-template-card";
-import { MOCK_VM_TEMPLATES } from "./mock-templates";
+import VMTemplateCardSkeleton from "./vm-template-card-skeleton";
 import * as TableModule from "@/components/ui/alt-table";
 
 import CreateVMModal, { VMConfigurationData } from "./create-vm-modal";
@@ -12,6 +12,7 @@ import TabList, { TabOption } from "../../ui/tabs/TabList";
 import { usePagination } from "@/app/lib/hooks";
 import CustomTooltip2 from "../../ui/CustomTooltip2";
 import { Select } from "../../ui";
+import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 
 const CreateVM: React.FC = () => {
   const router = useRouter();
@@ -20,32 +21,66 @@ const CreateVM: React.FC = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<VMTemplate | null>(
     null
   );
+  const { data: flavors, isLoading: isFlavorsLoading } = useVMFlavors();
+
+  // Transform flavors API data to template format with categories
+  const categorizedTemplates =
+    flavors?.map((flavor) => {
+      const flavorName = flavor.name.toLowerCase();
+      let category = "all";
+
+      // Categorize based on flavor name
+      if (flavorName === "spark" || flavorName === "pulse") {
+        category = "starter";
+      } else if (flavorName === "cipher" || flavorName === "vault") {
+        category = "standard";
+      } else if (
+        flavorName === "fortress" ||
+        flavorName === "titan" ||
+        flavorName === "sovereign"
+      ) {
+        category = "high-capacity";
+      }
+
+      return {
+        id: String(flavor.id),
+        name: flavor.display_name,
+        ram: "RAM",
+        ramValue: `${(flavor.memory_mb / 1024).toFixed(0)} GB`,
+        cores: "Cores",
+        coresValue: `${flavor.cpu_cores} vCore${
+          flavor.cpu_cores > 1 ? "s" : ""
+        }`,
+        storage: `${flavor.data_disk_gb} GB Storage`,
+        bandwidth: "",
+        price: `${flavor.credits_per_hour} credit${
+          flavor.credits_per_hour !== 1 ? "s" : ""
+        }/hour`,
+        category,
+      };
+    }) || [];
 
   const categories: TabOption[] = [
     { tabName: "All Models" },
-    { tabName: "General Purpose" },
-    { tabName: "Compute Optimized" },
-    { tabName: "Memory Optimized" },
-    { tabName: "Discovery" },
-    { tabName: "Storage Optimized" },
+    { tabName: "Starter" },
+    { tabName: "Standard" },
+    { tabName: "High Capacity" },
   ];
 
   const getCategoryKey = (tabName: string): string => {
     const categoryMap: Record<string, string> = {
       "All Models": "all",
-      "General Purpose": "general",
-      "Compute Optimized": "compute",
-      "Memory Optimized": "memory",
-      Discovery: "discovery",
-      "Storage Optimized": "storage",
+      Starter: "starter",
+      Standard: "standard",
+      "High Capacity": "high-capacity",
     };
     return categoryMap[tabName] || "all";
   };
 
   const filteredTemplates =
     activeCategory === "All Models"
-      ? MOCK_VM_TEMPLATES
-      : MOCK_VM_TEMPLATES.filter(
+      ? categorizedTemplates
+      : categorizedTemplates.filter(
           (template) => template.category === getCategoryKey(activeCategory)
         );
 
@@ -130,23 +165,37 @@ const CreateVM: React.FC = () => {
       </div>
 
       {/* Templates Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
-        {templates.map((template) => (
-          <VMTemplateCard
-            key={template.id}
-            template={template}
-            onSelect={handleTemplateSelect}
-          />
-        ))}
-      </div>
+      {isFlavorsLoading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+          {Array.from({ length: 8 }).map((_, index) => (
+            <VMTemplateCardSkeleton key={`skeleton-${index}`} />
+          ))}
+        </div>
+      ) : templates.length === 0 ? (
+        <div className="flex items-center justify-center py-12">
+          <p className="text-grey-50">No models available</p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+            {templates.map((template) => (
+              <VMTemplateCard
+                key={template.id}
+                template={template}
+                onSelect={handleTemplateSelect}
+              />
+            ))}
+          </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <TableModule.Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          setPage={setCurrentPage}
-        />
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <TableModule.Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              setPage={setCurrentPage}
+            />
+          )}
+        </>
       )}
 
       {/* Create VM Modal */}

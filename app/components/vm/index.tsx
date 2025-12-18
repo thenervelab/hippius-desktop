@@ -11,8 +11,8 @@ import SSHKeysTable, { SSHKey } from "./ssh-keys-table";
 import CreateSSHKeyModal, {
   CreateSSHKeyData,
 } from "./ssh-keys-table/create-ssh-key-modal";
-import { MOCK_VM_TEMPLATES } from "./create-vm/mock-templates";
 import VMTemplateCard from "./create-vm/vm-template-card";
+import VMTemplateCardSkeleton from "./create-vm/vm-template-card-skeleton";
 import * as TableModule from "@/components/ui/alt-table";
 import { useDeleteInstance } from "./hooks/useDeleteInstance";
 import { Icons, SearchInput } from "../ui";
@@ -22,6 +22,7 @@ import DeleteConfirmationDialog from "../DeleteConfirmationDialog";
 import CreateButton from "../ui/button/CreateButton";
 import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
+import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 
 export interface CreateTokenFields {
   name: string;
@@ -42,6 +43,50 @@ const VirtualMachines: FC = () => {
   const [selectedSSHKeyToDelete, setSelectedSSHKeyToDelete] =
     useState<SSHKey | null>(null);
   const [isDeletingInProgress, setIsDeletingInProgress] = useState(false);
+  const {
+    data: flavors,
+    isLoading: isFlavorsLoading,
+    refetch: refetchFlavors,
+    isFetching: isFlavorsRefetching,
+  } = useVMFlavors();
+  const flavorsLoading = isFlavorsLoading || isFlavorsRefetching;
+
+  // Transform flavors API data to template format with categories
+  const templatesFromFlavors =
+    flavors?.map((flavor) => {
+      const flavorName = flavor.name.toLowerCase();
+      let category = "all";
+
+      // Categorize based on flavor name
+      if (flavorName === "spark" || flavorName === "pulse") {
+        category = "starter";
+      } else if (flavorName === "cipher" || flavorName === "vault") {
+        category = "standard";
+      } else if (
+        flavorName === "fortress" ||
+        flavorName === "titan" ||
+        flavorName === "sovereign"
+      ) {
+        category = "high-capacity";
+      }
+
+      return {
+        id: String(flavor.id),
+        name: flavor.display_name,
+        ram: "RAM",
+        ramValue: `${(flavor.memory_mb / 1024).toFixed(0)} GB`,
+        cores: "Cores",
+        coresValue: `${flavor.cpu_cores} vCore${
+          flavor.cpu_cores > 1 ? "s" : ""
+        }`,
+        storage: `${flavor.data_disk_gb} GB Storage`,
+        bandwidth: "",
+        price: `${flavor.credits_per_hour} credit${
+          flavor.credits_per_hour !== 1 ? "s" : ""
+        }/hour`,
+        category,
+      };
+    }) || [];
 
   // Debounce SSH key search term with 500ms delay
   useEffect(() => {
@@ -80,7 +125,7 @@ const VirtualMachines: FC = () => {
     setCurrentPage: setTemplatesPage,
     currentPage: templatesCurrentPage,
     totalPages: templatesTotalPages,
-  } = usePagination(MOCK_VM_TEMPLATES, 8);
+  } = usePagination(templatesFromFlavors, 8);
 
   const tabs: TabOption[] = [
     {
@@ -105,7 +150,7 @@ const VirtualMachines: FC = () => {
     if (activeTab === "SSH Keys") {
       setOpenCreateSSHKeyModal(true);
     } else if (activeTab === "Instances") {
-      router.push("/dashboard/vm/create");
+      router.push("/vm/create");
     }
   };
 
@@ -225,16 +270,19 @@ const VirtualMachines: FC = () => {
           )}
           {activeTab === "Templates" && (
             <>
-              <SearchInput
+              {/* <SearchInput
                 placeholder="Search for a template"
                 className="h-9"
+              /> */}
+              <RefreshButton
+                refetching={isFlavorsRefetching}
+                onClick={() => refetchFlavors()}
               />
-              <RefreshButton refetching={false} onClick={() => {}} />
-              <CreateButton
+              {/* <CreateButton
                 text="New Template"
                 isLoading={false}
                 onClick={handleModalOpen}
-              />
+              /> */}
             </>
           )}
         </div>
@@ -255,22 +303,37 @@ const VirtualMachines: FC = () => {
             />
           ) : activeTab === "Templates" ? (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
-                {templates.map((template) => (
-                  <VMTemplateCard
-                    key={template.id}
-                    template={template}
-                    onDelete={handleDeleteTemplate}
-                    showSetupButton={false}
-                  />
-                ))}
-              </div>
-              {templatesTotalPages > 1 && (
-                <TableModule.Pagination
-                  currentPage={templatesCurrentPage}
-                  totalPages={templatesTotalPages}
-                  setPage={setTemplatesPage}
-                />
+              {flavorsLoading ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+                  {Array.from({ length: 8 }).map((_, index) => (
+                    <VMTemplateCardSkeleton key={`skeleton-${index}`} />
+                  ))}
+                </div>
+              ) : templates.length === 0 ? (
+                <div className="flex items-center justify-center py-12">
+                  <p className="text-grey-50">No templates available</p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
+                    {templates.map((template) => (
+                      <VMTemplateCard
+                        key={template.id}
+                        template={template}
+                        onDelete={handleDeleteTemplate}
+                        showSetupButton={false}
+                        hideMenu={true}
+                      />
+                    ))}
+                  </div>
+                  {templatesTotalPages > 1 && (
+                    <TableModule.Pagination
+                      currentPage={templatesCurrentPage}
+                      totalPages={templatesTotalPages}
+                      setPage={setTemplatesPage}
+                    />
+                  )}
+                </>
               )}
             </>
           ) : (

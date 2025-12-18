@@ -37,6 +37,10 @@ export const API_CONFIG = {
       revoke: (id: string) =>
         `/api/infrastructure/tokens/service/${id}/revoke/`,
     },
+    vm: {
+      flavors: "/api/infrastructure/vm/flavors/",
+      images: "/api/infrastructure/vm/images/",
+    },
   },
 } as const;
 
