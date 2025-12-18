@@ -19,6 +19,7 @@ import {
 } from "@/app/lib/store/syncAtoms";
 import { useAtomValue, useAtom, useSetAtom } from "jotai";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
+import { API_CONFIG } from "@/app/lib/config";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
@@ -81,8 +82,186 @@ interface VpnStatus {
   is_enabled: boolean;
 }
 
+interface OAuthSession {
+  token: string;
+  userId: string;
+  username: string;
+  substrateAddress: string;
+  provider: string;
+  expiresAt: string;
+}
+
+interface CreditsApiResponse {
+  balance: string; // String representation of the credit balance
+}
+
+const MINIMUM_CREDITS = 10;
+const OAUTH_SESSION_KEY = "hippius_oauth_session";
+const CREDITS_CACHE_DURATION = 30000; // Cache credits for 30 seconds
+
 // Cache for resolved generic icons
 const iconPathCache: Record<string, string | undefined | null> = {};
+
+// Cache for credits to avoid repeated API calls
+let creditsCache: {
+  credits: number;
+  timestamp: number;
+  isLoading: boolean;
+  error?: string;
+} | null = null;
+
+// Helper to check if user is logged in
+function isUserLoggedIn(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
+    const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
+
+    if (!storedSession || !storedExpiry) return false;
+
+    // Check if session is expired
+    const expiryTime = new Date(storedExpiry).getTime();
+    const now = Date.now();
+
+    if (now >= expiryTime) {
+      console.log("[Tray] Session expired");
+      return false;
+    }
+
+    const session: OAuthSession = JSON.parse(storedSession);
+    return !!session.token;
+  } catch (error) {
+    console.error("[Tray] Failed to check login status:", error);
+    return false;
+  }
+}
+
+// Helper to get OAuth token from localStorage
+function getOAuthToken(): string | null {
+  if (!isUserLoggedIn()) return null;
+
+  try {
+    const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
+    if (!storedSession) return null;
+    const session: OAuthSession = JSON.parse(storedSession);
+    return session.token || null;
+  } catch (error) {
+    console.error("[Tray] Failed to get OAuth token:", error);
+    return null;
+  }
+}
+
+// Helper to fetch credits from API with caching
+async function fetchUserCredits(
+  forceRefresh = false
+): Promise<{
+  credits: number;
+  isLoading: boolean;
+  error?: string;
+}> {
+  // Return cached result if available and not expired
+  if (!forceRefresh && creditsCache) {
+    const now = Date.now();
+    if (now - creditsCache.timestamp < CREDITS_CACHE_DURATION) {
+      return {
+        credits: creditsCache.credits,
+        isLoading: creditsCache.isLoading,
+        error: creditsCache.error,
+      };
+    }
+  }
+
+  try {
+    const token = getOAuthToken();
+    if (!token) {
+      const result = {
+        credits: 0,
+        isLoading: true,
+        error: "Loading credits",
+      };
+      creditsCache = { ...result, timestamp: Date.now() };
+      return result;
+    }
+
+    const response = await fetch(
+      `${API_CONFIG.baseUrl}${API_CONFIG.billing.credits}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Token ${token}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.error("[Tray] Failed to fetch credits:", response.status);
+      const result = {
+        credits: 0,
+        isLoading: true,
+        error: "Loading credits",
+      };
+      creditsCache = { ...result, timestamp: Date.now() };
+      return result;
+    }
+
+    const data: CreditsApiResponse = await response.json();
+    const balanceStr = data.balance || "0";
+    const credits = parseFloat(balanceStr);
+
+    const result = {
+      credits,
+      isLoading: false,
+    };
+    creditsCache = { ...result, timestamp: Date.now() };
+    return result;
+  } catch (error) {
+    console.error("[Tray] Failed to fetch credits:", error);
+    const result = {
+      credits: 0,
+      isLoading: true,
+      error: "Loading credits",
+    };
+    creditsCache = { ...result, timestamp: Date.now() };
+    return result;
+  }
+}
+
+// Helper to check if user has sufficient credits
+async function checkUserCredits(): Promise<{
+  hasEnough: boolean;
+  isLoading: boolean;
+  error?: string;
+  notLoggedIn?: boolean;
+}> {
+  // First check if user is logged in
+  if (!isUserLoggedIn()) {
+    return {
+      hasEnough: false,
+      isLoading: false,
+      notLoggedIn: true,
+      error: "Login required",
+    };
+  }
+
+  const result = await fetchUserCredits();
+
+  if (result.isLoading) {
+    return {
+      hasEnough: false,
+      isLoading: true,
+      error: result.error || "Loading credits",
+    };
+  }
+
+  const hasEnough = result.credits >= MINIMUM_CREDITS;
+
+  return {
+    hasEnough,
+    isLoading: false,
+    error: hasEnough ? undefined : "Insufficient credits",
+  };
+}
 
 /* ─ Public: create tray once ──────────────────────────────────── */
 export function useTrayInit(polkadotAddress: string) {
@@ -138,16 +317,28 @@ export function useTrayInit(polkadotAddress: string) {
 
       // VPN toggle item
       const isVpnEnabled = await getVpnStatus();
+      const creditCheck = await checkUserCredits();
+      const shouldDisable =
+        !isVpnEnabled && (!creditCheck.hasEnough || creditCheck.isLoading);
+
+      let text = isVpnEnabled ? "VPN: Turn Off" : "VPN: Turn On";
+      if (shouldDisable && creditCheck.error) {
+        text = `VPN: ${creditCheck.error}`;
+      }
+
       vpnToggleItem = await MenuItem.new({
         id: VPN_TOGGLE_ID,
-        text: isVpnEnabled ? "VPN: Turn Off" : "VPN: Turn On",
+        text,
+        enabled: !shouldDisable,
         action: async () => {
           try {
             const newStatus = await toggleVpnStatus();
             setVpnState(newStatus); // Update Jotai atom
-            await updateVpnMenuItem();
+            // Immediately update with known status for fast response
+            await updateVpnMenuItem(newStatus);
           } catch (error) {
             console.error("[Tray] VPN toggle failed:", error);
+            await updateVpnMenuItem();
           }
         },
       });
@@ -223,15 +414,40 @@ async function toggleVpnStatus(): Promise<boolean> {
 }
 
 
-async function updateVpnMenuItem() {
+async function updateVpnMenuItem(knownStatus?: boolean) {
   try {
     const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
     if (!menu) return;
 
-    const isEnabled = await getVpnStatus();
-    const label = isEnabled ? "VPN: Turn Off" : "VPN: Turn On";
+    // Use provided status or fetch from backend
+    const isEnabled =
+      knownStatus !== undefined ? knownStatus : await getVpnStatus();
 
-    logTrayAction("Updating VPN menu item", { isEnabled, label });
+    let label: string;
+    let shouldEnable = true;
+
+    if (isEnabled) {
+      label = "VPN: Turn Off";
+      shouldEnable = true;
+    } else {
+      // Check credits when VPN is off (use cached value for fast updates)
+      const creditCheck = await checkUserCredits();
+      if (!creditCheck.hasEnough || creditCheck.isLoading) {
+        label = creditCheck.error
+          ? `VPN: ${creditCheck.error}`
+          : "VPN: Turn On";
+        shouldEnable = false;
+      } else {
+        label = "VPN: Turn On";
+        shouldEnable = true;
+      }
+    }
+
+    logTrayAction("Updating VPN menu item", {
+      isEnabled,
+      label,
+      shouldEnable,
+    });
 
     // Remove old item if exists
     if (vpnToggleItem) {
@@ -243,19 +459,22 @@ async function updateVpnMenuItem() {
       }
     }
 
-    // Recreate the menu item with new text
+    // Recreate the menu item with new text and enabled state
     const newVpnItem = await MenuItem.new({
       id: VPN_TOGGLE_ID,
       text: label,
+      enabled: shouldEnable,
       action: async () => {
         try {
           const newStatus = await toggleVpnStatus();
           if (vpnStateSetter) {
             vpnStateSetter(newStatus);
           }
-          await updateVpnMenuItem();
+          // Immediately update with known status for fast response
+          await updateVpnMenuItem(newStatus);
         } catch (error) {
           console.error("[Tray] VPN toggle failed:", error);
+          await updateVpnMenuItem();
         }
       },
     });
@@ -268,7 +487,11 @@ async function updateVpnMenuItem() {
     await menu.insert(newVpnItem, insertPosition);
     vpnToggleItem = newVpnItem;
 
-    logTrayAction("VPN menu item recreated successfully", { label, position: insertPosition });
+    logTrayAction("VPN menu item recreated successfully", {
+      label,
+      position: insertPosition,
+      enabled: shouldEnable,
+    });
   } catch (error) {
     console.error("[Tray] Failed to update VPN menu item:", error);
   }
@@ -431,25 +654,50 @@ export async function setTraySyncPercent(percent: number | null) {
 
 /* ─ VPN Status watcher ─────────────────────────────────────────── */
 let vpnStateSetter: ((enabled: boolean) => void) | null = null;
+let lastLoginStatus: boolean | null = null;
 
 function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
   if (setVpnState) {
     vpnStateSetter = setVpnState;
   }
 
-  const INTERVAL_MS = 5000; // Check every 5 seconds
+  const INTERVAL_MS = 2000; // Check every 2 seconds for faster updates
   let lastKnownStatus: boolean | null = null;
 
   const tick = async () => {
-    const currentStatus = await getVpnStatus();
+    const currentLoginStatus = isUserLoggedIn();
 
-    // Update atom if status changed
-    if (lastKnownStatus !== currentStatus && vpnStateSetter) {
-      vpnStateSetter(currentStatus);
-      lastKnownStatus = currentStatus;
+    // If login status changed, update menu immediately
+    if (lastLoginStatus !== currentLoginStatus) {
+      lastLoginStatus = currentLoginStatus;
+      await updateVpnMenuItem();
+
+      // If user logged out, turn off VPN
+      if (!currentLoginStatus && lastKnownStatus) {
+        if (vpnStateSetter) {
+          vpnStateSetter(false);
+        }
+        lastKnownStatus = false;
+      }
+      return;
     }
 
-    await updateVpnMenuItem();
+    // Only check VPN status if user is logged in
+    if (!currentLoginStatus) {
+      return;
+    }
+
+    const currentStatus = await getVpnStatus();
+
+    // Only update menu if status actually changed
+    if (lastKnownStatus !== currentStatus) {
+      if (vpnStateSetter) {
+        vpnStateSetter(currentStatus);
+      }
+      lastKnownStatus = currentStatus;
+      // Update menu with known status to avoid redundant backend calls
+      await updateVpnMenuItem(currentStatus);
+    }
   };
 
   void tick();
