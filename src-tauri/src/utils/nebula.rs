@@ -709,11 +709,37 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
     
     println!("[Nebula] Renewing certificate from: {}", url);
     
-    let response = client.post(&url)
+    // Extract the token from the auth header (removing 'Token ' prefix)
+    let token = auth_header.trim_start_matches("Token ");
+    
+    // First, make a GET request to get the CSRF token
+    let csrf_response = client.get(&url)
         .header(AUTHORIZATION, auth_header)
         .send()
         .await?;
+        
+    // Extract CSRF token from cookies or headers (adjust this based on your API)
+    let csrf_token = csrf_response.headers()
+        .get("set-cookie")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|c| {
+            c.split(';')
+             .find(|part| part.trim().starts_with("csrftoken="))
+             .map(|part| part.trim().trim_start_matches("csrftoken=").to_string())
+        })
+        .unwrap_or_default();
+        
+    println!("[Nebula] Got CSRF token: {}", csrf_token);
     
+    // Now make the POST request with both auth and CSRF token
+    let response = client.post(&url)
+        .header(AUTHORIZATION, auth_header)
+        .header("X-CSRFTOKEN", csrf_token)
+        .header("Content-Type", "application/json")
+        .body("{}")  // Empty JSON body as in curl example
+        .send()
+        .await?;
+
     let status = response.status();
     println!("[Nebula] Renew certificate status: {}", status);
     
