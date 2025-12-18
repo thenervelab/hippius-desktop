@@ -24,7 +24,11 @@ const VPNMenuContent = () => {
   const [isConnected, setIsConnected] = useAtom(vpnConnectedAtom);
   const [isLoading, setIsLoading] = useAtom(vpnLoadingAtom);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
-  const { data: credits, isFetching, isLoading: isCreditsLoading } = useUserCredits();
+  const {
+    data: credits,
+    isFetching,
+    isLoading: isCreditsLoading,
+  } = useUserCredits();
 
   const handleToggle = async (checked: boolean) => {
     // Check if user has at least 10 credits before enabling VPN
@@ -46,16 +50,16 @@ const VPNMenuContent = () => {
 
     setIsLoading(true);
     try {
-      const status = await invoke<VpnStatus>("toggle_vpn_status");
-      setIsConnected(status.is_enabled);
-
       // Check if nebula binary is installed
       const isInstalled = await invoke<boolean>(
         "get_nebula_binary_installed_status"
       );
       if (!isInstalled) {
         setShowRestartDialog(true);
+        return;
       }
+      const status = await invoke<VpnStatus>("toggle_vpn_status");
+      setIsConnected(status.is_enabled);
     } catch (error) {
       console.error("Failed to toggle VPN status:", error);
       // Revert on error
@@ -74,22 +78,13 @@ const VPNMenuContent = () => {
   };
 
   const handleDialogClose = async (open: boolean) => {
-    if (!open) {
-      // User cancelled or closed the dialog, revert VPN state
-      try {
-        const status = await invoke<VpnStatus>("toggle_vpn_status");
-        setIsConnected(status.is_enabled);
-      } catch (error) {
-        console.error("Failed to revert VPN status:", error);
-      }
-    }
     setShowRestartDialog(open);
   };
 
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
-        <Dialog.Root open={showRestartDialog} onOpenChange={handleDialogClose}>
+        <div>
           <div
             ref={ref}
             className="w-full bg-white rounded-lg overflow-hidden flex flex-col"
@@ -192,42 +187,48 @@ const VPNMenuContent = () => {
           </div>
 
           {/* Restart Dialog */}
-          <Dialog.Portal>
-            <Dialog.Overlay className="bg-white/70 fixed inset-0 flex items-center justify-center data-[state=open]:animate-fade-in-0.3" />
-            <Dialog.Content className="fixed top-1/2 left-1/2 w-[90%] max-w-sm -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-lg">
-              <div className="flex justify-between items-center mb-4">
-                <Dialog.Title className="text-xl font-semibold text-black">
-                  Restart Required
-                </Dialog.Title>
-                <Dialog.Close asChild>
-                  <button onClick={() => handleDialogClose(false)}>
-                    <CloseCircle className="size-6 text-black" />
-                  </button>
-                </Dialog.Close>
-              </div>
-              <p className="mb-6 text-black">
-                The VPN binary needs to be installed. Please restart the
-                application to complete the setup.
-              </p>
-              <div className="flex justify-end space-x-2">
-                <Dialog.Close asChild>
+          <Dialog.Root
+            open={showRestartDialog}
+            onOpenChange={handleDialogClose}
+            modal={true}
+          >
+            <Dialog.Portal>
+              <Dialog.Overlay className="bg-white/70 backdrop-blur-sm fixed inset-0 z-[9999] flex items-center justify-center data-[state=open]:animate-fade-in-0.3" />
+              <Dialog.Content className="fixed top-1/2 left-1/2 w-[90%] max-w-sm -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-2xl z-[10000] focus:outline-none">
+                <div className="flex justify-between items-center mb-4">
+                  <Dialog.Title className="text-xl font-semibold text-black">
+                    Restart Required
+                  </Dialog.Title>
+                  <Dialog.Close asChild>
+                    <button onClick={() => handleDialogClose(false)}>
+                      <CloseCircle className="size-6 text-black" />
+                    </button>
+                  </Dialog.Close>
+                </div>
+                <p className="mb-6 text-black">
+                  The VPN binary needs to be installed. Please restart the
+                  application to complete the setup.
+                </p>
+                <div className="flex justify-end space-x-2">
+                  <Dialog.Close asChild>
+                    <button
+                      onClick={() => handleDialogClose(false)}
+                      className="px-4 py-2 border rounded text-black"
+                    >
+                      Cancel
+                    </button>
+                  </Dialog.Close>
                   <button
-                    onClick={() => handleDialogClose(false)}
-                    className="px-4 py-2 border rounded text-black"
+                    onClick={handleRestart}
+                    className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
                   >
-                    Cancel
+                    Restart Now
                   </button>
-                </Dialog.Close>
-                <button
-                  onClick={handleRestart}
-                  className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
-                >
-                  Restart Now
-                </button>
-              </div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
+                </div>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+        </div>
       )}
     </InView>
   );
