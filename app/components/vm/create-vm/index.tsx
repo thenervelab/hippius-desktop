@@ -22,7 +22,17 @@ const CreateVM: React.FC = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<VMTemplate | null>(
     null
   );
-  const { data: flavors, isLoading: isFlavorsLoading } = useVMFlavors();
+  const {
+    data: flavors,
+    isLoading: isFlavorsLoading,
+    error: flavorsError,
+  } = useVMFlavors();
+
+  // Check if error is related to beta access
+  const isBetaError =
+    flavorsError?.message?.toLowerCase().includes("beta") || false;
+  const betaAccessMessage =
+    "VM feature is in beta. Contact support for access.";
 
   // Transform flavors API data to template format with categories
   const categorizedTemplates =
@@ -166,7 +176,16 @@ const CreateVM: React.FC = () => {
       </div>
 
       {/* Templates Grid */}
-      {isFlavorsLoading ? (
+      {isBetaError ? (
+        <NoEntriesFound className="h-[500px]">
+          <div className="text-center">
+            <p className="text-grey-30 font-semibold mb-1 text-base">
+              Feature Not Available
+            </p>
+            <p className="text-grey-50 text-sm max-w-md">{betaAccessMessage}</p>
+          </div>
+        </NoEntriesFound>
+      ) : isFlavorsLoading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
           {Array.from({ length: 8 }).map((_, index) => (
             <VMTemplateCardSkeleton key={`skeleton-${index}`} />

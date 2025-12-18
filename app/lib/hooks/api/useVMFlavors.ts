@@ -61,6 +61,7 @@ export default function useVMFlavors(
     enabled: !!oauthSession?.token,
     refetchOnWindowFocus: false,
     staleTime: 10 * 60 * 1000, // 10 minutes (flavors don't change often)
+    retry: false, // Don't retry on error to avoid long loading states
     ...options,
   });
 }

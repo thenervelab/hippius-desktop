@@ -23,6 +23,7 @@ import CreateButton from "../ui/button/CreateButton";
 import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
+import useVMInstances from "@/app/lib/hooks/api/useVMInstances";
 import NoEntriesFound from "../ui/NoEntriesFound";
 
 export interface CreateTokenFields {
@@ -44,8 +45,16 @@ const VirtualMachines: FC = () => {
   const [selectedSSHKeyToDelete, setSelectedSSHKeyToDelete] =
     useState<SSHKey | null>(null);
   const [isDeletingInProgress, setIsDeletingInProgress] = useState(false);
-  const { data: flavors, isLoading: isFlavorsLoading } = useVMFlavors();
+  const { data: flavors, isLoading: isFlavorsLoading, error: flavorsError } = useVMFlavors();
+  const { error: instancesError } = useVMInstances();
   const flavorsLoading = isFlavorsLoading;
+  
+  // Check if error is related to beta access
+  const isBetaError = (error: Error | null) => {
+    return error?.message?.toLowerCase().includes('beta') || false;
+  };
+  
+  const betaAccessMessage = "VM feature is in beta. Contact support for access.";
 
   // Transform flavors API data to template format with categories
   const templatesFromFlavors =
@@ -288,12 +297,25 @@ const VirtualMachines: FC = () => {
       <div className="mt-6">
         <div className="animate-in fade-in duration-300">
           {activeTab === "Instances" ? (
-            <InstancesTable
-              onDeleteInstance={handleDeleteInstance}
-              onCreateNew={handleModalOpen}
-              flavors={flavors}
-              isFlavorsLoading={isFlavorsLoading}
-            />
+            isBetaError(instancesError) ? (
+              <NoEntriesFound className="h-[500px]">
+                <div className="text-center">
+                  <p className="text-grey-30 font-semibold mb-1 text-base">
+                    Feature Not Available
+                  </p>
+                  <p className="text-grey-50 text-sm max-w-md">
+                    {betaAccessMessage}
+                  </p>
+                </div>
+              </NoEntriesFound>
+            ) : (
+              <InstancesTable
+                onDeleteInstance={handleDeleteInstance}
+                onCreateNew={handleModalOpen}
+                flavors={flavors}
+                isFlavorsLoading={isFlavorsLoading}
+              />
+            )
           ) : activeTab === "SSH Keys" ? (
             <SSHKeysTable
               onDeleteKey={handleDeleteSSHKey}
@@ -304,7 +326,18 @@ const VirtualMachines: FC = () => {
             />
           ) : activeTab === "Templates" ? (
             <>
-              {flavorsLoading ? (
+              {isBetaError(flavorsError) ? (
+                <NoEntriesFound className="h-[500px]">
+                  <div className="text-center">
+                    <p className="text-grey-30 font-semibold mb-1 text-base">
+                      Feature Not Available
+                    </p>
+                    <p className="text-grey-50 text-sm max-w-md">
+                      {betaAccessMessage}
+                    </p>
+                  </div>
+                </NoEntriesFound>
+              ) : flavorsLoading ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
                   {Array.from({ length: 8 }).map((_, index) => (
                     <VMTemplateCardSkeleton key={`skeleton-${index}`} />

@@ -4,7 +4,6 @@ import {
   useQuery,
   UseQueryOptions,
   UseQueryResult,
-  keepPreviousData,
 } from "@tanstack/react-query";
 import { API_CONFIG } from "@/lib/config";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
@@ -64,6 +63,7 @@ export default function useVMInstances(
     enabled: !!oauthSession?.token,
     refetchOnWindowFocus: false,
     staleTime: 30 * 1000, // 30 seconds (instances change frequently)
+    retry: false, // Don't retry on error to avoid long loading states
     ...options,
   });
 }
