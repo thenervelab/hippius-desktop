@@ -117,7 +117,7 @@ struct CertificateResponse {
 /// Get the current account ID from the database
 async fn get_current_account_id() -> Result<String> {
     let pool = crate::DB_POOL.get().ok_or_else(|| anyhow!("Database not initialized"))?;
-    let account_row = sqlx::query("SELECT owner FROM objectstore_auth_scoped LIMIT 1")
+    let account_row = sqlx::query("SELECT owner FROM objectstore_auth_scoped ORDER BY updated_at DESC LIMIT 1")
         .fetch_optional(pool)
         .await?;
     
