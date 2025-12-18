@@ -125,6 +125,14 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
+        (
+            "autoconnect_vpn_enabled",
+            &[
+                ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
+                ("is_enabled", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+            ],
+        ),
     ];
 
     for (table_name, columns) in TABLE_SCHEMAS {
@@ -550,6 +558,31 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                         }
                     } else {
                         println!("[Setup] Nebula binary status entry already exists");
+                    }
+                }
+
+                // Initialize autoconnect VPN status if it doesn't exist
+                let autoconnect_exists: Option<(i64,)> = sqlx::query_as(
+                    "SELECT COUNT(*) as count FROM autoconnect_vpn_enabled"
+                )
+                .fetch_optional(&pool)
+                .await
+                .unwrap_or(Some((0,)));
+
+                if let Some((count,)) = autoconnect_exists {
+                    if count == 0 {
+                        println!("[Setup] No autoconnect VPN status found, creating default entry...");
+                        if let Err(e) = sqlx::query(
+                            "INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)"
+                        )
+                        .execute(&pool)
+                        .await {
+                            eprintln!("[Setup] Failed to create default autoconnect VPN status: {}", e);
+                        } else {
+                            println!("[Setup] Default autoconnect VPN status created successfully");
+                        }
+                    } else {
+                        println!("[Setup] Autoconnect VPN status entry already exists");
                     }
                 }
 
