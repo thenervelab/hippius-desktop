@@ -977,7 +977,7 @@ pub async fn start_nebula_internal() -> Result<(), String> {
 
     // Spawn the process using setsid to detach it from our process tree
     // This prevents zombie processes when we kill it
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
     {
         use std::process::Stdio;
         
@@ -992,6 +992,23 @@ pub async fn start_nebula_internal() -> Result<(), String> {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("Failed to spawn nebula with setsid: {}", e))?;
+            
+        println!("[Nebula] Started with PID: {}", child.id());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Stdio;
+        
+        // On macOS, start directly. setsid is not standard.
+        let child = std::process::Command::new(&binary_path)
+            .arg("-config")
+            .arg(&config_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn nebula: {}", e))?;
             
         println!("[Nebula] Started with PID: {}", child.id());
     }
@@ -1325,18 +1342,17 @@ pub async fn get_nebula_version() -> Result<String, String> {
         .ok_or_else(|| "Nebula not installed".to_string())
 }
 
-#[tauri::command]
-pub async fn get_nebula_ip() -> Result<String, String> {
-    let account_id = get_current_account_id().await.map_err(|e| e.to_string())?;
-    let config_dir = get_nebula_config_dir(&account_id).map_err(|e| e.to_string())?;
+pub async fn get_nebula_ip_internal() -> Result<String> {
+    let account_id = get_current_account_id().await?;
+    let config_dir = get_nebula_config_dir(&account_id)?;
     // Use host.crt from API instead of hostname-based cert
     let crt_path = config_dir.join("host.crt");
     
     if !crt_path.exists() {
-        return Err("Nebula certificate not found".to_string());
+        return Err(anyhow!("Nebula certificate not found"));
     }
     
-    let nebula_cert_binary = get_nebula_cert_binary_path().map_err(|e| e.to_string())?;
+    let nebula_cert_binary = get_nebula_cert_binary_path()?;
     
     let output = tokio::process::Command::new(&nebula_cert_binary)
         .args(&[
@@ -1346,34 +1362,38 @@ pub async fn get_nebula_ip() -> Result<String, String> {
             crt_path.to_str().unwrap(),
         ])
         .output()
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
         
     if !output.status.success() {
-        return Err(format!("Failed to read certificate: {}", String::from_utf8_lossy(&output.stderr)));
+        return Err(anyhow!("Failed to read certificate: {}", String::from_utf8_lossy(&output.stderr)));
     }
     
     // The output is an array of certificates
     let certs: Vec<NebulaCert> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse certificate JSON: {}", e))?;
+        .map_err(|e| anyhow!("Failed to parse certificate JSON: {}", e))?;
     
     let cert = certs.first()
-        .ok_or_else(|| "No certificate found in output".to_string())?;
+        .ok_or_else(|| anyhow!("No certificate found in output"))?;
     
     // Try networks first (newer format), then fall back to ips (older format)
     let ip_cidr = cert.details.networks.first()
         .or_else(|| cert.details.ips.first())
-        .ok_or_else(|| "No IP found in certificate".to_string())?;
+        .ok_or_else(|| anyhow!("No IP found in certificate"))?;
     
     // Extract IP from CIDR notation (e.g., "100.64.0.31/10" -> "100.64.0.31")
     let ip = ip_cidr.split('/').next()
-        .ok_or_else(|| "Invalid IP format in certificate".to_string())?;
+        .ok_or_else(|| anyhow!("Invalid IP format in certificate"))?;
     
     Ok(ip.to_string())
 }
 
+#[tauri::command]
+pub async fn get_nebula_ip() -> Result<String, String> {
+    get_nebula_ip_internal().await.map_err(|e| e.to_string())
+}
+
 /// Tries to find the Nebula network interface by checking common names and IP ranges
-async fn find_nebula_interface() -> Option<String> {
+async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
     // First try to find by common interface names
     #[cfg(target_os = "linux")]
     {
@@ -1399,7 +1419,8 @@ async fn find_nebula_interface() -> Option<String> {
             .output() {
                 let output_str = String::from_utf8_lossy(&output.stdout);
                 for line in output_str.lines() {
-                    if line.contains("100.64.") {
+                    let target_ip = search_ip.unwrap_or("100.64.");
+                    if line.contains(target_ip) {
                         // Extract interface name (it's the second field in the output)
                         if let Some(iface) = line.split_whitespace().nth(1) {
                             let iface = iface.trim_end_matches(':');
@@ -1429,7 +1450,8 @@ async fn find_nebula_interface() -> Option<String> {
                     } 
                     // Check for Nebula IP in the interface details
                     else if let Some(iface) = current_iface {
-                        if line.contains("100.64.") {
+                        let target_ip = search_ip.unwrap_or("100.64.");
+                        if line.contains(target_ip) {
                             println!("[Nebula] Found interface by IP range: {}", iface);
                             return Some(iface.to_string());
                         }
@@ -1443,8 +1465,12 @@ async fn find_nebula_interface() -> Option<String> {
 
 #[tauri::command]
 pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
+    // Try to get the Nebula IP from the certificate to help find the interface
+    let nebula_ip = get_nebula_ip_internal().await.ok();
+    let search_ip = nebula_ip.as_deref();
+
     // Try to find the Nebula interface dynamically
-    if let Some(iface) = find_nebula_interface().await {
+    if let Some(iface) = find_nebula_interface(search_ip).await {
         println!("[Nebula Stats] Using interface: {}", iface);
         
         // Try to read stats from the detected interface
@@ -1471,7 +1497,7 @@ pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
 
         #[cfg(target_os = "macos")]
         {
-            if let Ok((tx_bytes, rx_bytes)) = get_macos_interface_stats(&iface).await {
+            if let Ok((tx_bytes, rx_bytes)) = get_macos_interface_stats(&iface, search_ip).await {
                 let mb_tx = tx_bytes as f64 / (1024.0 * 1024.0);
                 let mb_rx = rx_bytes as f64 / (1024.0 * 1024.0);
                 
@@ -1543,7 +1569,7 @@ async fn read_sys_net_stat(interface: &str, stat: &str) -> Result<u64, String> {
 
 /// Get interface stats on macOS using netstat
 #[cfg(target_os = "macos")]
-async fn get_macos_interface_stats(interface_prefix: &str) -> Result<(u64, u64), String> {
+async fn get_macos_interface_stats(interface_prefix: &str, search_ip: Option<&str>) -> Result<(u64, u64), String> {
     // Run netstat -ibn to get interface statistics
     let output = tokio::process::Command::new("netstat")
         .args(&["-ibn"])
@@ -1563,8 +1589,9 @@ async fn get_macos_interface_stats(interface_prefix: &str) -> Result<(u64, u64),
         
         // netstat format: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes
         if parts.len() >= 10 && parts[0].starts_with(interface_prefix) {
-            // Check if this is the Nebula interface by looking for the 100.64.x.x IP
-            if parts.len() > 3 && parts[3].starts_with("100.64") {
+            // Check if this is the Nebula interface by looking for the IP
+            let target_ip = search_ip.unwrap_or("100.64");
+            if parts.len() > 3 && parts[3].starts_with(target_ip) {
                 let ibytes = parts[6].parse::<u64>()
                     .map_err(|e| format!("Failed to parse ibytes: {}", e))?;
                 let obytes = parts[9].parse::<u64>()
