@@ -2,9 +2,6 @@
 import React, { useState, useEffect } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import InstanceHeader from "./instance-header";
-import { MOCK_INSTANCES } from "../instances-table/mock-data";
-import { Instance } from "../instances-table";
-import { Loader } from "lucide-react";
 import VirtualMachineInfo from "./virtual-machine-info";
 import NetworksInfo from "./networks-info";
 import VncConsole from "./vnc-console";
@@ -13,15 +10,23 @@ import { useDeleteInstance } from "../hooks/useDeleteInstance";
 import { useStartStopInstance } from "../hooks/useStartStopInstance";
 import { useRebootInstance } from "../hooks/useRebootInstance";
 import { useReinstallInstance } from "../hooks/useReinstallInstance";
+import useVMInstanceDetails from "@/app/lib/hooks/api/useVMInstanceDetails";
 
 const InstanceDetails: React.FC = () => {
-  const { instanceId } = useParams();
   const searchParams = useSearchParams();
-  const [instanceData, setInstanceData] = useState<Instance | null>(null);
-  const [loading, setLoading] = useState(true);
+  const instanceId = searchParams.get("instanceId");
   const [activeTab, setActiveTab] = useState<string>("Dashboard");
   const [openChangeImageModal, setOpenChangeImageModal] = useState(false);
 
+  // Fetch instance details from API
+  const {
+    data: instanceData,
+    isLoading: isLoading,
+    isFetching: isFetching,
+    error,
+    refetch,
+  } = useVMInstanceDetails(instanceId as string);
+  const loading = isLoading || isFetching;
   // Use delete instance hook with redirect
   const { handleDeleteInstance, DeleteInstanceModal } = useDeleteInstance({
     redirectOnDelete: true,
@@ -39,15 +44,6 @@ const InstanceDetails: React.FC = () => {
     useReinstallInstance();
 
   useEffect(() => {
-    const instance = MOCK_INSTANCES.find((inst) => inst.id === instanceId);
-
-    setTimeout(() => {
-      setInstanceData(instance || null);
-      setLoading(false);
-    }, 500);
-  }, [instanceId]);
-
-  useEffect(() => {
     const tab = searchParams.get("tab");
     if (tab === "vnc-console") {
       setActiveTab("VNC Console");
@@ -63,15 +59,51 @@ const InstanceDetails: React.FC = () => {
   };
 
   const handleStartStop = () => {
-    handleStartStopInstance(instanceData || undefined, instanceData?.status);
+    if (!instanceData) return;
+    const instance = {
+      id: instanceData.id,
+      uuid: instanceData.uuid,
+      name: instanceData.name,
+      status: instanceData.status,
+      flavor: instanceData.flavor.name,
+      image: instanceData.image,
+      public_ip: instanceData.public_ip,
+      nebula_ip: instanceData.nebula_ip,
+      created_at: instanceData.created_at,
+    };
+    handleStartStopInstance(instance, instanceData.status);
   };
 
   const handleReboot = () => {
-    handleRebootInstance(instanceData || undefined);
+    if (!instanceData) return;
+    const instance = {
+      id: instanceData.id,
+      uuid: instanceData.uuid,
+      name: instanceData.name,
+      status: instanceData.status,
+      flavor: instanceData.flavor.name,
+      image: instanceData.image,
+      public_ip: instanceData.public_ip,
+      nebula_ip: instanceData.nebula_ip,
+      created_at: instanceData.created_at,
+    };
+    handleRebootInstance(instance);
   };
 
   const handleReinstall = () => {
-    handleReinstallInstance(instanceData || undefined);
+    if (!instanceData) return;
+    const instance = {
+      id: instanceData.id,
+      uuid: instanceData.uuid,
+      name: instanceData.name,
+      status: instanceData.status,
+      flavor: instanceData.flavor.name,
+      image: instanceData.image,
+      public_ip: instanceData.public_ip,
+      nebula_ip: instanceData.nebula_ip,
+      created_at: instanceData.created_at,
+    };
+    handleReinstallInstance(instance);
   };
 
   const handleImageChange = (data: {
@@ -82,11 +114,16 @@ const InstanceDetails: React.FC = () => {
     setOpenChangeImageModal(false);
   };
 
-  if (loading) {
+  if (error) {
     return (
-      <div className="w-full py-12 flex justify-center items-center">
-        <div className="animate-spin">
-          <Loader className="size-6 text-primary-50" />
+      <div className="w-full py-12">
+        <div className="text-center">
+          <h2 className="text-lg font-medium text-grey-20">
+            Failed to load instance
+          </h2>
+          <p className="text-grey-60 mt-2">
+            {error instanceof Error ? error.message : "An error occurred"}
+          </p>
         </div>
       </div>
     );
@@ -107,13 +144,6 @@ const InstanceDetails: React.FC = () => {
     );
   }
 
-  // Default network info if not available in instance data
-  const networkInfo = instanceData.network || {
-    ipv4: "10.0.0.254",
-    sshLogin: "ssh ubuntu@hotmail.com",
-    sshKey: "dubs",
-  };
-
   return (
     <div className="w-full">
       <InstanceHeader
@@ -122,21 +152,49 @@ const InstanceDetails: React.FC = () => {
         activeTab={activeTab}
         onTabChange={handleTabChange}
         onChangeImage={handleChangeImage}
-        onDeleteInstance={handleDeleteInstance}
+        onDeleteInstance={() =>
+          handleDeleteInstance({
+            id: instanceData.id,
+            uuid: instanceData.uuid,
+            name: instanceData.name,
+            status: instanceData.status,
+            flavor: instanceData.flavor.name,
+            image: instanceData.image,
+            public_ip: instanceData.public_ip,
+            nebula_ip: instanceData.nebula_ip,
+            created_at: instanceData.created_at,
+          })
+        }
         onStartStop={handleStartStop}
         onReboot={handleReboot}
         onReinstall={handleReinstall}
+        onRefresh={() => refetch()}
       />
 
       {/* Display content based on activeTab */}
       <div className="animate-in fade-in duration-300">
         {activeTab === "Dashboard" ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
-            <VirtualMachineInfo instance={instanceData} />
-            <NetworksInfo networkInfo={networkInfo} />
+            <VirtualMachineInfo
+              instanceData={instanceData}
+              isLoading={loading}
+            />
+            <NetworksInfo instanceData={instanceData} isLoading={loading} />
           </div>
         ) : activeTab === "VNC Console" ? (
-          <VncConsole instance={instanceData} />
+          <VncConsole
+            instance={{
+              id: instanceData.id,
+              uuid: instanceData.uuid,
+              name: instanceData.name,
+              status: instanceData.status,
+              flavor: instanceData.flavor.name,
+              image: instanceData.image,
+              public_ip: instanceData.public_ip,
+              nebula_ip: instanceData.nebula_ip,
+              created_at: instanceData.created_at,
+            }}
+          />
         ) : null}
       </div>
 

@@ -16,6 +16,7 @@ interface InstanceHeaderProps {
   onStartStop?: () => void;
   onReboot?: () => void;
   onReinstall?: () => void;
+  onRefresh?: () => void;
 }
 
 const InstanceHeader: React.FC<InstanceHeaderProps> = ({
@@ -28,6 +29,7 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
   onStartStop,
   onReboot,
   onReinstall,
+  onRefresh,
 }) => {
   const tabs: TabOption[] = [
     {
@@ -62,6 +64,17 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
               width="w-full sm:min-w-[148px]"
             />
           </div>
+          {onRefresh && (
+            <Button
+              variant="ghost"
+              size="noStyle"
+              className="border border-grey-80 text-grey-10 p-2"
+              onClick={onRefresh}
+              title="Refresh instance details"
+            >
+              <Icons.Refresh className="size-4" />
+            </Button>
+          )}
           <div className="hidden sm:block">
             <TableActionMenu
               dropdownTitle="Instance Options"

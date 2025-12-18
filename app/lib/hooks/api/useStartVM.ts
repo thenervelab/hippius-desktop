@@ -45,6 +45,7 @@ export default function useStartVM(
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         const message =
+          errorData.error ||
           errorData.message ||
           errorData.detail ||
           `Failed to start VM instance`;

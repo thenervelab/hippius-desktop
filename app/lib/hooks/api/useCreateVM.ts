@@ -69,14 +69,19 @@ export default function useCreateVM(
           );
         } else if (response.status === 400) {
           const message =
-            errorData.message || errorData.detail || "Invalid request";
+            errorData.error ||
+            errorData.message ||
+            errorData.detail ||
+            "Invalid request";
           throw new Error(message);
         }
-
+        const message =
+          errorData.error ||
+          errorData.message ||
+          errorData.detail ||
+          "Invalid request";
         throw new Error(
-          `HTTP ${response.status}: Failed to create VM instance ${
-            errorData.message ? `- ${errorData.message}` : ""
-          }`
+          `HTTP ${response.status}: Failed to create VM instance - ${message}`
         );
       }
 

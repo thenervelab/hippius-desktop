@@ -23,6 +23,7 @@ import CreateButton from "../ui/button/CreateButton";
 import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
+import NoEntriesFound from "../ui/NoEntriesFound";
 
 export interface CreateTokenFields {
   name: string;
@@ -310,9 +311,7 @@ const VirtualMachines: FC = () => {
                   ))}
                 </div>
               ) : templates.length === 0 ? (
-                <div className="flex items-center justify-center py-12">
-                  <p className="text-grey-50">No templates available</p>
-                </div>
+                <NoEntriesFound text="No templates available" />
               ) : (
                 <>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">

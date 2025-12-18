@@ -45,6 +45,7 @@ export default function useRebootVM(
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         const message =
+          errorData.error ||
           errorData.message ||
           errorData.detail ||
           `Failed to reboot VM instance`;

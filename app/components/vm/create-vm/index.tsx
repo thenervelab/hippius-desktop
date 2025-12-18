@@ -13,6 +13,7 @@ import { usePagination } from "@/app/lib/hooks";
 import CustomTooltip2 from "../../ui/CustomTooltip2";
 import { Select } from "../../ui";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
+import NoEntriesFound from "../../ui/NoEntriesFound";
 
 const CreateVM: React.FC = () => {
   const router = useRouter();
@@ -172,9 +173,7 @@ const CreateVM: React.FC = () => {
           ))}
         </div>
       ) : templates.length === 0 ? (
-        <div className="flex items-center justify-center py-12">
-          <p className="text-grey-50">No models available</p>
-        </div>
+        <NoEntriesFound text="No templates available" />
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">

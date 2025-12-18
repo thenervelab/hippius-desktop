@@ -45,7 +45,10 @@ export default function useStopVM(
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         const message =
-          errorData.message || errorData.detail || `Failed to stop VM instance`;
+          errorData.error ||
+          errorData.message ||
+          errorData.detail ||
+          `Failed to stop VM instance`;
         throw new Error(message);
       }
 

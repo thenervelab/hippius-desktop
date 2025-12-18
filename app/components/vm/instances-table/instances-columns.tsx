@@ -27,7 +27,7 @@ export const getDesktopColumns = (
       const instance = d.row.original;
       return (
         <Link
-          href={`/vm/view/${instance.id}`}
+          href={`/vm/instance-details?instanceId=${instance.id}`}
           className="text-grey-20 text-base hover:text-primary-50 transition-colors cursor-pointer"
         >
           {d.getValue()}
@@ -122,13 +122,13 @@ export const getDesktopColumns = (
               icon: <Icons.Code className="size-4" />,
               itemTitle: "Instance Details",
               isLink: true,
-              href: `/vm/view/${instance.id}`,
+              href: `/vm/instance-details?instanceId=${instance.id}`,
             },
             {
               icon: <Icons.CodeCircle className="size-4" />,
               itemTitle: "VNC Console (Ready)",
               isLink: true,
-              href: `/vm/view/${instance.id}?tab=vnc-console`,
+              href: `/vm/instance-details?instanceId=${instance.id}&tab=vnc-console`,
             },
             {
               icon: <Icons.CloudConnection className="size-4" />,

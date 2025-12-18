@@ -47,7 +47,13 @@ export default function useVMFlavors(
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: Failed to fetch VM flavors`);
+        const errorData = await response.json().catch(() => ({}));
+        const message =
+          errorData.error ||
+          errorData.message ||
+          errorData.detail ||
+          `Failed to fetch VM flavors`;
+        throw new Error(message);
       }
 
       return response.json() as Promise<VMFlavorResponse[]>;

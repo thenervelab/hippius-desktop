@@ -4,42 +4,56 @@ import {
   useQuery,
   UseQueryOptions,
   UseQueryResult,
-  keepPreviousData,
 } from "@tanstack/react-query";
 import { API_CONFIG } from "@/lib/config";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
-export interface VMInstanceResponse {
+export interface VMInstanceDetailsResponse {
   id: number;
   uuid: string | null;
   name: string;
   status: string;
-  flavor: string;
+  flavor: {
+    name: string;
+    cpu_cores: number;
+    memory_mb: number;
+    disk_gb: number;
+  };
   image: string;
   public_ip: string | null;
   nebula_ip: string | null;
+  ssh_public_key: string;
+  error_message: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 /**
- * Hook to fetch VM instances using react-query
+ * Hook to fetch VM instance details by ID using react-query
  */
-export default function useVMInstances(
+export default function useVMInstanceDetails(
+  instanceId: number | string,
   options?: Omit<
-    UseQueryOptions<VMInstanceResponse[], Error, VMInstanceResponse[]>,
+    UseQueryOptions<
+      VMInstanceDetailsResponse,
+      Error,
+      VMInstanceDetailsResponse
+    >,
     "queryKey" | "queryFn"
   >
-): UseQueryResult<VMInstanceResponse[], Error> {
+): UseQueryResult<VMInstanceDetailsResponse, Error> {
   const { oauthSession } = useWalletAuth();
 
-  return useQuery<VMInstanceResponse[], Error, VMInstanceResponse[]>({
-    queryKey: ["vmInstances", oauthSession?.token],
+  return useQuery<VMInstanceDetailsResponse, Error, VMInstanceDetailsResponse>({
+    queryKey: ["vm-instance-details", instanceId, oauthSession?.token],
     queryFn: async () => {
       if (!oauthSession?.token) {
         throw new Error("No authentication token available");
       }
 
-      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.instances}`;
+      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.instance(
+        Number(instanceId)
+      )}`;
 
       const response = await fetch(url, {
         method: "GET",
@@ -55,15 +69,15 @@ export default function useVMInstances(
           errorData.error ||
           errorData.message ||
           errorData.detail ||
-          `Failed to fetch VM instances`;
+          `Failed to fetch VM instance details`;
         throw new Error(message);
       }
 
-      return response.json() as Promise<VMInstanceResponse[]>;
+      return response.json() as Promise<VMInstanceDetailsResponse>;
     },
-    enabled: !!oauthSession?.token,
+    enabled: !!oauthSession?.token && !!instanceId,
     refetchOnWindowFocus: false,
-    staleTime: 30 * 1000, // 30 seconds (instances change frequently)
+    staleTime: 30 * 1000, // 30 seconds
     ...options,
   });
 }

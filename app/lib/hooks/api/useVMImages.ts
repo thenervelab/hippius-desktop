@@ -44,7 +44,13 @@ export default function useVMImages(
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: Failed to fetch VM images`);
+        const errorData = await response.json().catch(() => ({}));
+        const message =
+          errorData.error ||
+          errorData.message ||
+          errorData.detail ||
+          `Failed to fetch VM images`;
+        throw new Error(message);
       }
 
       return response.json() as Promise<VMImageResponse[]>;

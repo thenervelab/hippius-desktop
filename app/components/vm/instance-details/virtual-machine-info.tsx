@@ -1,11 +1,9 @@
 import React, { useState } from "react";
 import InfoPanel from "./info-panel";
 import LabelWithIcon from "./label-with-icon";
-import { Instance } from "../instances-table";
 import ImageCell from "../instances-table/image-cell";
 import StatusCell from "../instances-table/status-cell";
 import TemplateItem from "@/components/vm/instance-details/template-item";
-import { Button } from "@/components/ui/button";
 import { Button as NewButton } from "@/components/ui/button/NewButton";
 import { MoreVertical } from "lucide-react";
 import { toast } from "sonner";
@@ -17,14 +15,17 @@ import { useReinstallInstance } from "../hooks/useReinstallInstance";
 import { Icons } from "../../ui";
 import ConfirmDialog2 from "../../ui/ConfirmDialog2";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
-import CopyableText from "../../ui/CopyableText";
+import { VMInstanceDetailsResponse } from "@/app/lib/hooks/api/useVMInstanceDetails";
+import Skeleton from "@/components/ui/skeleton";
 
 interface VirtualMachineInfoProps {
-  instance: Instance;
+  instanceData?: VMInstanceDetailsResponse;
+  isLoading: boolean;
 }
 
 const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
-  instance,
+  instanceData,
+  isLoading,
 }) => {
   const [openChangeImageModal, setOpenChangeImageModal] = useState(false);
   const [openChangeInstanceModal, setOpenChangeInstanceModal] = useState(false);
@@ -45,13 +46,29 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
   const { handleReinstallInstance, ReinstallConfirmModal } =
     useReinstallInstance();
 
-  // Extended instance data for the mock
-  const extendedInfo = {
-    model: "B3-32-FLEX",
-    ram: "32 GB",
-    processor: "8 vCores",
-    storage: "200 GB",
-    bandwidth: "200 Mbps",
+  // Parse image name for ImageCell
+  const parseImageName = (imageName: string) => {
+    let os: "AlmaLinux" | "Debian" | "Rocky Linux" | "Ubuntu";
+    let version: string;
+
+    if (imageName.startsWith("AlmaLinux")) {
+      os = "AlmaLinux";
+      version = imageName.replace("AlmaLinux ", "");
+    } else if (imageName.startsWith("Debian")) {
+      os = "Debian";
+      version = imageName.replace("Debian ", "");
+    } else if (imageName.startsWith("Rocky Linux")) {
+      os = "Rocky Linux";
+      version = imageName.replace("Rocky Linux ", "");
+    } else if (imageName.startsWith("Ubuntu")) {
+      os = "Ubuntu";
+      version = imageName.replace("Ubuntu ", "");
+    } else {
+      os = "Ubuntu";
+      version = imageName;
+    }
+
+    return { os, version };
   };
 
   const handleChangeImage = (data: ChangeImageData) => {
@@ -64,35 +81,84 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
     toast.success("Instance Image Changed Successfully");
   };
 
-  const vmControlsMenu = (
+  const vmControlsMenu = instanceData ? (
     <TableActionMenu
       dropdownTitle="VM Controls"
       items={[
         {
           icon:
-            instance.status === "Stopped" ? (
+            instanceData.status === "Stopped" ? (
               <Icons.PlayCircle className="size-4" />
             ) : (
               <Icons.StopCircle className="size-4" />
             ),
           itemTitle:
-            instance.status === "Stopped" ? "Start Instance" : "Stop Instance",
-          onItemClick: () => handleStartStopInstance(instance, instance.status),
+            instanceData.status === "Stopped"
+              ? "Start Instance"
+              : "Stop Instance",
+          onItemClick: () =>
+            handleStartStopInstance(
+              {
+                id: instanceData.id,
+                uuid: instanceData.uuid,
+                name: instanceData.name,
+                status: instanceData.status,
+                flavor: instanceData.flavor.name,
+                image: instanceData.image,
+                public_ip: instanceData.public_ip,
+                nebula_ip: instanceData.nebula_ip,
+                created_at: instanceData.created_at,
+              },
+              instanceData.status
+            ),
         },
         {
           icon: <Icons.Refresh2 className="size-4" />,
           itemTitle: "Reboot Instance",
-          onItemClick: () => handleRebootInstance(instance),
+          onItemClick: () =>
+            handleRebootInstance({
+              id: instanceData.id,
+              uuid: instanceData.uuid,
+              name: instanceData.name,
+              status: instanceData.status,
+              flavor: instanceData.flavor.name,
+              image: instanceData.image,
+              public_ip: instanceData.public_ip,
+              nebula_ip: instanceData.nebula_ip,
+              created_at: instanceData.created_at,
+            }),
         },
         {
           icon: <Icons.Refresh className="size-4" />,
           itemTitle: "Reinstall Instance",
-          onItemClick: () => handleReinstallInstance(instance),
+          onItemClick: () =>
+            handleReinstallInstance({
+              id: instanceData.id,
+              uuid: instanceData.uuid,
+              name: instanceData.name,
+              status: instanceData.status,
+              flavor: instanceData.flavor.name,
+              image: instanceData.image,
+              public_ip: instanceData.public_ip,
+              nebula_ip: instanceData.nebula_ip,
+              created_at: instanceData.created_at,
+            }),
         },
         {
           icon: <Icons.Trash className="size-4" />,
           itemTitle: "Delete Instance",
-          onItemClick: () => handleDeleteInstance(instance),
+          onItemClick: () =>
+            handleDeleteInstance({
+              id: instanceData.id,
+              uuid: instanceData.uuid,
+              name: instanceData.name,
+              status: instanceData.status,
+              flavor: instanceData.flavor.name,
+              image: instanceData.image,
+              public_ip: instanceData.public_ip,
+              nebula_ip: instanceData.nebula_ip,
+              created_at: instanceData.created_at,
+            }),
           variant: "destructive",
         },
       ]}
@@ -106,7 +172,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
         <MoreVertical className="size-4" />
       </NewButton>
     </TableActionMenu>
-  );
+  ) : null;
 
   return (
     <>
@@ -115,7 +181,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
         icon={<Icons.Driver className="size-[18px] relative text-primary-50" />}
         headerAction={vmControlsMenu}
       >
-        {/* Miner ID */}
+        {/* Miner ID
         <div className="mb-6">
           <LabelWithIcon
             icon={<Icons.UserSquare className="size-4" />}
@@ -130,7 +196,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
               maxWidth="w-full"
             />
           </div>
-        </div>
+        </div> */}
 
         {/* Image */}
         <div className="mb-6">
@@ -139,11 +205,15 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
             label="Image"
           />
           <div className="mt-1 flex justify-between gap-2">
-            <ImageCell
-              iconClass="bg-[#F7F7F7] p-[5px] size-[26px]"
-              value={instance.image}
-            />
-            <NewButton
+            {isLoading ? (
+              <Skeleton className="!h-[26px] !w-[150px]" />
+            ) : instanceData ? (
+              <ImageCell
+                iconClass="bg-[#F7F7F7] p-[5px] size-[26px]"
+                value={parseImageName(instanceData.image)}
+              />
+            ) : null}
+            {/* <NewButton
               variant="ghost"
               size="noStyle"
               className="px-1.5 py-1 flex gap-1 text-grey-50 border border-grey-80"
@@ -151,7 +221,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
             >
               <Icons.Refresh2 className="size-4" />
               <span className="text-sm">Change Image</span>
-            </NewButton>
+            </NewButton> */}
           </div>
         </div>
 
@@ -162,10 +232,14 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
             label="Status"
           />
           <div className="mt-1">
-            <StatusCell
-              className="p-2 bg-[#F7F7F7] w-min"
-              value={instance.status}
-            />
+            {isLoading ? (
+              <Skeleton className="!h-[25px] !w-[150px]" />
+            ) : instanceData ? (
+              <StatusCell
+                className="p-2 bg-[#F7F7F7] w-min"
+                value={instanceData.status}
+              />
+            ) : null}
           </div>
         </div>
 
@@ -176,15 +250,52 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
             label="Template"
           />
           <div className="grid grid-cols-2 gap-2 ">
-            <TemplateItem label="Model" value={extendedInfo.model} />
-            <TemplateItem label="RAM" value={extendedInfo.ram} />
-            <TemplateItem label="Processor" value={extendedInfo.processor} />
-            <TemplateItem label="Storage" value={extendedInfo.storage} />
-            <TemplateItem
-              label="Public Bandwidth"
-              className="col-span-2"
-              value={extendedInfo.bandwidth}
-            />
+            {isLoading ? (
+              <>
+                <div className="bg-[#F7F7F7] p-2 rounded">
+                  <div className="text-grey-50 font-medium text-base">
+                    Model
+                  </div>
+                  <Skeleton className="!h-[20px] !w-[80px] mt-2" />
+                </div>
+                <div className="bg-[#F7F7F7] p-2 rounded">
+                  <div className="text-grey-50 font-medium text-base">RAM</div>
+                  <Skeleton className="!h-[20px] !w-[80px] mt-2" />
+                </div>
+                <div className="bg-[#F7F7F7] p-2 rounded">
+                  <div className="text-grey-50 font-medium text-base">
+                    Processor
+                  </div>
+                  <Skeleton className="!h-[20px] !w-[80px] mt-2" />
+                </div>
+                <div className="bg-[#F7F7F7] p-2 rounded">
+                  <div className="text-grey-50 font-medium text-base">
+                    Storage
+                  </div>
+                  <Skeleton className="!h-[20px] !w-[80px] mt-2" />
+                </div>
+              </>
+            ) : instanceData ? (
+              <>
+                <TemplateItem label="Model" value={instanceData.flavor.name} />
+                <TemplateItem
+                  label="RAM"
+                  value={`${(instanceData.flavor.memory_mb / 1024).toFixed(
+                    0
+                  )} GB`}
+                />
+                <TemplateItem
+                  label="Processor"
+                  value={`${instanceData.flavor.cpu_cores} vCore${
+                    instanceData.flavor.cpu_cores > 1 ? "s" : ""
+                  }`}
+                />
+                <TemplateItem
+                  label="Storage"
+                  value={`${instanceData.flavor.disk_gb} GB`}
+                />
+              </>
+            ) : null}
           </div>
         </div>
       </InfoPanel>

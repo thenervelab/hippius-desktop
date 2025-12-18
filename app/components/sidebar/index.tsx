@@ -116,24 +116,33 @@ const Sidebar: React.FC = () => {
           </div> */}
 
             <div className="flex gap-4 flex-col flex-1 pt-4 border-t border-gray-80 w-full">
-              {navItems.map((item) => (
-                <NavItem
-                  key={item.path}
-                  icon={item.icon}
-                  label={item.label}
-                  href={item.path}
-                  inView={inView}
-                  active={pathname === item.path}
-                  comingSoon={item?.comingSoon}
-                  collapsed={collapsed}
-                  subMenuItems={item?.subMenuItems}
-                  onClick={
-                    item.label === "Settings"
-                      ? openSettingsWithDefaultTab
-                      : undefined
-                  }
-                />
-              ))}
+              {navItems.map((item) => {
+                // Check if current path matches or starts with the item path (for child routes)
+                const isActive =
+                  item.path === "/"
+                    ? pathname === item.path
+                    : pathname === item.path ||
+                      pathname.startsWith(item.path + "/");
+
+                return (
+                  <NavItem
+                    key={item.path}
+                    icon={item.icon}
+                    label={item.label}
+                    href={item.path}
+                    inView={inView}
+                    active={isActive}
+                    comingSoon={item?.comingSoon}
+                    collapsed={collapsed}
+                    subMenuItems={item?.subMenuItems}
+                    onClick={
+                      item.label === "Settings"
+                        ? openSettingsWithDefaultTab
+                        : undefined
+                    }
+                  />
+                );
+              })}
             </div>
 
             <div className="py-3 border-b border-gray-80 w-full">
