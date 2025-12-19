@@ -67,6 +67,8 @@ const InstanceDetails: React.FC = () => {
         activeTab={activeTab}
         onTabChange={handleTabChange}
         isLoading={loading}
+        onRefresh={() => refetch()}
+        isRefetching={isFetching}
       />
 
       {/* Display content based on activeTab */}

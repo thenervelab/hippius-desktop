@@ -4,12 +4,15 @@ import Link from "next/link";
 import { Icons } from "../../ui";
 import TabList, { TabOption } from "../../ui/tabs/TabList";
 import Skeleton from "@/components/ui/skeleton";
+import RefreshButton from "../../ui/refresh-button";
 
 interface InstanceHeaderProps {
   instanceName?: string;
   activeTab: string;
   onTabChange: (tabName: string) => void;
   isLoading?: boolean;
+  onRefresh?: () => void;
+  isRefetching?: boolean;
 }
 
 const InstanceHeader: React.FC<InstanceHeaderProps> = ({
@@ -17,6 +20,8 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
   activeTab,
   onTabChange,
   isLoading = false,
+  onRefresh,
+  isRefetching = false,
 }) => {
   const tabs: TabOption[] = [
     {
@@ -46,6 +51,9 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
         </div>
 
         <div className="flex items-center gap-4">
+          {onRefresh && (
+            <RefreshButton refetching={isRefetching} onClick={onRefresh} />
+          )}
           <div className="border border-grey-80 rounded p-1 bg-grey-100">
             <TabList
               tabs={tabs}
