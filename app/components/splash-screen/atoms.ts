@@ -40,21 +40,9 @@ export const stepAtom = atom((get) => {
   return 0;
 });
 
-// Helper to calculate start percentage for a phase based on weights
-function getPhaseStartPercentage(phaseIndex: number): number {
-  const phaseKeys = Object.keys(PHASE_CONTENT);
-  let cumulative = 0;
-  for (let i = 0; i < phaseIndex; i++) {
-    const phaseKey = phaseKeys[i];
-    cumulative += PHASE_CONTENT[phaseKey].weight;
-  }
-  return cumulative;
-}
 
 // Progress percentage based on weighted phases and real-time backend progress
 export const progressAtom = atom((get) => {
-  const completedPhases = get(completedPhasesAtom);
-  const isCommandRunning = get(phaseCommandRunningAtom);
   const phase = get(phaseAtom);
   const isUpdateCheckPhase = get(isUpdateCheckPhaseAtom);
   const phaseInternalProgress = get(_phaseInternalProgressAtom);
