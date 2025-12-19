@@ -12,6 +12,7 @@ export const useReinstallInstance = (options?: UseReinstallInstanceOptions) => {
   const { onSuccess } = options || {};
 
   const [openConfirmModal, setOpenConfirmModal] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const handleReinstallInstance = (instance?: Instance) => {
     if (instance) {
@@ -21,6 +22,7 @@ export const useReinstallInstance = (options?: UseReinstallInstanceOptions) => {
   };
 
   const handleConfirm = async () => {
+    setIsProcessing(true);
     try {
       // TODO: Replace with actual API call
       // await reinstallInstanceAPI(selectedInstance?.id);
@@ -33,20 +35,24 @@ export const useReinstallInstance = (options?: UseReinstallInstanceOptions) => {
     } catch (error) {
       toast.error("Failed to reinstall instance");
       console.error("Reinstall instance error:", error);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   const handleCancel = () => {
+    if (isProcessing) return;
     setOpenConfirmModal(false);
   };
 
   const ReinstallConfirmModal = () => (
     <ConfirmDialog2
       open={openConfirmModal}
-      onClose={handleCancel}
+      onClose={isProcessing ? () => {} : handleCancel}
       onConfirm={handleConfirm}
-      onBack={handleCancel}
-      button="Reinstall Instance"
+      onBack={isProcessing ? () => {} : handleCancel}
+      button={isProcessing ? "Reinstalling..." : "Reinstall Instance"}
+      disableButton={isProcessing}
       text="Are you sure you want to reinstall this instance? This will erase all data and reset the instance to its initial state. This action cannot be undone."
       heading="Reinstall Instance"
       icon={<Icons.Refresh className="size-6 text-grey-100" />}

@@ -36,7 +36,6 @@ const VirtualMachines: FC = () => {
   const [activeTab, setActiveTab] = useState<string>("Instances");
   const [openCreateSSHKeyModal, setOpenCreateSSHKeyModal] = useState(false);
   const [openDeleteSSHKeyModal, setOpenDeleteSSHKeyModal] = useState(false);
-  const [openDeleteTemplateModal, setOpenDeleteTemplateModal] = useState(false);
   const [instanceSearchTerm, setInstanceSearchTerm] = useState("");
   const [debouncedInstanceSearchTerm, setDebouncedInstanceSearchTerm] =
     useState("");
@@ -210,15 +209,6 @@ const VirtualMachines: FC = () => {
     }
   };
 
-  const handleDeleteTemplate = () => {
-    setOpenDeleteTemplateModal(true);
-  };
-
-  const handleConfirmDeleteTemplate = () => {
-    setOpenDeleteTemplateModal(false);
-    toast.success("Template Deleted");
-  };
-
   const getHeaderTitle = () => {
     switch (activeTab) {
       case "SSH Keys":
@@ -362,7 +352,6 @@ const VirtualMachines: FC = () => {
                       <VMTemplateCard
                         key={template.id}
                         template={template}
-                        onDelete={handleDeleteTemplate}
                         showSetupButton={false}
                         hideMenu={true}
                       />
@@ -416,20 +405,6 @@ const VirtualMachines: FC = () => {
         }"? This action is permanent.`}
         heading="Delete SSH Key"
         disableButton={isDeletingInProgress}
-      />
-      {/* Delete Template Confirmation */}
-      <DeleteConfirmationDialog
-        open={openDeleteTemplateModal}
-        onClose={() => {
-          setOpenDeleteTemplateModal(false);
-        }}
-        onBack={() => {
-          setOpenDeleteTemplateModal(false);
-        }}
-        onDelete={handleConfirmDeleteTemplate}
-        button="Delete Template"
-        text="Are you sure you want to delete this template? This action is permanent."
-        heading="Delete Template"
       />
     </div>
   );

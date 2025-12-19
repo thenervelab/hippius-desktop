@@ -12,7 +12,6 @@ import { useStartStopInstance } from "../hooks/useStartStopInstance";
 import useVMInstances from "@/app/lib/hooks/api/useVMInstances";
 import { VMFlavorResponse } from "@/app/lib/hooks/api/useVMFlavors";
 import { useRebootInstance } from "../hooks/useRebootInstance";
-import { useReinstallInstance } from "../hooks/useReinstallInstance";
 import { usePagination } from "@/app/lib/hooks";
 import NoDataFound from "../../ui/NoDataFound";
 import { Server } from "lucide-react";
@@ -44,7 +43,7 @@ const InstancesTable: FC<InstancesTableProps> = ({
   isFlavorsLoading,
   searchTerm = "",
 }) => {
-  const { data: instances, isLoading, error, isRefetching } = useVMInstances();
+  const { data: instances, isLoading, error, isFetching } = useVMInstances();
 
   // Filter instances locally based on search term (memoized for performance)
   const filteredInstances = useMemo(() => {
@@ -69,16 +68,13 @@ const InstancesTable: FC<InstancesTableProps> = ({
   const { handleStartStopInstance, StartStopConfirmModal } =
     useStartStopInstance();
   const { handleRebootInstance, RebootConfirmModal } = useRebootInstance();
-  const { handleReinstallInstance, ReinstallConfirmModal } =
-    useReinstallInstance();
 
   // Get columns with the handlers
   const desktopColumns = getDesktopColumns(
     flavors,
     onDeleteInstance,
     handleStartStopInstance,
-    handleRebootInstance,
-    handleReinstallInstance
+    handleRebootInstance
   );
 
   const table = useReactTable({
@@ -97,7 +93,7 @@ const InstancesTable: FC<InstancesTableProps> = ({
               Oops an error occurred...
             </P>
           </div>
-        ) : isLoading || isRefetching || isFlavorsLoading ? (
+        ) : isLoading || isFetching || isFlavorsLoading ? (
           <TableModule.Table>
             <TableModule.THead>
               {table.getHeaderGroups().map((headerGroup) => (
@@ -189,7 +185,6 @@ const InstancesTable: FC<InstancesTableProps> = ({
       {/* Instance Control Modals */}
       <StartStopConfirmModal />
       <RebootConfirmModal />
-      <ReinstallConfirmModal />
     </div>
   );
 };

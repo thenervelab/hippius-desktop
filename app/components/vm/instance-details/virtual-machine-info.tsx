@@ -11,7 +11,6 @@ import ChangeImageModal, { ChangeImageData } from "./change-image-modal";
 import { useDeleteInstance } from "../hooks/useDeleteInstance";
 import { useStartStopInstance } from "../hooks/useStartStopInstance";
 import { useRebootInstance } from "../hooks/useRebootInstance";
-import { useReinstallInstance } from "../hooks/useReinstallInstance";
 import { Icons } from "../../ui";
 import ConfirmDialog2 from "../../ui/ConfirmDialog2";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
@@ -21,11 +20,13 @@ import Skeleton from "@/components/ui/skeleton";
 interface VirtualMachineInfoProps {
   instanceData?: VMInstanceDetailsResponse;
   isLoading: boolean;
+  onRefresh?: () => void;
 }
 
 const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
   instanceData,
   isLoading,
+  onRefresh,
 }) => {
   const [openChangeImageModal, setOpenChangeImageModal] = useState(false);
   const [openChangeInstanceModal, setOpenChangeInstanceModal] = useState(false);
@@ -35,16 +36,16 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
     redirectOnDelete: true,
   });
 
-  // Use start/stop instance hook
+  // Use start/stop instance hook with refresh callback
   const { handleStartStopInstance, StartStopConfirmModal } =
-    useStartStopInstance();
+    useStartStopInstance({
+      onSuccess: onRefresh,
+    });
 
-  // Use reboot instance hook
-  const { handleRebootInstance, RebootConfirmModal } = useRebootInstance();
-
-  // Use reinstall instance hook
-  const { handleReinstallInstance, ReinstallConfirmModal } =
-    useReinstallInstance();
+  // Use reboot instance hook with refresh callback
+  const { handleRebootInstance, RebootConfirmModal } = useRebootInstance({
+    onSuccess: onRefresh,
+  });
 
   // Parse image name for ImageCell
   const parseImageName = (imageName: string) => {
@@ -119,22 +120,6 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
           itemTitle: "Reboot Instance",
           onItemClick: () =>
             handleRebootInstance({
-              id: instanceData.id,
-              uuid: instanceData.uuid,
-              name: instanceData.name,
-              status: instanceData.status,
-              flavor: instanceData.flavor.name,
-              image: instanceData.image,
-              public_ip: instanceData.public_ip,
-              nebula_ip: instanceData.nebula_ip,
-              created_at: instanceData.created_at,
-            }),
-        },
-        {
-          icon: <Icons.Refresh className="size-4" />,
-          itemTitle: "Reinstall Instance",
-          onItemClick: () =>
-            handleReinstallInstance({
               id: instanceData.id,
               uuid: instanceData.uuid,
               name: instanceData.name,
@@ -246,7 +231,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
         </div>
 
         {/* Template */}
-        <div>
+        <div className="mb-6">
           <LabelWithIcon
             icon={<Icons.Setting className="size-4" />}
             label="Template"
@@ -300,6 +285,23 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
             ) : null}
           </div>
         </div>
+
+        {/* Created At */}
+        <div>
+          <LabelWithIcon
+            icon={<Icons.Calendar className="size-4" />}
+            label="Created At"
+          />
+          <div className="mt-1">
+            {isLoading ? (
+              <Skeleton className="!h-[20px] !w-[200px]" />
+            ) : instanceData ? (
+              <div className="text-grey-10 font-medium text-base">
+                {new Date(instanceData.created_at).toLocaleString()}
+              </div>
+            ) : null}
+          </div>
+        </div>
       </InfoPanel>
       <ChangeImageModal
         open={openChangeImageModal}
@@ -324,8 +326,6 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
       <StartStopConfirmModal />
 
       <RebootConfirmModal />
-
-      <ReinstallConfirmModal />
     </>
   );
 };

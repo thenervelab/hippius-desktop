@@ -19,8 +19,7 @@ export const getDesktopColumns = (
   flavors: VMFlavorResponse[] | undefined,
   onDelete?: (instance: Instance) => void,
   onStartStop?: (instance: Instance, status: string) => void,
-  onReboot?: (instance: Instance) => void,
-  onReinstall?: (instance: Instance) => void
+  onReboot?: (instance: Instance) => void
 ) => [
   columnHelper.accessor("name", {
     header: "NAME",
@@ -142,6 +141,7 @@ export const getDesktopColumns = (
             {
               icon: <Icons.CloudConnection className="size-4" />,
               itemTitle: "SSH Connection",
+              disabled: true,
               onItemClick: () => console.log("SSH connection"),
             },
             {
@@ -162,11 +162,6 @@ export const getDesktopColumns = (
               icon: <Icons.Refresh2 className="size-4" />,
               itemTitle: "Reboot Instance",
               onItemClick: () => onReboot && onReboot(instance),
-            },
-            {
-              icon: <Icons.Refresh className="size-4" />,
-              itemTitle: "Reinstall Instance",
-              onItemClick: () => onReinstall && onReinstall(instance),
             },
             {
               icon: <Icons.Trash className="size-4" />,
