@@ -24,7 +24,6 @@ import CreateButton from "../ui/button/CreateButton";
 import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
-import useVMInstances from "@/app/lib/hooks/api/useVMInstances";
 import NoEntriesFound from "../ui/NoEntriesFound";
 
 export interface CreateTokenFields {

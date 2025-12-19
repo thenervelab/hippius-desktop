@@ -158,8 +158,9 @@ const Step1Configuration: React.FC<Step1Props> = ({
             showInfo
             tooltipContent={
               <div className="text-xs leading-snug">
-                We'll set up the selected app when the VM is created. If you
-                don't choose one, you'll get a plain VM with just the OS.
+                We&apos;ll set up the selected app when the VM is created. If
+                you don&apos;t choose one, you&apos;ll get a plain VM with just
+                the OS.
               </div>
             }
           />
