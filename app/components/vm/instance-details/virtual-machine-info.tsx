@@ -90,13 +90,16 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
       items={[
         {
           icon:
-            instanceData.status === "Stopped" ? (
+            instanceData.status.toLowerCase() === "stopped" ? (
               <Icons.PlayCircle className="size-4" />
             ) : (
               <Icons.StopCircle className="size-4" />
             ),
+          disabled:
+            instanceData.status.toLowerCase() !== "running" &&
+            instanceData.status.toLowerCase() !== "stopped",
           itemTitle:
-            instanceData.status === "Stopped"
+            instanceData.status.toLowerCase() === "stopped"
               ? "Start Instance"
               : "Stop Instance",
           onItemClick: () =>
@@ -118,6 +121,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
         {
           icon: <Icons.Refresh2 className="size-4" />,
           itemTitle: "Reboot Instance",
+          disabled: instanceData.status.toLowerCase() !== "running",
           onItemClick: () =>
             handleRebootInstance({
               id: instanceData.id,

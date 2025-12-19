@@ -43,8 +43,8 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
     if (instance) {
       setSelectedInstance(instance);
     }
-    // Determine action based on current status
-    const actionType = currentStatus === "Stopped" ? "start" : "stop";
+    // Determine action based on current status (case-insensitive)
+    const actionType = currentStatus?.toLowerCase() === "stopped" ? "start" : "stop";
     setAction(actionType);
     setOpenConfirmModal(true);
   };

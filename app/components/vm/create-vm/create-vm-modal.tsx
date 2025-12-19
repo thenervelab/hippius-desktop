@@ -16,8 +16,11 @@ import { Button as Button2 } from "@/components/ui/button/NewButton";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useSSHKeys from "@/app/lib/hooks/api/useSSHKeys";
 import useVMImages from "@/app/lib/hooks/api/useVMImages";
-import useCreateVM from "@/app/lib/hooks/api/useCreateVM";
+import useCreateVM, {
+  type CreateVMRequest,
+} from "@/app/lib/hooks/api/useCreateVM";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
+import useVMApplications from "@/app/lib/hooks/api/useVMApplications";
 
 type FieldName = "instanceName" | "operatingSystem" | "image" | "sshKey";
 
@@ -27,6 +30,7 @@ export interface VMConfigurationData {
   instanceName: string;
   operatingSystem: string;
   image: string;
+  applicationId?: string;
   sshKey: string;
 }
 
@@ -52,6 +56,7 @@ const CreateVMModal: React.FC<Props> = ({
   const [instanceName, setInstanceName] = useState("");
   const [operatingSystem, setOperatingSystem] = useState("");
   const [image, setImage] = useState("");
+  const [applicationId, setApplicationId] = useState("");
   const [sshKey, setSshKey] = useState("");
   const [errors, setErrors] = useState<FieldErrors>({});
 
@@ -64,6 +69,13 @@ const CreateVMModal: React.FC<Props> = ({
   // Fetch VM images from API
   const { data: vmImages, isLoading: isLoadingImages } = useVMImages();
 
+  // Fetch VM one-click applications from API
+  const {
+    data: vmApplications,
+    isLoading: isLoadingApplications,
+    isFetching: isFetchingApplications,
+  } = useVMApplications();
+
   // Fetch SSH keys from API
   const {
     data: sshKeysData,
@@ -75,6 +87,7 @@ const CreateVMModal: React.FC<Props> = ({
     page_size: 100, // Get all keys for dropdown
   });
   const isLoadingSSHKeys = loadingSSHKeys || isFetchingSSHKeys;
+  const isLoadingVMApps = isLoadingApplications || isFetchingApplications;
 
   // Use create SSH key mutation
   const { mutateAsync: createSSHKey, isPending: isCreatingSSHKey } =
@@ -128,6 +141,16 @@ const CreateVMModal: React.FC<Props> = ({
       }));
   }, [vmImages, operatingSystem]);
 
+  const applicationOptions = React.useMemo(() => {
+    if (!vmApplications?.length) return [];
+
+    return vmApplications.map((app) => ({
+      value: app.id.toString(),
+      label: app.name,
+      imageUrl: app.logo_url,
+    }));
+  }, [vmApplications]);
+
   // Convert SSH keys to options format
   const sshKeyOptions = React.useMemo(() => {
     if (!sshKeysData?.results?.length) {
@@ -144,6 +167,7 @@ const CreateVMModal: React.FC<Props> = ({
     setInstanceName("");
     setOperatingSystem("");
     setImage("");
+    setApplicationId("");
     setSshKey("");
     setDirection(0);
     setErrors({});
@@ -212,6 +236,10 @@ const CreateVMModal: React.FC<Props> = ({
   const handleImageChange = (value: string) => {
     setImage(value);
     clearFieldError("image");
+  };
+
+  const handleApplicationChange = (value: string) => {
+    setApplicationId(value);
   };
 
   const handleSshKeyChange = (value: string) => {
@@ -283,6 +311,18 @@ const CreateVMModal: React.FC<Props> = ({
         return;
       }
 
+      const selectedApplication = applicationId
+        ? vmApplications?.find((app) => app.id.toString() === applicationId)
+        : undefined;
+
+      if (applicationId && !selectedApplication) {
+        toast.error("Selected application not found", {
+          duration: Infinity,
+          closeButton: true,
+        });
+        return;
+      }
+
       // Find the selected SSH key's public key
       const selectedSSHKey = sshKeysData?.results?.find(
         (key) => key.id.toString() === sshKey
@@ -305,12 +345,18 @@ const CreateVMModal: React.FC<Props> = ({
       }
 
       // Create the VM
-      await createVM({
+      const payload: CreateVMRequest = {
         flavor_id: Number(template.id),
         image_id: selectedImage.id,
         ssh_public_key: selectedSSHKey.public_key,
         name: instanceName,
-      });
+      };
+
+      if (selectedApplication) {
+        payload.application_id = selectedApplication.id;
+      }
+
+      await createVM(payload);
 
       toast.success("Virtual Machine Created Successfully");
 
@@ -319,6 +365,7 @@ const CreateVMModal: React.FC<Props> = ({
         instanceName,
         operatingSystem,
         image,
+        applicationId: selectedApplication?.id.toString() || undefined,
         sshKey,
       });
 
@@ -388,6 +435,14 @@ const CreateVMModal: React.FC<Props> = ({
       (os) => os.value === operatingSystem
     );
     return selectedOS?.label || "";
+  };
+
+  const getSelectedApplicationLabel = () => {
+    if (!applicationId) return "Not selected";
+    const selectedApp = applicationOptions.find(
+      (app) => app.value === applicationId
+    );
+    return selectedApp?.label || "Not selected";
   };
 
   return (
@@ -489,13 +544,17 @@ const CreateVMModal: React.FC<Props> = ({
                           handleOSChange={handleOSChange}
                           image={image}
                           setImage={handleImageChange}
+                          applicationId={applicationId}
+                          setApplicationId={handleApplicationChange}
                           sshKey={sshKey}
                           setSshKey={handleSshKeyChange}
                           operatingSystems={operatingSystems}
                           filteredImages={filteredImages}
+                          applicationOptions={applicationOptions}
                           sshKeyOptions={sshKeyOptions}
                           onCreateSSHKey={() => setOpenCreateSSHKeyModal(true)}
                           isLoadingImages={isLoadingImages}
+                          isLoadingApplications={isLoadingVMApps}
                           isLoadingSSHKeys={isLoadingSSHKeys}
                           errors={errors}
                         />
@@ -522,6 +581,7 @@ const CreateVMModal: React.FC<Props> = ({
                           instanceName={instanceName}
                           operatingSystemLabel={getSelectedOSLabel()}
                           imageLabel={getSelectedImageLabel()}
+                          applicationLabel={getSelectedApplicationLabel()}
                         />
                       </motion.div>
                     )}

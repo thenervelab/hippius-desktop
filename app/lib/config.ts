@@ -40,6 +40,7 @@ export const API_CONFIG = {
     vm: {
       flavors: "/api/infrastructure/vm/flavors/",
       images: "/api/infrastructure/vm/images/",
+      applications: "/api/infrastructure/vm/applications/",
       spawn: "/api/infrastructure/vm/spawn/",
       instances: "/api/infrastructure/vm/instances/",
       instance: (id: number) => `/api/infrastructure/vm/instances/${id}/`,

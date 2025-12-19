@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-table";
 import * as TableModule from "@/components/ui/alt-table";
 import { FC, useMemo } from "react";
+import React from "react";
 import { P } from "../../ui/typography";
 import { cn } from "@/lib/utils";
 import { getDesktopColumns } from "./instances-columns";
@@ -34,6 +35,9 @@ interface InstancesTableProps {
   flavors?: VMFlavorResponse[];
   isFlavorsLoading?: boolean;
   searchTerm?: string;
+  onError?: (error: Error | null) => void;
+  onRefetchChange?: (refetch: () => void) => void;
+  onFetchingChange?: (isFetching: boolean) => void;
 }
 
 const InstancesTable: FC<InstancesTableProps> = ({
@@ -42,8 +46,32 @@ const InstancesTable: FC<InstancesTableProps> = ({
   flavors,
   isFlavorsLoading,
   searchTerm = "",
+  onError,
+  onRefetchChange,
+  onFetchingChange,
 }) => {
-  const { data: instances, isLoading, error, isFetching } = useVMInstances();
+  const {
+    data: instances,
+    isLoading,
+    error,
+    isFetching,
+    refetch,
+  } = useVMInstances();
+
+  // Pass error, refetch, and isFetching to parent
+  React.useEffect(() => {
+    onError?.(error || null);
+  }, [error, onError]);
+
+  React.useEffect(() => {
+    if (onRefetchChange) {
+      onRefetchChange(refetch);
+    }
+  }, [refetch, onRefetchChange]);
+
+  React.useEffect(() => {
+    onFetchingChange?.(isFetching);
+  }, [isFetching, onFetchingChange]);
 
   // Filter instances locally based on search term (memoized for performance)
   const filteredInstances = useMemo(() => {

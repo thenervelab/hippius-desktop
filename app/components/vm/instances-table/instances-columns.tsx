@@ -138,12 +138,12 @@ export const getDesktopColumns = (
               isLink: true,
               href: `/vm/instance-details?instanceId=${instance.id}&tab=vnc-console`,
             },
-            {
-              icon: <Icons.CloudConnection className="size-4" />,
-              itemTitle: "SSH Connection",
-              disabled: true,
-              onItemClick: () => console.log("SSH connection"),
-            },
+            // {
+            //   icon: <Icons.CloudConnection className="size-4" />,
+            //   itemTitle: "SSH Connection",
+            //   disabled: true,
+            //   onItemClick: () => console.log("SSH connection"),
+            // },
             {
               icon:
                 instance.status.toLowerCase() === "stopped" ? (
@@ -155,12 +155,16 @@ export const getDesktopColumns = (
                 instance.status.toLowerCase() === "stopped"
                   ? "Start Instance"
                   : "Stop Instance",
+              disabled:
+                instance.status.toLowerCase() !== "running" &&
+                instance.status.toLowerCase() !== "stopped",
               onItemClick: () =>
                 onStartStop && onStartStop(instance, instance.status),
             },
             {
               icon: <Icons.Refresh2 className="size-4" />,
               itemTitle: "Reboot Instance",
+              disabled: instance.status.toLowerCase() !== "running",
               onItemClick: () => onReboot && onReboot(instance),
             },
             {

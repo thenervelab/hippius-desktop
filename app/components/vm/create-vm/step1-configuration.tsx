@@ -3,6 +3,8 @@
 import React from "react";
 import { PlusCircle } from "lucide-react";
 import TicketSelect from "../../page-sections/support/TicketSelect";
+import ImageOptionSelect from "../../ui/select/ImageOptionSelect";
+import CustomTooltip2 from "../../ui/CustomTooltip2";
 
 interface Step1Props {
   instanceName: string;
@@ -11,13 +13,21 @@ interface Step1Props {
   handleOSChange: (value: string) => void;
   image: string;
   setImage: (value: string) => void;
+  applicationId: string;
+  setApplicationId: (value: string) => void;
   sshKey: string;
   setSshKey: (value: string) => void;
   operatingSystems: Array<{ value: string; label: string }>;
   filteredImages: Array<{ value: string; label: string }>;
+  applicationOptions: Array<{
+    value: string;
+    label: string;
+    imageUrl?: string;
+  }>;
   sshKeyOptions: Array<{ value: string; label: string }>;
   onCreateSSHKey: () => void;
   isLoadingImages?: boolean;
+  isLoadingApplications?: boolean;
   isLoadingSSHKeys?: boolean;
   errors?: Partial<{
     instanceName: string;
@@ -34,13 +44,17 @@ const Step1Configuration: React.FC<Step1Props> = ({
   handleOSChange,
   image,
   setImage,
+  applicationId,
+  setApplicationId,
   sshKey,
   setSshKey,
   operatingSystems,
   filteredImages,
+  applicationOptions,
   sshKeyOptions,
   onCreateSSHKey,
   isLoadingImages = false,
+  isLoadingApplications = false,
   isLoadingSSHKeys = false,
   errors = {},
 }) => {
@@ -92,6 +106,7 @@ const Step1Configuration: React.FC<Step1Props> = ({
                   ? "No OS available"
                   : "Choose an OS"
               }
+              isLoading={isLoadingImages}
               disabled={isLoadingImages || operatingSystems.length === 0}
             />
           </div>
@@ -123,12 +138,53 @@ const Step1Configuration: React.FC<Step1Props> = ({
                   ? "No images available"
                   : "Choose an image"
               }
+              isLoading={isLoadingImages}
               disabled={isLoadingImages || filteredImages.length === 0}
             />
           </div>
           {errors.image && (
             <p className="mt-2 text-sm text-red-500">{errors.image}</p>
           )}
+        </div>
+      </div>
+
+      {/* One-Click Application */}
+      <div>
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium text-grey-70">
+            Application (optional)
+          </label>
+          <CustomTooltip2
+            showInfo
+            tooltipContent={
+              <div className="text-xs leading-snug">
+                We'll set up the selected app when the VM is created. If you
+                don't choose one, you'll get a plain VM with just the OS.
+              </div>
+            }
+          />
+        </div>
+        <div className="mt-2">
+          <ImageOptionSelect
+            value={applicationId}
+            onValueChange={setApplicationId}
+            options={
+              isLoadingApplications
+                ? []
+                : applicationOptions.length === 0
+                ? []
+                : applicationOptions
+            }
+            placeholder={
+              isLoadingApplications
+                ? "Loading..."
+                : applicationOptions.length === 0
+                ? "No applications available"
+                : "Select Application"
+            }
+            isLoading={isLoadingApplications}
+            disabled={isLoadingApplications || applicationOptions.length === 0}
+          />
         </div>
       </div>
 
@@ -153,6 +209,7 @@ const Step1Configuration: React.FC<Step1Props> = ({
                 ? "No SSH keys found"
                 : "Select your SSH key"
             }
+            isLoading={isLoadingSSHKeys}
             disabled={isLoadingSSHKeys}
           />
         </div>

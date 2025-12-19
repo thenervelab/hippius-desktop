@@ -45,7 +45,7 @@ export default function useVMInstanceDetails(
   const { oauthSession } = useWalletAuth();
 
   return useQuery<VMInstanceDetailsResponse, Error, VMInstanceDetailsResponse>({
-    queryKey: ["vm-instance-details", instanceId, oauthSession?.token],
+    queryKey: ["vm-instance-details", instanceId],
     queryFn: async () => {
       if (!oauthSession?.token) {
         throw new Error("No authentication token available");

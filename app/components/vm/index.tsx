@@ -2,6 +2,7 @@
 
 import AbstractIconWrapper from "../ui/abstract-icon-wrapper";
 import { FC, useEffect, useState } from "react";
+import React from "react";
 
 import { toast } from "sonner";
 import RefreshButton from "../ui/refresh-button";
@@ -47,16 +48,22 @@ const VirtualMachines: FC = () => {
   const [selectedSSHKeyToDelete, setSelectedSSHKeyToDelete] =
     useState<SSHKey | null>(null);
   const [isDeletingInProgress, setIsDeletingInProgress] = useState(false);
+  const [instancesError, setInstancesError] = useState<Error | null>(null);
+  const refetchInstancesRef = React.useRef<() => void>(() => {});
+  const [isInstancesFetching, setIsInstancesFetching] = useState(false);
+
+  const handleRefetchInstances = () => {
+    refetchInstancesRef.current();
+  };
+
+  const setRefetchInstances = (fn: () => void) => {
+    refetchInstancesRef.current = fn;
+  };
   const {
     data: flavors,
     isLoading: isFlavorsLoading,
     error: flavorsError,
   } = useVMFlavors();
-  const {
-    error: instancesError,
-    refetch: refetchInstances,
-    isFetching: isInstancesFetching,
-  } = useVMInstances();
   const flavorsLoading = isFlavorsLoading;
 
   // Check if error is related to beta access
@@ -261,7 +268,7 @@ const VirtualMachines: FC = () => {
               />
               <RefreshButton
                 refetching={isInstancesFetching}
-                onClick={() => refetchInstances()}
+                onClick={handleRefetchInstances}
               />
               <CreateButton
                 text="Create VM"
@@ -314,6 +321,9 @@ const VirtualMachines: FC = () => {
                 flavors={flavors}
                 isFlavorsLoading={isFlavorsLoading}
                 searchTerm={debouncedInstanceSearchTerm}
+                onError={setInstancesError}
+                onRefetchChange={setRefetchInstances}
+                onFetchingChange={setIsInstancesFetching}
               />
             )
           ) : activeTab === "SSH Keys" ? (

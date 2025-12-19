@@ -8,6 +8,7 @@ interface Step2Props {
   instanceName: string;
   operatingSystemLabel: string;
   imageLabel: string;
+  applicationLabel: string;
 }
 
 const Step2Summary: React.FC<Step2Props> = ({
@@ -15,6 +16,7 @@ const Step2Summary: React.FC<Step2Props> = ({
   instanceName,
   operatingSystemLabel,
   imageLabel,
+  applicationLabel,
 }) => {
   return (
     <div className="space-y-4 py-4">
@@ -44,6 +46,13 @@ const Step2Summary: React.FC<Step2Props> = ({
           <p className="text-lg font-medium text-grey-60">Image</p>
           <p className="text-lg font-medium text-grey-10 text-right">
             {imageLabel}
+          </p>
+        </div>
+
+        <div className="flex items-start justify-between gap-4">
+          <p className="text-lg font-medium text-grey-60">Application</p>
+          <p className="text-lg font-medium text-grey-10 text-right">
+            {applicationLabel}
           </p>
         </div>
 
