@@ -28,7 +28,10 @@ function normalizeDate(date: Date): string {
   )}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-// Map daily usage data to date range, filling missing days with zero
+// Map daily usage data to date range
+// - If data exists for a day, use it
+// - If no data for a day, use the last known value (forward-fill)
+// - If date is before first data point, use 0
 export function mapBytesToDateRange(
   rawData: ChartPoint[],
   dateRange: Date[],
@@ -41,20 +44,45 @@ export function mapBytesToDateRange(
     usageMap.set(key, point.balance);
   });
 
-  // Map each date in range, using actual data or zero for missing days
+  // Track the last known value for forward-filling
+  let lastKnownValue = 0;
+  let hasSeenData = false;
+
+  // Map each date in range
   return dateRange.map((date) => {
     const key = normalizeDate(date);
-    const usage = usageMap.get(key) || 0;
 
-    return {
-      balance: usage,
-      formattedBalance: formatBytes(usage),
-      timestamp: usageMap.has(key) ? key : "",
-      x: new Date(date),
-      dayLabel: getLabel
-        ? getLabel(date)
-        : String(date.getDate()).padStart(2, "0"),
-    };
+    if (usageMap.has(key)) {
+      // Data exists for this date, use it
+      const usage = usageMap.get(key) || 0;
+      lastKnownValue = usage;
+      hasSeenData = true;
+
+      return {
+        balance: usage,
+        formattedBalance: formatBytes(usage),
+        timestamp: key,
+        x: new Date(date),
+        dayLabel: getLabel
+          ? getLabel(date)
+          : String(date.getDate()).padStart(2, "0"),
+      };
+    } else {
+      // No data for this date
+      // If we've seen data before, forward-fill with last known value
+      // Otherwise, use 0 (dates before first data point)
+      const valueToUse = hasSeenData ? lastKnownValue : 0;
+
+      return {
+        balance: valueToUse,
+        formattedBalance: formatBytes(valueToUse),
+        timestamp: "",
+        x: new Date(date),
+        dayLabel: getLabel
+          ? getLabel(date)
+          : String(date.getDate()).padStart(2, "0"),
+      };
+    }
   });
 }
 
@@ -186,32 +214,38 @@ export const formatStorageForChartByRange = (
   return chartPoints;
 };
 
-// Aggregate by month but always show full year (Jan to current month)
+// Get the last (most recent) value for each month - no summing
 function aggregateBytesByMonthFullYear(points: ChartPoint[]): ChartPoint[] {
   if (points.length === 0) return [];
 
   const currentYear = new Date().getFullYear();
   const currentMonth = new Date().getMonth();
 
-  // Group daily usage by month and sum them up
-  const monthlyUsage = new Map<number, number>();
+  // Store the last value seen for each month (latest day of the month)
+  const monthlyLastValue = new Map<number, number>();
 
   points.forEach((point) => {
     const month = point.x.getMonth();
-    const currentUsage = monthlyUsage.get(month) || 0;
-    monthlyUsage.set(month, currentUsage + point.balance);
+    // Always update with the current value - the last iteration will be the latest day
+    monthlyLastValue.set(month, point.balance);
   });
 
   // Create monthly data for all months from January to current month
   const monthlyData: ChartPoint[] = [];
+  let lastKnownValue = 0;
 
   for (let monthIndex = 0; monthIndex <= currentMonth; monthIndex++) {
-    const totalUsage = monthlyUsage.get(monthIndex) || 0;
+    // Use the last value of the month if available, otherwise forward-fill
+    const monthValue = monthlyLastValue.has(monthIndex)
+      ? monthlyLastValue.get(monthIndex)!
+      : lastKnownValue;
+
+    lastKnownValue = monthValue;
 
     monthlyData.push({
       x: new Date(currentYear, monthIndex, 1),
-      balance: totalUsage,
-      formattedBalance: formatBytes(totalUsage),
+      balance: monthValue,
+      formattedBalance: formatBytes(monthValue),
       timestamp: normalizeDate(new Date(currentYear, monthIndex, 1)),
       dayLabel: MONTHS_FULL[monthIndex],
       bandLabel: MONTHS_FULL[monthIndex],

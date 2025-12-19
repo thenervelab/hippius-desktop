@@ -6,7 +6,7 @@ import {
   Select,
   H4,
   RevealTextLine,
-  BarChart,
+  AreaLineChart,
   ChartGridOverlay,
 } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
@@ -28,9 +28,10 @@ const timeRangeOptions: Option[] = [
   { value: "year", label: "This Year" },
 ];
 
-// === Bar Colors ===
+// === Line + Area Colors ===
 const COLORS = {
-  bar: "#3B82F6", // primary-50 color
+  line: "#3B82F6", // primary-50 color
+  area: "url(#area-gradient)", // Use the gradient defined in AreaLineChart
 };
 
 const StorageUsageTrends: React.FC<{
@@ -66,14 +67,12 @@ const StorageUsageTrends: React.FC<{
     return getXLabelsForTimeRange(formattedChartData, chartData, timeRange);
   }, [formattedChartData, chartData, timeRange]);
 
-  // Calculate total storage used based on the selected time range
+  // Get the most recent storage value (last day's value from API)
   const totalStorageUsed = useMemo(() => {
     if (!formattedChartData || formattedChartData.length === 0) return "0 B";
-    // Sum up all the storage usage values for the selected time period
-    const total = formattedChartData.reduce((sum, point) => {
-      return sum + (point.balance || 0);
-    }, 0);
-    return formatBytes(total, 2);
+    // Get the last entry's value (most recent day)
+    const lastEntry = formattedChartData[formattedChartData.length - 1];
+    return formatBytes(lastEntry.balance || 0, 2);
   }, [formattedChartData]);
 
   return (
@@ -140,7 +139,7 @@ const StorageUsageTrends: React.FC<{
                   </div>
                   <ChartGridOverlay marginClasses="mt-[0px] ml-[60px] mb-[30px] mr-[21px]" />
 
-                  <BarChart
+                  <AreaLineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
                     data={formattedChartData}
                     plots={[
@@ -149,8 +148,8 @@ const StorageUsageTrends: React.FC<{
                         xAccessor: (d: ChartPoint) =>
                           d.bandLabel ? d.bandLabel : d?.x,
                         yAccessor: (d: ChartPoint) => d?.balance || 0,
-                        barColor: COLORS.bar,
-                        barOpacity: 1,
+                        lineColor: COLORS.line,
+                        areaColor: COLORS.area,
                       },
                     ]}
                     xScaleType="band"
