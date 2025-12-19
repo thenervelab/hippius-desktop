@@ -34,8 +34,9 @@ const SplashScreen = () => {
   });
   const nebulaInstalled = useAtomValue(nebulaInstalledAtom);
 
-  // Show progress bar only if nebula is not installed (or status unknown yet)
-  const showProgressBar = nebulaInstalled === false;
+  // Show progress bar during setup phases (both fresh install and when already installed)
+  // Only hide progress bar when status is still unknown (null) or explicitly disabled
+  const showProgressBar = nebulaInstalled !== null && phase !== null;
 
   const contentArr = Object.values(PHASE_CONTENT);
 
