@@ -583,7 +583,23 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
         .unwrap_or(false);
 
     if !is_enabled {
-        println!("[Nebula] VPN is disabled in settings, skipping certificate setup");
+        println!("[Nebula] VPN is disabled in settings. Checking if we need to renew an existing certificate...");
+        
+        // Only renew if we already have a certificate locally. 
+        // We don't want to generate a new one if the user hasn't enabled VPN yet.
+        let cert_exists = sqlx::query("SELECT 1 FROM nebula_certificate WHERE id = 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some();
+            
+        if cert_exists {
+             println!("[Nebula] Found existing certificate, checking validity...");
+             check_and_update_certificate().await.map_err(|e| e.to_string())?;
+        } else {
+             println!("[Nebula] No existing certificate found and VPN is disabled. Skipping certificate generation.");
+        }
+        
         return Ok(());
     }
     
@@ -906,13 +922,20 @@ pub async fn check_and_update_certificate() -> Result<()> {
     
     if should_renew {
         println!("[Nebula] calling renew_certificate_from_api...");
-        let cert = renew_certificate_from_api(&auth_header).await?;
-        // Renew response might not have expires_at, so we might need to fetch again?
-        // User said: "response is like : { ... }" for renew, same structure as request.
-        // And request response: "response is like : { ... }"
-        // But GET response has "expires_at".
-        // If renew/request don't return expires_at, we should fetch it.
         
+        // Try to renew first, but if it fails (e.g. 404 because cert is too old or gone), 
+        // fallback to requesting a new one.
+        let cert_result = renew_certificate_from_api(&auth_header).await;
+        
+        let cert = match cert_result {
+            Ok(c) => c,
+            Err(e) => {
+                println!("[Nebula] Renewal failed: {}. Attempting to request a new certificate...", e);
+                request_certificate_from_api(&auth_header).await?
+            }
+        };
+
+        // Renew/Request response might not have expires_at, so we might need to fetch again
         let mut final_cert = cert;
         if final_cert.expires_at.is_none() {
              println!("[Nebula] Renew/Request response missing expiration, fetching details...");
@@ -923,7 +946,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
         
         save_certificate_files(&final_cert, &account_id).await?;
         update_certificate_db(&final_cert).await?;
-        println!("[Nebula] Certificate renewed successfully");
+        println!("[Nebula] Certificate renewed/requested successfully");
     } else if should_request {
         println!("[Nebula] calling request_certificate_from_api...");
         let cert = request_certificate_from_api(&auth_header).await?;
