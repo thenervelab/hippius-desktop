@@ -34,7 +34,7 @@ const StorageUsedTooltip: React.FC<{
     }
   }
 
-  // Format the storage size using formatBytes
+  // Format the storage size using formatBytes (exact value from API)
   const formattedSize = formatBytes(Number(datum.balance));
 
   return (

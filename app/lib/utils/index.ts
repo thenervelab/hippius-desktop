@@ -16,4 +16,3 @@ export * from "./shortenCopyAbleText";
 export * from "./formatTimeDiff";
 export * from "./shortIdFromHash";
 export * from "./fileName";
-export * from "./calculateDelta";
