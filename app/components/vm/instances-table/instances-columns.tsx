@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { Icons } from "../../ui";
+import { CopyableCell } from "../../ui/alt-table";
 import { formatDate } from "@/app/lib/utils/formatters/formatDate";
 import ImageCell from "./image-cell";
 import TemplateCell from "./template-cell";
@@ -89,17 +90,25 @@ export const getDesktopColumns = (
       return <ImageCell value={{ os, version }} />;
     },
   }),
-  columnHelper.accessor("public_ip", {
-    header: "PUBLIC IP",
-    cell: (d) => (
-      <span className="text-grey-20 text-base">{d.getValue() || "—"}</span>
-    ),
-  }),
   columnHelper.accessor("nebula_ip", {
     header: "NEBULA IP",
-    cell: (d) => (
-      <span className="text-grey-20 text-base">{d.getValue() || "—"}</span>
-    ),
+    cell: (d) => {
+      const ip = d.getValue();
+      if (!ip) {
+        return <span className="text-grey-20 text-base">—</span>;
+      }
+      return (
+        <div className="overflow-hidden">
+          <CopyableCell
+            title="Copy Nebula IP"
+            toastMessage="Nebula IP Copied Successfully!"
+            copyAbleText={ip}
+            numberOfCharactersFromStartAndEnd={30}
+            className="h-full"
+          />
+        </div>
+      );
+    },
   }),
   columnHelper.accessor("status", {
     header: "STATUS",

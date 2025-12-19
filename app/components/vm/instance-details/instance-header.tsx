@@ -5,9 +5,10 @@ import { Button } from "@/components/ui/button/NewButton";
 import { Icons } from "../../ui";
 import TabList, { TabOption } from "../../ui/tabs/TabList";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
+import Skeleton from "@/components/ui/skeleton";
 
 interface InstanceHeaderProps {
-  instanceName: string;
+  instanceName?: string;
   instanceStatus?: string;
   activeTab: string;
   onTabChange: (tabName: string) => void;
@@ -17,6 +18,7 @@ interface InstanceHeaderProps {
   onReboot?: () => void;
   onReinstall?: () => void;
   onRefresh?: () => void;
+  isLoading?: boolean;
 }
 
 const InstanceHeader: React.FC<InstanceHeaderProps> = ({
@@ -30,6 +32,7 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
   onReboot,
   onReinstall,
   onRefresh,
+  isLoading = false,
 }) => {
   const tabs: TabOption[] = [
     {
@@ -51,7 +54,11 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
           </Link>
           <h1 className="text-nowrap">Instance Details</h1>
           <span className="text-grey-60">-</span>
-          <span className="text-grey-60 truncate">{instanceName}</span>
+          {isLoading ? (
+            <Skeleton className="!h-[28px] !w-[150px]" />
+          ) : (
+            <span className="text-grey-60 truncate">{instanceName}</span>
+          )}
         </div>
 
         <div className="flex items-center gap-4">
@@ -78,6 +85,7 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
           <div className="hidden sm:block">
             <TableActionMenu
               dropdownTitle="Instance Options"
+              disabled={isLoading}
               items={[
                 {
                   icon:

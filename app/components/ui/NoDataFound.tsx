@@ -6,9 +6,9 @@ import CreateButton from "./button/CreateButton";
 interface NoDataFoundProps {
   icon: LucideIcon;
   title: string;
-  description: string;
-  buttonText: string;
-  onButtonClick: () => void;
+  description?: string;
+  buttonText?: string;
+  onButtonClick?: () => void;
   isLoading?: boolean;
   showButton?: boolean;
 }
@@ -47,19 +47,23 @@ const NoDataFound: React.FC<NoDataFoundProps> = ({
         <span>{title}</span>
       </div>
 
-      <div className="flex flex-col items-center justify-center mt-4 max-w-[380px]">
-        <div className="text-sm text-grey-60 font-medium mb-4 text-center">
-          {description}
-        </div>
+      {showButton && description && (
+        <div className="flex flex-col items-center justify-center mt-4 max-w-[380px]">
+          {description && (
+            <div className="text-sm text-grey-60 font-medium mb-4 text-center">
+              {description}
+            </div>
+          )}
 
-        {showButton && (
-          <CreateButton
-            text={buttonText}
-            isLoading={isLoading}
-            onClick={onButtonClick}
-          />
-        )}
-      </div>
+          {showButton && buttonText && onButtonClick && (
+            <CreateButton
+              text={buttonText}
+              isLoading={isLoading}
+              onClick={onButtonClick}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 };

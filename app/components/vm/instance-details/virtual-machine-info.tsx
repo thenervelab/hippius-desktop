@@ -85,6 +85,7 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
   const vmControlsMenu = instanceData ? (
     <TableActionMenu
       dropdownTitle="VM Controls"
+      disabled={isLoading}
       items={[
         {
           icon:

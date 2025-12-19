@@ -37,6 +37,9 @@ const VirtualMachines: FC = () => {
   const [openCreateSSHKeyModal, setOpenCreateSSHKeyModal] = useState(false);
   const [openDeleteSSHKeyModal, setOpenDeleteSSHKeyModal] = useState(false);
   const [openDeleteTemplateModal, setOpenDeleteTemplateModal] = useState(false);
+  const [instanceSearchTerm, setInstanceSearchTerm] = useState("");
+  const [debouncedInstanceSearchTerm, setDebouncedInstanceSearchTerm] =
+    useState("");
   const [sshKeySearchTerm, setSSHKeySearchTerm] = useState("");
   const [debouncedSSHKeySearchTerm, setDebouncedSSHKeySearchTerm] =
     useState("");
@@ -45,16 +48,25 @@ const VirtualMachines: FC = () => {
   const [selectedSSHKeyToDelete, setSelectedSSHKeyToDelete] =
     useState<SSHKey | null>(null);
   const [isDeletingInProgress, setIsDeletingInProgress] = useState(false);
-  const { data: flavors, isLoading: isFlavorsLoading, error: flavorsError } = useVMFlavors();
-  const { error: instancesError } = useVMInstances();
+  const {
+    data: flavors,
+    isLoading: isFlavorsLoading,
+    error: flavorsError,
+  } = useVMFlavors();
+  const {
+    error: instancesError,
+    refetch: refetchInstances,
+    isFetching: isInstancesFetching,
+  } = useVMInstances();
   const flavorsLoading = isFlavorsLoading;
-  
+
   // Check if error is related to beta access
   const isBetaError = (error: Error | null) => {
-    return error?.message?.toLowerCase().includes('beta') || false;
+    return error?.message?.toLowerCase().includes("beta") || false;
   };
-  
-  const betaAccessMessage = "VM feature is in beta. Contact support for access.";
+
+  const betaAccessMessage =
+    "VM feature is in beta. Contact support for access.";
 
   // Transform flavors API data to template format with categories
   const templatesFromFlavors =
@@ -92,6 +104,15 @@ const VirtualMachines: FC = () => {
         category,
       };
     }) || [];
+
+  // Debounce instance search term with 500ms delay
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedInstanceSearchTerm(instanceSearchTerm);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [instanceSearchTerm]);
 
   // Debounce SSH key search term with 500ms delay
   useEffect(() => {
@@ -245,8 +266,13 @@ const VirtualMachines: FC = () => {
               <SearchInput
                 placeholder="Search for an instance"
                 className="h-9"
+                value={instanceSearchTerm}
+                onChange={(value) => setInstanceSearchTerm(value)}
               />
-              <RefreshButton refetching={false} onClick={() => {}} />
+              <RefreshButton
+                refetching={isInstancesFetching}
+                onClick={() => refetchInstances()}
+              />
               <CreateButton
                 text="Create VM"
                 isLoading={false}
@@ -273,23 +299,6 @@ const VirtualMachines: FC = () => {
               />
             </>
           )}
-          {/* {activeTab === "Templates" && (
-            <>
-              <SearchInput
-                placeholder="Search for a template"
-                className="h-9"
-              />
-              <RefreshButton
-                refetching={isFlavorsRefetching}
-                onClick={() => refetchFlavors()}
-              />
-              <CreateButton
-                text="New Template"
-                isLoading={false}
-                onClick={handleModalOpen}
-              />
-            </>
-          )} */}
         </div>
       </div>
 
@@ -314,6 +323,7 @@ const VirtualMachines: FC = () => {
                 onCreateNew={handleModalOpen}
                 flavors={flavors}
                 isFlavorsLoading={isFlavorsLoading}
+                searchTerm={debouncedInstanceSearchTerm}
               />
             )
           ) : activeTab === "SSH Keys" ? (

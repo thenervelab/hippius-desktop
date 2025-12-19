@@ -99,6 +99,7 @@ const ConfirmDialog2: React.FC<ConfirmDialogProps> = ({
             variant="secondary"
             className="bg-grey-100 border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-12 hover:bg-grey-80 transition"
             onClick={onBack}
+            disabled={disableButton}
           >
             Go Back
           </CardButton>

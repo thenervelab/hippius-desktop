@@ -60,12 +60,16 @@ const CreateSSHKeyModal: React.FC<Props> = ({
   };
 
   const handleClose = () => {
+    if (isLoading) return;
     resetForm();
     onClose();
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={(o) => !o && handleClose()}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(o) => !o && !isLoading && handleClose()}
+    >
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
         <Dialog.Content
@@ -83,7 +87,8 @@ const CreateSSHKeyModal: React.FC<Props> = ({
           <Dialog.Close asChild className="sm:hidden">
             <button
               aria-label="Close"
-              className="absolute top-[30px] right-4 text-grey-10 hover:text-grey-20"
+              disabled={isLoading}
+              className="absolute top-[30px] right-4 text-grey-10 hover:text-grey-20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <CloseCircle className="size-6" />
             </button>

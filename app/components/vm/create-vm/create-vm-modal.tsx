@@ -67,12 +67,14 @@ const CreateVMModal: React.FC<Props> = ({
   // Fetch SSH keys from API
   const {
     data: sshKeysData,
-    isLoading: isLoadingSSHKeys,
+    isLoading: loadingSSHKeys,
+    isFetching: isFetchingSSHKeys,
     refetch: refetchSSHKeys,
   } = useSSHKeys({
     page: 1,
     page_size: 100, // Get all keys for dropdown
   });
+  const isLoadingSSHKeys = loadingSSHKeys || isFetchingSSHKeys;
 
   // Use create SSH key mutation
   const { mutateAsync: createSSHKey, isPending: isCreatingSSHKey } =
@@ -334,6 +336,7 @@ const CreateVMModal: React.FC<Props> = ({
   };
 
   const handleClose = () => {
+    if (isCreatingVM) return;
     resetForm();
     onClose();
   };
@@ -389,7 +392,10 @@ const CreateVMModal: React.FC<Props> = ({
 
   return (
     <>
-      <Dialog.Root open={open} onOpenChange={(o) => !o && handleClose()}>
+      <Dialog.Root
+        open={open}
+        onOpenChange={(o) => !o && !isCreatingVM && handleClose()}
+      >
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-white/60 z-50" />
           <Dialog.Content asChild>
@@ -423,7 +429,8 @@ const CreateVMModal: React.FC<Props> = ({
                   <Dialog.Close asChild>
                     <button
                       aria-label="Close"
-                      className="text-grey-10 hover:text-grey-20"
+                      disabled={isCreatingVM}
+                      className="text-grey-10 hover:text-grey-20 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <CloseCircle className="size-6" />
                     </button>

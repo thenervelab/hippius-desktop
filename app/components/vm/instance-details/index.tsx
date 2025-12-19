@@ -11,6 +11,8 @@ import { useStartStopInstance } from "../hooks/useStartStopInstance";
 import { useRebootInstance } from "../hooks/useRebootInstance";
 import { useReinstallInstance } from "../hooks/useReinstallInstance";
 import useVMInstanceDetails from "@/app/lib/hooks/api/useVMInstanceDetails";
+import NoDataFound from "../../ui/NoDataFound";
+import { Server } from "lucide-react";
 
 const InstanceDetails: React.FC = () => {
   const searchParams = useSearchParams();
@@ -116,55 +118,53 @@ const InstanceDetails: React.FC = () => {
 
   if (error) {
     return (
-      <div className="w-full py-12">
-        <div className="text-center">
-          <h2 className="text-lg font-medium text-grey-20">
-            Failed to load instance
-          </h2>
-          <p className="text-grey-60 mt-2">
-            {error instanceof Error ? error.message : "An error occurred"}
-          </p>
-        </div>
-      </div>
+      <NoDataFound
+        icon={Server}
+        title="Failed to load instance"
+        description={
+          error instanceof Error ? error.message : "An error occurred"
+        }
+        showButton={false}
+      />
     );
   }
 
-  if (!instanceData) {
+  // Only show "not found" after loading is complete and there's no data
+  if (!loading && !instanceData) {
     return (
-      <div className="w-full py-12">
-        <div className="text-center">
-          <h2 className="text-lg font-medium text-grey-20">
-            Instance not found
-          </h2>
-          <p className="text-grey-60 mt-2">
-            The instance you&apos;re looking for doesn&apos;t exist or has been
-            deleted.
-          </p>
-        </div>
-      </div>
+      <NoDataFound
+        icon={Server}
+        title="Instance not found"
+        description="The instance you're looking for doesn't exist or has been deleted."
+        showButton={false}
+      />
     );
   }
 
   return (
     <div className="w-full">
       <InstanceHeader
-        instanceName={instanceData.name}
-        instanceStatus={instanceData.status}
+        instanceName={instanceData?.name}
+        instanceStatus={instanceData?.status}
         activeTab={activeTab}
         onTabChange={handleTabChange}
         onChangeImage={handleChangeImage}
-        onDeleteInstance={() =>
-          handleDeleteInstance({
-            id: instanceData.id,
-            uuid: instanceData.uuid,
-            name: instanceData.name,
-            status: instanceData.status,
-            flavor: instanceData.flavor.name,
-            image: instanceData.image,
-            public_ip: instanceData.public_ip,
-            nebula_ip: instanceData.nebula_ip,
-            created_at: instanceData.created_at,
-          })
+        isLoading={loading}
+        onDeleteInstance={
+          instanceData
+            ? () =>
+                handleDeleteInstance({
+                  id: instanceData.id,
+                  uuid: instanceData.uuid,
+                  name: instanceData.name,
+                  status: instanceData.status,
+                  flavor: instanceData.flavor.name,
+                  image: instanceData.image,
+                  public_ip: instanceData.public_ip,
+                  nebula_ip: instanceData.nebula_ip,
+                  created_at: instanceData.created_at,
+                })
+            : undefined
         }
         onStartStop={handleStartStop}
         onReboot={handleReboot}
@@ -184,17 +184,22 @@ const InstanceDetails: React.FC = () => {
           </div>
         ) : activeTab === "VNC Console" ? (
           <VncConsole
-            instance={{
-              id: instanceData.id,
-              uuid: instanceData.uuid,
-              name: instanceData.name,
-              status: instanceData.status,
-              flavor: instanceData.flavor.name,
-              image: instanceData.image,
-              public_ip: instanceData.public_ip,
-              nebula_ip: instanceData.nebula_ip,
-              created_at: instanceData.created_at,
-            }}
+            instance={
+              instanceData
+                ? {
+                    id: instanceData.id,
+                    uuid: instanceData.uuid,
+                    name: instanceData.name,
+                    status: instanceData.status,
+                    flavor: instanceData.flavor.name,
+                    image: instanceData.image,
+                    public_ip: instanceData.public_ip,
+                    nebula_ip: instanceData.nebula_ip,
+                    created_at: instanceData.created_at,
+                  }
+                : undefined
+            }
+            isLoading={loading}
           />
         ) : null}
       </div>
