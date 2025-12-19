@@ -1,35 +1,27 @@
 "use client";
 import React from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui/button/NewButton";
 import { Icons } from "../../ui";
 import TabList, { TabOption } from "../../ui/tabs/TabList";
-import TableActionMenu from "../../ui/alt-table/TableActionMenu";
+import Skeleton from "@/components/ui/skeleton";
+import RefreshButton from "../../ui/refresh-button";
 
 interface InstanceHeaderProps {
-  instanceName: string;
-  instanceStatus?: string;
+  instanceName?: string;
   activeTab: string;
   onTabChange: (tabName: string) => void;
-  onChangeImage?: () => void;
-  onDeleteInstance?: () => void;
-  onStartStop?: () => void;
-  onReboot?: () => void;
-  onReinstall?: () => void;
+  isLoading?: boolean;
   onRefresh?: () => void;
+  isRefetching?: boolean;
 }
 
 const InstanceHeader: React.FC<InstanceHeaderProps> = ({
   instanceName,
   activeTab,
-  instanceStatus,
   onTabChange,
-  onChangeImage,
-  onDeleteInstance,
-  onStartStop,
-  onReboot,
-  onReinstall,
+  isLoading = false,
   onRefresh,
+  isRefetching = false,
 }) => {
   const tabs: TabOption[] = [
     {
@@ -51,10 +43,17 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
           </Link>
           <h1 className="text-nowrap">Instance Details</h1>
           <span className="text-grey-60">-</span>
-          <span className="text-grey-60 truncate">{instanceName}</span>
+          {isLoading ? (
+            <Skeleton className="!h-[28px] !w-[150px]" />
+          ) : (
+            <span className="text-grey-60 truncate">{instanceName}</span>
+          )}
         </div>
 
         <div className="flex items-center gap-4">
+          {onRefresh && (
+            <RefreshButton refetching={isRefetching} onClick={onRefresh} />
+          )}
           <div className="border border-grey-80 rounded p-1 bg-grey-100">
             <TabList
               tabs={tabs}
@@ -63,67 +62,6 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
               className="w-full "
               width="w-full sm:min-w-[148px]"
             />
-          </div>
-          {onRefresh && (
-            <Button
-              variant="ghost"
-              size="noStyle"
-              className="border border-grey-80 text-grey-10 p-2"
-              onClick={onRefresh}
-              title="Refresh instance details"
-            >
-              <Icons.Refresh className="size-4" />
-            </Button>
-          )}
-          <div className="hidden sm:block">
-            <TableActionMenu
-              dropdownTitle="Instance Options"
-              items={[
-                {
-                  icon:
-                    instanceStatus === "Stopped" ? (
-                      <Icons.PlayCircle className="size-4" />
-                    ) : (
-                      <Icons.StopCircle className="size-4" />
-                    ),
-                  itemTitle:
-                    instanceStatus === "Stopped"
-                      ? "Start Instance"
-                      : "Stop Instance",
-                  onItemClick: () => onStartStop && onStartStop(),
-                },
-                {
-                  icon: <Icons.Refresh2 className="size-4" />,
-                  itemTitle: "Reboot Instance",
-                  onItemClick: () => onReboot && onReboot(),
-                },
-                {
-                  icon: <Icons.Refresh className="size-4" />,
-                  itemTitle: "Reinstall Instance",
-                  onItemClick: () => onReinstall && onReinstall(),
-                },
-                {
-                  icon: <Icons.CpuCharge className="size-4" />,
-                  itemTitle: "Change Image",
-                  onItemClick: () => onChangeImage && onChangeImage(),
-                },
-                {
-                  icon: <Icons.Trash className="size-4" />,
-                  itemTitle: "Delete Instance",
-                  onItemClick: () => onDeleteInstance && onDeleteInstance(),
-                  variant: "destructive",
-                },
-              ]}
-            >
-              <Button
-                variant="ghost"
-                size="noStyle"
-                className="border border-grey-80 text-grey-10 p-2 flex gap-2 text-sm"
-              >
-                <Icons.MoreCircle className="size-4" />
-                <span>Instance Options</span>
-              </Button>
-            </TableActionMenu>
           </div>
         </div>
       </div>

@@ -8,37 +8,33 @@ import {
 import { API_CONFIG } from "@/lib/config";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
-export interface VMInstanceResponse {
+export interface VMApplicationResponse {
   id: number;
-  uuid: string | null;
   name: string;
-  status: string;
-  flavor: string;
-  image: string;
-  public_ip: string | null;
-  nebula_ip: string | null;
-  created_at: string;
+  slug: string;
+  description: string;
+  logo_url: string;
 }
 
 /**
- * Hook to fetch VM instances using react-query
+ * Hook to fetch VM One-Click Applications (Docker, Postgres, etc.) using react-query
  */
-export default function useVMInstances(
+export default function useVMApplications(
   options?: Omit<
-    UseQueryOptions<VMInstanceResponse[], Error, VMInstanceResponse[]>,
+    UseQueryOptions<VMApplicationResponse[], Error, VMApplicationResponse[]>,
     "queryKey" | "queryFn"
   >
-): UseQueryResult<VMInstanceResponse[], Error> {
+): UseQueryResult<VMApplicationResponse[], Error> {
   const { oauthSession } = useWalletAuth();
 
-  return useQuery<VMInstanceResponse[], Error, VMInstanceResponse[]>({
-    queryKey: ["vmInstances"],
+  return useQuery<VMApplicationResponse[], Error, VMApplicationResponse[]>({
+    queryKey: ["vmApplications"],
     queryFn: async () => {
       if (!oauthSession?.token) {
         throw new Error("No authentication token available");
       }
 
-      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.instances}`;
+      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.applications}`;
 
       const response = await fetch(url, {
         method: "GET",
@@ -54,15 +50,15 @@ export default function useVMInstances(
           errorData.error ||
           errorData.message ||
           errorData.detail ||
-          `Failed to fetch VM instances`;
+          `Failed to fetch VM applications`;
         throw new Error(message);
       }
 
-      return response.json() as Promise<VMInstanceResponse[]>;
+      return response.json() as Promise<VMApplicationResponse[]>;
     },
     enabled: !!oauthSession?.token,
     refetchOnWindowFocus: false,
-    staleTime: 30 * 1000, // 30 seconds (instances change frequently)
+    staleTime: 60 * 60 * 1000, // 1 hour (applications don't change often)
     retry: false, // Don't retry on error to avoid long loading states
     ...options,
   });

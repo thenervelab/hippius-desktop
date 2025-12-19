@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { Icons } from "../../ui";
+import { CopyableCell } from "../../ui/alt-table";
 import { formatDate } from "@/app/lib/utils/formatters/formatDate";
 import ImageCell from "./image-cell";
 import TemplateCell from "./template-cell";
@@ -18,8 +19,7 @@ export const getDesktopColumns = (
   flavors: VMFlavorResponse[] | undefined,
   onDelete?: (instance: Instance) => void,
   onStartStop?: (instance: Instance, status: string) => void,
-  onReboot?: (instance: Instance) => void,
-  onReinstall?: (instance: Instance) => void
+  onReboot?: (instance: Instance) => void
 ) => [
   columnHelper.accessor("name", {
     header: "NAME",
@@ -89,17 +89,25 @@ export const getDesktopColumns = (
       return <ImageCell value={{ os, version }} />;
     },
   }),
-  columnHelper.accessor("public_ip", {
-    header: "PUBLIC IP",
-    cell: (d) => (
-      <span className="text-grey-20 text-base">{d.getValue() || "—"}</span>
-    ),
-  }),
   columnHelper.accessor("nebula_ip", {
     header: "NEBULA IP",
-    cell: (d) => (
-      <span className="text-grey-20 text-base">{d.getValue() || "—"}</span>
-    ),
+    cell: (d) => {
+      const ip = d.getValue();
+      if (!ip) {
+        return <span className="text-grey-20 text-base">—</span>;
+      }
+      return (
+        <div className="overflow-hidden">
+          <CopyableCell
+            title="Copy Nebula IP"
+            toastMessage="Nebula IP Copied Successfully!"
+            copyAbleText={ip}
+            numberOfCharactersFromStartAndEnd={30}
+            className="h-full"
+          />
+        </div>
+      );
+    },
   }),
   columnHelper.accessor("status", {
     header: "STATUS",
@@ -130,11 +138,12 @@ export const getDesktopColumns = (
               isLink: true,
               href: `/vm/instance-details?instanceId=${instance.id}&tab=vnc-console`,
             },
-            {
-              icon: <Icons.CloudConnection className="size-4" />,
-              itemTitle: "SSH Connection",
-              onItemClick: () => console.log("SSH connection"),
-            },
+            // {
+            //   icon: <Icons.CloudConnection className="size-4" />,
+            //   itemTitle: "SSH Connection",
+            //   disabled: true,
+            //   onItemClick: () => console.log("SSH connection"),
+            // },
             {
               icon:
                 instance.status.toLowerCase() === "stopped" ? (
@@ -146,18 +155,17 @@ export const getDesktopColumns = (
                 instance.status.toLowerCase() === "stopped"
                   ? "Start Instance"
                   : "Stop Instance",
+              disabled:
+                instance.status.toLowerCase() !== "running" &&
+                instance.status.toLowerCase() !== "stopped",
               onItemClick: () =>
                 onStartStop && onStartStop(instance, instance.status),
             },
             {
               icon: <Icons.Refresh2 className="size-4" />,
               itemTitle: "Reboot Instance",
+              disabled: instance.status.toLowerCase() !== "running",
               onItemClick: () => onReboot && onReboot(instance),
-            },
-            {
-              icon: <Icons.Refresh className="size-4" />,
-              itemTitle: "Reinstall Instance",
-              onItemClick: () => onReinstall && onReinstall(instance),
             },
             {
               icon: <Icons.Trash className="size-4" />,

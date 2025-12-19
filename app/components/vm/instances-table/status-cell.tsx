@@ -22,15 +22,20 @@ const StatusCell: React.FC<StatusCellProps> = ({ value, className }) => {
         return "border-[#E8CCFF] bg-[#BA66FF]";
       case "pending":
         return "border-grey-80 bg-grey-70";
+      case "spawning":
+        return "border-grey-80 bg-grey-70";
       case "failed":
-        return "border-error-90 bg-error-70";
+        return "border-error-90 bg-error-50";
+      case "error":
+        return "border-error-90 bg-error-50";
       default:
         return "bg-grey-50";
     }
   };
 
   // Capitalize first letter for display
-  const displayValue = value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+  const displayValue =
+    value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
 
   return (
     <div className={cn("flex items-center gap-2", className)}>

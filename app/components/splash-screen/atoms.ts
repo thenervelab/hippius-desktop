@@ -16,6 +16,18 @@ export const currentPhaseIndexAtom = atom<number>(0);
 
 export const phaseCommandRunningAtom = atom<boolean>(false);
 
+// Track current phase's internal progress (0-100) reported by backend
+// Use writable atom so we can update it from the component
+const _phaseInternalProgressAtom = atom<number>(0);
+export const phaseInternalProgressAtom = atom(
+  (get) => get(_phaseInternalProgressAtom),
+  (get, set, newValue: number) => {
+    // Ensure value is always between 0-100
+    const clampedValue = Math.max(0, Math.min(100, newValue));
+    set(_phaseInternalProgressAtom, clampedValue);
+  }
+);
+
 export const stepAtom = atom((get) => {
   const phase = get(phaseAtom);
   const phaseKeys = Object.keys(PHASE_CONTENT);
@@ -28,41 +40,47 @@ export const stepAtom = atom((get) => {
   return 0;
 });
 
-// Progress percentage based on completed phases
-// 5 phases = 20% each
+
+// Progress percentage based on weighted phases and real-time backend progress
 export const progressAtom = atom((get) => {
-  const completedPhases = get(completedPhasesAtom);
-  const isCommandRunning = get(phaseCommandRunningAtom);
   const phase = get(phaseAtom);
   const isUpdateCheckPhase = get(isUpdateCheckPhaseAtom);
+  const phaseInternalProgress = get(_phaseInternalProgressAtom);
 
   // During update check phase, always show 0%
   if (isUpdateCheckPhase) {
     return 0;
   }
 
-  const phaseKeys = Object.keys(PHASE_CONTENT);
-  const totalPhases = phaseKeys.length;
-  const phasePercent = 100 / totalPhases;
-
-  // Count completed phases
-  const completedCount = phaseKeys.filter((p) => completedPhases.has(p)).length;
-  const baseProgress = (completedCount / totalPhases) * 100;
-
-  // Get current phase index
-  const currentProgressIndex = phase
-    ? phaseKeys.findIndex((p) => p === phase)
-    : -1;
-
-  if (
-    isCommandRunning &&
-    currentProgressIndex >= 0 &&
-    currentProgressIndex < totalPhases
-  ) {
-    // Progress should be: completed phases + 95% of current phase
-    const targetProgress = baseProgress + phasePercent * 0.95;
-    return Math.min(targetProgress, 99); // Never exceed 99% while running
+  if (!phase) {
+    return 0;
   }
 
-  return Math.min(baseProgress, 100);
+  const phaseKeys = Object.keys(PHASE_CONTENT);
+  const currentPhaseIndex = phaseKeys.findIndex((p) => p === phase);
+
+  if (currentPhaseIndex === -1) {
+    return 0;
+  }
+
+  // Calculate base progress from all PREVIOUS completed phases
+  let baseProgress = 0;
+  for (let i = 0; i < currentPhaseIndex; i++) {
+    const phaseKey = phaseKeys[i];
+    baseProgress += PHASE_CONTENT[phaseKey].weight;
+  }
+
+  // Add progress within current phase
+  const currentPhaseKey = phaseKeys[currentPhaseIndex];
+  const currentPhaseWeight = PHASE_CONTENT[currentPhaseKey].weight;
+
+  // Scale phase internal progress (0-100) to phase weight
+  // Clamp phaseInternalProgress between 0-100
+  const clampedProgress = Math.max(0, Math.min(100, phaseInternalProgress));
+  const phaseProgress = (clampedProgress / 100) * currentPhaseWeight;
+
+  const totalProgress = baseProgress + phaseProgress;
+
+  // Never exceed 100% or go below base progress
+  return Math.max(baseProgress, Math.min(totalProgress, 99.9));
 });

@@ -5,6 +5,7 @@ import { Icons } from "../../ui";
 import { VMInstanceDetailsResponse } from "@/app/lib/hooks/api/useVMInstanceDetails";
 import Skeleton from "@/components/ui/skeleton";
 import { CopyableCell } from "../../ui/alt-table";
+import CopyableText from "../../ui/CopyableText";
 
 interface NetworksInfoProps {
   instanceData?: VMInstanceDetailsResponse;
@@ -20,39 +21,28 @@ const NetworksInfo: React.FC<NetworksInfoProps> = ({
       title="Networks"
       icon={<Icons.Cloud className="size-6 relative text-primary-50" />}
     >
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-y-6 gap-x-4">
-        {/* Public IP */}
-        <div className="">
-          <LabelWithIcon
-            icon={<Icons.CloudAdd className="size-4" />}
-            label="Public IP"
-          />
-          {isLoading ? (
-            <Skeleton className="!h-[26px] !w-[150px] mt-1" />
-          ) : (
-            <div className="text-grey-20 font-medium text-base mt-1">
-              {instanceData?.public_ip || "—"}
-            </div>
-          )}
-        </div>
-
+      <div className="grid grid-cols-1 gap-y-6 gap-x-4">
         {/* Nebula IP */}
         <div className="">
           <LabelWithIcon
-            icon={<Icons.CloudConnection className="size-4" />}
+            icon={<Icons.CloudAdd className="size-4" />}
             label="Nebula IP"
           />
           {isLoading ? (
             <Skeleton className="!h-[26px] !w-[150px] mt-1" />
           ) : (
-            <div className="text-grey-20 font-medium text-base mt-1">
-              {instanceData?.nebula_ip || "—"}
-            </div>
+            <CopyableText
+              value={instanceData?.nebula_ip || "—"}
+              displayMode="truncate"
+              textClassName="text-grey-20 font-medium"
+              iconClassName="text-grey-50 p-1 bg-grey-90 rounded w-6 h-6"
+              maxWidth="w-full"
+            />
           )}
         </div>
 
         {/* SSH Public Key */}
-        <div className="col-span-1 md:col-span-2">
+        <div>
           <LabelWithIcon
             icon={<Icons.ShieldSecurity className="size-4" />}
             label="SSH Public Key"

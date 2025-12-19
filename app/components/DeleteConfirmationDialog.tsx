@@ -81,9 +81,9 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
 
           {/* Buttons */}
           <CardButton
-            className="bg-primary-50 py-4 hover:bg-primary-40 transition text-white w-full font-medium"
+            className="bg-error-50 py-4 hover:bg-error-40 transition text-white w-full font-medium"
             size={"lg"}
-            variant={"primary"}
+            variant={"error"}
             onClick={onDelete}
             appendToStart
             disabled={disableButton}
@@ -93,6 +93,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
           <CardButton
             variant="secondary"
             className="bg-grey-100 border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-12 hover:bg-grey-80 transition"
+            disabled={disableButton}
             onClick={onBack}
           >
             Go Back

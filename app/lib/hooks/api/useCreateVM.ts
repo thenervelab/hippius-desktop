@@ -13,6 +13,7 @@ export interface CreateVMRequest {
   image_id: number;
   ssh_public_key: string;
   name: string;
+  application_id?: number;
 }
 
 export interface CreateVMResponse {

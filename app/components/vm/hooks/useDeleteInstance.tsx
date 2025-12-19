@@ -29,8 +29,9 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
   // Use the terminate VM mutation
   const { mutateAsync: terminateVM, isPending: isDeleting } = useTerminateVM({
     onSuccess: () => {
-      // Invalidate and refetch VM instances
-      queryClient.invalidateQueries({ queryKey: ["vm-instances"] });
+      // Invalidate and refetch VM instances list and details
+      queryClient.invalidateQueries({ queryKey: ["vmInstances"] });
+      queryClient.invalidateQueries({ queryKey: ["vm-instance-details"] });
     },
   });
 
@@ -67,6 +68,7 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
   };
 
   const handleCancelDelete = () => {
+    if (isDeleting) return;
     setOpenDeleteModal(false);
     setSelectedInstance(null);
   };
@@ -74,8 +76,8 @@ export const useDeleteInstance = (options?: UseDeleteInstanceOptions) => {
   const DeleteInstanceModal = () => (
     <DeleteConfirmationDialog
       open={openDeleteModal}
-      onClose={handleCancelDelete}
-      onBack={handleCancelDelete}
+      onClose={isDeleting ? () => {} : handleCancelDelete}
+      onBack={isDeleting ? () => {} : handleCancelDelete}
       onDelete={handleConfirmDelete}
       button={isDeleting ? "Deleting..." : "Delete Instance"}
       text="Are you sure you want to delete this instance? This action is permanent and all data will be lost."

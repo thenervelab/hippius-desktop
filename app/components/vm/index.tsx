@@ -2,6 +2,7 @@
 
 import AbstractIconWrapper from "../ui/abstract-icon-wrapper";
 import { FC, useEffect, useState } from "react";
+import React from "react";
 
 import { toast } from "sonner";
 import RefreshButton from "../ui/refresh-button";
@@ -23,7 +24,6 @@ import CreateButton from "../ui/button/CreateButton";
 import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
-import useVMInstances from "@/app/lib/hooks/api/useVMInstances";
 import NoEntriesFound from "../ui/NoEntriesFound";
 
 export interface CreateTokenFields {
@@ -36,7 +36,9 @@ const VirtualMachines: FC = () => {
   const [activeTab, setActiveTab] = useState<string>("Instances");
   const [openCreateSSHKeyModal, setOpenCreateSSHKeyModal] = useState(false);
   const [openDeleteSSHKeyModal, setOpenDeleteSSHKeyModal] = useState(false);
-  const [openDeleteTemplateModal, setOpenDeleteTemplateModal] = useState(false);
+  const [instanceSearchTerm, setInstanceSearchTerm] = useState("");
+  const [debouncedInstanceSearchTerm, setDebouncedInstanceSearchTerm] =
+    useState("");
   const [sshKeySearchTerm, setSSHKeySearchTerm] = useState("");
   const [debouncedSSHKeySearchTerm, setDebouncedSSHKeySearchTerm] =
     useState("");
@@ -45,16 +47,31 @@ const VirtualMachines: FC = () => {
   const [selectedSSHKeyToDelete, setSelectedSSHKeyToDelete] =
     useState<SSHKey | null>(null);
   const [isDeletingInProgress, setIsDeletingInProgress] = useState(false);
-  const { data: flavors, isLoading: isFlavorsLoading, error: flavorsError } = useVMFlavors();
-  const { error: instancesError } = useVMInstances();
+  const [instancesError, setInstancesError] = useState<Error | null>(null);
+  const refetchInstancesRef = React.useRef<() => void>(() => {});
+  const [isInstancesFetching, setIsInstancesFetching] = useState(false);
+
+  const handleRefetchInstances = () => {
+    refetchInstancesRef.current();
+  };
+
+  const setRefetchInstances = (fn: () => void) => {
+    refetchInstancesRef.current = fn;
+  };
+  const {
+    data: flavors,
+    isLoading: isFlavorsLoading,
+    error: flavorsError,
+  } = useVMFlavors();
   const flavorsLoading = isFlavorsLoading;
-  
+
   // Check if error is related to beta access
   const isBetaError = (error: Error | null) => {
-    return error?.message?.toLowerCase().includes('beta') || false;
+    return error?.message?.toLowerCase().includes("beta") || false;
   };
-  
-  const betaAccessMessage = "VM feature is in beta. Contact support for access.";
+
+  const betaAccessMessage =
+    "VM feature is in beta. Contact support for access.";
 
   // Transform flavors API data to template format with categories
   const templatesFromFlavors =
@@ -92,6 +109,15 @@ const VirtualMachines: FC = () => {
         category,
       };
     }) || [];
+
+  // Debounce instance search term with 500ms delay
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedInstanceSearchTerm(instanceSearchTerm);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [instanceSearchTerm]);
 
   // Debounce SSH key search term with 500ms delay
   useEffect(() => {
@@ -189,15 +215,6 @@ const VirtualMachines: FC = () => {
     }
   };
 
-  const handleDeleteTemplate = () => {
-    setOpenDeleteTemplateModal(true);
-  };
-
-  const handleConfirmDeleteTemplate = () => {
-    setOpenDeleteTemplateModal(false);
-    toast.success("Template Deleted");
-  };
-
   const getHeaderTitle = () => {
     switch (activeTab) {
       case "SSH Keys":
@@ -245,8 +262,13 @@ const VirtualMachines: FC = () => {
               <SearchInput
                 placeholder="Search for an instance"
                 className="h-9"
+                value={instanceSearchTerm}
+                onChange={(value) => setInstanceSearchTerm(value)}
               />
-              <RefreshButton refetching={false} onClick={() => {}} />
+              <RefreshButton
+                refetching={isInstancesFetching}
+                onClick={handleRefetchInstances}
+              />
               <CreateButton
                 text="Create VM"
                 isLoading={false}
@@ -273,23 +295,6 @@ const VirtualMachines: FC = () => {
               />
             </>
           )}
-          {/* {activeTab === "Templates" && (
-            <>
-              <SearchInput
-                placeholder="Search for a template"
-                className="h-9"
-              />
-              <RefreshButton
-                refetching={isFlavorsRefetching}
-                onClick={() => refetchFlavors()}
-              />
-              <CreateButton
-                text="New Template"
-                isLoading={false}
-                onClick={handleModalOpen}
-              />
-            </>
-          )} */}
         </div>
       </div>
 
@@ -314,6 +319,10 @@ const VirtualMachines: FC = () => {
                 onCreateNew={handleModalOpen}
                 flavors={flavors}
                 isFlavorsLoading={isFlavorsLoading}
+                searchTerm={debouncedInstanceSearchTerm}
+                onError={setInstancesError}
+                onRefetchChange={setRefetchInstances}
+                onFetchingChange={setIsInstancesFetching}
               />
             )
           ) : activeTab === "SSH Keys" ? (
@@ -352,7 +361,6 @@ const VirtualMachines: FC = () => {
                       <VMTemplateCard
                         key={template.id}
                         template={template}
-                        onDelete={handleDeleteTemplate}
                         showSetupButton={false}
                         hideMenu={true}
                       />
@@ -406,20 +414,6 @@ const VirtualMachines: FC = () => {
         }"? This action is permanent.`}
         heading="Delete SSH Key"
         disableButton={isDeletingInProgress}
-      />
-      {/* Delete Template Confirmation */}
-      <DeleteConfirmationDialog
-        open={openDeleteTemplateModal}
-        onClose={() => {
-          setOpenDeleteTemplateModal(false);
-        }}
-        onBack={() => {
-          setOpenDeleteTemplateModal(false);
-        }}
-        onDelete={handleConfirmDeleteTemplate}
-        button="Delete Template"
-        text="Are you sure you want to delete this template? This action is permanent."
-        heading="Delete Template"
       />
     </div>
   );

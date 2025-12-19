@@ -185,4 +185,5 @@ export { default as MoreCircle } from "./MoreCircle";
 export { default as MoreSquare } from "./MoreSquare";
 export { default as Computing } from "./Computing";
 export { default as Globe } from "./Globe";
+export { default as Debian } from "./Debian";
 export { default as SplashHippiusLogo } from "./SplashHippiusLogo";

@@ -30,7 +30,7 @@ export default function useVMFlavors(
   const { oauthSession } = useWalletAuth();
 
   return useQuery<VMFlavorResponse[], Error, VMFlavorResponse[]>({
-    queryKey: ["vmFlavors", oauthSession?.token],
+    queryKey: ["vmFlavors"],
     queryFn: async () => {
       if (!oauthSession?.token) {
         throw new Error("No authentication token available");

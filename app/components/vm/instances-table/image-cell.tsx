@@ -21,7 +21,7 @@ const ImageCell: React.FC<ImageCellProps> = ({
       case "AlmaLinux":
         return <Icons.Linux className={cn(iconClass)} />;
       case "Debian":
-        return <Icons.Linux className={cn(iconClass)} />;
+        return <Icons.Debian className={cn(iconClass)} />;
       case "Rocky Linux":
         return <Icons.Linux className={cn(iconClass)} />;
       default:

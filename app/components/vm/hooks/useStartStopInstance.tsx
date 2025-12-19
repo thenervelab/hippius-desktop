@@ -24,13 +24,15 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
   // Use start and stop VM mutations
   const { mutateAsync: startVM, isPending: isStarting } = useStartVM({
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vm-instances"] });
+      queryClient.invalidateQueries({ queryKey: ["vmInstances"] });
+      queryClient.invalidateQueries({ queryKey: ["vm-instance-details"] });
     },
   });
 
   const { mutateAsync: stopVM, isPending: isStopping } = useStopVM({
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vm-instances"] });
+      queryClient.invalidateQueries({ queryKey: ["vmInstances"] });
+      queryClient.invalidateQueries({ queryKey: ["vm-instance-details"] });
     },
   });
 
@@ -41,8 +43,8 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
     if (instance) {
       setSelectedInstance(instance);
     }
-    // Determine action based on current status
-    const actionType = currentStatus === "Stopped" ? "start" : "stop";
+    // Determine action based on current status (case-insensitive)
+    const actionType = currentStatus?.toLowerCase() === "stopped" ? "start" : "stop";
     setAction(actionType);
     setOpenConfirmModal(true);
   };
@@ -73,6 +75,7 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
   };
 
   const handleCancel = () => {
+    if (isProcessing) return;
     setOpenConfirmModal(false);
     setSelectedInstance(null);
   };
@@ -82,9 +85,9 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
   const StartStopConfirmModal = () => (
     <ConfirmDialog2
       open={openConfirmModal}
-      onClose={handleCancel}
+      onClose={isProcessing ? () => {} : handleCancel}
       onConfirm={handleConfirm}
-      onBack={handleCancel}
+      onBack={isProcessing ? () => {} : handleCancel}
       button={
         isProcessing
           ? action === "start"

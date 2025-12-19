@@ -22,7 +22,8 @@ export const useRebootInstance = (options?: UseRebootInstanceOptions) => {
   // Use reboot VM mutation
   const { mutateAsync: rebootVM, isPending: isRebooting } = useRebootVM({
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vm-instances"] });
+      queryClient.invalidateQueries({ queryKey: ["vmInstances"] });
+      queryClient.invalidateQueries({ queryKey: ["vm-instance-details"] });
     },
   });
 
@@ -54,6 +55,7 @@ export const useRebootInstance = (options?: UseRebootInstanceOptions) => {
   };
 
   const handleCancel = () => {
+    if (isRebooting) return;
     setOpenConfirmModal(false);
     setSelectedInstance(null);
   };
@@ -61,9 +63,9 @@ export const useRebootInstance = (options?: UseRebootInstanceOptions) => {
   const RebootConfirmModal = () => (
     <ConfirmDialog2
       open={openConfirmModal}
-      onClose={handleCancel}
+      onClose={isRebooting ? () => {} : handleCancel}
       onConfirm={handleConfirm}
-      onBack={handleCancel}
+      onBack={isRebooting ? () => {} : handleCancel}
       button={isRebooting ? "Rebooting..." : "Reboot Instance"}
       text="Are you sure you want to reboot this instance? This will restart the instance and may cause temporary downtime."
       heading="Reboot Instance"

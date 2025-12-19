@@ -4,7 +4,8 @@ import {
   getSortedRowModel,
 } from "@tanstack/react-table";
 import * as TableModule from "@/components/ui/alt-table";
-import { FC } from "react";
+import { FC, useMemo } from "react";
+import React from "react";
 import { P } from "../../ui/typography";
 import { cn } from "@/lib/utils";
 import { getDesktopColumns } from "./instances-columns";
@@ -12,7 +13,6 @@ import { useStartStopInstance } from "../hooks/useStartStopInstance";
 import useVMInstances from "@/app/lib/hooks/api/useVMInstances";
 import { VMFlavorResponse } from "@/app/lib/hooks/api/useVMFlavors";
 import { useRebootInstance } from "../hooks/useRebootInstance";
-import { useReinstallInstance } from "../hooks/useReinstallInstance";
 import { usePagination } from "@/app/lib/hooks";
 import NoDataFound from "../../ui/NoDataFound";
 import { Server } from "lucide-react";
@@ -34,6 +34,10 @@ interface InstancesTableProps {
   onCreateNew?: () => void;
   flavors?: VMFlavorResponse[];
   isFlavorsLoading?: boolean;
+  searchTerm?: string;
+  onError?: (error: Error | null) => void;
+  onRefetchChange?: (refetch: () => void) => void;
+  onFetchingChange?: (isFetching: boolean) => void;
 }
 
 const InstancesTable: FC<InstancesTableProps> = ({
@@ -41,31 +45,64 @@ const InstancesTable: FC<InstancesTableProps> = ({
   onCreateNew,
   flavors,
   isFlavorsLoading,
+  searchTerm = "",
+  onError,
+  onRefetchChange,
+  onFetchingChange,
 }) => {
-  const { data: instances, isLoading, error, isRefetching } = useVMInstances();
+  const {
+    data: instances,
+    isLoading,
+    error,
+    isFetching,
+    refetch,
+  } = useVMInstances();
 
-  // Use client-side pagination
+  // Pass error, refetch, and isFetching to parent
+  React.useEffect(() => {
+    onError?.(error || null);
+  }, [error, onError]);
+
+  React.useEffect(() => {
+    if (onRefetchChange) {
+      onRefetchChange(refetch);
+    }
+  }, [refetch, onRefetchChange]);
+
+  React.useEffect(() => {
+    onFetchingChange?.(isFetching);
+  }, [isFetching, onFetchingChange]);
+
+  // Filter instances locally based on search term (memoized for performance)
+  const filteredInstances = useMemo(() => {
+    if (!instances) return [];
+    if (!searchTerm.trim()) return instances;
+
+    const searchLower = searchTerm.toLowerCase().trim();
+    return instances.filter((instance) =>
+      instance.name.toLowerCase().includes(searchLower)
+    );
+  }, [instances, searchTerm]);
+
+  // Use client-side pagination on filtered data
   const {
     paginatedData: data,
     setCurrentPage,
     currentPage,
     totalPages,
-  } = usePagination(instances || [], 10);
+  } = usePagination(filteredInstances, 10);
 
   // Instance control hooks
   const { handleStartStopInstance, StartStopConfirmModal } =
     useStartStopInstance();
   const { handleRebootInstance, RebootConfirmModal } = useRebootInstance();
-  const { handleReinstallInstance, ReinstallConfirmModal } =
-    useReinstallInstance();
 
   // Get columns with the handlers
   const desktopColumns = getDesktopColumns(
     flavors,
     onDeleteInstance,
     handleStartStopInstance,
-    handleRebootInstance,
-    handleReinstallInstance
+    handleRebootInstance
   );
 
   const table = useReactTable({
@@ -84,7 +121,7 @@ const InstancesTable: FC<InstancesTableProps> = ({
               Oops an error occurred...
             </P>
           </div>
-        ) : isLoading || isRefetching || isFlavorsLoading ? (
+        ) : isLoading || isFetching || isFlavorsLoading ? (
           <TableModule.Table>
             <TableModule.THead>
               {table.getHeaderGroups().map((headerGroup) => (
@@ -103,7 +140,7 @@ const InstancesTable: FC<InstancesTableProps> = ({
               <TableModule.SkeletonTableRow
                 rowClassName="h-[69px]"
                 rows={10}
-                columns={8}
+                columns={7}
                 columnWidths={[
                   "100px",
                   "160px",
@@ -111,21 +148,29 @@ const InstancesTable: FC<InstancesTableProps> = ({
                   "100px",
                   "100px",
                   "90px",
-                  "100px",
                   "50px",
                 ]}
               />
             </TableModule.TBody>
           </TableModule.Table>
         ) : !data.length ? (
-          <NoDataFound
-            icon={Server}
-            title="No VM Instances Found"
-            description="You currently do not have any virtual machine instances. Create your first VM to get started with cloud computing."
-            buttonText="Create VM"
-            onButtonClick={onCreateNew || (() => {})}
-            showButton={!!onCreateNew}
-          />
+          searchTerm && searchTerm.trim() ? (
+            <NoDataFound
+              icon={Server}
+              title="No matching instances found"
+              description=""
+              showButton={false}
+            />
+          ) : (
+            <NoDataFound
+              icon={Server}
+              title="No VM Instances Found"
+              description="You currently do not have any virtual machine instances. Create your first VM to get started with cloud computing."
+              buttonText="Create VM"
+              onButtonClick={onCreateNew || (() => {})}
+              showButton={!!onCreateNew}
+            />
+          )
         ) : (
           <TableModule.Table>
             <TableModule.THead>
@@ -168,7 +213,6 @@ const InstancesTable: FC<InstancesTableProps> = ({
       {/* Instance Control Modals */}
       <StartStopConfirmModal />
       <RebootConfirmModal />
-      <ReinstallConfirmModal />
     </div>
   );
 };
