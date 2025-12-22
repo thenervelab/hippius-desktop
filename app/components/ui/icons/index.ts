@@ -186,4 +186,6 @@ export { default as MoreSquare } from "./MoreSquare";
 export { default as Computing } from "./Computing";
 export { default as Globe } from "./Globe";
 export { default as Debian } from "./Debian";
+export { default as Fedora } from "./Fedora";
+export { default as CentOS } from "./CentOS";
 export { default as SplashHippiusLogo } from "./SplashHippiusLogo";

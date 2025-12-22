@@ -58,22 +58,24 @@ const CopyableText: React.FC<CopyableTextProps> = ({
   return (
     <div className="flex items-center gap-2">
       {renderText()}
-      <Button
-        type="button"
-        size={"noStyle"}
-        onClick={copyToClipboard}
-        className={cn(
-          "h-auto flex-shrink-0 hover:bg-transparent",
-          copied ? "text-green-600" : "text-grey-60 hover:text-grey-70"
-        )}
-        variant="ghost"
-      >
-        {copied ? (
-          <Check className={cn(iconClassName, "!text-green-600")} />
-        ) : (
-          <Icons.Copy className={cn(iconClassName)} />
-        )}
-      </Button>
+      {value !== "—" && (
+        <Button
+          type="button"
+          size={"noStyle"}
+          onClick={copyToClipboard}
+          className={cn(
+            "h-auto flex-shrink-0 hover:bg-transparent",
+            copied ? "text-green-600" : "text-grey-60 hover:text-grey-70"
+          )}
+          variant="ghost"
+        >
+          {copied ? (
+            <Check className={cn(iconClassName, "!text-green-600")} />
+          ) : (
+            <Icons.Copy className={cn(iconClassName)} />
+          )}
+        </Button>
+      )}
     </div>
   );
 };

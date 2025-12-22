@@ -4,7 +4,7 @@ import { Icons } from "../../ui";
 
 export interface ImageCellProps {
   value: {
-    os: "AlmaLinux" | "Debian" | "Rocky Linux" | "Ubuntu";
+    os: "AlmaLinux" | "CentOS" | "Debian" | "Fedora" | "Rocky Linux" | "Ubuntu";
     version: string;
   };
   iconClass?: string;
@@ -20,8 +20,12 @@ const ImageCell: React.FC<ImageCellProps> = ({
         return <Icons.Ubuntu className={cn(iconClass)} />;
       case "AlmaLinux":
         return <Icons.Linux className={cn(iconClass)} />;
+      case "CentOS":
+        return <Icons.CentOS className={cn(iconClass)} />;
       case "Debian":
         return <Icons.Debian className={cn(iconClass)} />;
+      case "Fedora":
+        return <Icons.Fedora className={cn(iconClass)} />;
       case "Rocky Linux":
         return <Icons.Linux className={cn(iconClass)} />;
       default:
