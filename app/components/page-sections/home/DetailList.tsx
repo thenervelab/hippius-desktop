@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
@@ -13,6 +14,8 @@ import pricingJson from "@/app/utils/data/pricing-cfg.json";
 import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 
 export default function DetailList() {
+  const [isRefreshingCredits, setIsRefreshingCredits] = useState(false);
+
   const {
     data: credits,
     isLoading: isCreditsLoading,
@@ -28,11 +31,14 @@ export default function DetailList() {
 
   const handleRefreshCredits = async () => {
     try {
+      setIsRefreshingCredits(true);
       await refetchCredits();
       toast.success("Credits refreshed successfully!");
     } catch (error) {
       console.error("Failed to refresh credits:", error);
       toast.error("Failed to refresh credits");
+    } finally {
+      setIsRefreshingCredits(false);
     }
   };
 
@@ -134,7 +140,7 @@ export default function DetailList() {
       subtitle: getCreditsSubtitle(),
       showRefresh: true,
       onRefresh: handleRefreshCredits,
-      isLoading: isCreditsLoading,
+      isLoading: isRefreshingCredits,
     },
     {
       id: "total-files",

@@ -72,7 +72,7 @@ export default function DetailsCard({
             <Icons.Refresh
               className={cn(
                 "size-4 text-grey-60",
-                isLoading && "animate-spin"
+                isLoading && "animate-spin-reverse-really-fast"
               )}
             />
           </button>
