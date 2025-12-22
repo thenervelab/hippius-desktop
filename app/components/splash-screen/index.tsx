@@ -19,7 +19,7 @@ import {
 import { cn } from "@/app/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  PHASE_CONTENT,
+  getPhaseContent,
   AppSetupPhaseContent,
   MIN_PHASE_DURATION,
   PHASE_PROGRESS_EVENT,
@@ -200,7 +200,9 @@ export default function SplashWrapper({
       setIsUpdateCheckPhase(false);
 
       // ========== MAIN PHASES (contribute to progress) ==========
-      const phaseNames = Object.keys(PHASE_CONTENT);
+      // Get the dynamic phase content based on installation state
+      const dynamicPhaseContent = getPhaseContent(isAlreadyInstalled);
+      const phaseNames = Object.keys(dynamicPhaseContent);
 
       for (let i = 0; i < phaseNames.length; i++) {
         const phaseName = phaseNames[i];
@@ -213,7 +215,7 @@ export default function SplashWrapper({
         setPhaseCommandRunning(true);
 
         const phaseContent: AppSetupPhaseContent | undefined =
-          PHASE_CONTENT[phaseName];
+          dynamicPhaseContent[phaseName];
 
         if (!phaseContent) {
           console.warn(`Unknown phase: ${phaseName}`);

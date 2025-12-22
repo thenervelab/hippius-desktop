@@ -350,6 +350,7 @@ export default {
         ["spin-fast"]: "spin 4s linear infinite",
         ["spin-medium"]: "spin 6s linear infinite",
         ["spin-slow"]: "spin 8s linear infinite",
+        ["spin-reverse-really-fast"]: "spin-reverse 1s linear infinite",
         ["spin-reverse-fast"]: "spin-reverse 4s linear infinite",
         ["spin-reverse-medium"]: "spin-reverse 6s linear infinite",
         ["spin-reverse-slow"]: "spin-reverse 8s linear infinite",

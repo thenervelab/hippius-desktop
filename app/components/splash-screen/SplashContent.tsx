@@ -28,7 +28,7 @@ export const UPDATE_CHECK_CONTENT: AppSetupPhaseContent = {
 
 // Main phases with weighted percentages (must sum to 100)
 // commandTriggerPercent: when to execute backend command (50 = execute at midpoint)
-export const PHASE_CONTENT: Record<string, AppSetupPhaseContent> = {
+export const PHASE_CONTENT_BASE: Record<string, AppSetupPhaseContent> = {
   checking_binary: {
     icon: <Icons.CheckingIPFS className="h-[140px] w-[230px]" />,
     status: "Checking Tools",
@@ -48,8 +48,7 @@ export const PHASE_CONTENT: Record<string, AppSetupPhaseContent> = {
   installing_nebula: {
     icon: <Icons.InitializeRepo className="h-[180px] w-[180px]" />,
     status: "Installing Tools",
-    subStatus:
-      "Installing Hippius Mesh Tools. Enter your password to continue...",
+    subStatus: "", // Will be set dynamically based on installation state
     command: "install_nebula",
     weight: 20, // 40-60%
     commandTriggerPercent: 50, // Execute at 50% (50% through the 40-60% range)
@@ -73,3 +72,29 @@ export const PHASE_CONTENT: Record<string, AppSetupPhaseContent> = {
     commandTriggerPercent: 50, // Execute at 90% (50% through the 80-100% range)
   },
 };
+
+/**
+ * Get phase content with conditional messages based on installation state
+ * @param isAlreadyInstalled - Whether tools are already installed
+ * @returns Phase content with appropriate messages
+ */
+export function getPhaseContent(
+  isAlreadyInstalled: boolean | null
+): Record<string, AppSetupPhaseContent> {
+  const content = { ...PHASE_CONTENT_BASE };
+
+  // Update the installing_nebula message based on installation state
+  if (isAlreadyInstalled) {
+    // Tools already installed - show simpler verification message
+    content.installing_nebula.subStatus = "Installing Hippius Mesh Tools...";
+  } else {
+    // Tools not installed - show password requirement message
+    content.installing_nebula.subStatus =
+      "Installing Hippius Mesh Tools. Enter your password to continue...";
+  }
+
+  return content;
+}
+
+// For backwards compatibility with existing code that imports PHASE_CONTENT directly
+export const PHASE_CONTENT = PHASE_CONTENT_BASE;

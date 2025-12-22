@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import {
   AbstractCity,
   Graphsheet,
@@ -8,7 +8,7 @@ import {
 import { InView } from "react-intersection-observer";
 import Link from "next/link";
 import AnimatedRings from "./AnimatedRings";
-import { PHASE_CONTENT, UPDATE_CHECK_CONTENT } from "./SplashContent";
+import { UPDATE_CHECK_CONTENT, getPhaseContent } from "./SplashContent";
 import AnimatedProgressIcon from "./AnimatedIcons";
 import { AnimatePresence, motion } from "framer-motion";
 import ProgressDisplay from "./ProgressDisplay";
@@ -34,11 +34,16 @@ const SplashScreen = () => {
   });
   const nebulaInstalled = useAtomValue(nebulaInstalledAtom);
 
+  // Get dynamic phase content based on installation state
+  const phaseContent = useMemo(() => {
+    return getPhaseContent(nebulaInstalled);
+  }, [nebulaInstalled]);
+
   // Show progress bar during setup phases (both fresh install and when already installed)
   // Only hide progress bar when status is still unknown (null) or explicitly disabled
   const showProgressBar = nebulaInstalled !== null && phase !== null;
 
-  const contentArr = Object.values(PHASE_CONTENT);
+  const contentArr = Object.values(phaseContent);
 
   // When update dialog is open, freeze everything and show no UI elements
   if (updateDialogOpen) {
