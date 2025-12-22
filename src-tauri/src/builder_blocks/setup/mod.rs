@@ -387,7 +387,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 }
             }
 
-            let _handle = app.handle().clone();
+            let app_handle = app.handle().clone();
             let win = app.get_webview_window("main").expect("main window not found");
 
             if let Some(m) = win.current_monitor()? {
@@ -539,15 +539,15 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                     .await {
                         eprintln!("[Setup] Failed to reset VPN status: {}", e);
                     }
+
+                    // Ensure Nebula is stopped
+                    println!("[Setup] Ensuring Nebula is stopped on startup...");
+                    if let Err(e) = crate::utils::nebula::stop_nebula().await {
+                        eprintln!("[Setup] Failed to stop Nebula: {}", e);
+                    }
                 } else {
                     println!("[Setup] Autoconnect enabled, skipping VPN status reset");
                 }
-
-               // Ensure Nebula is stopped
-               println!("[Setup] Ensuring Nebula is stopped on startup...");
-               if let Err(e) = crate::utils::nebula::stop_nebula().await {
-                   eprintln!("[Setup] Failed to stop Nebula: {}", e);
-               }
                
                // Initialize Nebula binary status if it doesn't exist
                 let nebula_binary_status_exists: Option<(i64,)> = sqlx::query_as(
@@ -601,9 +601,32 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
                 println!("[Setup] Database initialized successfully");
 
-                // Nebula installation is now handled by the frontend splash screen
-                // via granular commands (check_nebula_requirements, etc.)
+                // Verify Nebula setup and certificates
+                println!("[Setup] Verifying Nebula setup...");
+                if let Err(e) = verify_nebula_setup(app_handle).await {
+                    eprintln!("[Setup] Warning: {}", e);
+                    // Don't fail the entire setup, just log the error
+                    // The user can still use the app, they'll just need to set up VPN separately
+                }
             });
             Ok(())
         })
+}
+
+async fn verify_nebula_setup(app: tauri::AppHandle) -> Result<(), String> {
+    use crate::utils::nebula;
+
+    // Check if Nebula is installed
+    if let Err(e) = nebula::check_nebula_installation().await {
+        eprintln!("[Setup] Nebula not installed: {}", e);
+        return Err("Nebula installation verification failed".into());
+    }
+
+    // Verify Nebula (this will check and renew certificates if needed)
+    if let Err(e) = nebula::verify_nebula(app).await {
+        eprintln!("[Setup] Nebula verification failed: {}", e);
+        return Err("Nebula verification failed".into());
+    }
+
+    Ok(())
 }
