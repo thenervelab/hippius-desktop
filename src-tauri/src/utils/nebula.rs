@@ -248,62 +248,6 @@ async fn fetch_latest_release() -> Result<GitHubRelease> {
     Ok(release)
 }
 
-/// Download and extract Nebula binary
-async fn download_and_install_nebula(download_url: &str, version: &str) -> Result<()> {
-    let nebula_dir = get_nebula_dir()?;
-    fs::create_dir_all(&nebula_dir).await?;
-    
-    println!("[Nebula] Downloading from: {}", download_url);
-    
-    // Download the archive
-    let client = Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()?;
-    
-    let response = client.get(download_url).send().await?;
-    
-    if !response.status().is_success() {
-        return Err(anyhow!("Download failed: HTTP {}", response.status()));
-    }
-    
-    let bytes = response.bytes().await?;
-    
-    // Determine archive type and extract
-    let asset_name = get_asset_name()?;
-    
-    if asset_name.ends_with(".zip") {
-        extract_zip(&bytes, &nebula_dir).await?;
-    } else if asset_name.ends_with(".tar.gz") {
-        extract_tar_gz(&bytes, &nebula_dir).await?;
-    } else {
-        return Err(anyhow!("Unsupported archive format"));
-    }
-    
-    // Make binaries executable on Unix
-    #[cfg(unix)]
-    {
-        let binary_path = get_nebula_binary_path()?;
-        if binary_path.exists() {
-            let mut perms = fs::metadata(&binary_path).await?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&binary_path, perms).await?;
-        }
-        
-        let cert_binary_path = get_nebula_cert_binary_path()?;
-        if cert_binary_path.exists() {
-            let mut perms = fs::metadata(&cert_binary_path).await?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&cert_binary_path, perms).await?;
-        }
-    }
-    
-    // Save version
-    save_installed_version(version).await?;
-    
-    println!("[Nebula] Installation complete: version {}", version);
-    Ok(())
-}
-
 /// Extract ZIP archive
 async fn extract_zip(bytes: &[u8], target_dir: &Path) -> Result<()> {
     use std::io::Cursor;
@@ -1890,3 +1834,6 @@ pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
     // 3. Certificate is not active
     Ok(false)
 }
+
+
+
