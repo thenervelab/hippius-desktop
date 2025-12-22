@@ -67,7 +67,7 @@ export default function useMarketplaceCredits(
           throw new Error("No wallet address available");
         }
 
-        const url = `${API_BASE_URL}/marketplace/credit?account_id=${polkadotAddress}&limit=${limit}&page=${page}`;
+        const url = `${API_BASE_URL}/marketplace/credit?account_id=${polkadotAddress}&limit=${limit}&page=${page}&event_name=CreditsConsumed`;
 
         const response = await fetch(url, {
           headers: {
@@ -85,7 +85,6 @@ export default function useMarketplaceCredits(
       },
       select: (data) => {
         return data.events
-          .filter((event) => event.event_name === "CreditsConsumed")
           .map((event) => ({
             blockNumber: event.block_number,
             eventIndex: event.event_index,
