@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   getCoreRowModel,
   useReactTable,
@@ -110,6 +111,8 @@ const InstancesTable: FC<InstancesTableProps> = ({
     data: data || [],
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    enableColumnResizing: false,
+    columnResizeMode: "onChange",
   });
 
   return (
@@ -189,7 +192,10 @@ const InstancesTable: FC<InstancesTableProps> = ({
                   <TableModule.Tr rowHover key={`${row.id}`} transparent>
                     {row.getVisibleCells().map((cell) => (
                       <TableModule.Td
-                        className={cn(cell.column.id === "actions" && "w-8")}
+                        className={cn(
+                          cell.column.id === "actions" && "w-8",
+                          (cell.column.columnDef.meta as any)?.cellClassName
+                        )}
                         key={cell.id}
                         cell={cell}
                       />

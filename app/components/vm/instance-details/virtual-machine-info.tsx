@@ -49,21 +49,33 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
 
   // Parse image name for ImageCell
   const parseImageName = (imageName: string) => {
-    let os: "AlmaLinux" | "Debian" | "Rocky Linux" | "Ubuntu";
+    let os:
+      | "AlmaLinux"
+      | "CentOS"
+      | "Debian"
+      | "Fedora"
+      | "Rocky Linux"
+      | "Ubuntu";
     let version: string;
 
     if (imageName.startsWith("AlmaLinux")) {
       os = "AlmaLinux";
-      version = imageName.replace("AlmaLinux ", "");
+      version = imageName;
+    } else if (imageName.startsWith("CentOS")) {
+      os = "CentOS";
+      version = imageName;
     } else if (imageName.startsWith("Debian")) {
       os = "Debian";
-      version = imageName.replace("Debian ", "");
+      version = imageName;
+    } else if (imageName.startsWith("Fedora")) {
+      os = "Fedora";
+      version = imageName;
     } else if (imageName.startsWith("Rocky Linux")) {
       os = "Rocky Linux";
-      version = imageName.replace("Rocky Linux ", "");
+      version = imageName;
     } else if (imageName.startsWith("Ubuntu")) {
       os = "Ubuntu";
-      version = imageName.replace("Ubuntu ", "");
+      version = imageName;
     } else {
       os = "Ubuntu";
       version = imageName;

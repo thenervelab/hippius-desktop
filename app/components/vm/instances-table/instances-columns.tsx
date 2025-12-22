@@ -15,6 +15,14 @@ import { VMFlavorResponse } from "@/app/lib/hooks/api/useVMFlavors";
 
 const columnHelper = createColumnHelper<Instance>();
 
+// Format instance name for display - truncate long names
+const formatInstanceName = (name: string): string => {
+  if (name.length > 20) {
+    return `${name.slice(0, 10)}...${name.slice(-7)}`;
+  }
+  return name;
+};
+
 export const getDesktopColumns = (
   flavors: VMFlavorResponse[] | undefined,
   onDelete?: (instance: Instance) => void,
@@ -25,14 +33,23 @@ export const getDesktopColumns = (
     header: "NAME",
     cell: (d) => {
       const instance = d.row.original;
+      const fullName = d.getValue();
+      const displayName = formatInstanceName(fullName);
       return (
         <Link
           href={`/vm/instance-details?instanceId=${instance.id}`}
-          className="text-grey-20 text-base hover:text-primary-50 transition-colors cursor-pointer"
+          className="text-grey-20 text-base hover:text-primary-50 transition-colors cursor-pointer block truncate"
+          title={fullName}
         >
-          {d.getValue()}
+          {displayName}
         </Link>
       );
+    },
+    size: 200,
+    minSize: 150,
+    maxSize: 300,
+    meta: {
+      cellClassName: "!max-w-[300px] !min-w-[150px] !w-[200px]",
     },
   }),
   columnHelper.accessor("flavor", {
@@ -64,26 +81,37 @@ export const getDesktopColumns = (
     cell: (d) => {
       const imageName = d.getValue();
       // Extract OS and version from image name
-      let os: "AlmaLinux" | "Debian" | "Rocky Linux" | "Ubuntu";
+      let os:
+        | "AlmaLinux"
+        | "CentOS"
+        | "Debian"
+        | "Fedora"
+        | "Rocky Linux"
+        | "Ubuntu";
       let version: string;
 
       if (imageName.startsWith("AlmaLinux")) {
         os = "AlmaLinux";
-        version = imageName.replace("AlmaLinux ", "");
+        version = imageName;
+      } else if (imageName.startsWith("CentOS")) {
+        os = "CentOS";
+        version = imageName;
       } else if (imageName.startsWith("Debian")) {
         os = "Debian";
-        version = imageName.replace("Debian ", "");
+        version = imageName;
+      } else if (imageName.startsWith("Fedora")) {
+        os = "Fedora";
+        version = imageName;
       } else if (imageName.startsWith("Rocky Linux")) {
         os = "Rocky Linux";
-        version = imageName.replace("Rocky Linux ", "");
+        version = imageName;
       } else if (imageName.startsWith("Ubuntu")) {
         os = "Ubuntu";
-        version = imageName.replace("Ubuntu ", "");
+        version = imageName;
       } else {
         // Fallback for unknown OS
-        const parts = imageName.split(" ");
         os = "Rocky Linux"; // Default fallback
-        version = parts.slice(1).join(" ") || imageName;
+        version = imageName;
       }
 
       return <ImageCell value={{ os, version }} />;
