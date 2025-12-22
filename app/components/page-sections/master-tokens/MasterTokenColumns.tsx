@@ -64,6 +64,7 @@ export const getMasterTokenColumns = (
         {
             accessorKey: "name",
             header: "Token Name",
+            id: "name",
             cell: ({ row }) => {
                 const token = row.original;
                 return (
@@ -76,6 +77,7 @@ export const getMasterTokenColumns = (
         {
             accessorKey: "access_key_id",
             header: "Access Key ID",
+            id: "access_key_id",
             cell: ({ row }) => {
                 const token = row.original;
                 return (
@@ -88,6 +90,7 @@ export const getMasterTokenColumns = (
         {
             accessorKey: "last4",
             header: "Secret (Last 4)",
+            id: "status",
             cell: ({ row }) => {
                 const token = row.original;
                 return (
@@ -100,6 +103,7 @@ export const getMasterTokenColumns = (
         {
             accessorKey: "created_at",
             header: "Created",
+            id: "created_at",
             cell: ({ row }) => {
                 const token = row.original;
                 return (
@@ -112,19 +116,20 @@ export const getMasterTokenColumns = (
         {
             accessorKey: "expires_at",
             header: "Expires",
+            id: "expires_at",
             cell: ({ row }) => {
                 const token = row.original;
                 const { label, variant } = getExpiryStatus(token.expires_at);
 
                 return (
                     <div className="flex flex-col">
-                        <span className="text-grey-60 whitespace-nowrap text-sm">
+                        {variant !== "expired" && (<span className="text-grey-60 whitespace-nowrap text-sm">
                             {formatDate(token.expires_at)}
-                        </span>
+                        </span>)}
                         <span
                             className={cn(
                                 "text-xs",
-                                variant === "expired" && "text-error-50",
+                                variant === "expired" && "text-error-50 text-sm font-medium",
                                 variant === "warning" && "text-warning-50",
                                 variant === "caution" && "text-warning-60",
                                 variant === "normal" && "text-grey-60"
@@ -139,6 +144,7 @@ export const getMasterTokenColumns = (
         {
             accessorKey: "status",
             header: "Status",
+            id: "status_display",
             cell: ({ row }) => {
                 const token = row.original;
                 const isActive = token.status === "active";
@@ -189,6 +195,7 @@ export const getMasterTokenColumns = (
         ...(hasActiveTokens ? [{
             id: "actions",
             header: "",
+            enableResizing: false,
             cell: ({ row }: { row: { original: MasterToken } }) => {
                 const token = row.original;
                 const menuItems = getMenuItems(token);
@@ -199,15 +206,17 @@ export const getMasterTokenColumns = (
                 }
 
                 const buttonElement = (
-                    <Button variant="ghost" size="md" className="h-8 w-16 p-0 text-grey-70 action-menu-area">
+                    <Button variant="ghost" size="md" className="h-8 w-8 p-0 text-grey-70 action-menu-area">
                         <MoreVertical className="size-4" />
                     </Button>
                 );
 
                 return (
-                    <TableActionMenu dropdownTitle="Token Options" items={menuItems}>
-                        {buttonElement}
-                    </TableActionMenu>
+                    <div className="flex justify-center items-center">
+                        <TableActionMenu dropdownTitle="Token Options" items={menuItems}>
+                            {buttonElement}
+                        </TableActionMenu>
+                    </div>
                 );
             },
         }] : []),
