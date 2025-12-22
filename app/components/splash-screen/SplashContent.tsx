@@ -18,7 +18,7 @@ export const MIN_PHASE_DURATION = 1500;
 
 // Separate content for update check phase (shown at 0%, not part of progress)
 export const UPDATE_CHECK_CONTENT: AppSetupPhaseContent = {
-  icon: <Icons.CheckingIPFS className="h-[140px] w-[230px]" />,
+  icon: <Icons.CentralizedDataBase className="h-[140px] w-[230px]" />,
   status: "Checking for Updates",
   subStatus: "Please wait while we check for new version...",
   command: "check_updates",
@@ -46,9 +46,10 @@ export const PHASE_CONTENT: Record<string, AppSetupPhaseContent> = {
     commandTriggerPercent: 50, // Execute at 30% (50% through the 20-40% range)
   },
   installing_nebula: {
-    icon: <Icons.InitializeRepo className="h-[222px] w-[110px]" />,
+    icon: <Icons.InitializeRepo className="h-[180px] w-[180px]" />,
     status: "Installing Tools",
-    subStatus: "Installing Hippius Mesh Tools. Enter your password to continue...",
+    subStatus:
+      "Installing Hippius Mesh Tools. Enter your password to continue...",
     command: "install_nebula",
     weight: 20, // 40-60%
     commandTriggerPercent: 50, // Execute at 50% (50% through the 40-60% range)
