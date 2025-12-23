@@ -48,6 +48,7 @@ export const getTokenColumns = (
         {
             accessorKey: "name",
             header: "Token Name",
+            id: "name",
             cell: ({ row }) => {
                 const token = row.original;
                 return (
@@ -60,6 +61,7 @@ export const getTokenColumns = (
         {
             accessorKey: "appliedTo",
             header: "Applied To",
+            id: "bucket_scope",
             cell: ({ row }) => {
                 const token = row.original;
                 return <span className="text-grey-60">{token.appliedTo || (token.scope_type === 'all_buckets' ? 'All Buckets' : `${token.buckets?.length || 0} buckets`)}</span>;
@@ -68,6 +70,7 @@ export const getTokenColumns = (
         {
             accessorKey: "permission",
             header: "Permission",
+            id: "permission",
             cell: ({ row }) => {
                 const token = row.original;
                 return (
@@ -80,6 +83,7 @@ export const getTokenColumns = (
         {
             accessorKey: "created_at",
             header: "Date Created",
+            id: "created_at",
             cell: ({ row }) => {
                 const token = row.original;
                 return (
@@ -92,6 +96,7 @@ export const getTokenColumns = (
         {
             accessorKey: "status",
             header: "Status",
+            id: "expires_at",
             cell: ({ row }) => {
                 const token = row.original;
                 const isActive = token.status === "active";
@@ -130,6 +135,7 @@ export const getTokenColumns = (
         ...(hasActiveTokens ? [{
             id: "actions",
             header: "",
+            enableResizing: false,
             cell: ({ row }: { row: { original: ApiToken } }) => {
                 const token = row.original;
                 const menuItems = getMenuItems(token);
@@ -143,16 +149,18 @@ export const getTokenColumns = (
                     <Button
                         variant="ghost"
                         size="md"
-                        className="h-8 w-16 p-0 text-grey-70 action-menu-area"
+                        className="h-8 w-8 p-0 text-grey-70 action-menu-area"
                     >
                         <MoreVertical className="size-4" />
                     </Button>
                 );
 
                 return (
-                    <TableActionMenu dropdownTitle="Token Options" items={menuItems}>
-                        {buttonElement}
-                    </TableActionMenu>
+                    <div className="flex justify-center items-center">
+                        <TableActionMenu dropdownTitle="Token Options" items={menuItems}>
+                            {buttonElement}
+                        </TableActionMenu>
+                    </div>
                 );
             },
         }] : []),

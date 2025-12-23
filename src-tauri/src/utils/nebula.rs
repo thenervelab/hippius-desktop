@@ -248,62 +248,6 @@ async fn fetch_latest_release() -> Result<GitHubRelease> {
     Ok(release)
 }
 
-/// Download and extract Nebula binary
-async fn download_and_install_nebula(download_url: &str, version: &str) -> Result<()> {
-    let nebula_dir = get_nebula_dir()?;
-    fs::create_dir_all(&nebula_dir).await?;
-    
-    println!("[Nebula] Downloading from: {}", download_url);
-    
-    // Download the archive
-    let client = Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()?;
-    
-    let response = client.get(download_url).send().await?;
-    
-    if !response.status().is_success() {
-        return Err(anyhow!("Download failed: HTTP {}", response.status()));
-    }
-    
-    let bytes = response.bytes().await?;
-    
-    // Determine archive type and extract
-    let asset_name = get_asset_name()?;
-    
-    if asset_name.ends_with(".zip") {
-        extract_zip(&bytes, &nebula_dir).await?;
-    } else if asset_name.ends_with(".tar.gz") {
-        extract_tar_gz(&bytes, &nebula_dir).await?;
-    } else {
-        return Err(anyhow!("Unsupported archive format"));
-    }
-    
-    // Make binaries executable on Unix
-    #[cfg(unix)]
-    {
-        let binary_path = get_nebula_binary_path()?;
-        if binary_path.exists() {
-            let mut perms = fs::metadata(&binary_path).await?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&binary_path, perms).await?;
-        }
-        
-        let cert_binary_path = get_nebula_cert_binary_path()?;
-        if cert_binary_path.exists() {
-            let mut perms = fs::metadata(&cert_binary_path).await?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&cert_binary_path, perms).await?;
-        }
-    }
-    
-    // Save version
-    save_installed_version(version).await?;
-    
-    println!("[Nebula] Installation complete: version {}", version);
-    Ok(())
-}
-
 /// Extract ZIP archive
 async fn extract_zip(bytes: &[u8], target_dir: &Path) -> Result<()> {
     use std::io::Cursor;
@@ -583,7 +527,23 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
         .unwrap_or(false);
 
     if !is_enabled {
-        println!("[Nebula] VPN is disabled in settings, skipping certificate setup");
+        println!("[Nebula] VPN is disabled in settings. Checking if we need to renew an existing certificate...");
+        
+        // Only renew if we already have a certificate locally. 
+        // We don't want to generate a new one if the user hasn't enabled VPN yet.
+        let cert_exists = sqlx::query("SELECT 1 FROM nebula_certificate WHERE id = 1")
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some();
+            
+        if cert_exists {
+             println!("[Nebula] Found existing certificate, checking validity...");
+             check_and_update_certificate().await.map_err(|e| e.to_string())?;
+        } else {
+             println!("[Nebula] No existing certificate found and VPN is disabled. Skipping certificate generation.");
+        }
+        
         return Ok(());
     }
     
@@ -906,13 +866,20 @@ pub async fn check_and_update_certificate() -> Result<()> {
     
     if should_renew {
         println!("[Nebula] calling renew_certificate_from_api...");
-        let cert = renew_certificate_from_api(&auth_header).await?;
-        // Renew response might not have expires_at, so we might need to fetch again?
-        // User said: "response is like : { ... }" for renew, same structure as request.
-        // And request response: "response is like : { ... }"
-        // But GET response has "expires_at".
-        // If renew/request don't return expires_at, we should fetch it.
         
+        // Try to renew first, but if it fails (e.g. 404 because cert is too old or gone), 
+        // fallback to requesting a new one.
+        let cert_result = renew_certificate_from_api(&auth_header).await;
+        
+        let cert = match cert_result {
+            Ok(c) => c,
+            Err(e) => {
+                println!("[Nebula] Renewal failed: {}. Attempting to request a new certificate...", e);
+                request_certificate_from_api(&auth_header).await?
+            }
+        };
+
+        // Renew/Request response might not have expires_at, so we might need to fetch again
         let mut final_cert = cert;
         if final_cert.expires_at.is_none() {
              println!("[Nebula] Renew/Request response missing expiration, fetching details...");
@@ -923,7 +890,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
         
         save_certificate_files(&final_cert, &account_id).await?;
         update_certificate_db(&final_cert).await?;
-        println!("[Nebula] Certificate renewed successfully");
+        println!("[Nebula] Certificate renewed/requested successfully");
     } else if should_request {
         println!("[Nebula] calling request_certificate_from_api...");
         let cert = request_certificate_from_api(&auth_header).await?;
@@ -1867,3 +1834,6 @@ pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
     // 3. Certificate is not active
     Ok(false)
 }
+
+
+
