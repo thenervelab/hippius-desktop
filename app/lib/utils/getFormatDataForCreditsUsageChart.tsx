@@ -80,33 +80,33 @@ export function mapCreditsToDateRange(
   dateRange: Date[],
   getLabel?: (date: Date) => string
 ): ChartPoint[] {
-  const dataByDate = new Map<string, number>();
+  const dataByDate = new Map<string, ChartPoint>();
 
-  // Map actual credits used by date
+  // Map data by date (rawData already contains cumulative values)
   rawData.forEach((d) => {
     const key = normalizeDate(d.x);
-    const credits = d.balance; // This is the actual credits used
-
-    if (dataByDate.has(key)) {
-      // If multiple entries for same date, sum them
-      dataByDate.set(key, dataByDate.get(key)! + credits);
-    } else {
-      dataByDate.set(key, credits);
-    }
+    dataByDate.set(key, d);
   });
 
-  // For each date in the range, use actual data or zero
+  // For each date in the range, use actual cumulative data or carry forward previous day's value
+  let lastKnownBalance = 0;
   return dateRange.map((date) => {
     const key = normalizeDate(date);
-    const credits = dataByDate.get(key) || 0;
+    const hasData = dataByDate.has(key);
+
+    // If we have data for this date, use it (it's already cumulative)
+    if (hasData) {
+      lastKnownBalance = dataByDate.get(key)!.balance;
+    }
+    // If no data, carry forward the previous cumulative balance
 
     return {
-      balance: credits,
+      balance: lastKnownBalance,
       formattedBalance: formatBalance(
-        (credits * Math.pow(10, 18)).toString(),
+        (lastKnownBalance * Math.pow(10, 18)).toString(),
         6
       ),
-      timestamp: dataByDate.has(key) ? key : "",
+      timestamp: hasData ? key : "",
       x: new Date(date),
       dayLabel: getLabel
         ? getLabel(date)
@@ -116,6 +116,7 @@ export function mapCreditsToDateRange(
 }
 
 // New function to aggregate credits by month for year view
+// Takes the LAST cumulative value from each month (not sum)
 export function aggregateCreditsByMonth(
   chartPoints: ChartPoint[]
 ): ChartPoint[] {
@@ -123,26 +124,26 @@ export function aggregateCreditsByMonth(
     return [];
   }
 
-  // Group credits by month
-  const monthlyCredits = new Map<string, number>();
+  // Group by month and keep track of the LAST (cumulative) value for each month
+  const monthlyLastValues = new Map<string, { balance: number; point: ChartPoint }>();
 
   chartPoints.forEach((point) => {
     const month = point.x.getMonth();
     const year = point.x.getFullYear();
     const key = `${year}-${month}`;
 
-    const currentCredits = monthlyCredits.get(key) || 0;
-    monthlyCredits.set(key, currentCredits + point.balance);
+    // Always update to the latest point in this month (which has cumulative value)
+    monthlyLastValues.set(key, { balance: point.balance, point });
   });
 
   // Convert to ChartPoint array
-  return Array.from(monthlyCredits.entries())
-    .map(([key, totalCredits]) => {
+  return Array.from(monthlyLastValues.entries())
+    .map(([key, { balance }]) => {
       const [year, month] = key.split("-").map(Number);
       return {
-        balance: totalCredits,
+        balance: balance,
         formattedBalance: formatBalance(
-          (totalCredits * Math.pow(10, 18)).toString(),
+          (balance * Math.pow(10, 18)).toString(),
           6
         ),
         timestamp: "",

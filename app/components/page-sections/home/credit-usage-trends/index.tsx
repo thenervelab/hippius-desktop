@@ -55,22 +55,24 @@ const CreditUsageTrends: React.FC<{
     );
   }, [chartData, timeRange]);
 
-  // Calculate total credits used based on the selected time range
+  // Calculate ALL-TIME total credits used
+  // Since data is cumulative, the last value in the complete dataset is the total
   const totalCreditsUsed = useMemo(() => {
-    if (!formattedChartData || formattedChartData.length === 0) return "0";
-    // Sum up the balance values from the formatted data (already filtered by time range)
-    const total = formattedChartData.reduce((sum, point) => {
-      return sum + +(point.balance || 0);
-    }, 0);
-    // Format to a readable number with commas
-    return total.toFixed(6);
-  }, [formattedChartData]);
-  // Compute Y‐ticks
+    if (!chartData || chartData.length === 0) return "0";
+    // Get the LAST point from ALL DATA (complete dataset, not filtered by time range)
+    // This contains the all-time cumulative total
+    const lastPoint = chartData[chartData.length - 1];
+    const allTimeTotal = Number(lastPoint.total_balance) / Math.pow(10, 18);
+    return allTimeTotal.toFixed(6);
+  }, [chartData]);
+  // Compute Y‐ticks with minimal padding and more tick marks for better detail
   const yTicks = useMemo(() => {
     if (!formattedChartData.length) return [0, 1];
     const balances = formattedChartData.map((d) => d.balance);
     const max = Math.max(...balances, 0);
-    return getNiceTicksAlways(0, max, 5);
+    // Add very minimal padding (2%) above max and use more ticks (8) for granular display
+    const paddedMax = max > 0 ? max * 1.02 : 1;
+    return getNiceTicksAlways(0, paddedMax, 8);
   }, [formattedChartData]);
 
   // Build X‐labels (strings) depending on selected range
@@ -131,7 +133,7 @@ const CreditUsageTrends: React.FC<{
                 </div>
               ) : (
                 <div className="w-full h-full  relative pr-4">
-                  {/* Total Credits Used Display - Added based on image */}
+                  {/* Total Credits Used Display - Shows cumulative all-time total */}
                   <div className="absolute top-4 left-14 border border-grey-80 rounded bg-white px-2 py-1 z-10">
                     <div className="text-grey-60 text-base mb-1 font-medium">
                       Total Credits Used

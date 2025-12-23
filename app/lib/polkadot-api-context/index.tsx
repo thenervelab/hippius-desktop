@@ -2,14 +2,44 @@
 
 import { useEffect, useCallback, useRef, ReactNode, useState } from "react";
 import { ApiPromise, WsProvider } from "@polkadot/api";
-import { RECONNECT_INTERVAL } from "@/config/constants";
 import { useAtomValue, useSetAtom } from "jotai";
 import { polkadotApiAtom } from "@/lib/global-atoms/polkadotApiAtom";
 import { invoke } from "@tauri-apps/api/core";
 
+// Store for the current endpoint and reconnect function (for manual refresh)
+let globalEndpoint: string | null = null;
+let globalReconnect: ((endpoint: string) => Promise<void>) | null = null;
+let globalReconnectCount = 0; // Track reconnect attempts for backoff
+
 export const usePolkadotApi = () => {
   return useAtomValue(polkadotApiAtom);
 };
+
+/**
+ * Manually trigger a reconnection attempt to the blockchain
+ * Useful for UI button to refresh connection
+ */
+export const usePolkadotReconnect = () => {
+  return useCallback(async () => {
+    if (globalEndpoint && globalReconnect) {
+      console.log("Manual reconnect triggered");
+      globalReconnectCount = 0; // Reset backoff on manual reconnect
+      await globalReconnect(globalEndpoint);
+    } else {
+      console.warn("Reconnect not available yet");
+    }
+  }, []);
+};
+
+/**
+ * Calculate exponential backoff delay with jitter
+ * Starts at 100ms, caps at 5000ms, includes random jitter
+ */
+function getBackoffDelay(attemptCount: number): number {
+  const baseDelay = Math.min(100 * Math.pow(2, attemptCount), 5000);
+  const jitter = Math.random() * 0.1 * baseDelay; // 10% jitter
+  return Math.round(baseDelay + jitter);
+}
 
 export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   const setState = useSetAtom(polkadotApiAtom);
@@ -19,6 +49,8 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
   const wsProviderRef = useRef<WsProvider | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const fallbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Use state instead of refs for connection status to ensure proper reactivity
   const [connectionState, setConnectionState] = useState<{
@@ -74,37 +106,80 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Setup heartbeat to detect dead connections
+  const setupHeartbeat = useCallback(() => {
+    // Clear existing heartbeat
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+    }
+
+    // Check connection health every 2 seconds (aggressive for fast detection)
+    heartbeatIntervalRef.current = setInterval(async () => {
+      try {
+        if (apiRef.current && connectionState.connected) {
+          // Use a lightweight health check via RPC call with strict timeout
+          // This will fail immediately if the connection is dead
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Heartbeat timeout")), 2000)
+          );
+          const versionPromise = apiRef.current.rpc.system.version();
+          await Promise.race([versionPromise, timeoutPromise]);
+          console.log("✓ Heartbeat healthy");
+        }
+      } catch (error) {
+        console.warn("⚠ Heartbeat failed, triggering reconnect:", error);
+        setConnectionState((prev) => ({
+          ...prev,
+          connecting: false,
+          connected: false,
+        }));
+        setState((prev) => ({
+          ...prev,
+          isConnected: false,
+          isConnecting: false,
+        }));
+        // Force immediate reconnection without waiting
+        if (globalReconnect && globalEndpoint) {
+          globalReconnect(globalEndpoint).catch(console.error);
+        }
+      }
+    }, 2000); // 2 second interval for fast detection
+  }, [connectionState.connected]);
+
   const connect = useCallback(
     async (endpoint: string) => {
-      console.log("Connect called with endpoint:", endpoint);
-      console.log("Current connection state:", connectionState);
+      console.log("🔄 Connect called with endpoint:", endpoint);
+      console.log("   Current state:", connectionState);
 
       // Don't try to connect if already connected
       if (connectionState.connected) {
-        console.log("Skipping connection: already connected");
+        console.log("✓ Already connected, skipping");
         return;
       }
 
       // Don't try to connect if already connecting
       if (connectionState.connecting) {
-        console.log("Skipping connection: already connecting");
+        console.log("⏳ Already connecting, skipping");
         return;
       }
 
-      // Clear any pending reconnect
+      // Clear any pending reconnect timers
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      if (fallbackTimeoutRef.current) {
+        clearTimeout(fallbackTimeoutRef.current);
+        fallbackTimeoutRef.current = null;
+      }
 
-      console.log("Starting connection process...");
+      console.log("🚀 Starting connection process... (attempt #", globalReconnectCount + 1, ")");
       setConnectionState((prev) => ({
         ...prev,
         connecting: true,
         initiated: true,
       }));
 
-      // Set isConnecting state immediately
       setState((prev) => ({ ...prev, isConnecting: true }));
 
       // Clean up existing connections
@@ -131,30 +206,49 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         wsProviderRef.current = null;
       }
 
+      let connectionSucceeded = false;
+
       try {
-        console.log("Creating WebSocket provider:", endpoint);
+        console.log("📡 Creating WebSocket provider...");
         const wsProvider = new WsProvider(endpoint);
         wsProviderRef.current = wsProvider;
 
+        // Calculate timeout based on attempt count
+        // First attempt: 5 seconds, increases with retries, caps at 15 seconds
+        const timeoutMs = Math.min(5000 + globalReconnectCount * 2000, 15000);
+        console.log(`   Connection timeout: ${timeoutMs}ms`);
+
         // Create a promise that resolves when connected or rejects on error
         const connectionPromise = new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error("Connection timeout"));
-          }, 30000); // 30 second timeout
+          let timeoutId: NodeJS.Timeout | null = null;
+          let resolved = false;
 
-          wsProvider.on("error", (error) => {
-            console.error("WebSocket error:", error);
-          });
+          const handleError = (error: unknown) => {
+            console.error("❌ WebSocket error:", error);
+            if (timeoutId) clearTimeout(timeoutId);
+            if (!resolved) {
+              resolved = true;
+              reject(error);
+            }
+          };
 
-          wsProvider.on("connected", () => {
-            console.log("WebSocket connected!");
-            clearTimeout(timeout);
-            resolve();
-          });
+          const handleConnected = () => {
+            console.log("✅ WebSocket connected!");
+            if (timeoutId) clearTimeout(timeoutId);
+            if (!resolved) {
+              resolved = true;
+              resolve();
+            }
+          };
 
-          wsProvider.on("disconnected", () => {
-            console.log("WebSocket disconnected!");
-            clearTimeout(timeout);
+          const handleDisconnected = () => {
+            console.log("🔌 WebSocket disconnected!");
+            if (timeoutId) clearTimeout(timeoutId);
+
+            if (!resolved) {
+              resolved = true;
+              reject(new Error("WebSocket disconnected before ready"));
+            }
 
             setConnectionState((prev) => ({
               ...prev,
@@ -164,41 +258,76 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
             setState((prev) => ({
               ...prev,
               isConnected: false,
-              isConnecting: true,
+              isConnecting: false,
             }));
 
-            // Schedule reconnect
-            console.log(`Scheduling reconnect in ${RECONNECT_INTERVAL}ms...`);
+            // Schedule smart reconnect with exponential backoff
+            const delay = getBackoffDelay(globalReconnectCount);
+            console.log(`   Scheduling reconnect in ${delay}ms...`);
+            globalReconnectCount++;
+
             reconnectTimeoutRef.current = setTimeout(() => {
-              // Reset connecting state to allow new connection attempt
               setConnectionState((prev) => ({ ...prev, connecting: false }));
-              connect(endpoint);
-            }, RECONNECT_INTERVAL);
-          });
+              if (globalReconnect) {
+                globalReconnect(endpoint).catch(console.error);
+              }
+            }, delay);
+          };
+
+          timeoutId = setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              reject(new Error(`WebSocket connection timeout after ${Math.min(5000 + globalReconnectCount * 2000, 15000)}ms`));
+            }
+          }, Math.min(5000 + globalReconnectCount * 2000, 15000));
+
+          wsProvider.on("error", handleError);
+          wsProvider.on("connected", handleConnected);
+          wsProvider.on("disconnected", handleDisconnected);
         });
+
+        // Set a fallback timeout that triggers a retry attempt if taking too long
+        // This creates a race between the main connection and a faster fallback
+        fallbackTimeoutRef.current = setTimeout(() => {
+          console.log("⚡ Fallback: Connection taking too long, will retry after timeout expires");
+        }, timeoutMs * 0.7); // 70% of main timeout
 
         // Wait for WebSocket to connect
         await connectionPromise;
+        connectionSucceeded = true;
 
-        console.log("Creating API...");
+        console.log("📦 Creating API...");
         const api = await ApiPromise.create({
           provider: wsProvider,
-          throwOnConnect: true,
+          // Don't wait for connection in create - we already have it
+          throwOnConnect: false,
+          noInitWarn: true,
         });
         apiRef.current = api;
 
-        await api.isReady;
-        console.log("API is ready!");
+        // Initialize subscriptions in the background WITHOUT waiting
+        // This allows the app to be responsive immediately
+        (async () => {
+          try {
+            console.log("⏳ Setting up block subscriptions (background)...");
 
-        // Subscribe to new blocks
-        const unsubscribe = await api.rpc.chain.subscribeNewHeads((header) => {
-          setState((prev) => ({
-            ...prev,
-            blockNumber: BigInt(header.number.toString()),
-          }));
-        });
+            // Start subscriptions without blocking the main connection flow
+            const unsubscribe = await api.rpc.chain.subscribeNewHeads((header) => {
+              setState((prev) => ({
+                ...prev,
+                blockNumber: BigInt(header.number.toString()),
+              }));
+            });
 
-        unsubscribeRef.current = unsubscribe;
+            unsubscribeRef.current = unsubscribe;
+            console.log("✅ Block subscriptions ready!");
+          } catch (error) {
+            console.warn("⚠️ Failed to setup block subscriptions:", error);
+            // Continue anyway - subscriptions are non-critical
+          }
+        })();
+
+        // Mark as connected immediately - don't wait for subscriptions
         setConnectionState((prev) => ({
           ...prev,
           connecting: false,
@@ -212,31 +341,56 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
           isConnecting: false,
         }));
 
-        console.log("Connection established successfully!");
+        // Reset reconnect counter on successful connection
+        globalReconnectCount = 0;
+
+        // Start aggressive heartbeat check
+        setupHeartbeat();
+
+        console.log("🎉 Connection established successfully (ready to use)!");
       } catch (error) {
-        console.error("Connection error:", error);
-        setConnectionState((prev) => ({
-          ...prev,
-          connecting: false,
-          connected: false,
-        }));
+        console.error("❌ Connection error:", error);
 
-        setState((prev) => ({
-          ...prev,
-          isConnected: false,
-          isConnecting: true,
-        }));
+        if (!connectionSucceeded) {
+          setConnectionState((prev) => ({
+            ...prev,
+            connecting: false,
+            connected: false,
+          }));
 
-        // Schedule reconnect on error
-        console.log(`Scheduling reconnect in ${RECONNECT_INTERVAL}ms...`);
-        reconnectTimeoutRef.current = setTimeout(() => {
-          setConnectionState((prev) => ({ ...prev, connecting: false }));
-          connect(endpoint);
-        }, RECONNECT_INTERVAL);
+          setState((prev) => ({
+            ...prev,
+            isConnected: false,
+            isConnecting: false,
+          }));
+
+          // Schedule smart reconnect with exponential backoff
+          const delay = getBackoffDelay(globalReconnectCount);
+          console.log(`   Scheduling reconnect in ${delay}ms... (exponential backoff)`);
+          globalReconnectCount++;
+
+          reconnectTimeoutRef.current = setTimeout(() => {
+            setConnectionState((prev) => ({ ...prev, connecting: false }));
+            if (globalReconnect) {
+              globalReconnect(endpoint).catch(console.error);
+            }
+          }, delay);
+        }
+      } finally {
+        if (fallbackTimeoutRef.current) {
+          clearTimeout(fallbackTimeoutRef.current);
+          fallbackTimeoutRef.current = null;
+        }
       }
     },
-    [setState, connectionState.connected, connectionState.connecting]
+    [setState, setupHeartbeat]
   );
+
+  // Store endpoint and reconnect function globally for manual refresh
+  useEffect(() => {
+    globalEndpoint = wssEndpoint;
+    globalReconnect = connect;
+  }, [wssEndpoint, connect]);
 
   // Connect when endpoint is available
   useEffect(() => {
@@ -269,6 +423,16 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
+      }
+
+      if (fallbackTimeoutRef.current) {
+        clearTimeout(fallbackTimeoutRef.current);
+        fallbackTimeoutRef.current = null;
+      }
+
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
       }
 
       if (unsubscribeRef.current) {
