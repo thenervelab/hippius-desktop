@@ -26,7 +26,7 @@ const timeRangeOptions: Option[] = [
   { value: "last7days", label: "Last 7 Days" },
   { value: "last30days", label: "Last 30 Days" },
   { value: "last60days", label: "Last 60 Days" },
-  { value: "year", label: "This Year" },
+  { value: "year", label: "Last 12 Months" },
 ];
 
 // === Line + Area Colors ===

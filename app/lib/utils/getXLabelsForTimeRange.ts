@@ -53,16 +53,12 @@ export function getXLabelsForTimeRange(
       }
     }
   } else if (timeRange === "year") {
-    const baseYear =
-      chartData && chartData.length
-        ? new Date(
-            chartData[chartData.length - 1].processed_timestamp
-          ).getFullYear()
-        : new Date().getFullYear();
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const monthsToShow = baseYear === currentYear ? now.getMonth() + 1 : 12;
-    xLabels = MONTHS.slice(0, monthsToShow);
+    // For year range, use just the month name from bandLabel (remove year)
+    xLabels = formattedChartData.map((point) => {
+      const bandLabel = point.bandLabel || "";
+      // Extract just the month name (remove the year part like "'25")
+      return bandLabel.split(" ")[0];
+    });
   }
 
   return xLabels;
