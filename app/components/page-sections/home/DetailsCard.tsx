@@ -1,5 +1,7 @@
 import { Check } from "lucide-react";
-import { AbstractIconWrapper, Icons } from "@/components/ui";
+import { ReactNode } from "react";
+import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
+import { openLinkByKey } from "@/app/lib/utils/links";
 import { IconComponent } from "@/app/lib/types";
 import { cn } from "@/app/lib/utils";
 import { useState } from "react";
@@ -10,7 +12,7 @@ interface DetailsCardProps {
   icon: IconComponent;
   title: string;
   value: string | number;
-  subtitle?: string;
+  subtitle?: string | ReactNode;
   showStatus?: boolean;
   isOnline?: boolean;
   peerId?: string;
@@ -18,6 +20,7 @@ interface DetailsCardProps {
   speed?: string;
   isIncrease?: boolean;
   showRefresh?: boolean;
+  showAddCreditsButton?: boolean;
   onRefresh?: () => void;
   isLoading?: boolean;
 }
@@ -34,6 +37,7 @@ export default function DetailsCard({
   speed,
   isIncrease = false,
   showRefresh = false,
+  showAddCreditsButton = false,
   onRefresh,
   isLoading = false,
 }: DetailsCardProps) {
@@ -53,38 +57,50 @@ export default function DetailsCard({
 
   return (
     <div className="bg-white p-3 rounded-lg border border-grey-80 shadow-sm">
-      <div className="flex justify-between items-start">
+      <div className="flex justify-between items-center">
         <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">
           <Icon className="absolute text-primary-40 size-4 sm:size-5" />
         </AbstractIconWrapper>
-        {showRefresh ? (
-          <button
-            onClick={onRefresh}
-            disabled={isLoading}
-            className={cn(
-              "size-6 rounded border border-grey-80 bg-grey-90 flex items-center justify-center transition-all duration-200",
-              isLoading
-                ? "cursor-not-allowed opacity-50"
-                : "hover:bg-grey-80 hover:border-grey-70"
-            )}
-            title="Refresh Credits"
+        <div className="flex items-center gap-2">
+          {showAddCreditsButton && <CardButton
+            className="h-9 w-fit p-1 mr-0 pr-0"
+            onClick={() => openLinkByKey("CREDITS")}
           >
-            <Icons.Refresh
+            <div className="flex items-center gap-2 text-grey-100 text-base font-medium p-2">
+              <Icons.AddCircle className="size-3" />
+              Add Credits
+            </div>
+          </CardButton>}
+          {showRefresh ? (
+            <button
+              onClick={onRefresh}
+              disabled={isLoading}
               className={cn(
-                "size-4 text-grey-60",
-                isLoading && "animate-spin-reverse-really-fast"
+                "size-6 rounded border border-grey-80 bg-grey-90 flex items-center justify-center transition-all duration-200",
+                isLoading
+                  ? "cursor-not-allowed opacity-50"
+                  : "hover:bg-grey-80 hover:border-grey-70"
               )}
-            />
-          </button>
-        ) : info ? (
-          <div className="size-6 rounded border border-grey-80 bg-grey-90 flex items-center justify-center">
-            <InfoTooltip iconColor="text-grey-60">{info}</InfoTooltip>
-          </div>
-        ) : null}
+              title="Refresh Credits"
+            >
+              <Icons.Refresh
+                className={cn(
+                  "size-4 text-grey-60",
+                  isLoading && "animate-spin-reverse-really-fast"
+                )}
+              />
+            </button>
+          ) : info ? (
+            <div className="size-6 rounded border border-grey-80 bg-grey-90 flex items-center justify-center">
+              <InfoTooltip iconColor="text-grey-60">{info}</InfoTooltip>
+            </div>
+          ) : null}
+
+        </div>
       </div>
       <div className="mt-4">
         <p className="text-base font-medium text-grey-60 mb-2">{title}</p>
-        <div className="flex gap-2 items-baseline ">
+        <div className={cn("flex gap-2 items-baseline", typeof subtitle !== 'string' && "justify-between")}>
           {showStatus && (
             <>
               {/* Outer circle ring */}
@@ -105,10 +121,12 @@ export default function DetailsCard({
             </>
           )}
           <span className="text-2xl text-grey-10 font-medium">{value}</span>
-          {subtitle && (
-            <span className={` text-xs font-medium text-grey-60 leading-5 `}>
+          {subtitle && typeof subtitle === 'string' ? (
+            <span className="text-xs font-medium text-grey-60 leading-5">
               {subtitle}
             </span>
+          ) : (
+            subtitle && <div>{subtitle}</div>
           )}
 
           {peerId && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, ReactNode } from "react";
 import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
@@ -99,7 +99,7 @@ export default function DetailList() {
     return `≈${tbStr} TB/mo Storage`;
   };
 
-  const getCreditsSubtitle = () => {
+  const getCreditsSubtitle = (): ReactNode => {
     if (credits !== undefined) {
       const numCredits = getCreditsAsNumber(credits);
       if (numCredits > 0) {
@@ -139,6 +139,7 @@ export default function DetailList() {
       value: getCreditsValue(),
       subtitle: getCreditsSubtitle(),
       showRefresh: true,
+      showAddCreditsButton: (!isCreditsLoading && (credits === undefined || getCreditsAsNumber(credits) === 0)) ? true : false,
       onRefresh: handleRefreshCredits,
       isLoading: isRefreshingCredits,
     },
@@ -180,6 +181,7 @@ export default function DetailList() {
           showRefresh={card.showRefresh}
           onRefresh={card.onRefresh}
           isLoading={card.isLoading}
+          showAddCreditsButton={card.showAddCreditsButton}
         />
       ))}
     </div>

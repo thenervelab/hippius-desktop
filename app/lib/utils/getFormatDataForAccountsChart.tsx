@@ -183,40 +183,55 @@ export const formatAccountsForChartByRange = (
 
   if (range === "year") {
     // Create a monthly data map instead of using daily data
-    const monthlyData: Map<number, ChartPoint> = new Map();
+    const monthlyData: Map<string, ChartPoint> = new Map();
 
-    // Process each data point to group by month
+    // Process each data point to group by month-year
     chartPoints.forEach((point) => {
       const month = point.x.getMonth();
+      const year = point.x.getFullYear();
+      const key = `${year}-${String(month).padStart(2, "0")}`;
 
       if (
-        !monthlyData.has(month) ||
-        point.x > (monthlyData.get(month)?.x || new Date(0))
+        !monthlyData.has(key) ||
+        point.x > (monthlyData.get(key)?.x || new Date(0))
       ) {
         // Use the most recent data point for each month
-        monthlyData.set(month, {
-          ...point,
-          bandLabel: MONTHS_FULL[month],
-        });
+        monthlyData.set(key, point);
       }
     });
 
-    // Create a point for each month of the year up to current month
+    // Generate exactly 12 months of data, going back from today
     const result: ChartPoint[] = [];
-    for (let m = 0; m <= now.getMonth(); m++) {
-      const monthDate = new Date(now.getFullYear(), m, 1);
+    let lastPoint: ChartPoint | null = null;
+
+    for (let i = 11; i >= 0; i--) {
+      // Calculate date by working with year and month separately
+      let targetYear = now.getFullYear();
+      let targetMonth = now.getMonth() - i;
+
+      // Handle month wrapping across year boundaries
+      if (targetMonth < 0) {
+        targetYear += Math.floor(targetMonth / 12);
+        targetMonth = targetMonth % 12;
+        if (targetMonth < 0) targetMonth += 12;
+      }
+
+      const key = `${targetYear}-${String(targetMonth).padStart(2, "0")}`;
+      const monthDate = new Date(targetYear, targetMonth, 1);
+      const monthLabel = MONTHS[targetMonth];
 
       // If we have data for this month, use it
-      if (monthlyData.has(m)) {
-        const monthPoint = monthlyData.get(m)!;
+      if (monthlyData.has(key)) {
+        const monthPoint = monthlyData.get(key)!;
+        lastPoint = monthPoint;
         result.push({
           ...monthPoint,
-          bandLabel: MONTHS_FULL[m],
-          dayLabel: MONTHS_FULL[m],
+          x: monthDate,
+          bandLabel: monthLabel,
+          dayLabel: monthLabel,
         });
       } else {
         // Otherwise carry forward from the previous month
-        const lastPoint = result.length > 0 ? result[result.length - 1] : null;
         result.push({
           x: monthDate,
           balance: lastPoint ? lastPoint.balance : 0,
@@ -224,8 +239,8 @@ export const formatAccountsForChartByRange = (
           credit: lastPoint ? lastPoint.credit : 0,
           formattedCredit: lastPoint ? lastPoint.formattedCredit : "0",
           timestamp: lastPoint ? lastPoint.timestamp : "",
-          dayLabel: MONTHS_FULL[m],
-          bandLabel: MONTHS_FULL[m],
+          dayLabel: monthLabel,
+          bandLabel: monthLabel,
         });
       }
     }

@@ -194,61 +194,80 @@ export const formatStorageForChartByRange = (
   }
 
   if (range === "year") {
+    // Last exactly 12 months from today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const currentYear = today.getFullYear();
-    const startOfYear = new Date(currentYear, 0, 1);
-    const fullYearDates = getAllDatesInRange(startOfYear, today);
 
-    // Map daily usage data to full year dates (fill missing days with zero)
+    const twelveMonthsAgo = new Date(today);
+    twelveMonthsAgo.setFullYear(today.getFullYear() - 1);
+
+    const last12MonthsDates = getAllDatesInRange(twelveMonthsAgo, today);
+
+    // Map daily usage data to last 12 months dates (fill missing days with forward-fill)
     const dailyUsagePoints = mapBytesToDateRange(
       chartPoints,
-      fullYearDates,
+      last12MonthsDates,
       (date) => MONTHS[date.getMonth()]
     );
 
     // Aggregate daily usage by month
-    return aggregateBytesByMonthFullYear(dailyUsagePoints);
+    return aggregateBytesByMonthLast12Months(dailyUsagePoints);
   }
 
   return chartPoints;
 };
 
-// Get the last (most recent) value for each month - no summing
-function aggregateBytesByMonthFullYear(points: ChartPoint[]): ChartPoint[] {
+// Get the last (most recent) value for each month for the last 12 months
+// Ensures all 12 months are represented even if some have no data
+function aggregateBytesByMonthLast12Months(points: ChartPoint[]): ChartPoint[] {
   if (points.length === 0) return [];
 
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth();
+  const today = new Date();
 
-  // Store the last value seen for each month (latest day of the month)
-  const monthlyLastValue = new Map<number, number>();
+  // Store the last value seen for each month
+  const monthlyLastValue = new Map<string, number>();
 
   points.forEach((point) => {
     const month = point.x.getMonth();
+    const year = point.x.getFullYear();
+    const key = `${year}-${String(month).padStart(2, "0")}`;
     // Always update with the current value - the last iteration will be the latest day
-    monthlyLastValue.set(month, point.balance);
+    monthlyLastValue.set(key, point.balance);
   });
 
-  // Create monthly data for all months from January to current month
+  // Generate exactly 12 months of data, going back from today
   const monthlyData: ChartPoint[] = [];
   let lastKnownValue = 0;
 
-  for (let monthIndex = 0; monthIndex <= currentMonth; monthIndex++) {
-    // Use the last value of the month if available, otherwise forward-fill
-    const monthValue = monthlyLastValue.has(monthIndex)
-      ? monthlyLastValue.get(monthIndex)!
-      : lastKnownValue;
+  for (let i = 11; i >= 0; i--) {
+    // Calculate date by working with year and month separately
+    let targetYear = today.getFullYear();
+    let targetMonth = today.getMonth() - i;
 
-    lastKnownValue = monthValue;
+    // Handle month wrapping across year boundaries
+    if (targetMonth < 0) {
+      targetYear += Math.floor(targetMonth / 12);
+      targetMonth = targetMonth % 12;
+      if (targetMonth < 0) targetMonth += 12;
+    }
+
+    const key = `${targetYear}-${String(targetMonth).padStart(2, "0")}`;
+
+    // Use actual value if available, otherwise carry forward last known
+    if (monthlyLastValue.has(key)) {
+      lastKnownValue = monthlyLastValue.get(key)!;
+    }
+
+    const monthLabel = MONTHS[targetMonth];
+    const monthDate = new Date(targetYear, targetMonth, 1);
 
     monthlyData.push({
-      x: new Date(currentYear, monthIndex, 1),
-      balance: monthValue,
-      formattedBalance: formatBytes(monthValue),
-      timestamp: normalizeDate(new Date(currentYear, monthIndex, 1)),
-      dayLabel: MONTHS_FULL[monthIndex],
-      bandLabel: MONTHS_FULL[monthIndex],
+      x: monthDate,
+      balance: lastKnownValue,
+      formattedBalance: formatBytes(lastKnownValue),
+      timestamp: normalizeDate(monthDate),
+      dayLabel: monthLabel,
+      bandLabel: monthLabel,
     });
   }
 

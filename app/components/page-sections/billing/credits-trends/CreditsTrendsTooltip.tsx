@@ -13,13 +13,13 @@ const CreditsTrendsTooltip: React.FC<{
 
   // date line
   let dateDisplay = "";
-  if (datum.bandLabel) {
-    dateDisplay = datum.bandLabel;
-  } else if (datum.x instanceof Date) {
+  if (datum.x instanceof Date) {
     // Format based on time range
     if (timeRange === "last7days") {
       dateDisplay = datum.x.toLocaleDateString("en-US", {
         weekday: "long",
+        month: "short",
+        day: "numeric",
       });
     } else if (timeRange === "year") {
       dateDisplay = datum.x.toLocaleDateString("en-US", {
@@ -33,6 +33,8 @@ const CreditsTrendsTooltip: React.FC<{
         year: "numeric",
       });
     }
+  } else if (datum.bandLabel) {
+    dateDisplay = datum.bandLabel;
   }
 
   return (

@@ -117,6 +117,7 @@ export function mapCreditsToDateRange(
 
 // New function to aggregate credits by month for year view
 // Takes the LAST cumulative value from each month (not sum)
+// Ensures all 12 months are represented even if some have no data
 export function aggregateCreditsByMonth(
   chartPoints: ChartPoint[]
 ): ChartPoint[] {
@@ -124,35 +125,60 @@ export function aggregateCreditsByMonth(
     return [];
   }
 
-  // Group by month and keep track of the LAST (cumulative) value for each month
-  const monthlyLastValues = new Map<string, { balance: number; point: ChartPoint }>();
+  const today = new Date();
+
+  // Group by month-year and keep track of the LAST (cumulative) value for each month
+  const monthlyLastValues = new Map<string, number>();
 
   chartPoints.forEach((point) => {
     const month = point.x.getMonth();
     const year = point.x.getFullYear();
-    const key = `${year}-${month}`;
+    const key = `${year}-${String(month).padStart(2, "0")}`;
 
     // Always update to the latest point in this month (which has cumulative value)
-    monthlyLastValues.set(key, { balance: point.balance, point });
+    monthlyLastValues.set(key, point.balance);
   });
 
-  // Convert to ChartPoint array
-  return Array.from(monthlyLastValues.entries())
-    .map(([key, { balance }]) => {
-      const [year, month] = key.split("-").map(Number);
-      return {
-        balance: balance,
-        formattedBalance: formatBalance(
-          (balance * Math.pow(10, 18)).toString(),
-          6
-        ),
-        timestamp: "",
-        x: new Date(year, month, 1),
-        dayLabel: MONTHS_FULL[month],
-        bandLabel: MONTHS_FULL[month],
-      };
-    })
-    .sort((a, b) => a.x.getTime() - b.x.getTime());
+  // Generate exactly 12 months of data, going back from today
+  const monthlyData: ChartPoint[] = [];
+  let lastKnownBalance = 0;
+
+  for (let i = 11; i >= 0; i--) {
+    // Calculate date by working with year and month separately
+    let targetYear = today.getFullYear();
+    let targetMonth = today.getMonth() - i;
+
+    // Handle month wrapping across year boundaries
+    if (targetMonth < 0) {
+      targetYear += Math.floor(targetMonth / 12);
+      targetMonth = targetMonth % 12;
+      if (targetMonth < 0) targetMonth += 12;
+    }
+
+    const key = `${targetYear}-${String(targetMonth).padStart(2, "0")}`;
+
+    // Use actual value if available, otherwise carry forward last known
+    if (monthlyLastValues.has(key)) {
+      lastKnownBalance = monthlyLastValues.get(key)!;
+    }
+
+    const monthLabel = MONTHS[targetMonth];
+    const monthDate = new Date(targetYear, targetMonth, 1);
+
+    monthlyData.push({
+      balance: lastKnownBalance,
+      formattedBalance: formatBalance(
+        (lastKnownBalance * Math.pow(10, 18)).toString(),
+        6
+      ),
+      timestamp: "",
+      x: monthDate,
+      dayLabel: monthLabel,
+      bandLabel: monthLabel,
+    });
+  }
+
+  return monthlyData;
 }
 
 export const formatAccountsForChartByRange = (
@@ -234,16 +260,18 @@ export const formatAccountsForChartByRange = (
   }
 
   if (range === "year") {
-    const year = now.getFullYear();
-    const start = new Date(year, 0, 1);
+    // Last exactly 12 months from today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    // Get all daily data for the year
-    const yearDates = getAllDatesInRange(start, today);
+    const twelveMonthsAgo = new Date(today);
+    twelveMonthsAgo.setFullYear(today.getFullYear() - 1);
+
+    // Get all daily data for the last 12 months
+    const last12MonthsDates = getAllDatesInRange(twelveMonthsAgo, today);
     const dailyChartPoints = mapCreditsToDateRange(
       chartPoints,
-      yearDates,
+      last12MonthsDates,
       (date) => MONTHS[date.getMonth()]
     );
 
