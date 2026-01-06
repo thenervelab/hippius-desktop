@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import {
   Icons,
   Select,
-  LineChart,
+  AreaLineChart,
   AbstractIconWrapper,
   ChartGridOverlay,
 } from "@/components/ui";
@@ -15,16 +15,22 @@ import {
 import { InView } from "react-intersection-observer";
 
 import BalanceTrendsTooltip from "./CreditsTrendsTooltip";
-import { COLORS } from "./constants";
 import { WalletAdd } from "@/app/components/ui/icons";
 import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
 import { getXLabelsForTimeRange } from "@/app/lib/utils/getXLabelsForTimeRange";
+
+// === Line + Area Colors ===
+const COLORS = {
+  line: "#2563eb",
+  area: "url(#area-gradient)", // Use the gradient defined in AreaLineChart
+};
+
 
 const timeRangeOptions: Option[] = [
   { value: "last7days", label: "Last 7 Days" },
   { value: "last30days", label: "Last 30 Days" },
   { value: "last60days", label: "Last 60 Days" },
-  { value: "year", label: "This Year" },
+  { value: "year", label: "Last 12 Months" },
 ];
 
 const CreditsTrends: React.FC<{
@@ -59,9 +65,8 @@ const CreditsTrends: React.FC<{
       {({ ref }) => (
         <div
           ref={ref}
-          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${
-            className || ""
-          }`}
+          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${className || ""
+            }`}
         >
           <div className="flex justify-between mb-3.5">
             <div className="flex gap-4 items-center">
@@ -107,10 +112,18 @@ const CreditsTrends: React.FC<{
                     bgClass="bg-[url('/wallet-chart-grid.png')]"
                     marginClasses="mt-[36px] ml-[43px] mb-[30px] mr-[21px]"
                   />
-                  <LineChart
+                  <AreaLineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
-                    className="w-full h-full"
                     data={formattedChartData}
+                    plots={[
+                      {
+                        dataKey: "credit",
+                        xAccessor: (d: ChartPoint) => d.bandLabel ?? d.x,
+                        yAccessor: (d: ChartPoint) => d.credit,
+                        lineColor: COLORS.line,
+                        areaColor: COLORS.area,
+                      },
+                    ]}
                     xScaleType="band"
                     yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
                     margin={{ top: 20, left: 45, bottom: 30, right: 5 }}
@@ -119,6 +132,9 @@ const CreditsTrends: React.FC<{
                     xAxisProps={{
                       numTicks: xLabels.length,
                       tickFormat: (_, i) => xLabels[i] || "",
+                      label: "",
+                      hideTicks: false,
+                      hideAxisLine: false,
                       tickLabelProps: () => ({
                         fontSize: 10,
                         fill: "#6B7280",
@@ -129,6 +145,7 @@ const CreditsTrends: React.FC<{
                     yAxisProps={{
                       numTicks: yTicks.length,
                       tickValues: yTicks,
+                      label: "",
                       tickFormat: (v) => {
                         const n = Number(v);
                         if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
@@ -144,14 +161,6 @@ const CreditsTrends: React.FC<{
                         dx: -2,
                       }),
                     }}
-                    plots={[
-                      {
-                        dataKey: "credit",
-                        xAccessor: (d: ChartPoint) => d.bandLabel ?? d.x,
-                        yAccessor: (d: ChartPoint) => d.credit,
-                        lineColor: COLORS.credit,
-                      },
-                    ]}
                     renderTooltip={(td) => (
                       <BalanceTrendsTooltip tooltipData={td} timeRange={timeRange} />
                     )}
