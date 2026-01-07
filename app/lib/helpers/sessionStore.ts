@@ -9,7 +9,7 @@ const FOREVER_MS = 1000 * 60 * 60 * 24 * 365 * 100;
 
 // API/AUTH constants and helpers
 export const API_CONFIG = {
-  baseUrl: process.env.NEXT_PUBLIC_API_URL || "https://api.hippius.com",
+  baseUrl: "https://api.hippius.com",
   billing: {
     transactions: "/api/billing/transactions/",
     activeSubscription: "/api/billing/stripe/active-subscription/",
