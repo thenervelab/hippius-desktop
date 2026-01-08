@@ -28,7 +28,6 @@ import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
-import { useTokenValidation } from "./hooks/useTokenValidation";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
 
 interface WalletContextType {
@@ -591,15 +590,6 @@ export function WalletAuthProvider({
   };
 
   useTrayInit(polkadotAddress || "");
-
-  // Validate token on route changes and periodically
-  useTokenValidation(isAuthenticated, {
-    skipPaths: ["/login", "/auth/callback"],
-    onTokenInvalid: async () => {
-      console.error("[WalletAuth] Token invalid via route change, logging out");
-      await logout("/login");
-    },
-  });
 
   return (
     <WalletContext.Provider
