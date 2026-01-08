@@ -117,18 +117,6 @@ export default function DetailList() {
     return filesData?.files.length || 0;
   };
 
-  const getPrivateFiles = () => {
-    if (isFilesLoading) return "Loading...";
-    if (filesError) return "Error";
-    return filesData?.files.filter(f => f.type?.toLowerCase() === "private").length || 0;
-  };
-
-  const getPublicFiles = () => {
-    if (isFilesLoading) return "Loading...";
-    if (filesError) return "Error";
-    return filesData?.files.filter(f => f.type?.toLowerCase() === "public").length || 0;
-  };
-
 
 
   const detailCards = [
@@ -148,22 +136,6 @@ export default function DetailList() {
       icon: Icons.Document,
       title: "Total Files",
       value: getTotalFiles(),
-      showRefresh: false,
-      isLoading: isFilesLoading,
-    },
-    {
-      id: "private-files",
-      icon: Icons.ShieldSecurity,
-      title: "Private Files",
-      value: getPrivateFiles(),
-      showRefresh: false,
-      isLoading: isFilesLoading,
-    },
-    {
-      id: "public-files",
-      icon: Icons.FolderOpen,
-      title: "Public Files",
-      value: getPublicFiles(),
       showRefresh: false,
       isLoading: isFilesLoading,
     },

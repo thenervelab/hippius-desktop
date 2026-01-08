@@ -4,9 +4,7 @@ import SectionHeader from "./SectionHeader";
 import SyncFolderSelector from "@/app/components/page-sections/files/SyncFolderSelector";
 import {
   getPrivateSyncPath,
-  getPublicSyncPath,
-  setPrivateSyncPath,
-  setPublicSyncPath
+  setPrivateSyncPath
 } from "@/app/lib/utils/syncPathUtils";
 import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import { toast } from "sonner";
@@ -21,9 +19,6 @@ const UpdateSyncFolder: React.FC = () => {
     useState("");
   const [selectedPrivateFolderName, setSelectedPrivateFolderName] =
     useState("");
-  const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState("");
-  const [selectedPublicFolderName, setSelectedPublicFolderName] = useState("");
-  const [isPublicFolderSelection, setIsPublicFolderSelection] = useState(false);
   const { polkadotAddress, oauthSession } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
   const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
@@ -44,27 +39,9 @@ const UpdateSyncFolder: React.FC = () => {
     })();
   }, []);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const publicfolderPath = await getPublicSyncPath();
-        setSelectedPublicFolderPath(publicfolderPath);
-        setSelectedPublicFolderName(
-          publicfolderPath.split(/[\\/]/).pop() || ""
-        );
-      } catch {
-        console.error("Failed to load sync folder");
-      }
-    })();
-  }, []);
-
   const handlePrivateFolderSelected = async (p: string) => {
     try {
       console.log("handlePrivateFolderSelected", p);
-      if (p === selectedPublicFolderPath) {
-        toast.error("Private sync folder cannot be the same as public sync folder");
-        return;
-      }
       if (!p) {
         toast.error("Please select a valid folder for private sync");
         return;
@@ -86,40 +63,6 @@ const UpdateSyncFolder: React.FC = () => {
     }
   };
 
-  const handlePublicFolderSelected = async (p: string) => {
-    try {
-      console.log("handlePublicFolderSelected", p);
-      if (p === selectedPrivateFolderPath) {
-        toast.error("Public sync folder cannot be the same as private sync folder");
-        return;
-      }
-      if (!p) {
-        toast.error("Please select a valid folder for public sync");
-        return;
-      }
-
-      if (!polkadotAddress) {
-        toast.error("Wallet authentication is required");
-        return;
-      }
-
-      await setPublicSyncPath(p, polkadotAddress, oauthSession?.token);
-      setSelectedPublicFolderPath(p);
-      setSelectedPublicFolderName(p.split(/[\\/]/).pop() || "");
-      toast.success("Public sync folder updated, syncing is now in progress.");
-      setShowSelector(false);
-      // Trigger files page refresh
-      triggerSyncPathRefresh((prev) => prev + 1);
-    } catch {
-      toast.error("Failed to update public sync folder");
-    }
-  };
-
-  const openFolderSelection = (isPublic: boolean) => {
-    setIsPublicFolderSelection(isPublic);
-    setShowSelector(true);
-  };
-
   const handleBackClick = () => {
     setShowSelector(false);
   };
@@ -134,17 +77,10 @@ const UpdateSyncFolder: React.FC = () => {
     setIsStoppingSync(true);
 
     try {
-      if (stopSyncTarget === "private") {
-        await setPrivateSyncPath("", polkadotAddress, oauthSession?.token);
-        setSelectedPrivateFolderPath("");
-        setSelectedPrivateFolderName("");
-        toast.success("Private folder syncing stopped");
-      } else {
-        await setPublicSyncPath("", polkadotAddress, oauthSession?.token);
-        setSelectedPublicFolderPath("");
-        setSelectedPublicFolderName("");
-        toast.success("Public folder syncing stopped");
-      }
+      await setPrivateSyncPath("", polkadotAddress, oauthSession?.token);
+      setSelectedPrivateFolderPath("");
+      setSelectedPrivateFolderName("");
+      toast.success("Private folder syncing stopped");
       setStopSyncTarget(null);
       // Trigger files page refresh
       triggerSyncPathRefresh((prev) => prev + 1);
@@ -182,8 +118,8 @@ const UpdateSyncFolder: React.FC = () => {
                   <SectionHeader
                     Icon={Icons.File2}
                     title="Change your sync folder"
-                    subtitle="Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
-                    info="Sync folders connect your local storage with our decentralized network, providing both convenience and blockchain-backed security for your files."
+                    subtitle="Choose a folder to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
+                    info="Sync folder connects your local storage with our decentralized network, providing both convenience and blockchain-backed security for your files."
                   />
                   <div className="flex justify-between p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
                     {selectedPrivateFolderName ? (
@@ -220,56 +156,10 @@ const UpdateSyncFolder: React.FC = () => {
                       <CardButton
                         className="max-w-[160px] h-10"
                         variant="primary"
-                        onClick={() => openFolderSelection(false)}
+                        onClick={() => setShowSelector(true)}
                       >
                         <span className="text-base leading-4 font-medium">
                           {selectedPrivateFolderName
-                            ? "Change Folder"
-                            : "Select Folder"}
-                        </span>
-                      </CardButton>
-                    </div>
-                  </div>
-                  <div className="flex justify-between p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80">
-                    {selectedPublicFolderName ? (
-                      <div className="flex flex-col">
-                        <div className="flex">
-                          <Icons.Folder className="size-4 mr-[6px] text-grey-40" />
-                          <span className="font-medium text-base text-grey-40 -mt-0.5">
-                            {selectedPublicFolderName}
-                          </span>
-                          <div className="-mt-1 ml-4 px-2 py-1 text-xs rounded bg-success-80 text-success-40 font-medium border border-grey-80">
-                            Public
-                          </div>
-                        </div>
-
-                        <p className="text-sm text-grey-60 mt-1 ml-6">
-                          {selectedPublicFolderPath}
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="flex items-center text-sm text-grey-60">
-                        No public sync folder set. You can set a public sync
-                        folder to share files with others.
-                      </div>
-                    )}
-                    <div className="flex self-start gap-3">
-                      {selectedPublicFolderPath && (
-                        <button
-                          onClick={() => setStopSyncTarget("public")}
-                          className="h-10 border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
-                        >
-                          Stop Syncing
-                        </button>
-
-                      )}
-                      <CardButton
-                        className="max-w-[160px] h-10"
-                        variant="primary"
-                        onClick={() => openFolderSelection(true)}
-                      >
-                        <span className="text-base leading-4 font-medium">
-                          {selectedPublicFolderName
                             ? "Change Folder"
                             : "Select Folder"}
                         </span>
@@ -296,18 +186,10 @@ const UpdateSyncFolder: React.FC = () => {
                 className="delay-300 w-full"
               >
                 <SyncFolderSelector
-                  initialPath={
-                    isPublicFolderSelection
-                      ? selectedPublicFolderPath
-                      : selectedPrivateFolderPath
-                  }
+                  initialPath={selectedPrivateFolderPath}
                   handleBackClick={handleBackClick}
                   isFromSettingsPage
-                  onFolderSelected={(path) =>
-                    isPublicFolderSelection
-                      ? handlePublicFolderSelected(path)
-                      : handlePrivateFolderSelected(path)
-                  }
+                  onFolderSelected={handlePrivateFolderSelected}
                 />
               </RevealTextLine>
             </div>
@@ -317,9 +199,8 @@ const UpdateSyncFolder: React.FC = () => {
             open={stopSyncTarget !== null}
             onClose={() => setStopSyncTarget(null)}
             onConfirm={handleStopSyncConfirm}
-            folderType={stopSyncTarget ?? "private"}
-            folderName={stopSyncTarget === "private" ? selectedPrivateFolderName : selectedPublicFolderName}
-            folderPath={stopSyncTarget === "private" ? selectedPrivateFolderPath : selectedPublicFolderPath}
+            folderName={selectedPrivateFolderName}
+            folderPath={selectedPrivateFolderPath}
             loading={isStoppingSync}
           />
         </div>
