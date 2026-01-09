@@ -21,14 +21,14 @@ export default function ResponsiveContent({
           collapsed ? "ml-[60px]" : "ml-[186px]"
         )}
       >
-        <div className="bg-white z-10 justify-between flex">
+        <div className="bg-white z-[100] justify-between flex relative">
           <HeaderText />
           <div className="flex -mt-2 gap-2 items-center justify-center">
             <BlockChainStats />
             <ProfileCard />
           </div>
         </div>
-        <div className="w-full">{children}</div>
+        <div className="w-full relative z-0">{children}</div>
       </main>
     </div>
   );
