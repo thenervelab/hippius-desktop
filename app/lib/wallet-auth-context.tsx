@@ -19,6 +19,7 @@ import {
   getSession,
   clearSession,
   clearApiAuth,
+  getApiAuth,
 } from "./helpers/sessionStore";
 
 import { useRouter } from "next/navigation";
@@ -56,6 +57,32 @@ interface WalletContextType {
   sessionTimeRemaining: number | null;
 }
 const MAX_DELAY = 2_147_483_647; // ~24.8 days
+
+// Helper function to validate token
+const isTokenValid = (token: string | null | undefined, expiresAt?: string): boolean => {
+  // Check if token exists and is not empty
+  if (!token || token.trim() === "") {
+    return false;
+  }
+
+  // Check if expiration date is provided and has passed
+  if (expiresAt) {
+    try {
+      const expirationTime = new Date(expiresAt).getTime();
+      const currentTime = Date.now();
+
+      if (currentTime >= expirationTime) {
+        console.log("[WalletAuth] Token has expired");
+        return false;
+      }
+    } catch (err) {
+      console.error("[WalletAuth] Failed to parse expiration date:", err);
+      return false;
+    }
+  }
+
+  return true;
+};
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
@@ -109,10 +136,12 @@ export function WalletAuthProvider({
         await clearSession();
         await clearApiAuth();
 
-        // Clear OAuth session if present
+        // Clear OAuth session and token if present
         if (typeof window !== "undefined") {
           localStorage.removeItem("hippius_oauth_session");
           localStorage.removeItem("hippius_oauth_session_expiry");
+          localStorage.removeItem("hippius_token");
+          localStorage.removeItem("hippius_token_expiry");
         }
       } catch (error) {
         console.error("Failed to cleanup sync on logout:", error);
@@ -183,6 +212,18 @@ export function WalletAuthProvider({
           if (Date.now() < expiryTime) {
             try {
               const oauthSessionData = JSON.parse(storedSession);
+
+              // Validate token before restoring session
+              if (!isTokenValid(oauthSessionData.token, oauthSessionData.expiresAt)) {
+                console.log("[WalletAuth] Token is invalid or expired, clearing session");
+                localStorage.removeItem("hippius_oauth_session");
+                localStorage.removeItem("hippius_oauth_session_expiry");
+                localStorage.removeItem("hippius_token");
+                localStorage.removeItem("hippius_token_expiry");
+                await logout("/login");
+                return;
+              }
+
               console.log(
                 "[WalletAuth] Restoring OAuth session:",
                 oauthSessionData.username
@@ -255,11 +296,15 @@ export function WalletAuthProvider({
               // Clear invalid session data
               localStorage.removeItem("hippius_oauth_session");
               localStorage.removeItem("hippius_oauth_session_expiry");
+              localStorage.removeItem("hippius_token");
+              localStorage.removeItem("hippius_token_expiry");
             }
           } else {
             console.log("[WalletAuth] OAuth session expired, clearing");
             localStorage.removeItem("hippius_oauth_session");
             localStorage.removeItem("hippius_oauth_session_expiry");
+            localStorage.removeItem("hippius_token");
+            localStorage.removeItem("hippius_token_expiry");
           }
         }
       }
@@ -268,6 +313,19 @@ export function WalletAuthProvider({
       const session = await getSession();
       if (!session || !session.mnemonic) {
         setSessionTimeRemaining(null);
+        return;
+      }
+
+      // Validate token from API auth if it exists
+      const apiAuth = await getApiAuth();
+
+      // If there's a mnemonic session, we must have a valid token
+      if (!apiAuth?.token || (apiAuth.tokenExpiry && apiAuth.tokenExpiry < Date.now())) {
+        console.log("[WalletAuth] No token or token expired for mnemonic session, redirecting to login");
+        await clearApiAuth();
+        localStorage.removeItem("hippius_token");
+        localStorage.removeItem("hippius_token_expiry");
+        await logout("/login");
         return;
       }
 
@@ -295,6 +353,7 @@ export function WalletAuthProvider({
     return () => {
       if (logoutTimerRef.current) clearTimeout(logoutTimerRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logout, router]);
 
   const unlockWithPasscode = async (
@@ -354,6 +413,19 @@ export function WalletAuthProvider({
         inputMnemonic,
         logoutTimeInMinutes
       );
+
+      // Validate API token if it exists
+      const apiAuth = await getApiAuth();
+      if (!apiAuth?.token || (apiAuth.tokenExpiry && apiAuth.tokenExpiry < Date.now())) {
+        console.error("[setSession] No token or token expired");
+        await clearApiAuth();
+        localStorage.removeItem("hippius_token");
+        localStorage.removeItem("hippius_token_expiry");
+        setPolkadotAddress(null);
+        setWalletManager(null);
+        setIsAuthenticated(false);
+        return false;
+      }
 
       const timeRemaining = +logoutTimeStamp - Date.now();
       setSessionTimeRemaining(timeRemaining);
@@ -480,6 +552,13 @@ export function WalletAuthProvider({
     session: import("@/app/lib/types/oAuth").OAuthSession
   ) => {
     console.log("[WalletAuth] Setting OAuth session");
+
+    // Validate token before setting session
+    if (!isTokenValid(session.token, session.expiresAt)) {
+      console.error("[WalletAuth] Invalid or expired token, rejecting OAuth session");
+      throw new Error("Token is invalid or expired");
+    }
+
     setOAuthSessionState(session);
     setPolkadotAddress(session.substrateAddress || null);
     setAuthType("oauth");

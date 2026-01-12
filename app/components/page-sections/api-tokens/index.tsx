@@ -216,7 +216,7 @@ const ApiTokensContent = () => {
             </div>
 
             {/* Tabs */}
-            <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center justify-between flex-wrap gap-4 mt-6">
                 <TabList
                     tabs={tabs}
                     activeTab={activeTab}

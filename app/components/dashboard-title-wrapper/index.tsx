@@ -9,14 +9,15 @@ const DashboardTitleWrapper: React.FC<{
   children: ReactNode;
   mainText: string;
   subText?: string;
-}> = ({ children, mainText, subText }) => {
+  infoTooltip?: ReactNode;
+}> = ({ children, mainText, subText, infoTooltip }) => {
   const setTitle = useSetAtom(dashboardPageHeaderAtom);
   useEffect(() => {
-    setTitle({ mainText, subText });
+    setTitle({ mainText, subText, infoTooltip });
     return () => {
       setTitle(RESET);
     };
-  }, [setTitle, mainText, subText]);
+  }, [setTitle, mainText, subText, infoTooltip]);
   return children;
 };
 

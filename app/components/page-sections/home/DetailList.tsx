@@ -1,9 +1,14 @@
 "use client";
 
-import { useState, ReactNode } from "react";
+import { useState, ReactNode, useMemo } from "react";
 import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
+import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
+import useFiles from "@/app/lib/hooks/api/useFilesSize";
+import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
+import { formatStorageForChartByRange } from "@/app/lib/utils/getFormatDataForStorageUsageChart";
+import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { toast } from "sonner";
 import {
@@ -11,7 +16,6 @@ import {
   DEFAULT_TIMING_OPTION,
 } from "@/lib/utils/storageCostUtils";
 import pricingJson from "@/app/utils/data/pricing-cfg.json";
-import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 
 export default function DetailList() {
   const [isRefreshingCredits, setIsRefreshingCredits] = useState(false);
@@ -27,7 +31,16 @@ export default function DetailList() {
     data: filesData,
     isLoading: isFilesLoading,
     error: filesError,
-  } = useUserFiles();
+  } = useFiles();
+
+  // Fetch marketplace credits for Total Credits Used (all-time)
+  const { data: marketplaceCredits, isLoading: isLoadingMarketplaceCredits } =
+    useMarketplaceCredits();
+
+  // Transform marketplace credits to the format expected by the chart
+  const transformedCreditsData = transformMarketplaceCreditsToAccounts(
+    marketplaceCredits || []
+  );
 
   const handleRefreshCredits = async () => {
     try {
@@ -114,20 +127,40 @@ export default function DetailList() {
   const getTotalFiles = () => {
     if (isFilesLoading) return "Loading...";
     if (filesError) return "Error";
-    return filesData?.files.length || 0;
+    // filesData is already an array (Account[]), so get its length
+    return Array.isArray(filesData) ? filesData.length : 0;
   };
 
-  const getPrivateFiles = () => {
-    if (isFilesLoading) return "Loading...";
-    if (filesError) return "Error";
-    return filesData?.files.filter(f => f.type?.toLowerCase() === "private").length || 0;
-  };
+  // Calculate all-time Total Credits Used from marketplace credits
+  // Using the SAME LOGIC as CreditUsageTrends component
+  // Get the LAST point from ALL DATA (complete dataset, not filtered by time range)
+  const getTotalCreditsUsed = useMemo(() => {
+    if (isLoadingMarketplaceCredits) return "Loading...";
+    if (!transformedCreditsData || transformedCreditsData.length === 0) return "0";
+    // This contains the all-time cumulative total
+    const lastPoint = transformedCreditsData[transformedCreditsData.length - 1];
+    const allTimeTotal = Number(lastPoint.total_balance) / Math.pow(10, 18);
+    return allTimeTotal.toFixed(6);
+  }, [transformedCreditsData, isLoadingMarketplaceCredits]);
 
-  const getPublicFiles = () => {
+  // Calculate all-time Total Storage Used from files data
+  // Using the SAME LOGIC as StorageUsageTrends component
+  const getTotalStorageUsed = useMemo(() => {
     if (isFilesLoading) return "Loading...";
-    if (filesError) return "Error";
-    return filesData?.files.filter(f => f.type?.toLowerCase() === "public").length || 0;
-  };
+    if (!filesData || filesData.length === 0) return "0 B";
+
+    // Format the raw data using the same transformer as the chart
+    const formattedData = formatStorageForChartByRange(
+      filesData,
+      "last7days" // Use last7days as base range
+    );
+
+    if (!formattedData || formattedData.length === 0) return "0 B";
+
+    // Get the last entry's value (most recent day) - same as the chart component
+    const lastEntry = formattedData[formattedData.length - 1];
+    return formatBytes(lastEntry.balance || 0, 2);
+  }, [filesData, isFilesLoading]);
 
 
 
@@ -142,6 +175,7 @@ export default function DetailList() {
       showAddCreditsButton: (!isCreditsLoading && (credits === undefined || getCreditsAsNumber(credits) === 0)) ? true : false,
       onRefresh: handleRefreshCredits,
       isLoading: isRefreshingCredits,
+      info: "Credits available for storage usage. Each credit equals $1 and can be used to pay for IPFS storage costs.",
     },
     {
       id: "total-files",
@@ -150,22 +184,25 @@ export default function DetailList() {
       value: getTotalFiles(),
       showRefresh: false,
       isLoading: isFilesLoading,
+      info: "Total number of files synced using the Hippius desktop app. This does not include files from other buckets or console uploads.",
     },
     {
-      id: "private-files",
-      icon: Icons.ShieldSecurity,
-      title: "Private Files",
-      value: getPrivateFiles(),
+      id: "total-credits-used",
+      icon: Icons.Tag2,
+      title: "Total Credit Used",
+      value: getTotalCreditsUsed,
       showRefresh: false,
-      isLoading: isFilesLoading,
+      isLoading: isLoadingMarketplaceCredits,
+      info: "All time total credits consumed for storage services since account creation.",
     },
     {
-      id: "public-files",
-      icon: Icons.FolderOpen,
-      title: "Public Files",
-      value: getPublicFiles(),
+      id: "total-storage-used",
+      icon: Icons.Chart,
+      title: "Total Storage Used",
+      value: getTotalStorageUsed,
       showRefresh: false,
       isLoading: isFilesLoading,
+      info: "All time total storage space used across all synced files from the desktop app and console.",
     },
   ];
 
@@ -182,6 +219,7 @@ export default function DetailList() {
           onRefresh={card.onRefresh}
           isLoading={card.isLoading}
           showAddCreditsButton={card.showAddCreditsButton}
+          info={card.info}
         />
       ))}
     </div>

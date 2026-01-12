@@ -478,9 +478,9 @@ const CreateVMModal: React.FC<Props> = ({
               >
                 {/* Header */}
                 <div className="border-b border-grey-80 flex gap-2 items-center justify-between px-4 py-3">
-                  <h2 className="flex-1 text-2xl font-medium text-grey-10">
+                  <Dialog.Title className="flex-1 text-2xl font-medium text-grey-10">
                     {template?.name || "Create Virtual Machine"}
-                  </h2>
+                  </Dialog.Title>
                   <Dialog.Close asChild>
                     <button
                       aria-label="Close"

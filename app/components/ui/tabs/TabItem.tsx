@@ -25,7 +25,7 @@ const TabItem: React.FC<TabItemProps> = ({
   return (
     <div
       className={cn(
-        "flex items-center gap-2  relative transition-all duration-300 cursor-pointer",
+        "flex items-center gap-2 relative transition-all duration-300 cursor-pointer",
         width,
         height,
         isActive ? "text-primary-50" : "text-grey-70",

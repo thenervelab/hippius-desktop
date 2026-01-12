@@ -93,10 +93,8 @@ const Step1Configuration: React.FC<Step1Props> = ({
               value={operatingSystem}
               onValueChange={handleOSChange}
               options={
-                isLoadingImages
+                isLoadingImages || operatingSystems.length === 0
                   ? []
-                  : operatingSystems.length === 0
-                  ? [{ value: "", label: "No OS available" }]
                   : operatingSystems
               }
               placeholder={
@@ -125,10 +123,8 @@ const Step1Configuration: React.FC<Step1Props> = ({
               value={image}
               onValueChange={setImage}
               options={
-                isLoadingImages
+                isLoadingImages || filteredImages.length === 0
                   ? []
-                  : filteredImages.length === 0
-                  ? [{ value: "", label: "No images available" }]
                   : filteredImages
               }
               placeholder={
@@ -197,10 +193,8 @@ const Step1Configuration: React.FC<Step1Props> = ({
             value={sshKey}
             onValueChange={setSshKey}
             options={
-              isLoadingSSHKeys
+              isLoadingSSHKeys || sshKeyOptions.length === 0
                 ? []
-                : sshKeyOptions.length === 0
-                ? [{ value: "", label: "No SSH keys found" }]
                 : sshKeyOptions
             }
             placeholder={

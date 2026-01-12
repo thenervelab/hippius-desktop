@@ -10,13 +10,20 @@ const HeaderText = () => {
 
   return (
     <div>
-      <P
-        size="xl"
-        className="animate-fade-in-from-b-0.3 opacity-0"
-        key={"t" + headerTextKey}
-      >
-        {dashHeader.mainText}
-      </P>
+      <div className="flex items-center gap-x-2">
+        <P
+          size="xl"
+          className="animate-fade-in-from-b-0.3 opacity-0"
+          key={"t" + headerTextKey}
+        >
+          {dashHeader.mainText}
+        </P>
+        {dashHeader.infoTooltip && (
+          <div className="animate-fade-in-from-b-0.3 opacity-0 flex items-center">
+            {dashHeader.infoTooltip}
+          </div>
+        )}
+      </div>
       {dashHeader.subText && (
         <P
           style={{

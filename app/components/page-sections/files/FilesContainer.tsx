@@ -15,8 +15,6 @@ import SyncFolderSelector from "./SyncFolderSelector";
 import {
   getPrivateSyncPath,
   setPrivateSyncPath,
-  getPublicSyncPath,
-  setPublicSyncPath,
 } from "@/lib/utils/syncPathUtils";
 import { formatBytesFromBigInt } from "@/lib/utils";
 import { FileTypes } from "@/lib/types/fileTypes";
@@ -30,7 +28,6 @@ import FilesHeader from "./FilesHeader";
 import FilesContent from "./FilesContent";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
-  activeSubMenuItemAtom,
   settingsDialogOpenAtom,
   activeSettingsTabAtom,
 } from "@/app/components/sidebar/sideBarAtoms";
@@ -48,8 +45,6 @@ import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, oauthSession } = useWalletAuth();
-  const activeSubMenuItem = useAtomValue(activeSubMenuItemAtom);
-  const isPrivateView = activeSubMenuItem === "Private";
 
   // Regular files hook
   const {
@@ -83,13 +78,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
     undefined as string | null | undefined
   );
-  const [selectedPublicFolderPath, setSelectedPublicFolderPath] = useState(
-    undefined as string | null | undefined
-  );
 
   // Loading states for sync paths
   const [isLoadingPrivatePath, setIsLoadingPrivatePath] = useState(true);
-  const [isLoadingPublicPath, setIsLoadingPublicPath] = useState(true);
 
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -113,8 +104,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
   const [showPrivateStartSyncingSelector, setShowPrivateStartSyncingSelector] =
     useState(false);
-  const [showPublicStartSyncingSelector, setShowPublicStartSyncingSelector] =
-    useState(false);
   const setTriggerUnpinnedFilesRefetch = useSetAtom(
     triggerUnpinnedFilesRefetchAtom
   );
@@ -132,25 +121,17 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     return [];
   }, [isRecentFiles, recentFilesData, regularFilesData?.files]);
 
-  // Filter data based on current view (public/private)
+  // Filter data to show only private files
   const allFilteredData = useMemo(() => {
     if (isRecentFiles) {
       return allData;
     }
 
-    let filtered = allData;
-    if (
-      activeSubMenuItem &&
-      (activeSubMenuItem === "Private" || activeSubMenuItem === "Public")
-    ) {
-      filtered = filtered.filter((file) => {
-        const fileType = file.type?.toLowerCase() || "";
-        return fileType === activeSubMenuItem.toLowerCase();
-      });
-    }
-
-    return filtered;
-  }, [allData, activeSubMenuItem, isRecentFiles]);
+    return allData.filter((file) => {
+      const fileType = file.type?.toLowerCase() || "";
+      return fileType === "private";
+    });
+  }, [allData, isRecentFiles]);
 
   // Filter data based on search and filter settings
   const filteredData = useMemo(() => {
@@ -218,22 +199,12 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     filterState.lastUpdated,
   ]);
 
-  // Reset pagination when view changes between private/public
+  // Reset pagination when data changes
   useEffect(() => {
     // Force reset pagination
     setShouldResetPagination(true);
     setCurrentPage(1);
-
-    // Also reset search and filters to start fresh
-    setSearchTerm("");
-    setFilterState({
-      fileTypes: [],
-      date: "",
-      fileSize: 0,
-      fileSizes: [],
-      lastUpdated: Date.now(),
-    });
-  }, [isPrivateView, setCurrentPage]);
+  }, [setCurrentPage]);
 
   // Handle pagination reset
   useEffect(() => {
@@ -275,23 +246,17 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     [filterState.fileTypes, filterState.fileSizes, updateFilters]
   );
 
-  // Format storage size with proper units based on view type
+  // Format private storage size
   const formattedStorageSize = useMemo(() => {
     if (isRecentFiles) return "";
 
     if (!regularFilesData) return "0 B";
 
-    if (isPrivateView && regularFilesData.privateStorageSize !== undefined) {
+    if (regularFilesData.privateStorageSize !== undefined) {
       return formatBytesFromBigInt(regularFilesData.privateStorageSize);
-    } else if (
-      !isPrivateView &&
-      regularFilesData.publicStorageSize !== undefined
-    ) {
-      return formatBytesFromBigInt(regularFilesData.publicStorageSize);
-    } else {
-      return "0 B";
     }
-  }, [regularFilesData, isPrivateView, isRecentFiles]);
+    return "0 B";
+  }, [regularFilesData, isRecentFiles]);
 
   // Handle resetting filters
   // Handle search input change
@@ -321,23 +286,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     [updateFilters]
   );
 
-  // Load public sync path
-  useEffect(() => {
-    (async () => {
-      try {
-        setIsLoadingPublicPath(true);
-        const publicfolderPath = await getPublicSyncPath(
-          polkadotAddress || undefined
-        );
-        setSelectedPublicFolderPath(publicfolderPath);
-      } catch {
-        console.error("Failed to load public sync folder");
-      } finally {
-        setIsLoadingPublicPath(false);
-      }
-    })();
-  }, [polkadotAddress]);
-
   // Load private sync path
   useEffect(() => {
     (async () => {
@@ -366,24 +314,19 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       try {
         setIsCheckingSyncPath(true);
 
-        // Wait for both paths to finish loading
-        const isStillLoading = isPrivateView
-          ? isLoadingPrivatePath
-          : isLoadingPublicPath;
-        if (isStillLoading) {
+        // Wait for private path to finish loading
+        if (isLoadingPrivatePath) {
           return; // Don't check yet, still loading
         }
 
-        const syncPath = isPrivateView
-          ? selectedPrivateFolderPath
-          : selectedPublicFolderPath;
+        const syncPath = selectedPrivateFolderPath;
 
         // Sync path is configured if it exists (even if empty string - means user skipped)
         // Only show selector if sync path is null/undefined (not set at all)
         setIsSyncPathConfigured(syncPath !== null && syncPath !== undefined);
       } catch (error) {
         console.error(
-          `Failed to check ${isPrivateView ? "private" : "public"} sync path:`,
+          `Failed to check private sync path:`,
           error
         );
         setIsSyncPathConfigured(false);
@@ -394,12 +337,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
     checkSyncPath();
   }, [
-    isPrivateView,
     selectedPrivateFolderPath,
-    selectedPublicFolderPath,
     isRecentFiles,
     isLoadingPrivatePath,
-    isLoadingPublicPath,
   ]);
 
   const refreshUserFilesWithPinningQueue = useCallback(() => {
@@ -421,28 +361,10 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           return;
         }
 
-        if (isPrivateView) {
-          if (path === selectedPublicFolderPath) {
-            toast.error(
-              "Private sync folder cannot be the same as public sync folder"
-            );
-            return;
-          }
-          await setPrivateSyncPath(path, polkadotAddress, oauthSession?.token);
-          setSelectedPrivateFolderPath(path);
-        } else {
-          if (path === selectedPrivateFolderPath) {
-            toast.error(
-              "Public sync folder cannot be the same as private sync folder"
-            );
-            return;
-          }
-          await setPublicSyncPath(path, polkadotAddress, oauthSession?.token);
-          setSelectedPublicFolderPath(path);
-        }
+        await setPrivateSyncPath(path, polkadotAddress, oauthSession?.token);
+        setSelectedPrivateFolderPath(path);
         toast.success(
-          `${isPrivateView ? "Private" : "Public"
-          } sync folder set successfully, syncing is now in progress.`
+          `Private sync folder set successfully, syncing is now in progress.`
         );
         setIsSyncPathConfigured(true);
 
@@ -459,10 +381,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     },
     [
       refreshUserFilesWithPinningQueue,
-      isPrivateView,
-      selectedPrivateFolderPath,
-      selectedPublicFolderPath,
       polkadotAddress,
+      oauthSession?.token,
     ]
   );
 
@@ -476,31 +396,17 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
       // Set sync path to empty string to indicate user has skipped
       const emptyPath = "";
-
-      if (isPrivateView) {
-        await setPrivateSyncPath(
-          emptyPath,
-          polkadotAddress,
-          oauthSession?.token
-        );
-        setSelectedPrivateFolderPath(emptyPath);
-      } else {
-        await setPublicSyncPath(
-          emptyPath,
-          polkadotAddress,
-          oauthSession?.token
-        );
-        setSelectedPublicFolderPath(emptyPath);
-      }
+      await setPrivateSyncPath(
+        emptyPath,
+        polkadotAddress,
+        oauthSession?.token
+      );
+      setSelectedPrivateFolderPath(emptyPath);
 
       // Set sync path as configured (with empty string) so selector doesn't show again
       setIsSyncPathConfigured(true);
-      // Hide the start syncing selector for the current view
-      if (isPrivateView) {
-        setShowPrivateStartSyncingSelector(false);
-      } else {
-        setShowPublicStartSyncingSelector(false);
-      }
+      // Hide the start syncing selector
+      setShowPrivateStartSyncingSelector(false);
 
       toast.success("Sync folder setup skipped. You can set it up later.");
     } catch (error) {
@@ -510,7 +416,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         }`
       );
     }
-  }, [isPrivateView, polkadotAddress]);
+  }, [polkadotAddress, oauthSession?.token]);
 
   // Navigation to settings
   const handleNavigateToSettings = useCallback(() => {
@@ -527,30 +433,22 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     }
 
     // If on /files page, show the sync folder selector
-    if (isPrivateView) {
-      setShowPrivateStartSyncingSelector(true);
-    } else {
-      setShowPublicStartSyncingSelector(true);
-    }
-  }, [isRecentFiles, isPrivateView, handleNavigateToSettings]);
+    setShowPrivateStartSyncingSelector(true);
+  }, [isRecentFiles, handleNavigateToSettings]);
 
   // Handle folder selection from Start Syncing flow
   const handleStartSyncingFolderSelected = useCallback(
     async (path: string) => {
       try {
         await handleFolderSelected(path);
-        // Hide the start syncing selector on success for the current view
-        if (isPrivateView) {
-          setShowPrivateStartSyncingSelector(false);
-        } else {
-          setShowPublicStartSyncingSelector(false);
-        }
+        // Hide the start syncing selector on success
+        setShowPrivateStartSyncingSelector(false);
       } catch (error) {
         // Keep the selector open on error so user can try again
         console.error("Failed to set sync folder:", error);
       }
     },
-    [handleFolderSelected, isPrivateView]
+    [handleFolderSelected]
   );
 
   // Load data on mount and set up interval refresh
@@ -616,12 +514,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     saveViewModePreference(mode);
   }, []);
 
-  // Close start syncing selectors when switching between private/public views
-  useEffect(() => {
-    setShowPrivateStartSyncingSelector(false);
-    setShowPublicStartSyncingSelector(false);
-  }, [isPrivateView]);
-
   // Reload sync paths when settings are updated
   useEffect(() => {
     if (syncPathRefreshTrigger > 0) {
@@ -639,93 +531,43 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           setIsLoadingPrivatePath(false);
         }
       })();
-
-      // Reload public sync path
-      (async () => {
-        try {
-          setIsLoadingPublicPath(true);
-          const publicfolderPath = await getPublicSyncPath(
-            polkadotAddress || undefined
-          );
-          setSelectedPublicFolderPath(publicfolderPath);
-        } catch {
-          console.error("Failed to reload public sync folder");
-        } finally {
-          setIsLoadingPublicPath(false);
-        }
-      })();
     }
   }, [syncPathRefreshTrigger, polkadotAddress]);
 
-  // Computed values for current view
-  const currentSyncPath = isPrivateView
-    ? selectedPrivateFolderPath
-    : selectedPublicFolderPath;
+  // Computed values for current view (always private)
+  const currentSyncPath = selectedPrivateFolderPath;
   const isCurrentSyncPathEmpty = currentSyncPath === "";
-  const showCurrentStartSyncingSelector = isPrivateView
-    ? showPrivateStartSyncingSelector
-    : showPublicStartSyncingSelector;
+  const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
 
-  // Recent files specific logic
+  // Recent files specific logic - check if private path is available
   const hasNoSyncPaths = useMemo(() => {
     if (!isRecentFiles) return false;
     return (
-      (selectedPrivateFolderPath === null ||
-        selectedPrivateFolderPath === undefined) &&
-      (selectedPublicFolderPath === null ||
-        selectedPublicFolderPath === undefined)
+      selectedPrivateFolderPath === null ||
+      selectedPrivateFolderPath === undefined
     );
-  }, [isRecentFiles, selectedPrivateFolderPath, selectedPublicFolderPath]);
+  }, [isRecentFiles, selectedPrivateFolderPath]);
 
-  // For recent files, check if ANY sync path is available (not empty)
+  // For recent files, check if sync path is available (not empty)
   const hasAnySyncPath = useMemo(() => {
     if (!isRecentFiles) return false;
     const hasPrivate =
       selectedPrivateFolderPath !== null &&
       selectedPrivateFolderPath !== undefined &&
       selectedPrivateFolderPath !== "";
-    const hasPublic =
-      selectedPublicFolderPath !== null &&
-      selectedPublicFolderPath !== undefined &&
-      selectedPublicFolderPath !== "";
-    return hasPrivate || hasPublic;
-  }, [isRecentFiles, selectedPrivateFolderPath, selectedPublicFolderPath]);
+    return hasPrivate;
+  }, [isRecentFiles, selectedPrivateFolderPath]);
 
-  // Determine effective isPrivateView for recent files based on configured sync paths
-  // Prioritize private if set, fallback to public if only public is set
+  // Effective is private view (always true for private-only)
   const effectiveIsPrivateView = useMemo(() => {
-    if (!isRecentFiles) return isPrivateView;
-
-    const hasPrivatePath =
-      selectedPrivateFolderPath !== null &&
-      selectedPrivateFolderPath !== undefined &&
-      selectedPrivateFolderPath !== "";
-    const hasPublicPath =
-      selectedPublicFolderPath !== null &&
-      selectedPublicFolderPath !== undefined &&
-      selectedPublicFolderPath !== "";
-
-    // If both are set or only private is set, use private
-    if (hasPrivatePath) return true;
-    // If only public is set, use public
-    if (hasPublicPath) return false;
-    // Default to private if neither is set (though this shouldn't happen in normal flow)
     return true;
-  }, [
-    isRecentFiles,
-    isPrivateView,
-    selectedPrivateFolderPath,
-    selectedPublicFolderPath,
-  ]);
+  }, []);
 
   // Determine what content to render
   let content;
 
   // Show loading while checking sync path or while loading sync paths
-  const isLoadingSyncPaths = isPrivateView
-    ? isLoadingPrivatePath
-    : isLoadingPublicPath;
-  const shouldShowLoading = isCheckingSyncPath || isLoadingSyncPaths;
+  const shouldShowLoading = isCheckingSyncPath || isLoadingPrivatePath;
 
   if (shouldShowLoading) {
     content = <WaitAMoment />;
@@ -734,16 +576,14 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       <SyncFolderSelector
         onFolderSelected={handleFolderSelected}
         onSkip={handleSkipSyncFolder}
-        isPrivateView={isPrivateView}
       />
     );
   } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
-    // Show sync folder selector when Start Syncing is clicked for the current view
+    // Show sync folder selector when Start Syncing is clicked
     content = (
       <SyncFolderSelector
         onFolderSelected={handleStartSyncingFolderSelected}
         onSkip={handleSkipSyncFolder} // Allow skip option in Start Syncing flow
-        isPrivateView={isPrivateView}
       />
     );
   } else {
@@ -752,37 +592,25 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     let effectiveSyncPathEmpty = false;
 
     if (isRecentFiles) {
-      // For recent files, prioritize private path, then fall back to public
+      // For recent files, use private path
       const privatePath =
         selectedPrivateFolderPath !== null &&
           selectedPrivateFolderPath !== undefined &&
           selectedPrivateFolderPath !== ""
           ? selectedPrivateFolderPath
           : null;
-      const publicPath =
-        selectedPublicFolderPath !== null &&
-          selectedPublicFolderPath !== undefined &&
-          selectedPublicFolderPath !== ""
-          ? selectedPublicFolderPath
-          : null;
 
-      syncFolderPath = privatePath || publicPath || "";
+      syncFolderPath = privatePath || "";
       effectiveSyncPathEmpty = !hasAnySyncPath;
     } else {
-      // For regular files view, use the path matching the current view
-      syncFolderPath =
-        (isPrivateView
-          ? selectedPrivateFolderPath
-          : selectedPublicFolderPath) || "";
+      // For regular files view, use the private path
+      syncFolderPath = selectedPrivateFolderPath || "";
       effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
     }
 
-    // Get file counts for view all button
+    // Get file count for view all button
     const privateFileCount =
       regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
-        .length || 0;
-    const publicFileCount =
-      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "public")
         .length || 0;
 
     content = (
@@ -808,7 +636,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             addButtonRef={addButtonRef}
             syncFolderPath={syncFolderPath}
             privateFileCount={privateFileCount}
-            publicFileCount={publicFileCount}
             isSyncPathEmpty={effectiveSyncPathEmpty}
             onStartSyncing={handleStartSyncing}
             hasNoSyncPaths={hasNoSyncPaths}

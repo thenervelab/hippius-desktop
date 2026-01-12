@@ -55,16 +55,6 @@ const CreditUsageTrends: React.FC<{
     );
   }, [chartData, timeRange]);
 
-  // Calculate ALL-TIME total credits used
-  // Since data is cumulative, the last value in the complete dataset is the total
-  const totalCreditsUsed = useMemo(() => {
-    if (!chartData || chartData.length === 0) return "0";
-    // Get the LAST point from ALL DATA (complete dataset, not filtered by time range)
-    // This contains the all-time cumulative total
-    const lastPoint = chartData[chartData.length - 1];
-    const allTimeTotal = Number(lastPoint.total_balance) / Math.pow(10, 18);
-    return allTimeTotal.toFixed(6);
-  }, [chartData]);
   // Compute Y‐ticks with minimal padding and more tick marks for better detail
   const yTicks = useMemo(() => {
     if (!formattedChartData.length) return [0, 1];
@@ -133,15 +123,6 @@ const CreditUsageTrends: React.FC<{
                 </div>
               ) : (
                 <div className="w-full h-full  relative pr-4">
-                  {/* Total Credits Used Display - Shows cumulative all-time total */}
-                  <div className="absolute top-4 left-14 border border-grey-80 rounded bg-white px-2 py-1 z-10">
-                    <div className="text-grey-60 text-base mb-1 font-medium">
-                      Total Credits Used
-                    </div>
-                    <div className="text-2xl font-medium text-grey-10">
-                      {totalCreditsUsed}
-                    </div>
-                  </div>
                   <ChartGridOverlay marginClasses="mt-[0px] ml-[45px] mb-[30px] mr-[21px]" />
                   <AreaLineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}

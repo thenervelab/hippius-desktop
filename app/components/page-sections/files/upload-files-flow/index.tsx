@@ -203,7 +203,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
                 Private Storage
               </p>
               <p className="text-xs text-primary-60">
-                Files uploaded here will be added to your private sync folder and encrypted for security.
+                Files uploaded here will be added to your sync folder and encrypted for security.
               </p>
             </div>
           </div>

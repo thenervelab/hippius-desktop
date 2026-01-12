@@ -1,16 +1,15 @@
-import React, { useMemo } from "react";
+import React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 
 import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Graphsheet, Icons } from "@/components/ui";
 
-type SyncType = "private" | "public";
+type SyncType = "private";
 
 export interface StopSyncDialogProps {
     open: boolean;
     onClose: () => void;
     onConfirm: () => void;
-    folderType: SyncType;
     folderName?: string;
     folderPath?: string;
     loading?: boolean;
@@ -20,23 +19,14 @@ const StopSyncDialog: React.FC<StopSyncDialogProps> = ({
     open,
     onClose,
     onConfirm,
-    folderType,
     folderName,
     folderPath,
     loading = false,
 }) => {
-    const heading =
-        folderType === "private"
-            ? "Stop syncing private folder?"
-            : "Stop syncing public folder?";
+    const heading = "Stop syncing this folder?";
 
-    const description = useMemo(
-        () =>
-            folderType === "private"
-                ? "We'll stop syncing files between Hippius and this private folder. Your local files stay on your computer, and any files already uploaded remain in Hippius."
-                : "We'll stop syncing files between Hippius and this public folder. Your local files stay on your computer, and any files already uploaded remain available to others.",
-        [folderType],
-    );
+    const description =
+        "We'll stop syncing files between Hippius and this folder. Your local files stay on your computer, and any files already uploaded remain safely in Hippius.";
 
     return (
         <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>

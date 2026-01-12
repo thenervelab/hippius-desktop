@@ -16,7 +16,6 @@ interface SyncFolderSelectorProps {
   initialPath?: string;
   isFromSettingsPage?: boolean;
   handleBackClick?: () => void;
-  isPrivateView?: boolean;
 }
 
 const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
@@ -25,7 +24,6 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   initialPath,
   isFromSettingsPage = false,
   handleBackClick,
-  isPrivateView = true,
 }) => {
   const { api, isConnected } = usePolkadotApi();
   const { data: balanceInfo } = useHippiusBalance();
@@ -100,7 +98,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
         setCustom(p);
         setSelected(p);
       }
-    } catch {}
+    } catch { }
   };
 
   const apply = async () => {
@@ -181,7 +179,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
         className={cn(
           "w-full flex-1 relative ",
           !isFromSettingsPage &&
-            "bg-[url('/assets/folder-sync-bg-layer.png')] bg-no-repeat bg-cover",
+          "bg-[url('/assets/folder-sync-bg-layer.png')] bg-no-repeat bg-cover",
           !initialPath && !isFromSettingsPage && "mt-6"
         )}
       >
@@ -205,10 +203,8 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
                 }
                 subtitle={
                   initialPath
-                    ? `Choose folders to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
-                    : `Choose a folder on your device to keep your ${
-                        isPrivateView ? "private" : "public"
-                      } files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
+                    ? `Choose a folder to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
+                    : `Choose a folder on your device to keep your private files in sync with Hippius. If you edit or remove files, those changes will be automatically synced.`
                 }
               />
             </div>
