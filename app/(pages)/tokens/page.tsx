@@ -9,7 +9,6 @@ const tokenManagementTooltip = (
     <InfoTooltip>
         Manage your S3 access tokens. Master tokens are required for bucket operations
         and can be used to create API tokens with granular permissions for specific buckets.
-        <br />
         <a
             href="https://docs.hippius.com/use/s3-token-management"
             target="_blank"
