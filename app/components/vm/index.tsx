@@ -25,7 +25,12 @@ import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 import NoEntriesFound from "../ui/NoEntriesFound";
-
+import Link from "next/link";
+import { HelpCircle } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+const VM_DOCS_URL = "https://docs.hippius.com/use/virtual-machines";
+const VM_SSH_DOCS_URL =
+  "https://docs.hippius.com/use/virtual-machines#ssh-keys";
 export interface CreateTokenFields {
   name: string;
   scopes: string[];
@@ -242,6 +247,26 @@ const VirtualMachines: FC = () => {
               <p className="font-medium text-base md:text-lg lg:text-xl text-nowrap">
                 {getHeaderTitle()}
               </p>
+              <button
+                onClick={() =>
+                  openUrl(
+                    activeTab === "SSH Keys" ? VM_SSH_DOCS_URL : VM_DOCS_URL
+                  )
+                }
+                aria-label={
+                  activeTab === "SSH Keys"
+                    ? "SSH keys documentation"
+                    : "Virtual machine documentation"
+                }
+                title={
+                  activeTab === "SSH Keys"
+                    ? "SSH keys documentation"
+                    : "Virtual machine documentation"
+                }
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
+              >
+                <HelpCircle className="size-4" />
+              </button>
             </div>
           </div>
           {/* Tab navigation */}

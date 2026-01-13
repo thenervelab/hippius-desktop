@@ -5,7 +5,11 @@ import { PlusCircle } from "lucide-react";
 import TicketSelect from "../../page-sections/support/TicketSelect";
 import ImageOptionSelect from "../../ui/select/ImageOptionSelect";
 import CustomTooltip2 from "../../ui/CustomTooltip2";
+import Link from "next/link";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
+const VM_SSH_CONNECT_DOCS_URL =
+  "https://docs.hippius.com/use/virtual-machines#connect-to-your-vm-via-ssh";
 interface Step1Props {
   instanceName: string;
   setInstanceName: (value: string) => void;
@@ -187,7 +191,23 @@ const Step1Configuration: React.FC<Step1Props> = ({
 
       {/* SSH Key */}
       <div>
-        <label className="text-sm font-medium text-grey-70">SSH Key</label>
+        <div className="flex items-center gap-2 mb-2">
+          <label className="text-sm font-medium text-grey-70">SSH Key</label>
+          <CustomTooltip2
+            showInfo={true}
+            tooltipContent={
+              <span>
+                SSH keys provide secure access to your VM.{" "}
+                <button
+                  onClick={() => openUrl(VM_SSH_CONNECT_DOCS_URL)}
+                  className="text-primary-50 hover:underline"
+                >
+                  Learn how to connect via SSH
+                </button>
+              </span>
+            }
+          />
+        </div>
         <div className="mt-2">
           <TicketSelect
             value={sshKey}

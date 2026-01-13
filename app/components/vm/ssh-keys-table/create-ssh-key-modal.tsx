@@ -7,6 +7,8 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/input/Input2";
 import { Textarea } from "../../ui/Textarea";
 import { Icons } from "../../ui";
+import Link from "next/link";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 export interface CreateSSHKeyData {
   keyName: string;
@@ -140,7 +142,17 @@ const CreateSSHKeyModal: React.FC<Props> = ({
                 <p className="text-xs text-primary-60">
                   Enter your public SSH key (e.g., ssh-rsa, ssh-ed25519). You
                   can generate one using ssh-keygen on your local machine. Never
-                  share your private key.
+                  share your private key.{" "}
+                  <button
+                    onClick={() =>
+                      openUrl(
+                        "https://docs.hippius.com/use/virtual-machines#generate-an-ssh-key-pair-with-ssh-keygen"
+                      )
+                    }
+                    className="text-primary-50 hover:text-primary-40 underline font-medium"
+                  >
+                    Learn more
+                  </button>
                 </p>
               </div>
             </div>
