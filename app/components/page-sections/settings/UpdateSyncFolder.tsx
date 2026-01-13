@@ -4,7 +4,7 @@ import SectionHeader from "./SectionHeader";
 import SyncFolderSelector from "@/app/components/page-sections/files/SyncFolderSelector";
 import {
   getPrivateSyncPath,
-  setPrivateSyncPath
+  setPrivateSyncPath,
 } from "@/app/lib/utils/syncPathUtils";
 import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import { toast } from "sonner";
@@ -120,6 +120,7 @@ const UpdateSyncFolder: React.FC = () => {
                     title="Change your sync folder"
                     subtitle="Choose a folder to keep your files in sync with Hippius. If you edit or remove files, those changes will be automatically synced."
                     info="Sync folder connects your local storage with our decentralized network, providing both convenience and blockchain-backed security for your files."
+                    learnMoreUrl="https://docs.hippius.com/use/desktop/settings#selecting-sync-folder"
                   />
                   <div className="flex justify-between p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
                     {selectedPrivateFolderName ? (

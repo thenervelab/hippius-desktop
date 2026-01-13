@@ -14,7 +14,6 @@ import CustomTooltip2 from "../../ui/CustomTooltip2";
 import { Select } from "../../ui";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 import NoEntriesFound from "../../ui/NoEntriesFound";
-import Link from "next/link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 const VM_DOCS_URL =
   "https://docs.hippius.com/use/virtual-machines#create-a-virtual-machine";

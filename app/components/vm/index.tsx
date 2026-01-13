@@ -25,7 +25,6 @@ import useDeleteSSHKey from "@/app/lib/hooks/api/useDeleteSSHKey";
 import useCreateSSHKey from "@/app/lib/hooks/api/useCreateSSHKey";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 import NoEntriesFound from "../ui/NoEntriesFound";
-import Link from "next/link";
 import { HelpCircle } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 const VM_DOCS_URL = "https://docs.hippius.com/use/virtual-machines";

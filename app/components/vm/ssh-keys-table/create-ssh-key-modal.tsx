@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/input/Input2";
 import { Textarea } from "../../ui/Textarea";
 import { Icons } from "../../ui";
-import Link from "next/link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 export interface CreateSSHKeyData {

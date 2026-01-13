@@ -31,7 +31,7 @@ const SettingsDialogContent: React.FC = () => {
       icon: <Icons.File2 className="size-4" />,
     },
     {
-      tabName: "Master Token",
+      tabName: "API Token",
       icon: <Icons.Key className="size-4" />,
     },
     {
@@ -116,7 +116,7 @@ const SettingsDialogContent: React.FC = () => {
                 </div>
               </div>
             )}
-            {activeTab === "Master Token" && (
+            {activeTab === "API Token" && (
               <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
                   rotate

@@ -1,19 +1,22 @@
 import React, { ReactNode } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import * as Icons from "@/components/ui/icons";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface InfoTooltipProps {
   children: ReactNode;
   className?: string;
   iconSize?: number | string;
   iconColor?: string;
+  learnMoreUrl?: string;
 }
 
 const InfoTooltip: React.FC<InfoTooltipProps> = ({
   children,
   className = "",
   iconSize = 4,
-  iconColor = "text-grey-50"
+  iconColor = "text-grey-50",
+  learnMoreUrl,
 }) => {
   return (
     <Tooltip.Provider>
@@ -36,7 +39,20 @@ const InfoTooltip: React.FC<InfoTooltipProps> = ({
             "
             sideOffset={8}
           >
-            {children}
+            <div>
+              {children}
+              {learnMoreUrl && (
+                <>
+                  {" "}
+                  <button
+                    onClick={() => openUrl(learnMoreUrl)}
+                    className="text-primary-50 hover:text-primary-40 font-semibold underline"
+                  >
+                    Learn More
+                  </button>
+                </>
+              )}
+            </div>
             <Tooltip.Arrow className="fill-white" />
           </Tooltip.Content>
         </Tooltip.Portal>

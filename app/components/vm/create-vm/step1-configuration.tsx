@@ -5,7 +5,6 @@ import { PlusCircle } from "lucide-react";
 import TicketSelect from "../../page-sections/support/TicketSelect";
 import ImageOptionSelect from "../../ui/select/ImageOptionSelect";
 import CustomTooltip2 from "../../ui/CustomTooltip2";
-import Link from "next/link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 const VM_SSH_CONNECT_DOCS_URL =
