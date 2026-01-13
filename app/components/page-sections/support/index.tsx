@@ -17,6 +17,8 @@ import TicketMessagesDialog from "./TicketMessagesDialog";
 import Lock from "../../ui/icons/Lock";
 import { Ticket } from "../../ui/icons";
 import { RefreshButton, SearchInput } from "../../ui";
+import { HelpCircle } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import useCreateSupportTicket from "@/app/lib/hooks/useCreateSupportTicket";
 import useUploadTicketAttachment from "@/app/lib/hooks/useUploadTicketAttachment";
 import useSupportTickets, {
@@ -27,6 +29,8 @@ import CreateButton from "../../ui/button/CreateButton";
 import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import ConfirmModal from "./SupportConfirmModal";
 import { OAuthButtonsGroup } from "../../auth/OAuthButtons";
+
+const SUPPORT_DOCS_URL = "https://docs.hippius.com/use/help-support";
 
 const Support: React.FC = () => {
   const { oauthSession } = useWalletAuth();
@@ -269,6 +273,14 @@ const Support: React.FC = () => {
                   <Ticket className="size-6 relative text-primary-50" />
                 </AbstractIconWrapper>
                 <P size="lg">My Tickets</P>
+                <button
+                  onClick={() => openUrl(SUPPORT_DOCS_URL)}
+                  aria-label="Support documentation"
+                  title="Support documentation"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
+                >
+                  <HelpCircle className="size-4" />
+                </button>
               </div>
             </div>
 
