@@ -78,6 +78,7 @@ const NotificationSettings: React.FC = () => {
                 title="Notification Preferences"
                 subtitle="Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you."
                 info="Customize which events trigger notifications to stay informed about activity relevant to you. These settings control in-app notifications that appear within the application. Your preferences can be updated anytime."
+                learnMoreUrl="https://docs.hippius.com/use/desktop/settings#notifications"
               />
             </RevealTextLine>
 

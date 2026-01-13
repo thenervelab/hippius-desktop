@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ExternalLink } from "lucide-react";
 import VMTemplateCard, { VMTemplate } from "./vm-template-card";
 import VMTemplateCardSkeleton from "./vm-template-card-skeleton";
 import * as TableModule from "@/components/ui/alt-table";
@@ -14,6 +14,9 @@ import CustomTooltip2 from "../../ui/CustomTooltip2";
 import { Select } from "../../ui";
 import useVMFlavors from "@/app/lib/hooks/api/useVMFlavors";
 import NoEntriesFound from "../../ui/NoEntriesFound";
+import { openUrl } from "@tauri-apps/plugin-opener";
+const VM_DOCS_URL =
+  "https://docs.hippius.com/use/virtual-machines#create-a-virtual-machine";
 
 const CreateVM: React.FC = () => {
   const router = useRouter();
@@ -122,16 +125,25 @@ const CreateVM: React.FC = () => {
   return (
     <div className="w-full">
       {/* Header */}
-      <div className="flex items-center gap-2 mb-6">
+      <div className="flex items-center justify-between gap-2 mb-6">
+        <div className="flex items-center gap-2 mb-6">
+          <button
+            onClick={handleBack}
+            className="p-1 hover:bg-grey-90 rounded transition"
+          >
+            <ArrowLeft className="size-6 text-grey-10" />
+          </button>
+          <h1 className="text-[22px] font-medium text-grey-10">
+            Create New Virtual Machine
+          </h1>
+        </div>
         <button
-          onClick={handleBack}
-          className="p-1 hover:bg-grey-90 rounded transition"
+          onClick={() => openUrl(VM_DOCS_URL)}
+          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-50 hover:text-primary-40 transition-colors"
         >
-          <ArrowLeft className="size-6 text-grey-10" />
+          Help me Create
+          <ExternalLink className="size-4" />
         </button>
-        <h1 className="text-[22px] font-medium text-grey-10">
-          Create New Virtual Machine
-        </h1>
       </div>
 
       {/* Select a Model Section */}

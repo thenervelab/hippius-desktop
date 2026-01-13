@@ -10,6 +10,10 @@ import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import { Icons } from "@/components/ui";
 import SubscriptionPlansWidget from "./SubscriptionPlansWidget";
 import TaoDepositWidget from "./TaoDepositWidget";
+import { HelpCircle } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+const BILLING_DOCS_URL = "https://docs.hippius.com/use/desktop/billing";
 
 export default function Billing() {
   const [activeTab, setActiveTab] = useState("Billing History");
@@ -17,15 +21,26 @@ export default function Billing() {
   const tabs: TabOption[] = [
     {
       tabName: "Billing History",
-      icon: <Icons.BoxTime className="size-4" />
-    }
+      icon: <Icons.BoxTime className="size-4" />,
+    },
   ];
 
   return (
     <>
-      <DashboardTitleWrapper mainText="Billing">
+      <DashboardTitleWrapper
+        mainText="Billing"
+        infoTooltip={
+          <button
+            onClick={() => openUrl(BILLING_DOCS_URL)}
+            aria-label="Billing documentation"
+            title="Billing documentation"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
+          >
+            <HelpCircle className="size-4" />
+          </button>
+        }
+      >
         <div className="flex flex-col mt-6">
-
           <div className="w-full grid">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <CreditsWidget />

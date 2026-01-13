@@ -162,9 +162,9 @@ export const getDesktopColumns = (
             },
             {
               icon: <Icons.CodeCircle className="size-4" />,
-              itemTitle: "VNC Console (Ready)",
+              itemTitle: "Access Console",
               isLink: true,
-              href: `/vm/instance-details?instanceId=${instance.id}&tab=vnc-console`,
+              href: `/vm/instance-details?instanceId=${instance.id}&tab=console`,
             },
             // {
             //   icon: <Icons.CloudConnection className="size-4" />,

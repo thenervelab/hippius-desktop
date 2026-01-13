@@ -176,6 +176,7 @@ const CustomizeRPC: React.FC = () => {
                     title="RPC Setting"
                     subtitle="Customize your connection by updating the blockchain RPC endpoint."
                     info="The RPC endpoint determines which blockchain network you connect to. By default, we use wss://rpc.hippius.network. Custom endpoints can provide better performance in specific regions or enable connection to test networks. Always ensure you're using a trusted RPC provider for security."
+                    learnMoreUrl="https://docs.hippius.com/use/desktop/settings#customize-rpc"
                   />
                   {!editMode && (
                     <IconButton
@@ -251,8 +252,8 @@ const CustomizeRPC: React.FC = () => {
                         {testing
                           ? "Verifying..."
                           : saving
-                            ? "Saving..."
-                            : "Save"}
+                          ? "Saving..."
+                          : "Save"}
                       </span>
                     </div>
                   </CardButton>

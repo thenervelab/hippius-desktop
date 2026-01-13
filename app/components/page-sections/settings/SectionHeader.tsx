@@ -10,6 +10,7 @@ interface SectionHeaderProps {
   subtitle: React.ReactNode;
   iconSize?: "small" | "large";
   info?: string;
+  learnMoreUrl?: string;
 }
 
 const SectionHeader: React.FC<SectionHeaderProps> = ({
@@ -18,6 +19,7 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
   subtitle,
   iconSize = "large",
   info = "",
+  learnMoreUrl,
 }) => {
   const wrapperSize = iconSize === "small" ? "size-8" : "size-8 sm:size-10";
   const iconSizeClass = iconSize === "small" ? "size-4" : "size-5 sm:size-6";
@@ -34,7 +36,9 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
           </div>
           {info && (
             <div className="size-4  flex items-center justify-center">
-              <InfoTooltip iconColor="text-grey-60">{info}</InfoTooltip>
+              <InfoTooltip iconColor="text-grey-60" learnMoreUrl={learnMoreUrl}>
+                {info}
+              </InfoTooltip>
             </div>
           )}
         </div>
