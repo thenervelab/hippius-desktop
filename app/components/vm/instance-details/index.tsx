@@ -26,8 +26,8 @@ const InstanceDetails: React.FC = () => {
 
   useEffect(() => {
     const tab = searchParams.get("tab");
-    if (tab === "vnc-console") {
-      setActiveTab("VNC Console");
+    if (tab === "console") {
+      setActiveTab("Console");
     }
   }, [searchParams]);
 
@@ -82,7 +82,7 @@ const InstanceDetails: React.FC = () => {
             />
             <NetworksInfo instanceData={instanceData} isLoading={loading} />
           </div>
-        ) : activeTab === "VNC Console" ? (
+        ) : activeTab === "Console" ? (
           <VncConsole
             instance={
               instanceData

@@ -29,7 +29,7 @@ const InstanceHeader: React.FC<InstanceHeaderProps> = ({
       icon: <Icons.Dashboard className="size-4" />,
     },
     {
-      tabName: "VNC Console",
+      tabName: "Console",
       icon: <Icons.DocumentCode className="size-4" />,
     },
   ];
