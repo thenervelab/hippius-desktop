@@ -5,6 +5,7 @@ import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
+import useUserFiles from "@/app/lib/hooks/use-user-files";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
 import { formatStorageForChartByRange } from "@/app/lib/utils/getFormatDataForStorageUsageChart";
@@ -26,6 +27,11 @@ export default function DetailList() {
     error: creditsError,
     refetch: refetchCredits,
   } = useUserCredits();
+
+  const {
+    data: userFilesData,
+    isLoading: isUserFilesLoading,
+  } = useUserFiles();
 
   const {
     data: filesData,
@@ -123,12 +129,16 @@ export default function DetailList() {
     return "≈0 GB/mo Storage";
   };
 
-  // Helper functions for file data
+  // Helper functions for file data - count only private files
   const getTotalFiles = () => {
     if (isFilesLoading) return "Loading...";
     if (filesError) return "Error";
-    // filesData is already an array (Account[]), so get its length
-    return Array.isArray(filesData) ? filesData.length : 0;
+    if (!userFilesData?.files) return 0;
+    // Filter for private files only (matching FilesContainer logic)
+    const privateFiles = userFilesData.files.filter(
+      (file) => !file.deleted && file.type?.toLowerCase() === "private"
+    );
+    return privateFiles.length;
   };
 
   // Calculate all-time Total Credits Used from marketplace credits
@@ -183,7 +193,7 @@ export default function DetailList() {
       title: "Total Files",
       value: getTotalFiles(),
       showRefresh: false,
-      isLoading: isFilesLoading,
+      isLoading: isUserFilesLoading,
       info: "Total number of files synced using the Hippius desktop app. This does not include files from other buckets or console uploads.",
     },
     {
