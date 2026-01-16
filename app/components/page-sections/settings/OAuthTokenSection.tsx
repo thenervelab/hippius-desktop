@@ -9,8 +9,8 @@ import { Key } from "@/components/ui/icons";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-const MASTER_TOKEN_DOCS_URL =
-  "https://docs.hippius.com/use/desktop/settings#master-token";
+const API_TOKEN_DOCS_URL =
+  "https://docs.hippius.com/use/desktop/settings#api-token";
 
 const OAuthTokenSection: React.FC = () => {
   const { oauthSession } = useWalletAuth();
@@ -87,9 +87,9 @@ const OAuthTokenSection: React.FC = () => {
             <div className="flex items-center gap-2">
               <h2 className="text-lg sm:text-[22px] font-medium">API Token</h2>
               <button
-                onClick={() => openUrl(MASTER_TOKEN_DOCS_URL)}
-                aria-label="Master token documentation"
-                title="Master token documentation"
+                onClick={() => openUrl(API_TOKEN_DOCS_URL)}
+                aria-label="API token documentation"
+                title="API token documentation"
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
               >
                 <HelpCircle className="size-4" />
