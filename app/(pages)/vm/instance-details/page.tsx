@@ -10,7 +10,10 @@ export const metadata: Metadata = {
 
 export default function InstanceDetailsPage() {
   return (
-    <DashboardTitleWrapper mainText="Virtual Machines">
+    <DashboardTitleWrapper
+      mainText="Virtual Machines"
+      subText="All virtual machines run in isolated enclaves with hardware-level encryption"
+    >
       <div className="mt-6">
         <InstanceDetails />
       </div>
