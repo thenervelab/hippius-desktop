@@ -318,7 +318,7 @@ pub async fn start_private_folder_sync(
             last_run_end.elapsed()
         );
 
-        running = true;
+        // running = true;
 
         // mark syncing
         {

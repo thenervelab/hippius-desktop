@@ -1,4 +1,4 @@
-use crate::DB_POOL;
+// use crate::DB_POOL;
 
 #[cfg(target_os = "macos")]
 use crate::macos_bookmarks::{
