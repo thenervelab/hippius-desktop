@@ -20,13 +20,15 @@ import { InView } from "react-intersection-observer";
 import CreditUsedTooltip from "./CreditsUsedTooltip";
 import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
 import { getXLabelsForTimeRange } from "@/app/lib/utils/getXLabelsForTimeRange";
+import { calculatePaddingOuter } from "@/app/lib/utils/calculatePaddingOuter";
 
 // === Time‐Range Options ===
 const timeRangeOptions: Option[] = [
   { value: "last7days", label: "Last 7 Days" },
   { value: "last30days", label: "Last 30 Days" },
   { value: "last60days", label: "Last 60 Days" },
-  { value: "year", label: "Last 12 Months" },
+  { value: "year", label: "1 Year" },
+  { value: "max", label: "MAX" },
 ];
 
 // === Line + Area Colors ===
@@ -51,7 +53,7 @@ const CreditUsageTrends: React.FC<{
 
     return formatAccountsForChartByRange(
       chartData,
-      timeRange as "last7days" | "last30days" | "last60days" | "year"
+      timeRange as "last7days" | "last30days" | "last60days" | "year" | "max",
     );
   }, [chartData, timeRange]);
 
@@ -60,15 +62,27 @@ const CreditUsageTrends: React.FC<{
     if (!formattedChartData.length) return [0, 1];
     const balances = formattedChartData.map((d) => d.balance);
     const max = Math.max(...balances, 0);
-    // Add very minimal padding (2%) above max and use more ticks (8) for granular display
+    // Add very minimal padding (2%) above max and use fewer ticks for legibility
     const paddedMax = max > 0 ? max * 1.02 : 1;
-    return getNiceTicksAlways(0, paddedMax, 8);
+    return getNiceTicksAlways(0, paddedMax, 5);
   }, [formattedChartData]);
 
   // Build X‐labels (strings) depending on selected range
-  const xLabels: string[] = useMemo(() => {
-    return getXLabelsForTimeRange(formattedChartData, chartData, timeRange);
-  }, [formattedChartData, chartData, timeRange]);
+  const xTicks = useMemo(() => {
+    return getXLabelsForTimeRange(formattedChartData, timeRange);
+  }, [formattedChartData, timeRange]);
+
+  const xTickLabelMap = useMemo(() => {
+    return new Map(xTicks.map((tick) => [tick.value.getTime(), tick.label]));
+  }, [xTicks]);
+
+  const xTickValues = useMemo(() => {
+    return xTicks.map((tick) => tick.value);
+  }, [xTicks]);
+  const paddingOuter = useMemo(
+    () => calculatePaddingOuter(formattedChartData.length),
+    [formattedChartData.length],
+  );
 
   return (
     <InView triggerOnce threshold={0.2}>
@@ -81,7 +95,7 @@ const CreditUsageTrends: React.FC<{
                   <AbstractIconWrapper
                     className={cn(
                       "px-0 size-6 sm:size-7 opacity-0 translate-y-7 duration-500 transition-transform",
-                      inView && "opacity-100 translate-y-0"
+                      inView && "opacity-100 translate-y-0",
                     )}
                   >
                     <Icons.Tag2 className="relative size-4 sm:size-5 text-primary-50" />
@@ -122,29 +136,34 @@ const CreditUsageTrends: React.FC<{
                   </span>
                 </div>
               ) : (
-                <div className="w-full h-full  relative pr-4">
-                  <ChartGridOverlay marginClasses="mt-[0px] ml-[45px] mb-[30px] mr-[21px]" />
+                <div className="w-full h-full relative pr-4 ">
+                  <ChartGridOverlay marginClasses="mt-[10px] ml-[45px] mb-[30px] mr-[21px]" />
                   <AreaLineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
                     data={formattedChartData}
+                    xScaleType="band"
+                    yScaleType="linear"
                     plots={[
                       {
                         dataKey: "balance",
-                        xAccessor: (d: ChartPoint) =>
-                          d.bandLabel ? d.bandLabel : d?.x,
+                        xAccessor: (d: ChartPoint) => d.x,
                         yAccessor: (d: ChartPoint) => d?.balance || 0,
                         lineColor: COLORS.line,
                         areaColor: COLORS.area,
                       },
                     ]}
-                    xScaleType="band" // Always use band for every range
+                    xDomain={formattedChartData.map((d) => d.x)}
                     yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
-                    margin={{ top: 0, left: 45, bottom: 30, right: 5 }}
+                    margin={{ top: 10, left: 45, bottom: 30, right: 5 }}
                     showVerticalCrosshair={true}
                     showHorizontalCrosshair={true}
                     xAxisProps={{
-                      numTicks: xLabels.length,
-                      tickFormat: (_, i) => xLabels[i] || "",
+                      tickValues: xTickValues,
+                      tickFormat: (value) => {
+                        const date =
+                          value instanceof Date ? value : new Date(value);
+                        return xTickLabelMap.get(date.getTime()) || "";
+                      },
                       label: "",
                       hideTicks: false,
                       hideAxisLine: false,
@@ -154,6 +173,11 @@ const CreditUsageTrends: React.FC<{
                         textAnchor: "middle",
                         dy: "0.5em",
                       }),
+                    }}
+                    bandScaleConfig={{
+                      paddingInner: 0.3,
+                      paddingOuter,
+                      align: 0.5,
                     }}
                     yAxisProps={{
                       numTicks: yTicks.length,

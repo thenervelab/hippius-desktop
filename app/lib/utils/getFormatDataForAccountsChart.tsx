@@ -1,4 +1,5 @@
 // getFormatDataForAccountsChart.tsx
+import { getHippiusCreationDate } from "@/lib/constants/hippius-dates";
 import { Account } from "@/lib/types";
 import { formatBalance } from "./formatters/formatBalance";
 
@@ -66,7 +67,7 @@ export function getAllDatesInRange(start: Date, end: Date): Date[] {
 export function fillDataWithCarryForward(
   rawData: ChartPoint[],
   dateRange: Date[],
-  getLabel?: (date: Date) => string
+  getLabel?: (date: Date) => string,
 ): ChartPoint[] {
   const dataByDate = new Map<string, ChartPoint>();
   rawData.forEach((d) => {
@@ -105,14 +106,14 @@ export function fillDataWithCarryForward(
 
 export const formatAccountsForChartByRange = (
   accounts: Account[],
-  range: "last7days" | "last30days" | "last60days" | "year"
+  range: "last7days" | "last30days" | "last60days" | "year" | "max",
 ): ChartPoint[] => {
   if (!accounts?.length) return [];
 
   const sorted = [...accounts].sort(
     (a, b) =>
       new Date(a.processed_timestamp).getTime() -
-      new Date(b.processed_timestamp).getTime()
+      new Date(b.processed_timestamp).getTime(),
   );
 
   const chartPoints: ChartPoint[] = sorted.map((acc) => {
@@ -148,7 +149,7 @@ export const formatAccountsForChartByRange = (
     return fillDataWithCarryForward(
       chartPoints,
       weekDates,
-      (date) => WEEKDAYS_FULL[date.getDay()]
+      (date) => WEEKDAYS_FULL[date.getDay()],
     ).map((pt) => ({
       ...pt,
       bandLabel: WEEKDAYS_FULL[pt.x.getDay()],
@@ -164,7 +165,7 @@ export const formatAccountsForChartByRange = (
     return fillDataWithCarryForward(
       chartPoints,
       thirtyDaysDates,
-      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
     );
   }
 
@@ -177,75 +178,31 @@ export const formatAccountsForChartByRange = (
     return fillDataWithCarryForward(
       chartPoints,
       sixtyDaysDates,
-      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
     );
   }
 
   if (range === "year") {
-    // Create a monthly data map instead of using daily data
-    const monthlyData: Map<string, ChartPoint> = new Map();
+    const lastYear = new Date(now);
+    lastYear.setFullYear(lastYear.getFullYear() - 1);
+    lastYear.setHours(0, 0, 0, 0);
 
-    // Process each data point to group by month-year
-    chartPoints.forEach((point) => {
-      const month = point.x.getMonth();
-      const year = point.x.getFullYear();
-      const key = `${year}-${String(month).padStart(2, "0")}`;
+    const yearDates = getAllDatesInRange(lastYear, now);
+    return fillDataWithCarryForward(
+      chartPoints,
+      yearDates,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
+    );
+  }
 
-      if (
-        !monthlyData.has(key) ||
-        point.x > (monthlyData.get(key)?.x || new Date(0))
-      ) {
-        // Use the most recent data point for each month
-        monthlyData.set(key, point);
-      }
-    });
-
-    // Generate exactly 12 months of data, going back from today
-    const result: ChartPoint[] = [];
-    let lastPoint: ChartPoint | null = null;
-
-    for (let i = 11; i >= 0; i--) {
-      // Calculate date by working with year and month separately
-      let targetYear = now.getFullYear();
-      let targetMonth = now.getMonth() - i;
-
-      // Handle month wrapping across year boundaries
-      if (targetMonth < 0) {
-        targetYear += Math.floor(targetMonth / 12);
-        targetMonth = targetMonth % 12;
-        if (targetMonth < 0) targetMonth += 12;
-      }
-
-      const key = `${targetYear}-${String(targetMonth).padStart(2, "0")}`;
-      const monthDate = new Date(targetYear, targetMonth, 1);
-      const monthLabel = MONTHS[targetMonth];
-
-      // If we have data for this month, use it
-      if (monthlyData.has(key)) {
-        const monthPoint = monthlyData.get(key)!;
-        lastPoint = monthPoint;
-        result.push({
-          ...monthPoint,
-          x: monthDate,
-          bandLabel: monthLabel,
-          dayLabel: monthLabel,
-        });
-      } else {
-        // Otherwise carry forward from the previous month
-        result.push({
-          x: monthDate,
-          balance: lastPoint ? lastPoint.balance : 0,
-          formattedBalance: lastPoint ? lastPoint.formattedBalance : "0",
-          credit: lastPoint ? lastPoint.credit : 0,
-          formattedCredit: lastPoint ? lastPoint.formattedCredit : "0",
-          timestamp: lastPoint ? lastPoint.timestamp : "",
-          dayLabel: monthLabel,
-          bandLabel: monthLabel,
-        });
-      }
-    }
-
-    return result;
+  if (range === "max") {
+    const startDate = getHippiusCreationDate();
+    const maxDates = getAllDatesInRange(startDate, now);
+    return fillDataWithCarryForward(
+      chartPoints,
+      maxDates,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
+    );
   }
 
   return chartPoints;

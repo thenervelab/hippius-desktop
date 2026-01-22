@@ -1,3 +1,4 @@
+import { getHippiusCreationDate } from "@/lib/constants/hippius-dates";
 import { Account } from "@/lib/types";
 import { formatBalance } from "./formatters/formatBalance";
 
@@ -78,8 +79,13 @@ function getDateFromUTCTimestamp(timestamp: string): Date {
 export function mapCreditsToDateRange(
   rawData: ChartPoint[],
   dateRange: Date[],
+  allHistoricalData: ChartPoint[],
   getLabel?: (date: Date) => string
 ): ChartPoint[] {
+  if (!dateRange.length) {
+    return [];
+  }
+
   const dataByDate = new Map<string, ChartPoint>();
 
   // Map data by date (rawData already contains cumulative values)
@@ -88,8 +94,18 @@ export function mapCreditsToDateRange(
     dataByDate.set(key, d);
   });
 
-  // For each date in the range, use actual cumulative data or carry forward previous day's value
+  // Find the MAXIMUM cumulative value from ALL historical data ON OR BEFORE the date range starts
+  const firstDateKey = normalizeDate(dateRange[0]);
   let lastKnownBalance = 0;
+
+  for (const point of allHistoricalData) {
+    const pointKey = normalizeDate(point.x);
+    if (pointKey <= firstDateKey) {
+      lastKnownBalance = Math.max(lastKnownBalance, point.balance);
+    }
+  }
+
+  // For each date in the range, use actual cumulative data or carry forward previous day's value
   return dateRange.map((date) => {
     const key = normalizeDate(date);
     const hasData = dataByDate.has(key);
@@ -183,7 +199,7 @@ export function aggregateCreditsByMonth(
 
 export const formatAccountsForChartByRange = (
   accounts: Account[],
-  range: "last7days" | "last30days" | "last60days" | "year"
+  range: "last7days" | "last30days" | "last60days" | "year" | "max"
 ): ChartPoint[] => {
   if (!accounts || accounts.length === 0) {
     return [];
@@ -226,6 +242,7 @@ export const formatAccountsForChartByRange = (
     return mapCreditsToDateRange(
       chartPoints,
       weekDates,
+      chartPoints,
       (date) => WEEKDAYS_FULL[date.getDay()]
     ).map((point) => ({
       ...point,
@@ -242,6 +259,7 @@ export const formatAccountsForChartByRange = (
     return mapCreditsToDateRange(
       chartPoints,
       thirtyDaysDates,
+      chartPoints,
       (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
     );
   }
@@ -255,28 +273,39 @@ export const formatAccountsForChartByRange = (
     return mapCreditsToDateRange(
       chartPoints,
       sixtyDaysDates,
+      chartPoints,
       (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
     );
   }
 
   if (range === "year") {
-    // Last exactly 12 months from today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const twelveMonthsAgo = new Date(today);
-    twelveMonthsAgo.setFullYear(today.getFullYear() - 1);
+    const lastYear = new Date(today);
+    lastYear.setFullYear(today.getFullYear() - 1);
 
-    // Get all daily data for the last 12 months
-    const last12MonthsDates = getAllDatesInRange(twelveMonthsAgo, today);
-    const dailyChartPoints = mapCreditsToDateRange(
+    const yearDates = getAllDatesInRange(lastYear, today);
+    return mapCreditsToDateRange(
       chartPoints,
-      last12MonthsDates,
-      (date) => MONTHS[date.getMonth()]
+      yearDates,
+      chartPoints,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
     );
+  }
 
-    // Aggregate by month for year view
-    return aggregateCreditsByMonth(dailyChartPoints);
+  if (range === "max") {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const startDate = getHippiusCreationDate();
+    const maxDates = getAllDatesInRange(startDate, today);
+    return mapCreditsToDateRange(
+      chartPoints,
+      maxDates,
+      chartPoints,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+    );
   }
 
   return chartPoints;

@@ -1,3 +1,4 @@
 export const COLORS = {
-    balance: "#1F51BE",
+  line: "#1F51BE",
+  area: "url(#area-gradient)",
 };
