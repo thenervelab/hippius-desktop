@@ -16,7 +16,7 @@ use crate::utils::objectstore_tokens::get_temp_auth_key;
 use reqwest::header::AUTHORIZATION;
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, MetadataExt};
 
 const NEBULA_GITHUB_API: &str = "https://api.github.com/repos/slackhq/nebula/releases/latest";
 const NEBULA_VERSION_FILE: &str = "nebula_version.txt";
@@ -43,14 +43,14 @@ static SETUP_STATE: Lazy<Mutex<NebulaSetupState>> = Lazy::new(|| {
 // Handle for the background ping task
 static PING_TASK_HANDLE: Lazy<Mutex<Option<JoinHandle<()>>>> = Lazy::new(|| Mutex::new(None));
 
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// pub enum NebulaSetupPhase {
-//     CheckingBinary,
-//     DownloadingNebula,
-//     InstallingNebula,
-//     VerifyingInstallation,
-//     Ready,
-// }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NebulaSetupPhase {
+    CheckingBinary,
+    DownloadingNebula,
+    InstallingNebula,
+    VerifyingInstallation,
+    Ready,
+}
 
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
@@ -107,7 +107,7 @@ struct CertificateResponse {
     ca: String,
     cert: String,
     key: String,
-    // ip: String,
+    ip: String,
     config: String,
     is_active: Option<bool>,
     expires_at: Option<String>,
@@ -310,7 +310,7 @@ async fn extract_tar_gz(bytes: &[u8], target_dir: &Path) -> Result<()> {
 // --- New Granular Commands ---
 
 #[tauri::command]
-pub async fn check_nebula_requirements(_app: AppHandle) -> Result<(), String> {
+pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
     println!("[Nebula] Checking requirements...");
     
     // Check current installation
@@ -367,14 +367,14 @@ pub async fn check_nebula_requirements(_app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn download_nebula(_app: AppHandle) -> Result<(), String> {
+pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
     let (needs_update, download_url, latest_version) = {
         let state = SETUP_STATE.lock().unwrap();
         (state.needs_update, state.download_url.clone(), state.latest_version.clone())
     };
     
     if needs_update {
-        if let (Some(url), Some(_version)) = (download_url, latest_version) {
+        if let (Some(url), Some(version)) = (download_url, latest_version) {
             // Check if temp file already exists (maybe from previous run?)
             // But we should re-download to be safe or check size. 
             // For now, just download.
@@ -407,7 +407,7 @@ pub async fn download_nebula(_app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn install_nebula(_app: AppHandle) -> Result<(), String> {
+pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
     let (needs_update, latest_version) = {
         let state = SETUP_STATE.lock().unwrap();
         (state.needs_update, state.latest_version.clone())
@@ -509,7 +509,7 @@ pub async fn install_nebula(_app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn verify_nebula(_app: AppHandle) -> Result<(), String> {
+pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
     // Verify binaries
     let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
     if !binary_path.exists() {
@@ -670,7 +670,7 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
     println!("[Nebula] Renewing certificate from: {}", url);
     
     // Extract the token from the auth header (removing 'Token ' prefix)
-    let _token = auth_header.trim_start_matches("Token ");
+    let token = auth_header.trim_start_matches("Token ");
     
     // First, make a GET request to get the CSRF token
     let csrf_response = client.get(&url)
@@ -1688,75 +1688,78 @@ pub async fn get_nebula_status() -> Result<NebulaStatus, String> {
     })
 }
 
-// /// Generate a Nebula node certificate
-// pub async fn generate_node_certificate(
-//     name: &str,
-//     ip: &str,
-//     groups: Vec<String>,
-//     duration_days: u32,
-// ) -> Result<()> {
-//     let nebula_cert_binary = get_nebula_cert_binary_path()?;
-//     let account_id = get_current_account_id().await?;
-//     let config_dir = get_nebula_config_dir(&account_id)?;
+
+
+
+/// Generate a Nebula node certificate
+pub async fn generate_node_certificate(
+    name: &str,
+    ip: &str,
+    groups: Vec<String>,
+    duration_days: u32,
+) -> Result<()> {
+    let nebula_cert_binary = get_nebula_cert_binary_path()?;
+    let account_id = get_current_account_id().await?;
+    let config_dir = get_nebula_config_dir(&account_id)?;
     
-//     let ca_crt = config_dir.join("ca.crt");
-//     let ca_key = config_dir.join("ca.key");
-//     let node_crt = config_dir.join(format!("{}.crt", name));
-//     let node_key = config_dir.join(format!("{}.key", name));
+    let ca_crt = config_dir.join("ca.crt");
+    let ca_key = config_dir.join("ca.key");
+    let node_crt = config_dir.join(format!("{}.crt", name));
+    let node_key = config_dir.join(format!("{}.key", name));
     
-//     if !ca_crt.exists() || !ca_key.exists() {
-//         return Err(anyhow!("CA certificate not found. Generate CA first."));
-//     }
+    if !ca_crt.exists() || !ca_key.exists() {
+        return Err(anyhow!("CA certificate not found. Generate CA first."));
+    }
     
-//     println!("[Nebula] Generating node certificate: {}", name);
+    println!("[Nebula] Generating node certificate: {}", name);
     
-//     let duration_str = format!("{}h", duration_days * 24);
-//     let ca_crt_str = ca_crt.to_str().unwrap();
-//     let ca_key_str = ca_key.to_str().unwrap();
-//     let node_crt_str = node_crt.to_str().unwrap();
-//     let node_key_str = node_key.to_str().unwrap();
+    let duration_str = format!("{}h", duration_days * 24);
+    let ca_crt_str = ca_crt.to_str().unwrap();
+    let ca_key_str = ca_key.to_str().unwrap();
+    let node_crt_str = node_crt.to_str().unwrap();
+    let node_key_str = node_key.to_str().unwrap();
     
-//     let mut cmd = tokio::process::Command::new(&nebula_cert_binary);
-//     let mut args: Vec<&str> = vec![
-//         "sign",
-//         "-name",
-//         name,
-//         "-ip",
-//         ip,
-//         "-duration",
-//         &duration_str,
-//         "-ca-crt",
-//         ca_crt_str,
-//         "-ca-key",
-//         ca_key_str,
-//         "-out-crt",
-//         node_crt_str,
-//         "-out-key",
-//         node_key_str,
-//     ];
+    let mut cmd = tokio::process::Command::new(&nebula_cert_binary);
+    let mut args: Vec<&str> = vec![
+        "sign",
+        "-name",
+        name,
+        "-ip",
+        ip,
+        "-duration",
+        &duration_str,
+        "-ca-crt",
+        ca_crt_str,
+        "-ca-key",
+        ca_key_str,
+        "-out-crt",
+        node_crt_str,
+        "-out-key",
+        node_key_str,
+    ];
     
-//     // Add groups
-//     let group_strs: Vec<String> = groups.iter().map(|g| g.as_str().to_string()).collect();
-//     for group in &group_strs {
-//         args.push("-groups");
-//         args.push(group);
-//     }
+    // Add groups
+    let group_strs: Vec<String> = groups.iter().map(|g| g.as_str().to_string()).collect();
+    for group in &group_strs {
+        args.push("-groups");
+        args.push(group);
+    }
     
-//     cmd.args(&args);
+    cmd.args(&args);
     
-//     let output = cmd.output().await?;
+    let output = cmd.output().await?;
     
-//     if !output.status.success() {
-//         return Err(anyhow!("Node certificate generation failed: {}", 
-//             String::from_utf8_lossy(&output.stderr)));
-//     }
+    if !output.status.success() {
+        return Err(anyhow!("Node certificate generation failed: {}", 
+            String::from_utf8_lossy(&output.stderr)));
+    }
     
-//     println!("[Nebula] Node certificate generated successfully");
-//     println!("[Nebula]   Certificate: {}", node_crt.display());
-//     println!("[Nebula]   Key: {}", node_key.display());
+    println!("[Nebula] Node certificate generated successfully");
+    println!("[Nebula]   Certificate: {}", node_crt.display());
+    println!("[Nebula]   Key: {}", node_key.display());
     
-//     Ok(())
-// }
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn check_nebula_update() -> Result<Option<String>, String> {
@@ -1831,6 +1834,3 @@ pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
     // 3. Certificate is not active
     Ok(false)
 }
-
-
-
