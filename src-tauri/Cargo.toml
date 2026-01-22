@@ -54,7 +54,7 @@ parity-scale-codec = "3.6"
 tauri-plugin-fs = "2"
 sysinfo = "0.32"
 notify = "6.1"
-tauri-plugin-dialog = "2"
+tauri-plugin-dialog = "2.6.0"
 tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
