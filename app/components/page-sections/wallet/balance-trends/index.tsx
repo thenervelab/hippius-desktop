@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import {
   Icons,
   Select,
-  LineChart,
+  AreaLineChart,
   AbstractIconWrapper,
   ChartGridOverlay,
 } from "@/components/ui";
@@ -20,13 +20,15 @@ import { COLORS } from "./constants";
 import { WalletAdd } from "@/app/components/ui/icons";
 import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
 import { getXLabelsForTimeRange } from "@/app/lib/utils/getXLabelsForTimeRange";
+import { calculatePaddingOuter } from "@/app/lib/utils/calculatePaddingOuter";
 
 // === Time‐Range Options ===
 const timeRangeOptions: Option[] = [
   { value: "last7days", label: "Last 7 Days" },
   { value: "last30days", label: "Last 30 Days" },
   { value: "last60days", label: "Last 60 Days" },
-  { value: "year", label: "This Year" },
+  { value: "year", label: "1 Year" },
+  { value: "max", label: "MAX" },
 ];
 
 const BalanceTrends: React.FC<{
@@ -40,7 +42,7 @@ const BalanceTrends: React.FC<{
     if (!chartData?.length) return [];
     return formatAccountsForChartByRange(
       chartData,
-      timeRange as "last7days" | "last30days" | "last60days" | "year"
+      timeRange as "last7days" | "last30days" | "last60days" | "year" | "max",
     );
   }, [chartData, timeRange]);
 
@@ -53,9 +55,21 @@ const BalanceTrends: React.FC<{
   }, [formattedChartData]);
 
   // Build X‐labels (strings) depending on selected range
-  const xLabels: string[] = useMemo(() => {
-    return getXLabelsForTimeRange(formattedChartData, chartData, timeRange);
-  }, [formattedChartData, chartData, timeRange]);
+  const xTicks = useMemo(() => {
+    return getXLabelsForTimeRange(formattedChartData, timeRange);
+  }, [formattedChartData, timeRange]);
+
+  const xTickLabelMap = useMemo(() => {
+    return new Map(xTicks.map((tick) => [tick.value.getTime(), tick.label]));
+  }, [xTicks]);
+
+  const xTickValues = useMemo(() => {
+    return xTicks.map((tick) => tick.value);
+  }, [xTicks]);
+  const paddingOuter = useMemo(
+    () => calculatePaddingOuter(formattedChartData.length),
+    [formattedChartData.length],
+  );
 
   return (
     <InView triggerOnce threshold={0.2}>
@@ -101,24 +115,35 @@ const BalanceTrends: React.FC<{
                     bgClass="bg-[url('/wallet-chart-grid.png')]"
                     marginClasses="mt-[36px] ml-[43px] mb-[30px] mr-[21px]"
                   />
-                  <LineChart
+                  <AreaLineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
-                    className="w-full h-full"
+                   
                     data={formattedChartData}
                     xScaleType="band"
+                    yScaleType="linear"
+                    xDomain={formattedChartData.map(d => d.x)}
                     yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
                     margin={{ top: 20, left: 45, bottom: 30, right: 5 }}
                     showVerticalCrosshair
                     showHorizontalCrosshair
                     xAxisProps={{
-                      numTicks: xLabels.length,
-                      tickFormat: (_, i) => xLabels[i] || "",
+                      tickValues: xTickValues,
+                      tickFormat: (value) => {
+                        const date =
+                          value instanceof Date ? value : new Date(value);
+                        return xTickLabelMap.get(date.getTime()) || "";
+                      },
                       tickLabelProps: () => ({
                         fontSize: 10,
                         fill: "#6B7280",
                         textAnchor: "middle",
                         dy: "0.5em",
                       }),
+                    }}
+                    bandScaleConfig={{
+                      paddingInner: 0.3,
+                      paddingOuter,
+                      align: 0.5,
                     }}
                     yAxisProps={{
                       numTicks: yTicks.length,
@@ -141,9 +166,10 @@ const BalanceTrends: React.FC<{
                     plots={[
                       {
                         dataKey: "balance",
-                        xAccessor: (d: ChartPoint) => d.bandLabel ?? d.x,
+                        xAccessor: (d: ChartPoint) => d.x,
                         yAccessor: (d: ChartPoint) => d.balance,
-                        lineColor: COLORS.balance,
+                        lineColor: COLORS.line,
+                        areaColor: COLORS.area,
                       },
                     ]}
                     renderTooltip={(td) => (

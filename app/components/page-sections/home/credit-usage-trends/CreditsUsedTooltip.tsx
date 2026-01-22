@@ -19,11 +19,6 @@ const CreditUsedTooltip: React.FC<{
         month: "short",
         day: "numeric",
       });
-    } else if (timeRange === "year") {
-      dateDisplay = datum.x.toLocaleDateString("en-US", {
-        month: "long",
-        year: "numeric",
-      });
     } else {
       dateDisplay = datum.x.toLocaleDateString("en-US", {
         month: "short",

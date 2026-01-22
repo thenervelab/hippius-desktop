@@ -18,6 +18,7 @@ import BalanceTrendsTooltip from "./CreditsTrendsTooltip";
 import { WalletAdd } from "@/app/components/ui/icons";
 import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
 import { getXLabelsForTimeRange } from "@/app/lib/utils/getXLabelsForTimeRange";
+import { calculatePaddingOuter } from "@/app/lib/utils/calculatePaddingOuter";
 
 // === Line + Area Colors ===
 const COLORS = {
@@ -25,12 +26,12 @@ const COLORS = {
   area: "url(#area-gradient)", // Use the gradient defined in AreaLineChart
 };
 
-
 const timeRangeOptions: Option[] = [
   { value: "last7days", label: "Last 7 Days" },
   { value: "last30days", label: "Last 30 Days" },
   { value: "last60days", label: "Last 60 Days" },
-  { value: "year", label: "Last 12 Months" },
+  { value: "year", label: "1 Year" },
+  { value: "max", label: "MAX" },
 ];
 
 const CreditsTrends: React.FC<{
@@ -44,7 +45,7 @@ const CreditsTrends: React.FC<{
     if (!chartData?.length) return [];
     return formatAccountsForChartByRange(
       chartData,
-      timeRange as "last7days" | "last30days" | "last60days" | "year"
+      timeRange as "last7days" | "last30days" | "last60days" | "year" | "max",
     );
   }, [chartData, timeRange]);
 
@@ -56,17 +57,30 @@ const CreditsTrends: React.FC<{
     return getNiceTicksAlways(0, mx, 5);
   }, [formattedChartData]);
   // Build X‐labels (strings) depending on selected range
-  const xLabels: string[] = useMemo(() => {
-    return getXLabelsForTimeRange(formattedChartData, chartData, timeRange);
-  }, [formattedChartData, chartData, timeRange]);
+  const xTicks = useMemo(() => {
+    return getXLabelsForTimeRange(formattedChartData, timeRange);
+  }, [formattedChartData, timeRange]);
+
+  const xTickLabelMap = useMemo(() => {
+    return new Map(xTicks.map((tick) => [tick.value.getTime(), tick.label]));
+  }, [xTicks]);
+
+  const xTickValues = useMemo(() => {
+    return xTicks.map((tick) => tick.value);
+  }, [xTicks]);
+  const paddingOuter = useMemo(
+    () => calculatePaddingOuter(formattedChartData.length),
+    [formattedChartData.length],
+  );
 
   return (
     <InView triggerOnce threshold={0.2}>
       {({ ref }) => (
         <div
           ref={ref}
-          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${className || ""
-            }`}
+          className={`p-4 border border-grey-80 rounded-lg w-full h-[310px] ${
+            className || ""
+          }`}
         >
           <div className="flex justify-between mb-3.5">
             <div className="flex gap-4 items-center">
@@ -115,23 +129,29 @@ const CreditsTrends: React.FC<{
                   <AreaLineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
                     data={formattedChartData}
+                    xScaleType="band"
+                    yScaleType="linear"
                     plots={[
                       {
                         dataKey: "credit",
-                        xAccessor: (d: ChartPoint) => d.bandLabel ?? d.x,
+                        xAccessor: (d: ChartPoint) => d.x,
                         yAccessor: (d: ChartPoint) => d.credit,
                         lineColor: COLORS.line,
                         areaColor: COLORS.area,
                       },
                     ]}
-                    xScaleType="band"
+                    xDomain={formattedChartData.map((d) => d.x)}
                     yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
                     margin={{ top: 20, left: 45, bottom: 30, right: 5 }}
                     showVerticalCrosshair
                     showHorizontalCrosshair
                     xAxisProps={{
-                      numTicks: xLabels.length,
-                      tickFormat: (_, i) => xLabels[i] || "",
+                      tickValues: xTickValues,
+                      tickFormat: (value) => {
+                        const date =
+                          value instanceof Date ? value : new Date(value);
+                        return xTickLabelMap.get(date.getTime()) || "";
+                      },
                       label: "",
                       hideTicks: false,
                       hideAxisLine: false,
@@ -141,6 +161,11 @@ const CreditsTrends: React.FC<{
                         textAnchor: "middle",
                         dy: "0.5em",
                       }),
+                    }}
+                    bandScaleConfig={{
+                      paddingInner: 0.3,
+                      paddingOuter,
+                      align: 0.5,
                     }}
                     yAxisProps={{
                       numTicks: yTicks.length,
@@ -162,7 +187,10 @@ const CreditsTrends: React.FC<{
                       }),
                     }}
                     renderTooltip={(td) => (
-                      <BalanceTrendsTooltip tooltipData={td} timeRange={timeRange} />
+                      <BalanceTrendsTooltip
+                        tooltipData={td}
+                        timeRange={timeRange}
+                      />
                     )}
                   />
                 </div>

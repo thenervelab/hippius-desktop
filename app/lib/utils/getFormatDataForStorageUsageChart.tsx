@@ -1,3 +1,4 @@
+import { getHippiusCreationDate } from "@/lib/constants/hippius-dates";
 import { Account } from "@/lib/types";
 import { formatBytes } from "./formatBytes";
 
@@ -24,7 +25,7 @@ export function getAllDatesInRange(start: Date, end: Date): Date[] {
 function normalizeDate(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
     2,
-    "0"
+    "0",
   )}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
@@ -35,8 +36,13 @@ function normalizeDate(date: Date): string {
 export function mapBytesToDateRange(
   rawData: ChartPoint[],
   dateRange: Date[],
-  getLabel?: (date: Date) => string
+  allHistoricalData: ChartPoint[],
+  getLabel?: (date: Date) => string,
 ): ChartPoint[] {
+  if (!dateRange.length) {
+    return [];
+  }
+
   // Create a map of date -> usage for quick lookups
   const usageMap = new Map<string, number>();
   rawData.forEach((point) => {
@@ -44,9 +50,15 @@ export function mapBytesToDateRange(
     usageMap.set(key, point.balance);
   });
 
-  // Track the last known value for forward-filling
+  const firstDateKey = normalizeDate(dateRange[0]);
   let lastKnownValue = 0;
-  let hasSeenData = false;
+
+  for (const point of allHistoricalData) {
+    const pointKey = normalizeDate(point.x);
+    if (pointKey <= firstDateKey) {
+      lastKnownValue = Math.max(lastKnownValue, point.balance);
+    }
+  }
 
   // Map each date in range
   return dateRange.map((date) => {
@@ -56,7 +68,6 @@ export function mapBytesToDateRange(
       // Data exists for this date, use it
       const usage = usageMap.get(key) || 0;
       lastKnownValue = usage;
-      hasSeenData = true;
 
       return {
         balance: usage,
@@ -68,14 +79,9 @@ export function mapBytesToDateRange(
           : String(date.getDate()).padStart(2, "0"),
       };
     } else {
-      // No data for this date
-      // If we've seen data before, forward-fill with last known value
-      // Otherwise, use 0 (dates before first data point)
-      const valueToUse = hasSeenData ? lastKnownValue : 0;
-
       return {
-        balance: valueToUse,
-        formattedBalance: formatBytes(valueToUse),
+        balance: lastKnownValue,
+        formattedBalance: formatBytes(lastKnownValue),
         timestamp: "",
         x: new Date(date),
         dayLabel: getLabel
@@ -124,7 +130,7 @@ export function aggregateBytesByMonth(chartPoints: ChartPoint[]): ChartPoint[] {
 // Data is already daily usage per row, just filter by range and fill missing days with zero
 export const formatStorageForChartByRange = (
   accounts: Account[],
-  range: "last7days" | "last30days" | "last60days" | "year"
+  range: "last7days" | "last30days" | "last60days" | "year" | "max",
 ): ChartPoint[] => {
   if (!accounts || accounts.length === 0) {
     return [];
@@ -160,7 +166,8 @@ export const formatStorageForChartByRange = (
     return mapBytesToDateRange(
       chartPoints,
       weekDates,
-      (date) => WEEKDAYS_FULL[date.getDay()]
+      chartPoints,
+      (date) => WEEKDAYS_FULL[date.getDay()],
     ).map((point) => ({
       ...point,
       bandLabel: WEEKDAYS_FULL[point.x.getDay()],
@@ -176,7 +183,8 @@ export const formatStorageForChartByRange = (
     return mapBytesToDateRange(
       chartPoints,
       thirtyDaysDates,
-      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+      chartPoints,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
     );
   }
 
@@ -189,87 +197,40 @@ export const formatStorageForChartByRange = (
     return mapBytesToDateRange(
       chartPoints,
       sixtyDaysDates,
-      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+      chartPoints,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
     );
   }
 
   if (range === "year") {
-    // Last exactly 12 months from today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const twelveMonthsAgo = new Date(today);
-    twelveMonthsAgo.setFullYear(today.getFullYear() - 1);
+    const lastYear = new Date(today);
+    lastYear.setFullYear(today.getFullYear() - 1);
 
-    const last12MonthsDates = getAllDatesInRange(twelveMonthsAgo, today);
-
-    // Map daily usage data to last 12 months dates (fill missing days with forward-fill)
-    const dailyUsagePoints = mapBytesToDateRange(
+    const yearDates = getAllDatesInRange(lastYear, today);
+    return mapBytesToDateRange(
       chartPoints,
-      last12MonthsDates,
-      (date) => MONTHS[date.getMonth()]
+      yearDates,
+      chartPoints,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
     );
+  }
 
-    // Aggregate daily usage by month
-    return aggregateBytesByMonthLast12Months(dailyUsagePoints);
+  if (range === "max") {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const startDate = getHippiusCreationDate();
+    const maxDates = getAllDatesInRange(startDate, today);
+    return mapBytesToDateRange(
+      chartPoints,
+      maxDates,
+      chartPoints,
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
+    );
   }
 
   return chartPoints;
 };
-
-// Get the last (most recent) value for each month for the last 12 months
-// Ensures all 12 months are represented even if some have no data
-function aggregateBytesByMonthLast12Months(points: ChartPoint[]): ChartPoint[] {
-  if (points.length === 0) return [];
-
-  const today = new Date();
-
-  // Store the last value seen for each month
-  const monthlyLastValue = new Map<string, number>();
-
-  points.forEach((point) => {
-    const month = point.x.getMonth();
-    const year = point.x.getFullYear();
-    const key = `${year}-${String(month).padStart(2, "0")}`;
-    // Always update with the current value - the last iteration will be the latest day
-    monthlyLastValue.set(key, point.balance);
-  });
-
-  // Generate exactly 12 months of data, going back from today
-  const monthlyData: ChartPoint[] = [];
-  let lastKnownValue = 0;
-
-  for (let i = 11; i >= 0; i--) {
-    // Calculate date by working with year and month separately
-    let targetYear = today.getFullYear();
-    let targetMonth = today.getMonth() - i;
-
-    // Handle month wrapping across year boundaries
-    if (targetMonth < 0) {
-      targetYear += Math.floor(targetMonth / 12);
-      targetMonth = targetMonth % 12;
-      if (targetMonth < 0) targetMonth += 12;
-    }
-
-    const key = `${targetYear}-${String(targetMonth).padStart(2, "0")}`;
-
-    // Use actual value if available, otherwise carry forward last known
-    if (monthlyLastValue.has(key)) {
-      lastKnownValue = monthlyLastValue.get(key)!;
-    }
-
-    const monthLabel = MONTHS[targetMonth];
-    const monthDate = new Date(targetYear, targetMonth, 1);
-
-    monthlyData.push({
-      x: monthDate,
-      balance: lastKnownValue,
-      formattedBalance: formatBytes(lastKnownValue),
-      timestamp: normalizeDate(monthDate),
-      dayLabel: monthLabel,
-      bandLabel: monthLabel,
-    });
-  }
-
-  return monthlyData;
-}

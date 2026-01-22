@@ -1,65 +1,67 @@
 import { MONTHS } from "./getXlablesForAccounts";
 import { ChartPoint } from "./getFormatDataForCreditsUsageChart";
-import { Account } from "../types/accounts";
 
 /**
  * Generates X-axis labels based on the selected time range and chart data
  * @param formattedChartData Formatted data points for the chart
- * @param chartData Raw account data (needed for year calculation)
- * @param timeRange Selected time range (last7days, last30days, last60days, year)
- * @returns Array of string labels for the X-axis
+ * @param timeRange Selected time range (last7days, last30days, last60days, year, max)
+ * @returns Array of tick values with labels for the X-axis
  */
+export interface XAxisTick {
+  value: Date;
+  label: string;
+}
+
 export function getXLabelsForTimeRange(
   formattedChartData: ChartPoint[],
-  chartData: Account[] | undefined,
-  timeRange: string
-): string[] {
-  let xLabels: string[] = [];
+  timeRange: string,
+): XAxisTick[] {
+  const ticks: XAxisTick[] = [];
+  const seen = new Set<number>();
+  const formatDateLabel = (date: Date) =>
+    `${MONTHS[date.getMonth()]} ${String(date.getDate()).padStart(2, "0")}`;
+  const addTick = (date: Date, label: string) => {
+    const time = date.getTime();
+    if (seen.has(time)) return;
+    seen.add(time);
+    ticks.push({ value: date, label });
+  };
 
   if (timeRange === "last7days") {
     // Use the day names for the last 7 days
-    xLabels = formattedChartData.map((point) =>
-      new Date(point.x).toLocaleDateString("en-US", { weekday: "short" })
-    );
-  } else if (timeRange === "last30days" || timeRange === "last60days") {
-    // For 30/60 days, create 8 evenly distributed date labels
-    if (formattedChartData.length > 0) {
-      // Create a sorted array of dates first to ensure chronological order
-      const sortedDates = formattedChartData
-        .map((point) => new Date(point.x))
-        .sort((a, b) => a.getTime() - b.getTime());
-
-      // Calculate interval to get 8 labels evenly distributed
-      const interval = Math.max(1, Math.floor(sortedDates.length / 8));
-
-      // Generate labels from sorted dates at regular intervals
-      for (let i = 0; i < sortedDates.length; i += interval) {
-        if (xLabels.length < 11) {
-          // Keep space for the last date
-          const date = sortedDates[i];
-          xLabels.push(`${date.getDate()} ${MONTHS[date.getMonth()]}`);
-        }
-      }
-      let lastDate;
-      // Always include the most recent date (last date)
-      if (timeRange === "last30days") {
-        lastDate = sortedDates[sortedDates.length - 2];
-      } else {
-        lastDate = sortedDates[sortedDates.length - 4];
-      }
-      const lastLabel = `${lastDate.getDate()} ${MONTHS[lastDate.getMonth()]}`;
-      if (!xLabels.includes(lastLabel)) {
-        xLabels.push(lastLabel);
-      }
-    }
-  } else if (timeRange === "year") {
-    // For year range, use just the month name from bandLabel (remove year)
-    xLabels = formattedChartData.map((point) => {
-      const bandLabel = point.bandLabel || "";
-      // Extract just the month name (remove the year part like "'25")
-      return bandLabel.split(" ")[0];
+    formattedChartData.forEach((point) => {
+      addTick(
+        point.x,
+        point.x.toLocaleDateString("en-US", { weekday: "short" }),
+      );
     });
+    return ticks;
   }
 
-  return xLabels;
+  if (!formattedChartData.length) {
+    return ticks;
+  }
+
+  const sortedPoints = [...formattedChartData].sort(
+    (a, b) => a.x.getTime() - b.x.getTime(),
+  );
+
+  let desiredTicks = 10;
+  if (timeRange === "last30days") {
+    desiredTicks = 10;
+  } else if (timeRange === "last60days") {
+    desiredTicks = 10;
+  } else if (timeRange === "year") {
+    desiredTicks = 10;
+  } else if (timeRange === "max") {
+    desiredTicks = 10;
+  }
+
+  const interval = Math.max(1, Math.ceil(sortedPoints.length / desiredTicks));
+  for (let i = 0; i < sortedPoints.length; i += interval) {
+    const point = sortedPoints[i];
+    addTick(point.x, formatDateLabel(point.x));
+  }
+
+  return ticks;
 }

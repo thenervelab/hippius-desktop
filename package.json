@@ -1,7 +1,7 @@
 {
   "name": "hippius",
   "private": true,
-  "version": "0.1.85",
+  "version": "0.1.86",
   "type": "module",
   "scripts": {
     "dev": "next dev",
@@ -73,7 +73,11 @@
     "sql.js": "^1.13.0",
     "swiper": "^11.2.10",
     "tailwind-merge": "^3.2.0",
-    "viem": "^2.31.6"
+    "viem": "^2.31.6",
+    "@react-spring/web": "^10.0.3",
+    "d3-interpolate-path": "^2.3.0",
+    "d3-shape": "^3.2.0",
+    "flubber": "^0.4.2"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -86,6 +90,9 @@
     "@types/sql.js": "^1.4.9",
     "@types/webpack": "^5.28.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "@types/d3-interpolate-path": "^2.0.3",
+    "@types/d3-shape": "^3.1.7",
+    "@types/flubber": "^0.4.0",
     "autoprefixer": "^10.4.21",
     "eslint": "^9.25.1",
     "eslint-config-next": "15.3.6",

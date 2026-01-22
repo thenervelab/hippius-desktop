@@ -1,7 +1,7 @@
 use crate::DB_POOL;
 use serde::Serialize;
-use tauri::State;
-use sqlx::SqlitePool;
+// use tauri::State;
+// use sqlx::SqlitePool;
 
 #[derive(Serialize)]
 pub struct VpnStatus {

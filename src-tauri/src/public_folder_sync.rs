@@ -346,7 +346,7 @@ pub async fn start_public_folder_sync(
             if explicit_pending { "FS_EVENT" } else { "HEARTBEAT" },
             last_run_end.elapsed()
         );
-        running = true;
+        // running = true;
 
         // mark UI “in progress”
         {

@@ -19,13 +19,15 @@ import StorageUsedTooltip from "./StorageUsedTooltip";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { getNiceTicksAlways } from "@/app/lib/utils/getNiceTicksAlways";
 import { getXLabelsForTimeRange } from "@/app/lib/utils/getXLabelsForTimeRange";
+import { calculatePaddingOuter } from "@/app/lib/utils/calculatePaddingOuter";
 
 // === Time‐Range Options ===
 const timeRangeOptions: Option[] = [
   { value: "last7days", label: "Last 7 Days" },
   { value: "last30days", label: "Last 30 Days" },
   { value: "last60days", label: "Last 60 Days" },
-  { value: "year", label: "Last 12 Months" },
+  { value: "year", label: "1 Year" },
+  { value: "max", label: "MAX" },
 ];
 
 // === Line + Area Colors ===
@@ -50,7 +52,7 @@ const StorageUsageTrends: React.FC<{
     }
     return formatStorageForChartByRange(
       chartData,
-      timeRange as "last7days" | "last30days" | "last60days" | "year"
+      timeRange as "last7days" | "last30days" | "last60days" | "year" | "max",
     );
   }, [chartData, timeRange]);
 
@@ -63,10 +65,21 @@ const StorageUsageTrends: React.FC<{
   }, [formattedChartData]);
 
   // Build X‐labels (strings) depending on selected range
-  const xLabels: string[] = useMemo(() => {
-    return getXLabelsForTimeRange(formattedChartData, chartData, timeRange);
-  }, [formattedChartData, chartData, timeRange]);
+  const xTicks = useMemo(() => {
+    return getXLabelsForTimeRange(formattedChartData, timeRange);
+  }, [formattedChartData, timeRange]);
 
+  const xTickLabelMap = useMemo(() => {
+    return new Map(xTicks.map((tick) => [tick.value.getTime(), tick.label]));
+  }, [xTicks]);
+
+  const xTickValues = useMemo(() => {
+    return xTicks.map((tick) => tick.value);
+  }, [xTicks]);
+  const paddingOuter = useMemo(
+    () => calculatePaddingOuter(formattedChartData.length),
+    [formattedChartData.length],
+  );
   return (
     <InView triggerOnce threshold={0.2}>
       {({ ref, inView }) => (
@@ -78,7 +91,7 @@ const StorageUsageTrends: React.FC<{
                   <AbstractIconWrapper
                     className={cn(
                       "px-0 size-6 sm:size-7 opacity-0 translate-y-7 duration-500 transition-transform",
-                      inView && "opacity-100 translate-y-0"
+                      inView && "opacity-100 translate-y-0",
                     )}
                   >
                     <Icons.Chart className="relative size-4 sm:size-5 text-primary-50" />
@@ -119,30 +132,35 @@ const StorageUsageTrends: React.FC<{
                   </span>
                 </div>
               ) : (
-                <div className="relative w-full h-full  pr-4">
-                  <ChartGridOverlay marginClasses="mt-[0px] ml-[60px] mb-[30px] mr-[21px]" />
+                <div className="relative w-full h-full pr-4 ">
+                  <ChartGridOverlay marginClasses="mt-[10px] ml-[60px] mb-[30px] mr-[21px]" />
 
                   <AreaLineChart
                     key={`chart-${timeRange}-${formattedChartData.length}`}
                     data={formattedChartData}
+                    xScaleType="band"
+                    yScaleType="linear"
                     plots={[
                       {
                         dataKey: "balance",
-                        xAccessor: (d: ChartPoint) =>
-                          d.bandLabel ? d.bandLabel : d?.x,
+                        xAccessor: (d: ChartPoint) => d.x,
                         yAccessor: (d: ChartPoint) => d?.balance || 0,
                         lineColor: COLORS.line,
                         areaColor: COLORS.area,
                       },
                     ]}
-                    xScaleType="band"
+                    xDomain={formattedChartData.map((d) => d.x)}
                     yDomain={[yTicks[0], yTicks[yTicks.length - 1]]}
-                    margin={{ top: 0, left: 60, bottom: 30, right: 5 }}
+                    margin={{ top: 10, left: 60, bottom: 30, right: 5 }}
                     showVerticalCrosshair={true}
                     showHorizontalCrosshair={true}
                     xAxisProps={{
-                      numTicks: xLabels.length,
-                      tickFormat: (_, i) => xLabels[i] || "",
+                      tickValues: xTickValues,
+                      tickFormat: (value) => {
+                        const date =
+                          value instanceof Date ? value : new Date(value);
+                        return xTickLabelMap.get(date.getTime()) || "";
+                      },
                       label: "",
                       hideTicks: false,
                       hideAxisLine: false,
@@ -152,6 +170,11 @@ const StorageUsageTrends: React.FC<{
                         textAnchor: "middle",
                         dy: "0.5em",
                       }),
+                    }}
+                    bandScaleConfig={{
+                      paddingInner: 0.3,
+                      paddingOuter,
+                      align: 0.5,
                     }}
                     yAxisProps={{
                       numTicks: yTicks.length,
@@ -174,7 +197,10 @@ const StorageUsageTrends: React.FC<{
                       }),
                     }}
                     renderTooltip={(tooltipData) => (
-                      <StorageUsedTooltip tooltipData={tooltipData} timeRange={timeRange} />
+                      <StorageUsedTooltip
+                        tooltipData={tooltipData}
+                        timeRange={timeRange}
+                      />
                     )}
                   />
                 </div>
