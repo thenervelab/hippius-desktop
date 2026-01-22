@@ -25,7 +25,7 @@ export function getAllDatesInRange(start: Date, end: Date): Date[] {
 function normalizeDate(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
     2,
-    "0"
+    "0",
   )}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
@@ -37,7 +37,7 @@ export function mapBytesToDateRange(
   rawData: ChartPoint[],
   dateRange: Date[],
   allHistoricalData: ChartPoint[],
-  getLabel?: (date: Date) => string
+  getLabel?: (date: Date) => string,
 ): ChartPoint[] {
   if (!dateRange.length) {
     return [];
@@ -130,7 +130,7 @@ export function aggregateBytesByMonth(chartPoints: ChartPoint[]): ChartPoint[] {
 // Data is already daily usage per row, just filter by range and fill missing days with zero
 export const formatStorageForChartByRange = (
   accounts: Account[],
-  range: "last7days" | "last30days" | "last60days" | "year" | "max"
+  range: "last7days" | "last30days" | "last60days" | "year" | "max",
 ): ChartPoint[] => {
   if (!accounts || accounts.length === 0) {
     return [];
@@ -167,7 +167,7 @@ export const formatStorageForChartByRange = (
       chartPoints,
       weekDates,
       chartPoints,
-      (date) => WEEKDAYS_FULL[date.getDay()]
+      (date) => WEEKDAYS_FULL[date.getDay()],
     ).map((point) => ({
       ...point,
       bandLabel: WEEKDAYS_FULL[point.x.getDay()],
@@ -184,7 +184,7 @@ export const formatStorageForChartByRange = (
       chartPoints,
       thirtyDaysDates,
       chartPoints,
-      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
     );
   }
 
@@ -198,7 +198,7 @@ export const formatStorageForChartByRange = (
       chartPoints,
       sixtyDaysDates,
       chartPoints,
-      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
     );
   }
 
@@ -214,7 +214,7 @@ export const formatStorageForChartByRange = (
       chartPoints,
       yearDates,
       chartPoints,
-      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
     );
   }
 
@@ -228,66 +228,9 @@ export const formatStorageForChartByRange = (
       chartPoints,
       maxDates,
       chartPoints,
-      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`
+      (date) => `${date.getDate()} ${MONTHS[date.getMonth()]}`,
     );
   }
 
   return chartPoints;
 };
-
-// Get the last (most recent) value for each month for the last 12 months
-// Ensures all 12 months are represented even if some have no data
-function aggregateBytesByMonthLast12Months(points: ChartPoint[]): ChartPoint[] {
-  if (points.length === 0) return [];
-
-  const today = new Date();
-
-  // Store the last value seen for each month
-  const monthlyLastValue = new Map<string, number>();
-
-  points.forEach((point) => {
-    const month = point.x.getMonth();
-    const year = point.x.getFullYear();
-    const key = `${year}-${String(month).padStart(2, "0")}`;
-    // Always update with the current value - the last iteration will be the latest day
-    monthlyLastValue.set(key, point.balance);
-  });
-
-  // Generate exactly 12 months of data, going back from today
-  const monthlyData: ChartPoint[] = [];
-  let lastKnownValue = 0;
-
-  for (let i = 11; i >= 0; i--) {
-    // Calculate date by working with year and month separately
-    let targetYear = today.getFullYear();
-    let targetMonth = today.getMonth() - i;
-
-    // Handle month wrapping across year boundaries
-    if (targetMonth < 0) {
-      targetYear += Math.floor(targetMonth / 12);
-      targetMonth = targetMonth % 12;
-      if (targetMonth < 0) targetMonth += 12;
-    }
-
-    const key = `${targetYear}-${String(targetMonth).padStart(2, "0")}`;
-
-    // Use actual value if available, otherwise carry forward last known
-    if (monthlyLastValue.has(key)) {
-      lastKnownValue = monthlyLastValue.get(key)!;
-    }
-
-    const monthLabel = MONTHS[targetMonth];
-    const monthDate = new Date(targetYear, targetMonth, 1);
-
-    monthlyData.push({
-      x: monthDate,
-      balance: lastKnownValue,
-      formattedBalance: formatBytes(lastKnownValue),
-      timestamp: normalizeDate(monthDate),
-      dayLabel: monthLabel,
-      bandLabel: monthLabel,
-    });
-  }
-
-  return monthlyData;
-}
