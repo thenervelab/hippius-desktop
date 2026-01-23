@@ -156,7 +156,7 @@ const SubscriptionPlansWidget: FC<SubscriptionPlansWidgetProps> = ({
 
                 {activeSubscription.subscription.current_period_end && (
                   <div className="flex items-center text-grey-70">
-                    <span className="mr-1">Expires in</span>
+                    <span className="mr-1">Auto-renews in</span>
                     <span>
                       {getDaysUntilExpiration(
                         activeSubscription.subscription.current_period_end,
