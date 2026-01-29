@@ -48,6 +48,7 @@ import {
 import { useAtomValue } from "jotai";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import FolderBreadcrumb from "./FolderBreadcrumb";
+import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 interface FileEntry {
   file_name: string;
@@ -307,8 +308,7 @@ export default function FolderView({
     } catch (error) {
       console.error("Error downloading folder:", error);
       toast.error(
-        `Failed to download folder: ${
-          error instanceof Error ? error.message : String(error)
+        `Failed to download folder: ${error instanceof Error ? error.message : String(error)
         }`
       );
     } finally {
@@ -438,6 +438,7 @@ export default function FolderView({
                   mainFolderActualName={mainFolderActualName}
                   subFolderPath={subFolderPath}
                   onFolderAdded={handleRefresh}
+                  disabled={IS_SYNC_PAUSED}
                 />
 
                 <AddFileToFolderButton
@@ -447,6 +448,7 @@ export default function FolderView({
                   folderName={folderName}
                   isPrivateFolder={isPrivateFolder}
                   onFileAdded={handleRefresh}
+                  disabled={IS_SYNC_PAUSED}
                 />
               </>
             )}
@@ -474,6 +476,14 @@ export default function FolderView({
           folderSource={folderSource}
           mainReqHash={mainReqHash}
         />
+
+        {/* Sync Paused Alert */}
+        {IS_SYNC_PAUSED && (
+          <div className="mt-4">
+            <SyncPausedAlert variant="inline" />
+          </div>
+        )}
+
         {activeFilters.length > 0 && (
           <FilterChips
             filters={activeFilters}

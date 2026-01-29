@@ -13,6 +13,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import StopSyncDialog, { type SyncType } from "./StopSyncDialog";
 import { useSetAtom } from "jotai";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 const UpdateSyncFolder: React.FC = () => {
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] =
@@ -122,7 +123,13 @@ const UpdateSyncFolder: React.FC = () => {
                     info="Sync folder connects your local storage with our decentralized network, providing both convenience and blockchain-backed security for your files."
                     learnMoreUrl="https://docs.hippius.com/use/desktop/settings#selecting-sync-folder"
                   />
-                  <div className="flex justify-between p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
+                  {/* Sync Paused Alert */}
+                  {IS_SYNC_PAUSED && (
+                    <div className="mt-4">
+                      <SyncPausedAlert variant="banner" />
+                    </div>
+                  )}
+                  <div className={cn("flex justify-between p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full", IS_SYNC_PAUSED && "opacity-60")}>
                     {selectedPrivateFolderName ? (
                       <div className="flex-1">
                         <div className="flex">
@@ -157,12 +164,21 @@ const UpdateSyncFolder: React.FC = () => {
                       <CardButton
                         className="max-w-[160px] h-10"
                         variant="primary"
-                        onClick={() => setShowSelector(true)}
+                        disabled={IS_SYNC_PAUSED}
+                        onClick={() => {
+                          if (IS_SYNC_PAUSED) {
+                            toast.info("Sync is temporarily paused while we transition to a new sync engine. Coming back soon!");
+                            return;
+                          }
+                          setShowSelector(true);
+                        }}
                       >
                         <span className="text-base leading-4 font-medium">
-                          {selectedPrivateFolderName
-                            ? "Change Folder"
-                            : "Select Folder"}
+                          {IS_SYNC_PAUSED
+                            ? "Sync Paused"
+                            : selectedPrivateFolderName
+                              ? "Change Folder"
+                              : "Select Folder"}
                         </span>
                       </CardButton>
                     </div>

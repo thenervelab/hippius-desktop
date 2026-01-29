@@ -22,6 +22,7 @@ import { useAtomValue } from "jotai";
 
 import { cn } from "@/lib/utils";
 import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
+import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 // Custom event name for file drop communication
 const HIPPIUS_DROP_EVENT = "hippius:file-drop";
@@ -34,6 +35,7 @@ const HIPPIUS_OPEN_MODAL_EVENT = "hippius:open-modal";
 type AddButtonProps = {
   className?: string;
   isPrivateView?: boolean; // Optional override for private/public view
+  disabled?: boolean; // Optional external disabled state
 };
 
 // Add ref interface for parent components to trigger the dialog
@@ -42,7 +44,7 @@ export interface AddButtonRef {
 }
 
 const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
-  ({ className, isPrivateView: isPrivateViewProp }, ref) => {
+  ({ className, isPrivateView: isPrivateViewProp, disabled: externalDisabled }, ref) => {
     // Keep state simple and isolated
     const [isOpen, setIsOpen] = useState(false);
 
@@ -128,12 +130,13 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     return (
       <>
         <CardButton
-          className={cn("h-10 w-fit p-1", className)}
+          className={cn("h-10 w-fit p-1", externalDisabled && "opacity-50 cursor-not-allowed", className)}
           onClick={() => {
+            if (IS_SYNC_PAUSED) return;
             setDroppedFiles(null);
             setIsOpen(true);
           }}
-          disabled={isLoading}
+          disabled={isLoading || externalDisabled}
         >
           <div className="flex items-center gap-2 text-grey-100 text-base font-medium p-2">
             <div>
@@ -178,9 +181,22 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
                   </button>
                 </div>
 
+                {/* Sync Paused Alert */}
+                {IS_SYNC_PAUSED && (
+                  <div className="px-4">
+                    <SyncPausedAlert variant="inline" />
+                  </div>
+                )}
+
                 {/* Content */}
                 <div className="grow max-h-[calc(85vh-120px)] p-4 pt-2 overflow-y-auto">
-                  {renderStepContent}
+                  {!IS_SYNC_PAUSED && renderStepContent}
+                  {IS_SYNC_PAUSED && (
+                    <div className="text-center py-8 text-grey-60">
+                      <p>File uploads are temporarily paused while we transition to our new sync engine.</p>
+                      <p className="mt-2 text-sm">This will be available again in the coming days.</p>
+                    </div>
+                  )}
                 </div>
               </Dialog.Content>
             </Dialog.Overlay>

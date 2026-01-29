@@ -23,6 +23,7 @@ export interface AddFileToFolderButtonProps {
     folderName: string;
     isPrivateFolder: boolean;
     onFileAdded: () => void;
+    disabled?: boolean;
 }
 
 export interface AddFileToFolderButtonRef {
@@ -30,7 +31,7 @@ export interface AddFileToFolderButtonRef {
 }
 
 const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFolderButtonProps>(
-    ({ className, folderCid, folderName, isPrivateFolder, onFileAdded }, ref) => {
+    ({ className, folderCid, folderName, isPrivateFolder, onFileAdded, disabled: externalDisabled }, ref) => {
         const [isOpen, setIsOpen] = useState(false);
         const [droppedFiles, setDroppedFiles] = useState<FileList | null>(null);
 
@@ -88,9 +89,9 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
         return (
             <>
                 <CardButton
-                    className={cn("h-10 w-fit p-1", className)}
+                    className={cn("h-10 w-fit p-1", externalDisabled && "opacity-50 cursor-not-allowed", className)}
                     onClick={() => setIsOpen(true)}
-                    disabled={isLoading}
+                    disabled={isLoading || externalDisabled}
                 >
                     <div className="flex items-center gap-2 text-grey-100 text-base font-medium p-2">
                         <div>
