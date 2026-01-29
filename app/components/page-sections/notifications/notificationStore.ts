@@ -83,8 +83,10 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
     // Column indices with userAddress:
     // 0: id, 1: userAddress, 2: notificationType, 3: notificationSubtype, 
     // 4: notificationTitleText, 5: notificationDescription, 6: notificationLinkText,
-    // 7: notificationLink, 8: isUnread, 9: notificationCreationTime, 10: isDeleted, 11: deletedAt
+    // 7: notificationLink, 8: isUnread, 9: notificationCreationTime, 10: isDeleted, 11: deletedAt,
+    // 12: notificationReleaseNotes
     const timestamp = Number(r[9]);
+    const releaseNotes = typeof r[12] === "string" ? r[12] : "";
 
     return {
       id: Number(r[0]),
@@ -95,6 +97,7 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
       description: r[5],
       buttonText: r[6],
       buttonLink: r[7],
+      releaseNotes,
       unread: r[8] === 1,
       // Keep original timestamp for TimeAgo component
       timestamp: timestamp,

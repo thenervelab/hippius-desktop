@@ -33,15 +33,16 @@ export async function checkForUpdates(notifyOnce = false) {
   let downloadToastId: string | number | undefined;
 
   try {
-    console.log('Checking for updates...');
+    console.log("Checking for updates...");
     const update = await check();
     if (!update) {
-      console.log('No updates available');
+      console.log("No updates available");
       return;
     }
 
-    console.log('Update found:', update.version);
+    console.log("Update found:", update.version);
     const version = update.version;
+    const releaseNotes = update.body || "";
 
     // Optional in-app notification
     const notified = await hippusVersionNotificationExists(version);
@@ -54,6 +55,7 @@ export async function checkForUpdates(notifyOnce = false) {
         notificationDescription: `Hippius ${version} is ready. Install and restart now.`,
         notificationLinkText: "Install Update",
         notificationLink: "Install Update",
+        notificationReleaseNotes: releaseNotes,
       });
     }
 
@@ -61,12 +63,12 @@ export async function checkForUpdates(notifyOnce = false) {
     // Only skip if notifyOnce is true AND this is just a notification check (not user-initiated)
     if (notifyOnce && notified) {
       // We've already notified about this version, but still show dialog
-      console.log('Update available but already notified');
+      console.log("Update available but already notified");
     }
 
     // Store the update object for dialog access
     currentUpdateObject = update;
-    console.log('Opening update dialog for version:', update.version);
+    console.log("Opening update dialog for version:", update.version);
 
     // Open the update dialog with the update info
     openUpdateDialog({
@@ -101,7 +103,10 @@ export async function checkForUpdates(notifyOnce = false) {
 }
 
 // Separate function to handle the actual update process
-async function performUpdate(update: Update, downloadToastId?: string | number) {
+async function performUpdate(
+  update: Update,
+  downloadToastId?: string | number,
+) {
   let totalBytes = 0;
   let downloadedBytes = 0;
 
@@ -119,7 +124,7 @@ async function performUpdate(update: Update, downloadToastId?: string | number) 
             description:
               "0% complete • 0 MB / " + formatBytes(totalBytes) + " MB",
             duration: Infinity,
-          }
+          },
         );
         break;
 
@@ -147,9 +152,7 @@ async function performUpdate(update: Update, downloadToastId?: string | number) 
         }
 
         toast.success("Download completed!", {
-          description: `${formatBytes(
-            totalBytes
-          )} MB downloaded successfully`,
+          description: `${formatBytes(totalBytes)} MB downloaded successfully`,
           duration: 3000,
         });
 
@@ -185,9 +188,13 @@ function handleUpdateError(err: any, downloadToastId?: string | number) {
 
   // Handle signature verification errors specifically
   const errorMessage = err instanceof Error ? err.message : String(err);
-  if (errorMessage.includes("signature") || errorMessage.includes("verification")) {
+  if (
+    errorMessage.includes("signature") ||
+    errorMessage.includes("verification")
+  ) {
     toast.error("Update signature verification failed", {
-      description: "Please download the latest version manually from our website.",
+      description:
+        "Please download the latest version manually from our website.",
       duration: 8000,
     });
   } else {
@@ -217,7 +224,7 @@ export async function getAvailableUpdate(): Promise<Update | null> {
 export async function startUpdateProcess(update?: Update) {
   const updateToUse = update || currentUpdateObject;
   if (!updateToUse) {
-    console.error('No update object available');
+    console.error("No update object available");
     return;
   }
 

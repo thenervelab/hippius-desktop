@@ -7,6 +7,7 @@ export interface UiNotification {
   subType: string;
   title: string;
   description: string;
+  releaseNotes?: string;
   buttonText?: string;
   buttonLink?: string;
   unread: boolean;

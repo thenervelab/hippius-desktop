@@ -162,6 +162,7 @@ const Notifications = () => {
       type: selected.type,
       title: selected.title ?? "",
       description: selected.description ?? "",
+      releaseNotes: selected.releaseNotes ?? "",
       time: selected.time,
       timestamp: selected.timestamp,
       actionText: selected.buttonText,
