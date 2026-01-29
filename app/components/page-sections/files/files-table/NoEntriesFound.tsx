@@ -1,4 +1,4 @@
-import { CardButton, Graphsheet, Icons } from "@/components/ui";
+import { CardButton, Graphsheet, Icons, IS_SYNC_PAUSED } from "@/components/ui";
 import { HippiusLogo } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import React, {
@@ -119,9 +119,14 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
               : "Start by uploading a file to see it here."}
           </div>
           <CardButton
-            onClick={handleOpenModal}
+            onClick={() => {
+              if (IS_SYNC_PAUSED) return;
+              handleOpenModal();
+            }}
             className="flex gap-x-2 items-center w-full h-14 max-w-[280px] mt-3"
-            disabled={isCheckingSyncPath}
+            // disabled={isCheckingSyncPath}
+            disabled
+
           >
             {isCheckingSyncPath
               ? "Checking sync path..."
@@ -195,7 +200,10 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
             </div>
 
             <CardButton
-              onClick={handleOpenModal}
+              onClick={() => {
+                if (IS_SYNC_PAUSED) return;
+                handleOpenModal();
+              }}
               className="flex gap-x-2 items-center w-full h-14"
               disabled={isCheckingSyncPath}
             >
@@ -203,7 +211,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
                 ? "Checking sync path..."
                 : !isSyncPathConfigured
                   ? "Start Syncing"
-                  : "Upload a File"}
+                  : "Upload a Filed"}
             </CardButton>
           </div>
 

@@ -18,6 +18,7 @@ import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
 import { FileTypes } from "@/lib/types/fileTypes";
 import ManageButton from "./ManageButton";
+import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 interface FilesHeaderProps {
   isRecentFiles?: boolean;
@@ -233,11 +234,17 @@ const FilesHeader: FC<FilesHeaderProps> = ({
 
 
           <>
-            {/* Folder Upload button - disabled for recent files with no sync paths */}
+            {/* Folder Upload button - disabled for recent files with no sync paths or when sync is paused */}
             {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
               <button
                 onClick={() => setIsFolderUploadOpen(true)}
-                className="flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50"
+                disabled={IS_SYNC_PAUSED}
+                className={cn(
+                  "flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50",
+                  IS_SYNC_PAUSED
+                    ? "opacity-50 cursor-not-allowed"
+                    : "hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white"
+                )}
               >
                 <Icons.FolderAdd className="size-4" />
                 <span className="ml-1">Add Folder</span>
@@ -264,7 +271,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               <span className="ml-1">Open Sync Folder</span>
             </button>
 
-            {/* Add File button - disabled for recent files with no sync paths */}
+            {/* Add File button - disabled for recent files with no sync paths or when sync is paused */}
             {isRecentFiles && hasNoSyncPaths ? (
               <button
                 disabled
@@ -279,6 +286,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
                   ref={addButtonRef}
                   className="h-9"
                   isPrivateView={isPrivateView}
+                  disabled={IS_SYNC_PAUSED}
                 />
               )
             )}

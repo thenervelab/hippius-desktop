@@ -9,6 +9,7 @@ import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { usePolkadotApi } from "@/app/lib/polkadot-api-context";
+import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 interface SyncFolderSelectorProps {
   onFolderSelected: (path: string) => void;
@@ -209,7 +210,14 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
               />
             </div>
 
-            <div className="mt-4 space-y-4">
+            {/* Sync Paused Alert */}
+            {IS_SYNC_PAUSED && (
+              <div className="mt-4">
+                <SyncPausedAlert variant="banner" />
+              </div>
+            )}
+
+            <div className={cn("mt-4 space-y-4", IS_SYNC_PAUSED && "opacity-50 pointer-events-none")}>
               {(["desktop", "documents", "downloads"] as const).map((opt) => (
                 <div
                   key={opt}
@@ -316,7 +324,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
         <CardButton
           className="max-w-[160px] h-[48px]"
           variant="dialog"
-          disabled={loading || !selected}
+          disabled={loading || !selected || IS_SYNC_PAUSED}
           loading={loading}
           onClick={apply}
         >
@@ -324,7 +332,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
             <ThreeDotLoader dotClassName="bg-white" />
           ) : (
             <span className="text-lg leading-6 font-medium">
-              {loading ? "Setting up..." : "Sync Folder"}
+              {IS_SYNC_PAUSED ? "Sync Paused" : loading ? "Setting up..." : "Sync Folder"}
             </span>
           )}
         </CardButton>

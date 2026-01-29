@@ -412,15 +412,25 @@ pub async fn start_private_folder_sync(
 
 #[tauri::command]
 pub async fn start_private_folder_sync_tauri(
-    app_handle: AppHandle,
+    _app_handle: AppHandle,
     account_id: String,
     policy: DeletePolicy,
 ) {
+    // SYNC ENGINE DISABLED: Paused during transition to new sync engine (Arion)
+    // This is a temporary measure to prevent file corruption issues.
+    // The sync functionality will be restored once the new engine is ready.
     println!(
-        "[PrivateFolderSync] Starting sync for private, policy {:?}",
-        policy
+        "[PrivateFolderSync] SYNC PAUSED - Transitioning to new sync engine. Account: {}, Policy: {:?}",
+        account_id, policy
     );
-    start_private_folder_sync(app_handle, account_id, policy).await;
+    eprintln!(
+        "[PrivateFolderSync] Sync engine is temporarily disabled during the transition to the new Arion sync engine."
+    );
+    // Early return - do not start sync
+    return;
+    
+    // Original code preserved below for when sync is re-enabled:
+    // start_private_folder_sync(app_handle, account_id, policy).await;
 }
 
 async fn process_batch(events: &[FsEvent], pool: &SqlitePool, owner: &str, bucket_name: &str) {

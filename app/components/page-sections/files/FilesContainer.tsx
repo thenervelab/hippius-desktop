@@ -42,6 +42,7 @@ import {
   triggerSyncPathRefreshAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
+import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, oauthSession } = useWalletAuth();
@@ -616,6 +617,13 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     content = (
       <FileSelectionProvider>
         <div className="w-full relative mt-6">
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && !isRecentFiles && (
+            <div className="mb-4">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
+
           <FilesHeader
             isRecentFiles={isRecentFiles}
             isRefetching={isRefetching}

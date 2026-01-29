@@ -155,15 +155,25 @@ async fn handle_fs_events(
 
 #[tauri::command]
 pub async fn start_public_folder_sync_tauri(
-    app_handle: AppHandle,
+    _app_handle: AppHandle,
     account_id: String,
     policy: DeletePolicy,
 ) {
+    // SYNC ENGINE DISABLED: Paused during transition to new sync engine (Arion)
+    // This is a temporary measure to prevent file corruption issues.
+    // The sync functionality will be restored once the new engine is ready.
     println!(
-        "[PublicFolderSync] Starting sync for public, policy {:?}",
-        policy
+        "[PublicFolderSync] SYNC PAUSED - Transitioning to new sync engine. Account: {}, Policy: {:?}",
+        account_id, policy
     );
-    start_public_folder_sync(app_handle, account_id, policy).await;
+    eprintln!(
+        "[PublicFolderSync] Sync engine is temporarily disabled during the transition to the new Arion sync engine."
+    );
+    // Early return - do not start sync
+    return;
+    
+    // Original code preserved below for when sync is re-enabled:
+    // start_public_folder_sync(app_handle, account_id, policy).await;
 }
 
 pub async fn start_public_folder_sync(

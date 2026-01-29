@@ -14,6 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 type Props = {
     open: boolean;
@@ -143,8 +144,13 @@ export default function FolderUploadDialog({
                             </RevealTextLine>
                         </div>
 
+                        {/* Sync Paused Notice */}
+                        {IS_SYNC_PAUSED && (
+                            <SyncPausedAlert variant="inline" className="mt-2" />
+                        )}
+
                         {/* Privacy Notice */}
-                        {useEncryption && (
+                        {useEncryption && !IS_SYNC_PAUSED && (
                             <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg">
                                 <div className="flex items-start gap-2">
                                     <div className="flex-shrink-0 mt-0.5">
@@ -204,10 +210,14 @@ export default function FolderUploadDialog({
                         <div className="flex flex-col gap-2">
                             <button
                                 type="submit"
-                                className="w-full p-1 bg-primary-50 text-grey-100 rounded shadow border border-primary-40 hover:bg-primary-40 transition"
+                                disabled={IS_SYNC_PAUSED}
+                                className={cn(
+                                    "w-full p-1 bg-primary-50 text-grey-100 rounded shadow border border-primary-40 hover:bg-primary-40 transition",
+                                    IS_SYNC_PAUSED && "opacity-50 cursor-not-allowed hover:bg-primary-50"
+                                )}
                             >
                                 <div className="py-2.5 rounded border border-primary-40 text-lg">
-                                    Upload Folder
+                                    {IS_SYNC_PAUSED ? "Sync Paused" : "Upload Folder"}
                                 </div>
                             </button>
                             <button
@@ -215,7 +225,7 @@ export default function FolderUploadDialog({
                                 onClick={handleClose}
                                 className="w-full py-3.5 bg-grey-100 border border-grey-80 rounded text-grey-10 hover:bg-grey-90 transition text-lg font-medium"
                             >
-                                Cancel
+                                {IS_SYNC_PAUSED ? "Close" : "Cancel"}
                             </button>
                         </div>
                     </form>

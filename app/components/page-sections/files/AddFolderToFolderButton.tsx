@@ -12,6 +12,7 @@ interface AddFolderToFolderButtonProps {
     mainFolderActualName?: string;
     subFolderPath?: string;
     onFolderAdded?: () => void;
+    disabled?: boolean;
 }
 
 const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps>(
@@ -22,7 +23,8 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
             isPrivateFolder,
             mainFolderActualName,
             subFolderPath,
-            onFolderAdded
+            onFolderAdded,
+            disabled
         },
         ref
     ) => {
@@ -34,7 +36,8 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
             <>
                 <button
                     onClick={() => setIsDialogOpen(true)}
-                    className="flex items-center justify-center gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors"
+                    disabled={disabled}
+                    className={`flex items-center justify-center gap-1 h-9 px-4 py-2 rounded bg-grey-90 text-grey-10 hover:bg-grey-80 transition-colors ${disabled ? 'opacity-50 cursor-not-allowed hover:bg-grey-90' : ''}`}
                 >
                     <Icons.FolderAdd className="size-4" />
                     <span className="ml-1">Add Folder</span>

@@ -12,7 +12,7 @@ import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transform
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import Ipfs from "@/app/components/page-sections/files/FilesContainer";
-import { Icons } from "@/components/ui";
+import { Icons, IS_SYNC_PAUSED, SyncPausedAlert } from "@/components/ui";
 // import NebulaTest from "../../DemoIpfsUpload";
 
 const Home: React.FC = () => {
@@ -69,6 +69,12 @@ const Home: React.FC = () => {
         <div className="mt-6">
           {/* <NebulaTest /> */}
           {/* Stats Cards */}
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && (
+            <div className="mb-4">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
           <DetailList />
 
           <div className="gap-4 mt-6 w-full h-full grid grid-cols-1 md:grid-cols-2">

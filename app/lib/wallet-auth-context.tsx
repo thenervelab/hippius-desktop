@@ -247,9 +247,15 @@ export function WalletAuthProvider({
                 !syncInitialized.current
               ) {
                 try {
-                  await invoke("initialize_sync", {
-                    accountId: oauthSessionData.substrateAddress,
-                    tempAuthKey: oauthSessionData.token || null,
+                  // await invoke("initialize_sync", {
+                  //   accountId: oauthSessionData.substrateAddress,
+                  //   tempAuthKey: oauthSessionData.token || null,
+                  // });
+                  await invoke("stop_sync_for_scope_command", {
+                    scope: "public",
+                  });
+                  await invoke("stop_sync_for_scope_command", {
+                    scope: "private",
                   });
                   syncInitialized.current = true;
                 } catch (err) {
@@ -274,9 +280,15 @@ export function WalletAuthProvider({
 
                   // Initialize sync
                   if (!syncInitialized.current) {
-                    await invoke("initialize_sync", {
-                      accountId: pair.address,
-                      tempAuthKey: oauthSessionData.token || null,
+                    // await invoke("initialize_sync", {
+                    //   accountId: pair.address,
+                    //   tempAuthKey: oauthSessionData.token || null,
+                    // });
+                    await invoke("stop_sync_for_scope_command", {
+                      scope: "public",
+                    });
+                    await invoke("stop_sync_for_scope_command", {
+                      scope: "private",
                     });
                     syncInitialized.current = true;
                   }
@@ -439,9 +451,15 @@ export function WalletAuthProvider({
       scheduleLogout(effMinutes === -1 ? Infinity : timeRemaining);
 
       if (!syncInitialized.current) {
-        await invoke("initialize_sync", {
-          accountId: pair.address,
-          tempAuthKey: null,
+        // await invoke("initialize_sync", {
+        //   accountId: pair.address,
+        //   tempAuthKey: null,
+        // });
+        await invoke("stop_sync_for_scope_command", {
+          scope: "public",
+        });
+        await invoke("stop_sync_for_scope_command", {
+          scope: "private",
         });
         syncInitialized.current = true;
       }
@@ -525,9 +543,15 @@ export function WalletAuthProvider({
 
       // Initialize sync with the mnemonic
       if (!syncInitialized.current) {
-        await invoke("initialize_sync", {
-          accountId: polkadotAddr,
-          tempAuthKey: session.token || null,
+        // await invoke("initialize_sync", {
+        //   accountId: polkadotAddr,
+        //   tempAuthKey: session.token || null,
+        // });
+        await invoke("stop_sync_for_scope_command", {
+          scope: "public",
+        });
+        await invoke("stop_sync_for_scope_command", {
+          scope: "private",
         });
         syncInitialized.current = true;
       }
@@ -572,9 +596,15 @@ export function WalletAuthProvider({
     // Kick off sync for OAuth login if not already started
     if (session.substrateAddress && !syncInitialized.current) {
       try {
-        await invoke("initialize_sync", {
-          accountId: session.substrateAddress,
-          tempAuthKey: session.token || null,
+        // await invoke("initialize_sync", {
+        //   accountId: session.substrateAddress,
+        //   tempAuthKey: session.token || null,
+        // });
+        await invoke("stop_sync_for_scope_command", {
+          scope: "public",
+        });
+        await invoke("stop_sync_for_scope_command", {
+          scope: "private",
         });
         syncInitialized.current = true;
       } catch (err) {
