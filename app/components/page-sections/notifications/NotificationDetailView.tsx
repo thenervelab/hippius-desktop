@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { IconComponent } from "@/app/lib/types";
 import NotificationType from "./NotificationType";
@@ -12,12 +12,14 @@ import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
 import BasicMarkdown from "@/components/updater/BasicMarkdown";
+import { getVersion } from "@tauri-apps/api/app";
 
 interface NotificationDetailViewProps {
   selectedNotification: {
     id?: number;
     icon: IconComponent;
     type: string;
+    subType?: string;
     title: string;
     description: string;
     releaseNotes?: string;
@@ -30,6 +32,19 @@ interface NotificationDetailViewProps {
   onReadStatusChange?: (id: number, isUnread: boolean) => void;
 }
 
+// Helper to compare semver versions (returns true if v1 >= v2)
+function isVersionGreaterOrEqual(v1: string, v2: string): boolean {
+  const parse = (v: string) => v.replace(/^v/, "").split(".").map(Number);
+  const [a, b] = [parse(v1), parse(v2)];
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const n1 = a[i] ?? 0;
+    const n2 = b[i] ?? 0;
+    if (n1 > n2) return true;
+    if (n1 < n2) return false;
+  }
+  return true;
+}
+
 const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   selectedNotification,
   onReadStatusChange,
@@ -40,6 +55,13 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     x: number;
     y: number;
   } | null>(null);
+  const [currentVersion, setCurrentVersion] = useState<string>("");
+
+  useEffect(() => {
+    getVersion()
+      .then(setCurrentVersion)
+      .catch(() => {});
+  }, []);
 
   if (!selectedNotification) {
     return <div className=" w-full h-[80.9vh]"></div>;
@@ -49,6 +71,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     id,
     icon: Icon,
     type,
+    subType,
     title,
     description,
     releaseNotes,
@@ -58,6 +81,15 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     actionLink,
     unread = false,
   } = selectedNotification;
+
+  // For Hippius update notifications, hide button if already on this version or newer
+  const isUpdateNotification =
+    type === "Hippius" && subType && actionLink === "Install Update";
+  const isUpdateAlreadyInstalled =
+    isUpdateNotification &&
+    currentVersion &&
+    isVersionGreaterOrEqual(currentVersion, subType);
+  const shouldShowButton = actionText && !isUpdateAlreadyInstalled;
 
   const releaseNotesText = releaseNotes?.trim() ?? "";
   const hasReleaseNotes = releaseNotesText.length > 0;
@@ -117,9 +149,9 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
 
             {hasReleaseNotes && (
               <div className="mt-2 mb-2">
-                <div className="flex items-center gap-2 text-grey-50 font-medium">
+                <div className="flex items-center gap-2 text-grey-50">
                   <Icons.Note2 className="size-5" />
-                  <span className="text-sm">Release Notes</span>
+                  <span className="text-base font-bold">Release Notes</span>
                 </div>
                 <div className=" max-h-[280px] overflow-y-auto pr-2">
                   <BasicMarkdown text={releaseNotesText} />
@@ -134,7 +166,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
             </RevealTextLine>
 
             {/* Action button */}
-            {actionText && (
+            {shouldShowButton && (
               <CardButton
                 className="max-w-[152px] h-10"
                 onClick={handleLinkClick}
