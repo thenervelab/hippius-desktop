@@ -136,7 +136,7 @@ export default function DetailList() {
     if (!userFilesData?.files) return 0;
     // Filter for private files only (matching FilesContainer logic)
     const privateFiles = userFilesData.files.filter(
-      (file) => !file.deleted && file.type?.toLowerCase() === "private"
+      (file) => file.type?.toLowerCase() === "private"
     );
     return privateFiles.length;
   };
