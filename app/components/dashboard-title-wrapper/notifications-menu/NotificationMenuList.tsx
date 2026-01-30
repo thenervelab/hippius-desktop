@@ -26,6 +26,7 @@ const NotificationMenuList: React.FC<NotificationListProps> = ({
           onClose={onClose}
           icon={notification.icon}
           notificationType={notification.type}
+          notificationSubType={notification.subType}
           notificationText={notification.title}
           notificationTime={notification.time}
           timestamp={notification.timestamp}

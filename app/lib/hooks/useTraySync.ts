@@ -4,10 +4,12 @@ import {
   Menu,
   MenuItem,
   IconMenuItem as TauriIconMenuItem,
+  PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
+import { openAppWindow, openFilesPage } from "@/app/lib/tray/trayWindowActions";
 import {
   checkForUpdates,
   getAvailableUpdate,
@@ -27,6 +29,8 @@ const QUIT_ID = "quit";
 const SYNC_ID = "sync";
 const INSTALL_UPDATE = "install-update";
 const VPN_TOGGLE_ID = "vpn-toggle";
+const OPEN_APP_ID = "open-app";
+const OPEN_FILES_ID = "open-files";
 const SYNC_ITEM_PREFIX = "sync-activity-item:";
 
 // add cached icon paths + state
@@ -42,6 +46,8 @@ let trayIconState: "default" | "syncing" | "completed" = "default";
 let menuPromise: Promise<Menu> | null = null;
 let syncItem: MenuItem | null = null;
 let vpnToggleItem: MenuItem | null = null;
+let openItemsSeparator: PredefinedMenuItem | null = null;
+let openFilesItem: MenuItem | null = null;
 const syncRowItems = new Map<string, MenuItem>(); // rows under header
 
 // Cache last rendered "rows signature" to avoid flicker
@@ -315,6 +321,29 @@ export function useTrayInit(polkadotAddress: string) {
         });
       }
 
+      const openAppItem = await MenuItem.new({
+        id: OPEN_APP_ID,
+        text: "Open Hippius",
+        action: async () => {
+          await openAppWindow();
+        },
+      });
+
+      const openFilesMenuItem = await MenuItem.new({
+        id: OPEN_FILES_ID,
+        text: "Open Files",
+        enabled: isUserLoggedIn(),
+        action: async () => {
+          if (!isUserLoggedIn()) return;
+          await openFilesPage();
+        },
+      });
+      openFilesItem = openFilesMenuItem;
+
+      openItemsSeparator = await PredefinedMenuItem.new({
+        item: "Separator",
+      });
+
       // VPN toggle item
       const isVpnEnabled = await getVpnStatus();
       const creditCheck = await checkUserCredits();
@@ -355,6 +384,8 @@ export function useTrayInit(polkadotAddress: string) {
       // Build the initial menu
       const menu = await Menu.new({
         items: [
+          openAppItem,
+          openFilesMenuItem,
           ...(installUpdateMenuItem ? [installUpdateMenuItem] : []),
           vpnToggleItem,
         ],
@@ -378,6 +409,14 @@ export function useTrayInit(polkadotAddress: string) {
       // Start VPN status watcher with state setter
       startVpnStatusWatcher(setVpnState);
 
+      // Add separator before quit
+      if (!openItemsSeparator) {
+        openItemsSeparator = await PredefinedMenuItem.new({
+          item: "Separator",
+        });
+      }
+      await menu.append(openItemsSeparator);
+
       // Add quit item at the end
       await menu.append(quit);
 
@@ -389,6 +428,15 @@ export function useTrayInit(polkadotAddress: string) {
 // Add these explicit debug logs
 function logTrayAction(action: string, details?: unknown) {
   console.log(`[Tray] ${action}`, details ? details : "");
+}
+
+async function updateOpenFilesMenuItem() {
+  if (!openFilesItem) return;
+  try {
+    await openFilesItem.setEnabled(isUserLoggedIn());
+  } catch (error) {
+    console.error("[Tray] Failed to update Open Files item:", error);
+  }
 }
 
 /* ─ VPN Helper Functions ──────────────────────────────────────── */
@@ -479,10 +527,19 @@ async function updateVpnMenuItem(knownStatus?: boolean) {
       },
     });
 
-    // Insert at the correct position (after update item if exists, otherwise at position 0)
+    // Insert after Open and Update items (if present)
     const items = await menu.items();
     const updateItemIndex = items.findIndex((i) => i.id === INSTALL_UPDATE);
-    const insertPosition = updateItemIndex >= 0 ? updateItemIndex + 1 : 0;
+    const openAppIndex = items.findIndex((i) => i.id === OPEN_APP_ID);
+    const openFilesIndex = items.findIndex((i) => i.id === OPEN_FILES_ID);
+    const syncIndex = items.findIndex((i) => i.id === SYNC_ID);
+    const anchorIndex = Math.max(
+      updateItemIndex,
+      openAppIndex,
+      openFilesIndex,
+      syncIndex
+    );
+    const insertPosition = anchorIndex >= 0 ? anchorIndex + 1 : 0;
 
     await menu.insert(newVpnItem, insertPosition);
     vpnToggleItem = newVpnItem;
@@ -635,7 +692,8 @@ async function updateTraySyncPercent(percent: number | null) {
       enabled: false,
     });
 
-    const insertPosition = update ? 1 : 0;
+    const baseOffset = openItemsSeparator ? 3 : 0;
+    const insertPosition = baseOffset + (update ? 1 : 0);
     await menu.insert(syncItem, insertPosition);
   } else {
     await syncItem.setText(label);
@@ -671,6 +729,7 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
     if (lastLoginStatus !== currentLoginStatus) {
       lastLoginStatus = currentLoginStatus;
       await updateVpnMenuItem();
+      await updateOpenFilesMenuItem();
 
       // If user logged out, turn off VPN
       if (!currentLoginStatus && lastKnownStatus) {

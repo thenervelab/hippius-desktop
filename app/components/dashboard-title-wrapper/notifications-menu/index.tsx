@@ -2,17 +2,15 @@
 
 import { useCreditsNotification } from "@/app/lib/hooks/useCreditsNotification";
 import { useFilesNotification } from "@/app/lib/hooks/useFilesNotification";
-import { useEffect, useState } from "react";
-import { useSetAtom, useAtom } from "jotai";
+import { useState } from "react";
+import { useAtom } from "jotai";
 import * as Menubar from "@radix-ui/react-menubar";
 
-import {
-  refreshUnreadCountAtom,
-  unreadCountAtom
-} from "@/components/page-sections/notifications/notificationStore";
+import { unreadCountAtom } from "@/components/page-sections/notifications/notificationStore";
 import NotificationIconButton from "./NotificationIconButton";
 import NotificationMenuContent from "./NotificationMenuContent";
 import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
+import { useNotifications } from "@/lib/hooks/useNotifications";
 
 type Props = {
   className?: string;
@@ -22,13 +20,11 @@ export default function NotificationMenu({ className = "delay-500" }: Props) {
   useCreditsNotification();
   useNotificationPreferences();
   useFilesNotification();
-  const refreshUnreadCount = useSetAtom(refreshUnreadCountAtom);
+  // useNotifications sets userAddressAtom and refreshes notifications on mount,
+  // ensuring unread count is available immediately when page loads
+  useNotifications();
   const [count] = useAtom(unreadCountAtom);
   const [menuValue, setMenuValue] = useState<string>("");
-
-  useEffect(() => {
-    refreshUnreadCount();
-  }, [refreshUnreadCount]);
 
   return (
     <Menubar.Root

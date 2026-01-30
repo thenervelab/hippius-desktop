@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { AbstractIconWrapper, CardButton } from "@/components/ui";
+import React, { useState, useEffect } from "react";
+import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { IconComponent } from "@/app/lib/types";
 import NotificationType from "./NotificationType";
 import { handleButtonLink } from "@/app/lib/utils/links";
@@ -11,14 +11,18 @@ import { InView } from "react-intersection-observer";
 import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/components/sidebar/sideBarAtoms";
+import BasicMarkdown from "@/components/updater/BasicMarkdown";
+import { getVersion } from "@tauri-apps/api/app";
 
 interface NotificationDetailViewProps {
   selectedNotification: {
     id?: number;
     icon: IconComponent;
     type: string;
+    subType?: string;
     title: string;
     description: string;
+    releaseNotes?: string;
     time: string | number;
     timestamp?: number;
     actionText?: string;
@@ -26,6 +30,19 @@ interface NotificationDetailViewProps {
     unread?: boolean;
   } | null;
   onReadStatusChange?: (id: number, isUnread: boolean) => void;
+}
+
+// Helper to compare semver versions (returns true if v1 >= v2)
+function isVersionGreaterOrEqual(v1: string, v2: string): boolean {
+  const parse = (v: string) => v.replace(/^v/, "").split(".").map(Number);
+  const [a, b] = [parse(v1), parse(v2)];
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const n1 = a[i] ?? 0;
+    const n2 = b[i] ?? 0;
+    if (n1 > n2) return true;
+    if (n1 < n2) return false;
+  }
+  return true;
 }
 
 const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
@@ -38,25 +55,47 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     x: number;
     y: number;
   } | null>(null);
+  const [currentVersion, setCurrentVersion] = useState<string>("");
+
+  useEffect(() => {
+    getVersion()
+      .then(setCurrentVersion)
+      .catch(() => {});
+  }, []);
 
   if (!selectedNotification) {
-    return (
-      <div className=" w-full h-[80.9vh]"></div>
-    );
+    return <div className=" w-full h-[80.9vh]"></div>;
   }
 
   const {
     id,
     icon: Icon,
     type,
+    subType,
     title,
     description,
+    releaseNotes,
     time,
     timestamp,
     actionText,
     actionLink,
     unread = false,
   } = selectedNotification;
+
+  // For Hippius update notifications, hide button if already on this version or newer
+  const isUpdateNotification =
+    type === "Hippius" && subType && actionLink === "Install Update";
+  const isUpdateAlreadyInstalled =
+    isUpdateNotification &&
+    currentVersion &&
+    isVersionGreaterOrEqual(currentVersion, subType);
+  const shouldShowButton = actionText && !isUpdateAlreadyInstalled;
+
+  const releaseNotesText = releaseNotes?.trim() ?? "";
+  const hasReleaseNotes = releaseNotesText.length > 0;
+  const descriptionText = hasReleaseNotes
+    ? `${description}${description.endsWith(".") ? "" : "."} See what's new below.`
+    : description;
 
   const handleMoreClick = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -88,7 +127,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
           <AbstractIconWrapper className="min-w-[32px] size-8 text-primary-40">
             <Icon className="absolute text-primary-40 size-5" />
           </AbstractIconWrapper>
-          <div className="flex flex-col">
+          <div className="flex flex-col min-h-0 flex-1 min-w-0">
             {/* Type badge */}
             <RevealTextLine rotate reveal={inView} className="delay-200">
               <NotificationType type={type} />
@@ -104,10 +143,21 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
             {/* Description */}
             <RevealTextLine rotate reveal={inView} className="delay-400">
               <p className="text-sm text-grey-30 font-medium leading-5 mb-[7px]">
-                {description}
+                {descriptionText}
               </p>
             </RevealTextLine>
 
+            {hasReleaseNotes && (
+              <div className="mt-2 mb-2">
+                <div className="flex items-center gap-2 text-grey-50">
+                  <Icons.Note2 className="size-5" />
+                  <span className="text-base font-bold">Release Notes</span>
+                </div>
+                <div className=" max-h-[280px] overflow-y-auto pr-2">
+                  <BasicMarkdown text={releaseNotesText} />
+                </div>
+              </div>
+            )}
             {/* Time */}
             <RevealTextLine rotate reveal={inView} className="delay-500">
               <span className="text-xs text-grey-60 leading-[18px] mb-[7px]">
@@ -116,7 +166,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
             </RevealTextLine>
 
             {/* Action button */}
-            {actionText && (
+            {shouldShowButton && (
               <CardButton
                 className="max-w-[152px] h-10"
                 onClick={handleLinkClick}
@@ -150,8 +200,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
               onArchived={() => {
                 setContextMenu(null);
               }}
-              onArchiveStart={() => {
-              }}
+              onArchiveStart={() => {}}
             />
           )}
         </div>
