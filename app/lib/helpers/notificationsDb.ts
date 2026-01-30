@@ -208,22 +208,22 @@ export async function addNotification({
 }) {
   const db = await getDb();
 
-  // // Special check for welcome notification - prevent duplicates (including deleted ones)
-  // if (notificationSubtype === "Welcome") {
-  //   const existing = db.exec(
-  //     `SELECT COUNT(*) FROM notifications
-  //      WHERE userAddress = ?
-  //      AND notificationSubtype = 'Welcome'`,
-  //     [userAddress],
-  //   );
-  //   const count = existing[0]?.values[0][0] as number;
-  //   if (count > 0) {
-  //     console.log(
-  //       `[NotificationsDB] Welcome notification already exists for ${userAddress} (including deleted), skipping`,
-  //     );
-  //     return;
-  //   }
-  // }
+  // Special check for welcome notification - prevent duplicates (including deleted ones)
+  if (notificationSubtype === "Welcome") {
+    const existing = db.exec(
+      `SELECT COUNT(*) FROM notifications
+       WHERE userAddress = ?
+       AND notificationSubtype = 'Welcome'`,
+      [userAddress],
+    );
+    const count = existing[0]?.values[0][0] as number;
+    if (count > 0) {
+      console.log(
+        `[NotificationsDB] Welcome notification already exists for ${userAddress} (including deleted), skipping`,
+      );
+      return;
+    }
+  }
 
   db.run(
     `INSERT INTO notifications

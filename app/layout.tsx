@@ -13,6 +13,7 @@ import PageLoader from "@/app/components/PageLoader";
 import SplashWrapper from "./components/splash-screen";
 import { NavigationLoaderProvider } from "./lib/hooks/useNavigationLoader";
 import UpdateChecker from "@/components/updater/UpdateChecker";
+import TrayNavigationListener from "@/app/components/tray/TrayNavigationListener";
 
 const digitalFonts = localFont({
   src: "./fonts/DigitalNumbers-Regular.ttf",
@@ -40,6 +41,7 @@ export default function RootLayout({
               <PreAuthProvider>
                 <NextTopLoader color="#3167DD" showSpinner={false} />
                 <NavigationLoaderProvider>
+                  <TrayNavigationListener />
                   <SplashWrapper preventClose={false}>
                     <Suspense fallback={<PageLoader />}>
                       <div className="flex min-h-screen h-screen">
