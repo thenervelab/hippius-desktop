@@ -127,6 +127,10 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
+      - name: Create Tauri env
+        run: |
+          echo "INDEXER_API_KEY=${{ secrets.INDEXER_API_KEY }}" > src-tauri/.env
+
       - name: Build frontend
         run: pnpm build
         env:

@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod ipfs_commands;
+pub mod indexer;
 pub mod substrate_tx;
 pub mod syncing;
 pub mod types;

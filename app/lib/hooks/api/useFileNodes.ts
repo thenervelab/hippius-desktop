@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { API_BASE_URL } from "@/lib/constants";
+import { indexerGet } from "@/lib/api/indexerClient";
 
 interface FileRecord {
   id: number;
@@ -43,13 +43,7 @@ export const useFileNodes = (cid: string | null) => {
         throw new Error("Invalid CID");
       }
 
-      const response = await fetch(`${API_BASE_URL}/files?cid=${cid}`);
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch nodes: ${response.statusText}`);
-      }
-
-      const data: FilesApiResponse = await response.json();
+      const data = await indexerGet<FilesApiResponse>("/files", { cid });
 
       // Get the first file record
       const firstFile = data.files?.[0];

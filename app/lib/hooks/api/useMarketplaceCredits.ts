@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { API_BASE_URL } from "@/lib/constants";
+import { indexerGet } from "@/lib/api/indexerClient";
 
 // Define types based on the indexer API response
 export interface MarketplaceCreditEvent {
@@ -67,21 +67,12 @@ export default function useMarketplaceCredits(
           throw new Error("No wallet address available");
         }
 
-        const url = `${API_BASE_URL}/marketplace/credit?account_id=${polkadotAddress}&limit=${limit}&page=${page}&event_name=CreditsConsumed`;
-
-        const response = await fetch(url, {
-          headers: {
-            accept: "application/json",
-          },
+        return indexerGet<MarketplaceCreditsResponse>("/marketplace/credit", {
+          account_id: polkadotAddress,
+          limit,
+          page,
+          event_name: "CreditsConsumed",
         });
-
-        if (!response.ok) {
-          throw new Error(
-            `Failed to fetch marketplace credits: ${response.status}`
-          );
-        }
-
-        return (await response.json()) as MarketplaceCreditsResponse;
       },
       select: (data) => {
         return data.events

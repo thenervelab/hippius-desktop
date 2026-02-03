@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { API_BASE_URL } from "@/lib/constants";
+import { indexerGet } from "@/lib/api/indexerClient";
 
 // Define types based on the indexer API response
 export interface TransferEvent {
@@ -66,19 +66,11 @@ export default function useBalanceTransactions(
         throw new Error("No wallet address available");
       }
 
-      const url = `${API_BASE_URL}/balance-transfers?account=${polkadotAddress}`;
-
-      const response = await fetch(url, {
-        headers: {
-          accept: "application/json",
-        },
+      return indexerGet<TransfersResponse>("/balance-transfers", {
+        account: polkadotAddress,
+        page,
+        limit,
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch transfers: ${response.status}`);
-      }
-
-      return (await response.json()) as TransfersResponse;
     },
     select: (data) => {
       return data.data.map((transfer) => ({

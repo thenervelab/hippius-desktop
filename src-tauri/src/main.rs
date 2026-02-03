@@ -53,7 +53,15 @@ use utils::file_operations::delete_and_unpin_file_by_name;
 // Register the new  Tauri command so the frontend can invoke it.
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
+fn load_env() {
+    let _ = dotenvy::dotenv();
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let env_path = format!("{}/.env", manifest_dir);
+    let _ = dotenvy::from_filename(env_path);
+}
+
 fn main() {
+    load_env();
     sodiumoxide::init().unwrap();
     println!("[Main] Application starting...");
 
@@ -150,6 +158,7 @@ fn main() {
             utils::nebula::verify_nebula,
             utils::nebula::finish_setup,
             utils::nebula::start_nebula,
+            commands::indexer::get_indexer_api_key,
             save_temp_auth_key_command,
             has_master_token_command,
             request_master_token_command

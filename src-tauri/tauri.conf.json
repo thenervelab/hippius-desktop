@@ -42,8 +42,7 @@
         "height": 1000,
         "visible": true,
         "center": true,
-        "resizable": true,
-        "devtools": false
+        "resizable": true
       }
     ],
     "withGlobalTauri": true,
@@ -74,7 +73,8 @@
       "icons/SyncingTrayIcon.png",
       "icons/SyncCompletedTrayIcon.png",
       "icons/*.png",
-      "icons/generic-image.png"
+      "icons/generic-image.png",
+      ".env"
     ],
     "macOS": {
       "entitlements": "entitlements.plist",

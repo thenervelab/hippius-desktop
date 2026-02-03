@@ -41,6 +41,7 @@ tar = "0.4.44"
 reqwest = { version = "0.12", features = ["blocking", "multipart", "json"] }
 zip = "4.2.0"
 sodiumoxide = "0.2"
+dotenvy = "0.15"
 base64 = "0.21"
 sha2 = "0.10"
 subxt = { version = "0.38", features = ["substrate-compat"] }

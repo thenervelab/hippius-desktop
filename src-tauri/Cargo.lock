@@ -15,6 +15,7 @@ dependencies = [
  "chrono",
  "cocoa",
  "dirs",
+ "dotenvy",
  "flate2",
  "fs_extra",
  "futures",
