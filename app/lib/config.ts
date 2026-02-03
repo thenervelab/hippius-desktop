@@ -92,8 +92,6 @@ export const HIPPIUS_EXPLORER_CONFIG = {
   baseUrl: "https://hipstats.com",
 } as const;
 
-export const API_BASE_URL = "https://indexer.hippius.network";
-
 export const STORAGE_CONTROL_CONFIG = {
   baseUrl: `${API_CONFIG.baseUrl}/api/storage-control`,
   endpoints: {
