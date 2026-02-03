@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export const TRAY_OPEN_FILES_EVENT = "hippius:tray-open-files";
+export const TRAY_OPEN_VM_EVENT = "hippius:tray-open-vm";
 
 export async function openAppWindow(): Promise<void> {
   try {
@@ -25,4 +26,13 @@ export async function openFilesPage(): Promise<void> {
   if (window.location.pathname === "/files") return;
 
   window.dispatchEvent(new CustomEvent(TRAY_OPEN_FILES_EVENT));
+}
+
+export async function openVirtualMachinesPage(): Promise<void> {
+  await openAppWindow();
+
+  if (typeof window === "undefined") return;
+  if (window.location.pathname === "/vm") return;
+
+  window.dispatchEvent(new CustomEvent(TRAY_OPEN_VM_EVENT));
 }

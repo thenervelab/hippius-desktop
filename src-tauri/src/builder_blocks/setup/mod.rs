@@ -2,7 +2,7 @@ use crate::{DB_POOL, constants::substrate::WSS_ENDPOINT};
 use dirs;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
-use tauri::{Builder, Manager, Wry};
+use tauri::{path::BaseDirectory, Builder, Manager, Wry};
 #[cfg(target_os = "linux")]
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -376,6 +376,10 @@ async fn migrate_sync_paths_unique_constraint(pool: &SqlitePool) -> Result<(), s
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
             println!("[Setup] .setup() closure called in setup.rs");
+
+            if let Ok(env_path) = app.path().resolve(".env", BaseDirectory::Resource) {
+                let _ = dotenvy::from_filename(env_path);
+            }
 
             // Register deep links for Linux at runtime (required for dev)
             #[cfg(target_os = "linux")]

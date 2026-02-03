@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { API_BASE_URL } from "@/lib/constants";
+import { indexerGet } from "@/lib/api/indexerClient";
 
 export interface NodeMetric {
     miner_id: string;
@@ -31,19 +31,14 @@ export function useNodeLocations(minerIds: string[] = []) {
             queryFn: async () => {
                 if (!minerId) return null;
 
-                const url = `${API_BASE_URL}/node-metrics?page=1&limit=1&miner_id=${minerId}`;
-
-                const response = await fetch(url, {
-                    headers: {
-                        accept: "application/json",
-                    },
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch node metrics: ${response.status}`);
-                }
-
-                const data = await response.json() as NodeMetricsResponse;
+                const data = await indexerGet<NodeMetricsResponse>(
+                    "/node-metrics",
+                    {
+                        page: 1,
+                        limit: 1,
+                        miner_id: minerId,
+                    }
+                );
 
                 if (!data.metrics || data.metrics.length === 0) {
                     return null;
@@ -96,19 +91,14 @@ export function useSingleNodeLocation(minerId: string | undefined) {
         queryFn: async () => {
             if (!minerId) return null;
 
-            const url = `${API_BASE_URL}/node-metrics?page=1&limit=1&miner_id=${minerId}`;
-
-            const response = await fetch(url, {
-                headers: {
-                    accept: "application/json",
-                },
-            });
-
-            if (!response.ok) {
-                throw new Error(`Failed to fetch node metrics: ${response.status}`);
-            }
-
-            const data = await response.json() as NodeMetricsResponse;
+            const data = await indexerGet<NodeMetricsResponse>(
+                "/node-metrics",
+                {
+                    page: 1,
+                    limit: 1,
+                    miner_id: minerId,
+                }
+            );
 
             if (!data.metrics || data.metrics.length === 0) {
                 return null;

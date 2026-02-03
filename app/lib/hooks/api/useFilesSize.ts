@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { API_BASE_URL } from "@/lib/constants";
+import { indexerGet } from "@/lib/api/indexerClient";
 import { sciToFullString } from "../../utils/formatters/formatBalance";
 
 // Define types based on the indexer API response
@@ -87,19 +87,10 @@ export default function useFiles(
         throw new Error("No wallet address available");
       }
 
-      const url = `${API_BASE_URL}/ipfs/user-total-files-size?limit=${limit}&account_id=${polkadotAddress}`;
-
-      const response = await fetch(url, {
-        headers: {
-          accept: "application/json",
-        },
+      return indexerGet<FilesResponse>("/ipfs/user-total-files-size", {
+        limit,
+        account_id: polkadotAddress,
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch files: ${response.status}`);
-      }
-
-      return (await response.json()) as FilesResponse;
     },
     select: (data) => {
       if (!data?.data?.length) return [];

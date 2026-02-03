@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { API_BASE_URL } from "@/lib/constants";
+import { indexerGet } from "@/lib/api/indexerClient";
 
 // Define types based on the indexer API response for MintedAccountCredits events
 export interface EventData {
@@ -70,19 +70,12 @@ export default function useAddCreditEvent(
         throw new Error("No wallet address available");
       }
 
-      const url = `${API_BASE_URL}/events?event_name=MintedAccountCredits&account_id=${polkadotAddress}&page=${page}&limit=${limit}`;
-
-      const response = await fetch(url, {
-        headers: {
-          accept: "application/json",
-        },
+      return indexerGet<CreditEventsResponse>("/events", {
+        event_name: "MintedAccountCredits",
+        account_id: polkadotAddress,
+        page,
+        limit,
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch credit events: ${response.status}`);
-      }
-
-      return (await response.json()) as CreditEventsResponse;
     },
     select: (data) => {
       return data.events.map((event) => ({

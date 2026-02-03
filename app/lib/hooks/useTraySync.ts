@@ -9,7 +9,11 @@ import {
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
-import { openAppWindow, openFilesPage } from "@/app/lib/tray/trayWindowActions";
+import {
+  openAppWindow,
+  openFilesPage,
+  openVirtualMachinesPage,
+} from "@/app/lib/tray/trayWindowActions";
 import {
   checkForUpdates,
   getAvailableUpdate,
@@ -31,6 +35,7 @@ const INSTALL_UPDATE = "install-update";
 const VPN_TOGGLE_ID = "vpn-toggle";
 const OPEN_APP_ID = "open-app";
 const OPEN_FILES_ID = "open-files";
+const OPEN_VM_ID = "open-vm";
 const SYNC_ITEM_PREFIX = "sync-activity-item:";
 
 // add cached icon paths + state
@@ -48,6 +53,7 @@ let syncItem: MenuItem | null = null;
 let vpnToggleItem: MenuItem | null = null;
 let openItemsSeparator: PredefinedMenuItem | null = null;
 let openFilesItem: MenuItem | null = null;
+let openVmItem: MenuItem | null = null;
 const syncRowItems = new Map<string, MenuItem>(); // rows under header
 
 // Cache last rendered "rows signature" to avoid flicker
@@ -158,9 +164,7 @@ function getOAuthToken(): string | null {
 }
 
 // Helper to fetch credits from API with caching
-async function fetchUserCredits(
-  forceRefresh = false
-): Promise<{
+async function fetchUserCredits(forceRefresh = false): Promise<{
   credits: number;
   isLoading: boolean;
   error?: string;
@@ -197,7 +201,7 @@ async function fetchUserCredits(
           Authorization: `Token ${token}`,
           Accept: "application/json",
         },
-      }
+      },
     );
 
     if (!response.ok) {
@@ -274,7 +278,7 @@ export function useTrayInit(polkadotAddress: string) {
   // Use atom to watch for sync percentage changes
   const currentPercent = useAtomValue(syncPercentAtom);
   const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
-    lastUpdatedPercentAtom
+    lastUpdatedPercentAtom,
   );
   const setVpnConnected = useSetAtom(vpnConnectedAtom);
 
@@ -340,6 +344,17 @@ export function useTrayInit(polkadotAddress: string) {
       });
       openFilesItem = openFilesMenuItem;
 
+      const openVmMenuItem = await MenuItem.new({
+        id: OPEN_VM_ID,
+        text: "Open Virtual Machines",
+        enabled: isUserLoggedIn(),
+        action: async () => {
+          if (!isUserLoggedIn()) return;
+          await openVirtualMachinesPage();
+        },
+      });
+      openVmItem = openVmMenuItem;
+
       openItemsSeparator = await PredefinedMenuItem.new({
         item: "Separator",
       });
@@ -386,6 +401,7 @@ export function useTrayInit(polkadotAddress: string) {
         items: [
           openAppItem,
           openFilesMenuItem,
+          openVmMenuItem,
           ...(installUpdateMenuItem ? [installUpdateMenuItem] : []),
           vpnToggleItem,
         ],
@@ -439,6 +455,15 @@ async function updateOpenFilesMenuItem() {
   }
 }
 
+async function updateOpenVmMenuItem() {
+  if (!openVmItem) return;
+  try {
+    await openVmItem.setEnabled(isUserLoggedIn());
+  } catch (error) {
+    console.error("[Tray] Failed to update Open Virtual Machines item:", error);
+  }
+}
+
 /* ─ VPN Helper Functions ──────────────────────────────────────── */
 async function getVpnStatus(): Promise<boolean> {
   try {
@@ -460,7 +485,6 @@ async function toggleVpnStatus(): Promise<boolean> {
     throw error;
   }
 }
-
 
 async function updateVpnMenuItem(knownStatus?: boolean) {
   try {
@@ -532,12 +556,14 @@ async function updateVpnMenuItem(knownStatus?: boolean) {
     const updateItemIndex = items.findIndex((i) => i.id === INSTALL_UPDATE);
     const openAppIndex = items.findIndex((i) => i.id === OPEN_APP_ID);
     const openFilesIndex = items.findIndex((i) => i.id === OPEN_FILES_ID);
+    const openVmIndex = items.findIndex((i) => i.id === OPEN_VM_ID);
     const syncIndex = items.findIndex((i) => i.id === SYNC_ID);
     const anchorIndex = Math.max(
       updateItemIndex,
       openAppIndex,
       openFilesIndex,
-      syncIndex
+      openVmIndex,
+      syncIndex,
     );
     const insertPosition = anchorIndex >= 0 ? anchorIndex + 1 : 0;
 
@@ -558,7 +584,7 @@ async function updateVpnMenuItem(knownStatus?: boolean) {
 // Replace setTrayIconSyncing with a more robust implementation
 async function setTrayIconSyncing(
   isSyncing: boolean,
-  isCompleted: boolean = false
+  isCompleted: boolean = false,
 ) {
   try {
     // Force resolve paths every time if they're missing
@@ -730,6 +756,7 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
       lastLoginStatus = currentLoginStatus;
       await updateVpnMenuItem();
       await updateOpenFilesMenuItem();
+      await updateOpenVmMenuItem();
 
       // If user logged out, turn off VPN
       if (!currentLoginStatus && lastKnownStatus) {
@@ -793,10 +820,10 @@ function startSyncActivityWatcher(polkadotAddress: string) {
       // Helper function to process files consistently
       const processFile = (
         file: UserProfileFile,
-        action: "uploading" | "uploaded" | "deleted"
+        action: "uploading" | "uploaded" | "deleted",
       ): BackendActivityItem => {
         const isErasureCodedFolder = file.fileName?.endsWith(
-          ".folder.ec_metadata"
+          ".folder.ec_metadata",
         );
         const isErasureCoded =
           !isErasureCodedFolder && file.fileName?.endsWith(".ec_metadata");
@@ -859,7 +886,7 @@ function startSyncActivityWatcher(polkadotAddress: string) {
           id: r.id,
           text: formatRowText(r),
           icon: r.path || "",
-        }))
+        })),
       );
 
       if (signature === lastRowsSignature) return;
@@ -883,7 +910,7 @@ function startSyncActivityWatcher(polkadotAddress: string) {
 
 /* ─ Normalize backend shape to rows (with thumbnails) ────────── */
 async function normalizeActivityToRows(
-  items: BackendActivityItem[]
+  items: BackendActivityItem[],
 ): Promise<SyncActivityRow[]> {
   // Resolve generic icons once
   if (!iconPathCache.file) {
@@ -1014,7 +1041,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
     for (const [, item] of [...syncRowItems.entries()]) {
       try {
         await menu.remove(item);
-      } catch { }
+      } catch {}
     }
     syncRowItems.clear();
 
@@ -1023,7 +1050,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
       if (typeof item.id === "string" && item.id.startsWith(SYNC_ITEM_PREFIX)) {
         try {
           await menu.remove(item);
-        } catch { }
+        } catch {}
       }
     }
   } catch (error) {

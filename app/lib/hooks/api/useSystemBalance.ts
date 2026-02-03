@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { API_BASE_URL } from "@/lib/constants";
+import { indexerGet } from "@/lib/api/indexerClient";
 
 /** Row as returned by the new API */
 export interface BalanceRow {
@@ -122,17 +122,14 @@ export default function useSystemBalance(
     queryFn: async () => {
       if (!polkadotAddress) throw new Error("No wallet address available");
 
-      const url =
-        `${API_BASE_URL}` +
-        `/system-account-balance?account_id=${encodeURIComponent(
-          polkadotAddress
-        )}` +
-        `&page=${page}&limit=${limit}`;
-
-      const res = await fetch(url, { headers: { accept: "application/json" } });
-      if (!res.ok) throw new Error(`Failed to fetch balance: ${res.status}`);
-
-      return (await res.json()) as PagedResponse<BalanceRow>;
+      return indexerGet<PagedResponse<BalanceRow>>(
+        "/system-account-balance",
+        {
+          account_id: polkadotAddress,
+          page,
+          limit,
+        }
+      );
     },
     select: (resp) => {
       if (!resp?.data?.length) return [];

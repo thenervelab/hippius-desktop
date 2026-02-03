@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { API_BASE_URL } from "@/lib/constants";
+import { indexerGet } from "@/lib/api/indexerClient";
 
 // Define types based on the indexer API response
 export interface CreditEvent {
@@ -113,19 +113,11 @@ export default function useCredits(
         throw new Error("No wallet address available");
       }
 
-      const url = `${API_BASE_URL}/credits/free-credits?account_id=${polkadotAddress}&limit=${limit}&page=${page}`;
-
-      const response = await fetch(url, {
-        headers: {
-          accept: "application/json",
-        },
+      return indexerGet<CreditsResponse>("/credits/free-credits", {
+        account_id: polkadotAddress,
+        limit,
+        page,
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch credits: ${response.status}`);
-      }
-
-      return (await response.json()) as CreditsResponse;
     },
     select: (data) => {
       if (!data?.data?.length) return [];
