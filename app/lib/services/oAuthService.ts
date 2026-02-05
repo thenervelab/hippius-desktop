@@ -327,6 +327,7 @@ class OAuthService {
      * Store OAuth session (persistent)
      */
     private storeSession(session: OAuthSession): void {
+        if (typeof window === "undefined") return;
         console.log("[OAuthService] Storing OAuth session");
         localStorage.setItem(OAUTH_SESSION_KEY, JSON.stringify(session));
         localStorage.setItem(OAUTH_SESSION_EXPIRY_KEY, session.expiresAt);
@@ -337,6 +338,7 @@ class OAuthService {
      * Works for both OAuth and mnemonic sessions
      */
     public getSession(): OAuthSession | null {
+        if (typeof window === "undefined") return null;
         try {
             const sessionData = localStorage.getItem(OAUTH_SESSION_KEY);
             const expiry = localStorage.getItem(OAUTH_SESSION_EXPIRY_KEY);
@@ -385,6 +387,7 @@ class OAuthService {
      * Clear OAuth session
      */
     public clearSession(): void {
+        if (typeof window === "undefined") return;
         console.log("[OAuthService] Clearing OAuth session");
         localStorage.removeItem(OAUTH_SESSION_KEY);
         localStorage.removeItem(OAUTH_SESSION_EXPIRY_KEY);

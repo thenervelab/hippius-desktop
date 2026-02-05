@@ -67,6 +67,7 @@ const normalizeColumnWidths = (maybeStored?: Record<string, number>) => {
 };
 
 const getStoredColumnWidths = () => {
+  if (typeof window === "undefined") return normalizeColumnWidths();
   try {
     const stored = localStorage.getItem("referralTable_columnWidths");
     return normalizeColumnWidths(stored ? JSON.parse(stored) : undefined);
@@ -76,6 +77,7 @@ const getStoredColumnWidths = () => {
 };
 
 const saveColumnWidths = (columnWidths: Record<string, number>) => {
+  if (typeof window === "undefined") return;
   try {
     localStorage.setItem("referralTable_columnWidths", JSON.stringify(columnWidths));
   } catch { }

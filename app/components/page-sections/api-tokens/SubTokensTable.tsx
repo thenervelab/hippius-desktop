@@ -67,6 +67,7 @@ const ApiTokensTable: React.FC<ApiTokensTableProps> = ({
     };
 
     const [columnWidths, setColumnWidths] = useState(() => {
+        if (typeof window === "undefined") return DEFAULT_COLUMN_WIDTHS;
         try {
             const stored = localStorage.getItem('subTokensTable_columnWidths');
             return stored ? JSON.parse(stored) : DEFAULT_COLUMN_WIDTHS;

@@ -82,6 +82,7 @@ const MIN_COLUMN_WIDTHS = {
 
 // Store the "base" column widths (without selection column) to preserve user preferences
 const getStoredBaseColumnWidths = (isRecentFiles: boolean, isPrivateFolder: boolean) => {
+  if (typeof window === "undefined") return DEFAULT_COLUMN_WIDTHS_NO_SELECTION;
   try {
     const key = `filesTable_baseColumnWidths_${isRecentFiles ? 'recent' : 'main'}_${isPrivateFolder ? 'private' : 'public'}`;
     const stored = localStorage.getItem(key);
@@ -95,6 +96,7 @@ const getStoredBaseColumnWidths = (isRecentFiles: boolean, isPrivateFolder: bool
 };
 
 const saveBaseColumnWidths = (columnWidths: Record<string, number>, isRecentFiles: boolean, isPrivateFolder: boolean) => {
+  if (typeof window === "undefined") return;
   try {
     // Remove selection column before saving as base widths
     const baseWidths = { ...columnWidths };
