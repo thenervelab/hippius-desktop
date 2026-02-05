@@ -77,12 +77,36 @@ const CustomizeRPC: React.FC = () => {
       return false;
     }
 
+    // Validate URL format
+    if (!rpcEndpoint.startsWith("ws://") && !rpcEndpoint.startsWith("wss://")) {
+      setError(formatErrorMessage("Invalid WSS endpoint format"));
+      return false;
+    }
+
     setError(null);
     setTesting(true);
 
     try {
-      // Test the endpoint using the Tauri command
-      await invoke("test_wss_endpoint_command", { endpoint: rpcEndpoint });
+      // Test the endpoint by opening a WebSocket connection
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(rpcEndpoint);
+        const timeout = setTimeout(() => {
+          ws.close();
+          reject(new Error("timed out"));
+        }, 10000);
+
+        ws.onopen = () => {
+          clearTimeout(timeout);
+          ws.close();
+          resolve();
+        };
+        ws.onerror = () => {
+          clearTimeout(timeout);
+          ws.close();
+          reject(new Error("connection refused"));
+        };
+      });
+
       setTesting(false);
       return true;
     } catch (err) {

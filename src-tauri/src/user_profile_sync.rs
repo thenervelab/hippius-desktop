@@ -1356,6 +1356,220 @@ pub async fn get_user_total_file_size(owner: String) -> Result<FileSizeBreakdown
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct FolderContentEntry {
+    pub file_name: String,
+    pub file_size: i64,
+    pub cid: String,
+    pub created_at: String,
+    pub file_hash: String,
+    pub last_charged_at: String,
+    pub miner_ids: Vec<String>,
+    pub source: String,
+    pub is_folder: bool,
+    pub main_req_hash: String,
+}
+
+/// List the contents of a blockchain-tracked folder by fetching its manifest from IPFS.
+#[tauri::command]
+pub async fn list_folder_contents(
+    account_id: String,
+    scope: String,
+    main_folder_name: Option<String>,
+    subfolder_path: Option<Vec<String>>,
+) -> Result<Vec<FolderContentEntry>, String> {
+    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+
+    let main_folder = main_folder_name.ok_or("Main folder name is required")?;
+
+    // Try different folder name patterns to find the entry in user_profiles
+    let folder_patterns = vec![
+        main_folder.clone(),
+        format!("{}.folder", main_folder),
+        format!("{}.folder.ec_metadata", main_folder),
+        format!("{}-folder", main_folder),
+        format!("{}-folder.ec_metadata", main_folder),
+    ];
+
+    let mut folder_row = None;
+    for pattern in &folder_patterns {
+        let row = sqlx::query(
+            "SELECT file_hash FROM user_profiles WHERE owner = ? AND type = ? AND file_name = ?",
+        )
+        .bind(&account_id)
+        .bind(&scope)
+        .bind(pattern)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("Database error: {e}"))?;
+
+        if row.is_some() {
+            folder_row = row;
+            break;
+        }
+    }
+
+    let folder_row = folder_row.ok_or("Folder not found in database")?;
+    let file_hash: String = folder_row.get("file_hash");
+
+    // Decode file hash to get IPFS CID
+    let cid = decode_file_hash(file_hash.as_bytes()).unwrap_or_else(|_| file_hash.clone());
+
+    // Fetch folder content from IPFS
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let mut folder_data = fetch_ipfs_json(&client, &cid).await?;
+
+    // Navigate into subfolders if path is provided
+    if let Some(ref path) = subfolder_path {
+        // Skip the first element (main folder name)
+        for subfolder_name in path.iter().skip(1) {
+            let files = folder_data
+                .as_array()
+                .ok_or("Expected folder content to be an array")?;
+
+            let subfolder = files
+                .iter()
+                .find(|f| {
+                    let name = f.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
+                    let base_name = name
+                        .trim_end_matches(".folder.ec_metadata")
+                        .trim_end_matches("-folder.ec_metadata")
+                        .trim_end_matches(".folder")
+                        .trim_end_matches("-folder");
+                    base_name == subfolder_name || name == subfolder_name
+                })
+                .ok_or(format!("Subfolder '{}' not found", subfolder_name))?;
+
+            let sub_hash = subfolder
+                .get("file_hash")
+                .and_then(|v| v.as_str())
+                .ok_or("Subfolder missing file_hash")?;
+
+            let sub_cid =
+                decode_file_hash(sub_hash.as_bytes()).unwrap_or_else(|_| sub_hash.to_string());
+
+            folder_data = fetch_ipfs_json(&client, &sub_cid).await?;
+        }
+    }
+
+    // Parse the entries
+    let files = folder_data
+        .as_array()
+        .ok_or("Expected folder content to be an array")?;
+
+    let entries: Vec<FolderContentEntry> = files
+        .iter()
+        .filter_map(|file| {
+            let file_name = file.get("file_name").and_then(|v| v.as_str())?.to_string();
+
+            // Skip internal metadata files
+            if file_name.ends_with(".ff.ec_metadata")
+                || file_name.ends_with(".ff")
+                || file_name.ends_with(".ec")
+                || file_name.ends_with(".s.folder")
+                || file_name.ends_with(".s.folder.ec_metadata")
+            {
+                return None;
+            }
+
+            let file_hash = match file.get("file_hash") {
+                Some(v) if v.is_string() => v.as_str().unwrap_or("").to_string(),
+                Some(v) if v.is_array() => {
+                    let bytes: Vec<u8> = v
+                        .as_array()?
+                        .iter()
+                        .filter_map(|n| n.as_u64().map(|u| u as u8))
+                        .collect();
+                    hex::encode(bytes)
+                }
+                _ => String::new(),
+            };
+
+            let file_size = file
+                .get("file_size_in_bytes")
+                .or_else(|| file.get("file_size"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+
+            let is_folder = file_name.ends_with("-folder")
+                || file_name.ends_with(".folder")
+                || file_name.ends_with(".folder.ec_metadata")
+                || file_name.ends_with("-folder.ec_metadata");
+
+            let entry_cid = decode_file_hash(file_hash.as_bytes()).unwrap_or_default();
+
+            let miner_ids: Vec<String> = file
+                .get("miner_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|id| id.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let main_req_hash = file
+                .get("main_req_hash")
+                .and_then(|v| v.as_str())
+                .map(|s| match hex::decode(s) {
+                    Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|_| s.to_string()),
+                    Err(_) => s.to_string(),
+                })
+                .unwrap_or_default();
+
+            Some(FolderContentEntry {
+                file_name,
+                file_size,
+                cid: entry_cid,
+                created_at: file
+                    .get("created_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0)
+                    .to_string(),
+                file_hash,
+                last_charged_at: file
+                    .get("last_charged_at")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0)
+                    .to_string(),
+                miner_ids,
+                source: "Hippius".to_string(),
+                is_folder,
+                main_req_hash,
+            })
+        })
+        .collect();
+
+    Ok(entries)
+}
+
+async fn fetch_ipfs_json(
+    client: &Client,
+    cid: &str,
+) -> Result<serde_json::Value, String> {
+    let url = format!("https://get.hippius.network/ipfs/{}", cid);
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("IPFS fetch error: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("IPFS returned status {}", resp.status()));
+    }
+
+    let data = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read IPFS response: {e}"))?;
+
+    serde_json::from_str(&data).map_err(|e| format!("Invalid JSON from IPFS: {e}"))
+}
+
 #[tauri::command]
 #[allow(dead_code)]
 pub async fn start_user_profile_sync_tauri(app_handle: AppHandle, account_id: String) {

@@ -16,7 +16,7 @@ mod utils;
 use crate::commands::syncing::{initialize_sync, stop_sync, trigger_sync_now};
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::sync_shared::{app_close, get_sync_activity, get_sync_status};
-use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size};
+use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size, list_folder_contents};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::accounts::{
     export_app_data, get_all_subaccount_addresses, import_app_data, reset_app,
@@ -95,6 +95,7 @@ fn main() {
             // User profile sync (blockchain)
             get_user_synced_files,
             get_user_total_file_size,
+            list_folder_contents,
             // IPFS info
             get_ipfs_node_info,
             get_ipfs_bandwidth,
