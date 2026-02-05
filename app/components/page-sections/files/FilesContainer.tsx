@@ -117,6 +117,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   // HCFS sync integration
   const {
     setupAndInitialize,
+    tryInitializeSync,
     checkConfig,
     isInitializing,
     mnemonicToBackup,
@@ -378,22 +379,18 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         // Check if HCFS config exists
         const hasConfig = await checkConfig(polkadotAddress);
 
-        if (!hasConfig) {
+        if (!hasConfig.has_password) {
           // Need to show setup dialog
           setShowHcfsSetup(true);
         } else {
-          // Config exists, initialize sync directly
-          const result = await setupAndInitialize(polkadotAddress, "", "", undefined);
-
-          if (result?.mnemonic) {
-            setShowMnemonicBackup(true);
-          }
+          // Config exists, just initialize (reads config from DB)
+          await tryInitializeSync(polkadotAddress, undefined);
         }
       } catch (err) {
         console.error("Failed to set sync folder:", err);
       }
     },
-    [polkadotAddress, checkConfig, setupAndInitialize]
+    [polkadotAddress, checkConfig, tryInitializeSync]
   );
 
   // Handle skipping sync folder setup

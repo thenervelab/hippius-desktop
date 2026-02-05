@@ -1,9 +1,10 @@
-use crate::hcfs_drive::{HcfsDriveManager, HCFS_DRIVE};
-use crate::sync_shared::{request_cancel, HCFS_SYNC_STATE};
+use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, HCFS_DRIVE};
+use crate::sync_shared::{clear_cancel, request_cancel, HCFS_SYNC_STATE};
+use crate::utils::account_key::account_key;
 use crate::DB_POOL;
+use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
@@ -27,6 +28,7 @@ pub async fn save_hcfs_config(
     drive_password: String,
 ) -> Result<(), String> {
     let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let owner = account_key(&account_id);
 
     sqlx::query(
         r#"
@@ -38,7 +40,7 @@ pub async fn save_hcfs_config(
             updated_at = CURRENT_TIMESTAMP
         "#,
     )
-    .bind(&account_id)
+    .bind(&owner)
     .bind(&server_url)
     .bind(&drive_password)
     .execute(db)
@@ -51,13 +53,14 @@ pub async fn save_hcfs_config(
 #[tauri::command]
 pub async fn get_hcfs_config(account_id: String) -> Result<HcfsConfigResult, String> {
     let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let owner = account_key(&account_id);
 
     let result: Option<(String, String)> = sqlx::query_as(
         r#"
         SELECT server_url, drive_password FROM hcfs_config WHERE owner = ?
         "#,
     )
-    .bind(&account_id)
+    .bind(&owner)
     .fetch_optional(db)
     .await
     .map_err(|e| format!("Failed to get HCFS config: {}", e))?;
@@ -76,13 +79,14 @@ pub async fn get_hcfs_config(account_id: String) -> Result<HcfsConfigResult, Str
 
 pub(crate) async fn get_drive_password(account_id: &str) -> Result<String, String> {
     let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let owner = account_key(account_id);
 
     let result: Option<(String,)> = sqlx::query_as(
         r#"
         SELECT drive_password FROM hcfs_config WHERE owner = ?
         "#,
     )
-    .bind(account_id)
+    .bind(&owner)
     .fetch_optional(db)
     .await
     .map_err(|e| format!("Failed to get drive password: {}", e))?;
@@ -94,13 +98,14 @@ pub(crate) async fn get_drive_password(account_id: &str) -> Result<String, Strin
 
 async fn get_sync_path(account_id: &str) -> Result<String, String> {
     let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let owner = account_key(account_id);
 
     let result: Option<(String,)> = sqlx::query_as(
         r#"
         SELECT path FROM sync_paths WHERE owner = ? AND type = 'private'
         "#,
     )
-    .bind(account_id)
+    .bind(&owner)
     .fetch_optional(db)
     .await
     .map_err(|e| format!("Failed to get sync path: {}", e))?;
@@ -110,14 +115,8 @@ async fn get_sync_path(account_id: &str) -> Result<String, String> {
         .ok_or_else(|| "Sync path not configured".to_string())
 }
 
-fn generate_user_id(input: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    input.hash(&mut hasher);
-    let hash_val = hasher.finish();
-    format!("hcfs_user_{:x}", hash_val)
-}
-
-/// Initialize sync by reading config from database
+/// Initialize sync by reading config from database, creating the HCFS Drive,
+/// and starting the background sync loop.
 #[tauri::command]
 pub async fn initialize_sync(
     app: tauri::AppHandle,
@@ -131,7 +130,7 @@ pub async fn initialize_sync(
     println!("[Setup] Sync path: {}", sync_path);
 
     // 2. Read HCFS config from database
-    let _drive_password = get_drive_password(&account_id).await?;
+    let drive_password = get_drive_password(&account_id).await?;
     let config = get_hcfs_config(account_id.clone()).await?;
 
     let server_url = if config.server_url.is_empty() {
@@ -141,24 +140,59 @@ pub async fn initialize_sync(
     };
     println!("[Setup] Server URL: {}", server_url);
 
-    // 3. Generate user ID from account
-    let user_id = generate_user_id(&account_id);
+    // 3. Ensure sync directory exists
+    std::fs::create_dir_all(&sync_path)
+        .map_err(|e| format!("Failed to create sync directory: {}", e))?;
 
-    // 4. Determine if this is a new setup and if we need to return a mnemonic
-    let (generated_mnemonic, is_new_setup) = if existing_mnemonic.is_some() {
-        // User provided mnemonic (mnemonic auth) - reuse it
-        (None, false)
+    // 4. Create HcfsDriveManager
+    let mut manager = HcfsDriveManager::new(PathBuf::from(&sync_path));
+
+    // 5. Init or unlock the drive
+    let (user_id, mnemonic, is_new_setup) = if manager.is_initialized() {
+        println!("[Setup] Drive already initialized, unlocking...");
+        let uid = manager.unlock(&drive_password)?;
+        println!("[Setup] Drive unlocked, user_id: {}", uid);
+        (uid, None, false)
     } else {
-        // OAuth user or first-time setup without mnemonic
-        // TODO: Integrate with actual HCFS library to generate mnemonic
-        // For now, return None - actual implementation will generate one
-        (None, true)
+        println!("[Setup] Drive not initialized, creating...");
+        let mnemonic_str = manager.init(&drive_password, existing_mnemonic.as_deref())?;
+        let uid = manager
+            .user_id()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "Failed to get user_id after init".to_string())?;
+        println!("[Setup] Drive initialized, user_id: {}", uid);
+
+        // Only return mnemonic for backup if we generated a new one (no existing mnemonic provided)
+        let mnemonic_to_return = if existing_mnemonic.is_none() {
+            Some(mnemonic_str)
+        } else {
+            None
+        };
+        (uid, mnemonic_to_return, existing_mnemonic.is_none())
     };
 
-    // 5. Emit sync started event
-    if let Err(e) = app.emit("hcfs_sync_started", &user_id) {
-        eprintln!("[Setup] Failed to emit hcfs_sync_started event: {}", e);
+    // 6. Set HCFS client config (server URL + auth)
+    manager.set_config(HcfsClientConfig {
+        base_url: server_url,
+        api_key: String::new(),
+        bearer_token: user_id.clone(),
+        accept_invalid_certs: false,
+    })?;
+
+    // 7. Setup progress event handlers
+    setup_progress_handlers(&app, &mut manager);
+
+    // 8. Clear any previous cancellation flag
+    clear_cancel();
+
+    // 9. Store the manager globally
+    {
+        let mut guard = HCFS_DRIVE.lock().await;
+        *guard = Some(manager);
     }
+
+    // 10. Start the background sync loop
+    start_sync_loop(app.clone()).await;
 
     println!(
         "[Setup] Sync initialized successfully. User ID: {}, New setup: {}",
@@ -167,52 +201,9 @@ pub async fn initialize_sync(
 
     Ok(InitSyncResult {
         user_id,
-        mnemonic: generated_mnemonic,
+        mnemonic,
         is_new_setup,
     })
-}
-
-// Placeholder for actual HCFS drive initialization
-async fn initialize_hcfs_drive(
-    sync_path: &str,
-    password: &str,
-    server_url: &str,
-    api_key: &str,
-    existing_mnemonic: Option<&str>,
-) -> Result<(String, Option<String>, bool), String> {
-    // TODO: Implement actual HCFS drive initialization
-    // This should:
-    // 1. Check if drive already exists at sync_path
-    // 2. If exists: unlock with password, return (user_id, None, false)
-    // 3. If not exists:
-    //    - If existing_mnemonic provided: use it to derive keys
-    //    - If no mnemonic: generate new one
-    //    - Create drive, return (user_id, Some(mnemonic) if generated, true)
-
-    println!(
-        "[Setup] HCFS drive init - path: {}, server: {}, has_mnemonic: {}",
-        sync_path,
-        server_url,
-        existing_mnemonic.is_some()
-    );
-
-    // Placeholder response
-    let user_id = format!("hcfs_user_{}", &account_id_hash(sync_path));
-    let (mnemonic, is_new) = if existing_mnemonic.is_some() {
-        (None, false)
-    } else {
-        // Would generate new mnemonic here for OAuth users
-        // For now, return None to indicate no backup needed
-        (None, true)
-    };
-
-    Ok((user_id, mnemonic, is_new))
-}
-
-fn account_id_hash(input: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    input.hash(&mut hasher);
-    format!("{:x}", hasher.finish())[..8].to_string()
 }
 
 #[tauri::command]

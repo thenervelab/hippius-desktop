@@ -40,7 +40,7 @@ const downloadFileExport = async (
     // Get sync path
     const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
       "get_sync_path",
-      { params: { isPublic: true, accountId: polkadotAddress } }
+      { params: { isPublic: false, accountId: polkadotAddress } }
     );
     const syncPath = syncPathResult.path;
 
@@ -91,7 +91,7 @@ const downloadFolderExport = async (
     // Get sync path
     const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
       "get_sync_path",
-      { params: { isPublic: true, accountId: polkadotAddress } }
+      { params: { isPublic: false, accountId: polkadotAddress } }
     );
     const syncPath = syncPathResult.path;
 

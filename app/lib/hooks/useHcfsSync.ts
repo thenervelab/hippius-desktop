@@ -8,6 +8,7 @@ import {
   type InitSyncResult,
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
+import { getPrivateSyncPath } from "../utils/syncPathUtils";
 
 export interface UseHcfsSyncResult {
   tryInitializeSync: (accountId: string, mnemonic?: string) => Promise<boolean>;
