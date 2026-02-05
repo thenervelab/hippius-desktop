@@ -12,8 +12,6 @@ import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { getFolderPathArray } from "@/app/utils/folderPathUtils";
-import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 
 type Props = {
     open: boolean;
@@ -32,20 +30,12 @@ export default function FolderToFolderUploadDialog({
     onClose,
     onSuccess,
     onRefresh,
-    isPrivateFolder,
-    parentFolderCid,
     parentFolderName,
-    mainFolderActualName,
-    subFolderPath
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
-    const { getParam } = useUrlParams();
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
-
-    const urlMainFolderCid = getParam("mainFolderCid");
-    const effectiveMainFolderCid = urlMainFolderCid || parentFolderCid;
 
     const handleSelectFolder = async () => {
         try {
@@ -79,25 +69,20 @@ export default function FolderToFolderUploadDialog({
         const toastId = toast.loading("Uploading folder...");
 
         try {
-            // Parse the folder path into an array of folder names
-            const folderPathArray = getFolderPathArray(mainFolderActualName, subFolderPath);
+            // Get sync path and copy folder into it
+            const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
+                "get_sync_path",
+                { isPublic: true, accountId: polkadotAddress }
+            );
+            const syncPath = syncPathResult.path;
 
-            // Choose the appropriate command based on folder type
-            const command = isPrivateFolder
-                ? "add_folder_to_private_folder"
-                : "add_folder_to_public_folder";
+            const name = await invoke<string>("add_folder", {
+                syncPath,
+                folderPath,
+            });
 
-            const invokeParams = {
-                accountId: polkadotAddress,
-                folderMetadataCid: effectiveMainFolderCid,
-                folderName: mainFolderActualName || parentFolderName,
-                folderPath: folderPath,
-                subfolderPath: folderPathArray || null
-            };
-
-            console.log("Invoke params:", invokeParams);
-
-            const manifestCid = await invoke<string>(command, invokeParams);
+            // Trigger sync to push changes
+            await invoke("trigger_sync_now").catch(() => {});
 
             toast.dismiss(toastId);
             toast.success(`Folder uploaded successfully!`);
@@ -107,7 +92,7 @@ export default function FolderToFolderUploadDialog({
             }
 
             if (onSuccess) {
-                onSuccess(manifestCid);
+                onSuccess(name);
             }
         } catch (error) {
             console.error("Error uploading folder:", error);

@@ -1,9 +1,8 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { decodeHexCid } from "./decodeHexCid";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { downloadFolder } from "./downloadFolder";
+import { open } from "@tauri-apps/plugin-dialog";
 
 const getFileSavePath = async (name: string) => {
   const fileExtension = name.split(".").pop() || "";
@@ -20,64 +19,43 @@ const getFileSavePath = async (name: string) => {
   });
 };
 
-const ensureWalletConnected = (polkadotAddress: string | undefined | null) => {
-  if (!polkadotAddress) {
-    throw new Error(
-      "Wallet not connected. Please connect your wallet to download files."
-    );
-  }
-};
-
 export const downloadFile = async (
   file: FormattedUserFile,
   polkadotAddress: string,
-  isPrivateView: boolean
 ) => {
   if (file.isFolder) {
-    console.log("isFolder", file)
-    const result = await downloadFolder({
-      folderCid: file.cid,
-      folderName: file.name,
-      polkadotAddress,
-      isPrivate: isPrivateView,
-      file
-    });
-
-    if (result && !result.success) {
-      toast.error(
-        `Failed to download folder: ${result.message || "Unknown error"}`
-      );
-    }
-    return;
-  } else if (isPrivateView) {
-    return downloadEncryptedIpfsFile(
-      file,
-      polkadotAddress ?? ""
-    );
-  } else {
-    return downloadRegularIpfsFile(file);
+    return downloadFolderExport(file, polkadotAddress);
   }
+  return downloadFileExport(file, polkadotAddress);
 };
 
-const downloadRegularIpfsFile = async (file: FormattedUserFile) => {
-  const { cid, name } = file;
+const downloadFileExport = async (
+  file: FormattedUserFile,
+  polkadotAddress: string
+) => {
+  const { name } = file;
   const toastId = toast.loading(`Preparing download: ${name}`);
 
   try {
-    const filePath = await getFileSavePath(name);
+    // Get sync path
+    const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
+      "get_sync_path",
+      { isPublic: true, accountId: polkadotAddress }
+    );
+    const syncPath = syncPathResult.path;
 
+    const filePath = await getFileSavePath(name);
     if (!filePath) {
       toast.error("Download cancelled", { id: toastId });
       return;
     }
 
-    toast.loading(`Downloading: ${name}`, { id: toastId });
+    toast.loading(`Exporting: ${name}`, { id: toastId });
 
-    await invoke("download_file_public", {
-      fileCid: decodeHexCid(cid),
-      outputFile: filePath,
-      source: file.source,
-      mainReqHash: file.mainReqHash
+    await invoke("export_file", {
+      syncPath,
+      fileName: file.actualFileName || name,
+      outputPath: filePath,
     });
 
     toast.success(`Download complete: ${name}`, { id: toastId });
@@ -85,53 +63,55 @@ const downloadRegularIpfsFile = async (file: FormattedUserFile) => {
   } catch (err) {
     console.error("Download failed:", err);
     toast.error(
-      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
-      }`,
+      `Download failed: ${err instanceof Error ? err.message : "Unknown error"}`,
       { id: toastId }
     );
     return { success: false, error: "DOWNLOAD_FAILED", message: String(err) };
   }
 };
 
-const downloadEncryptedIpfsFile = async (
+const downloadFolderExport = async (
   file: FormattedUserFile,
   polkadotAddress: string
 ) => {
-  const { name, cid } = file;
-  const toastId = toast.loading(`Preparing download: ${name}`);
+  const { name } = file;
+  const toastId = toast.loading(`Preparing folder download: ${name}`);
 
   try {
-    ensureWalletConnected(polkadotAddress);
+    const selectedDir = await open({
+      directory: true,
+      multiple: false,
+    }) as string | null;
 
-    const savePath = await getFileSavePath(name);
-
-    if (!savePath) {
+    if (!selectedDir) {
       toast.dismiss(toastId);
       return { success: false, error: "Download cancelled" };
     }
 
-    toast.loading(`Downloading encrypted file: ${name}...`, { id: toastId });
+    // Get sync path
+    const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
+      "get_sync_path",
+      { isPublic: true, accountId: polkadotAddress }
+    );
+    const syncPath = syncPathResult.path;
 
-    await invoke("download_and_decrypt_file", {
-      accountId: polkadotAddress,
-      metadataCid: cid,
-      outputFile: savePath,
-      source: file.source,
-      mainReqHash: file.mainReqHash
+    toast.loading(`Exporting folder: ${name}`, { id: toastId });
+
+    // Export the folder by listing and copying contents
+    await invoke("export_file", {
+      syncPath,
+      fileName: file.actualFileName || name,
+      outputPath: `${selectedDir}/${name}`,
     });
 
-    toast.success(`Download complete: ${name}`, {
-      id: toastId
-    });
+    toast.success(`Folder downloaded: ${name}`, { id: toastId });
     return { success: true };
   } catch (err) {
     toast.dismiss(toastId);
-    const errorMsg = String(err);
-    console.error("Encrypted download failed:", err);
+    console.error("Folder download failed:", err);
     toast.error(
-      `Download failed: ${err instanceof Error ? err.message : "Unknown error"
-      }`
+      `Download failed: ${err instanceof Error ? err.message : "Unknown error"}`
     );
-    return { success: false, error: "DOWNLOAD_FAILED", message: errorMsg };
+    return { success: false, error: "DOWNLOAD_FAILED", message: String(err) };
   }
 };

@@ -244,7 +244,7 @@ const FilesContent: FC<FilesContentProps> = ({
     file: FormattedUserFile,
     polkadotAddress: string
   ) => {
-    downloadFile(file, polkadotAddress, isPrivateView);
+    downloadFile(file, polkadotAddress);
   };
 
   const renderContent = () => {

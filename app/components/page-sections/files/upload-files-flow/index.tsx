@@ -8,8 +8,7 @@ import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-section
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { basename } from '@tauri-apps/api/path';
-import { invoke } from "@tauri-apps/api/core";
-import { formatDisplayName } from "@/lib/utils/fileTypeUtils"; // Add this import
+import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 
 
 interface UploadFilesFlowProps {
@@ -131,7 +130,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
     const toastId = toast.loading(`Preparing ${firstFileName} for upload...`);
 
     try {
-      // Process the files - write browser File objects to disk first
+      // Process the files - write browser File objects to temp disk first
       const processedPaths: string[] = [];
       console.log("fileInfo", files)
 
@@ -141,11 +140,9 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
             const arrayBuffer = await fileInfo.file.arrayBuffer();
             const tempPath = `/tmp/${fileInfo.name}`;
 
-            // Write file to disk using Tauri command
-            await invoke("write_file", {
-              path: tempPath,
-              data: Array.from(new Uint8Array(arrayBuffer)),
-            });
+            // Write file to temp disk using Tauri FS plugin
+            const { writeFile: tauriWriteFile } = await import("@tauri-apps/plugin-fs");
+            await tauriWriteFile(tempPath, new Uint8Array(arrayBuffer));
 
             processedPaths.push(tempPath);
           } catch (error) {

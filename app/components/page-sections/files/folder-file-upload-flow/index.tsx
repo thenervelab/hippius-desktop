@@ -5,8 +5,6 @@ import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Icons, CardButton } from "@/components/ui";
 import FileDropzone from "@/app/components/page-sections/files/upload-files-flow/FileDropzone";
-import { getFolderPathArray } from "@/app/utils/folderPathUtils";
-import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { basename } from '@tauri-apps/api/path';
 
 interface FolderFileUploadFlowProps {
@@ -25,20 +23,15 @@ interface FilePathInfo {
 
 const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     folderName,
-    isPrivateFolder,
     initialFiles,
     onSuccess,
     onCancel
 }) => {
-    const { getParam } = useUrlParams();
-
     const [files, setFiles] = useState<FilePathInfo[]>([]);
     const [revealFiles, setRevealFiles] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
     const { polkadotAddress } = useWalletAuth();
-    const mainFolderActualName = getParam("mainFolderActualName", "");
-    const subFolderPath = getParam("subFolderPath");
 
     // Handle initial files - just store references without writing to disk yet
     useEffect(() => {
@@ -143,11 +136,9 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                         const arrayBuffer = await file.file.arrayBuffer();
                         const tempPath = `/tmp/${file.name}`;
 
-                        // Write file to disk using Tauri command
-                        await invoke("write_file", {
-                            path: tempPath,
-                            data: Array.from(new Uint8Array(arrayBuffer)),
-                        });
+                        // Write file to temp disk using Tauri FS plugin
+                        const { writeFile: tauriWriteFile } = await import("@tauri-apps/plugin-fs");
+                        await tauriWriteFile(tempPath, new Uint8Array(arrayBuffer));
 
                         filePath = tempPath;
                     } catch (error) {
@@ -157,25 +148,17 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     }
                 }
 
-                // Now add the file to the folder using the file path
-                const functionName = isPrivateFolder
-                    ? "add_file_to_private_folder"
-                    : "add_file_to_public_folder";
+                // Get sync path and add file to sync folder
+                const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
+                    "get_sync_path",
+                    { isPublic: true, accountId: polkadotAddress }
+                );
+                const syncPath = syncPathResult.path;
 
-                const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
-                const mainFolderCid = getParam("mainFolderCid", "");
-
-                const params = {
-                    accountId: polkadotAddress,
-                    folderMetadataCid: mainFolderCid,
-                    folderName: mainFolderActualName,
-                    filePath: filePath,
-                    subfolderPath: folderPath || null
-                };
-
-                console.log("Invoking", functionName, "with params:", params);
-
-                await invoke<string>(functionName, params);
+                await invoke<string>("add_file", {
+                    syncPath,
+                    filePath,
+                });
 
                 // Update progress
                 setUploadProgress(percent);
@@ -186,15 +169,10 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
 
                 // Small delay to make progress visible when adding multiple small files
                 if (files.length > 1) await new Promise(r => setTimeout(r, 300));
-                // Only delete temporary files that were created from browser File objects
-                if (file.file && filePath.includes('/tmp/')) {
-                    try {
-                        await invoke("delete_file", { path: filePath });
-                    } catch (error) {
-                        console.error(`Failed to delete temporary file ${filePath}:`, error);
-                    }
-                }
             }
+
+            // Trigger sync to push changes
+            await invoke("trigger_sync_now").catch(() => {});
 
             toast.success(
                 files.length > 1

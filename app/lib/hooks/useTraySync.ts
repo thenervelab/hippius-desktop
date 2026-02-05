@@ -18,7 +18,7 @@ import {
   checkForUpdates,
   getAvailableUpdate,
 } from "@/components/updater/checkForUpdates";
-import { RecentFilesResponse, UserProfileFile } from "./use-recent-files";
+import { SyncActivityItem } from "./useSyncActivity";
 import {
   syncPercentAtom,
   lastUpdatedPercentAtom,
@@ -274,7 +274,7 @@ async function checkUserCredits(): Promise<{
 }
 
 /* ─ Public: create tray once ──────────────────────────────────── */
-export function useTrayInit(polkadotAddress: string) {
+export function useTrayInit() {
   // Use atom to watch for sync percentage changes
   const currentPercent = useAtomValue(syncPercentAtom);
   const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
@@ -420,7 +420,7 @@ export function useTrayInit(polkadotAddress: string) {
       }
 
       // Start watcher for sync activity after menu exists
-      startSyncActivityWatcher(polkadotAddress);
+      startSyncActivityWatcher();
 
       // Start VPN status watcher with state setter
       startVpnStatusWatcher(setVpnState);
@@ -797,7 +797,7 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
 }
 
 /* ─ Sync Activity watcher (debounced & diffed) ────────────────── */
-function startSyncActivityWatcher(polkadotAddress: string) {
+function startSyncActivityWatcher() {
   const INTERVAL_MS = 3000;
 
   const tick = async () => {
@@ -805,79 +805,32 @@ function startSyncActivityWatcher(polkadotAddress: string) {
       const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
       if (!menu) return;
 
-      // Pass accountId parameter to the invoke call
-      const resp = await invoke<RecentFilesResponse>("get_sync_activity", {
-        accountId: polkadotAddress,
+      // New API returns SyncActivityItem[] directly
+      const items = await invoke<SyncActivityItem[]>("get_sync_activity", {
+        limit: 50,
       });
 
-      // Only show what's returned now; if empty, clear all previous rows
-      if (!resp || (!resp.recent?.length && !resp.uploading?.length)) {
+      if (!items || items.length === 0) {
         await updateSyncRowsDirectly(menu, []);
         lastRowsSignature = "";
         return;
       }
 
-      // Helper function to process files consistently
-      const processFile = (
-        file: UserProfileFile,
-        action: "uploading" | "uploaded" | "deleted",
-      ): BackendActivityItem => {
-        const isErasureCodedFolder = file.fileName?.endsWith(
-          ".folder.ec_metadata",
-        );
-        const isErasureCoded =
-          !isErasureCodedFolder && file.fileName?.endsWith(".ec_metadata");
-        const isFolder =
-          !isErasureCodedFolder &&
-          (file.isFolder || file.fileName?.endsWith(".folder"));
-
-        let displayName = file.fileName;
-        if (isErasureCodedFolder) {
-          displayName = file.fileName.slice(0, -".folder.ec_metadata".length);
-        } else if (isErasureCoded) {
-          displayName = file.fileName.slice(0, -".ec_metadata".length);
-        } else if (isFolder && displayName?.endsWith(".folder")) {
-          displayName = file.fileName.slice(0, -".folder".length);
-        }
-
-        return {
-          name: displayName || "Unnamed File",
-          path: file.source || "",
-          scope: file.source || "",
-          action,
-          kind: file.isFolder ? "folder" : "file",
-          timestamp: file.createdAt || Date.now(),
-          file_type:
-            file.type || (file.source === "private" ? "Private" : "Public"),
-          deleted: file.deleted,
-        };
-      };
-
-      // Track processed files with a Map using fileHash as key
-      const processedFiles = new Map<string, BackendActivityItem>();
-
-      // Process uploading files first (priority)
-      if (resp.uploading) {
-        for (const file of resp.uploading) {
-          const key =
-            file.fileHash || `${file.fileName}-${file.fileSizeInBytes}`;
-          processedFiles.set(key, processFile(file, "uploading"));
-        }
-      }
-
-      // Process recent files, skipping any duplicates
-      if (resp.recent) {
-        for (const file of resp.recent) {
-          const key =
-            file.fileHash || `${file.fileName}-${file.fileSizeInBytes}`;
-          if (!processedFiles.has(key)) {
-            processedFiles.set(key, processFile(file, "uploaded"));
-          }
-        }
-      }
-
-      // Convert Map to array
-      const activityItems = Array.from(processedFiles.values());
+      // Convert SyncActivityItem[] to BackendActivityItem[]
+      const activityItems: BackendActivityItem[] = items.map((item) => ({
+        name: item.file_name || "Unknown",
+        path: "",
+        scope: "",
+        action: item.action === "deleted"
+          ? "deleted" as const
+          : item.action === "uploaded"
+            ? "uploaded" as const
+            : "uploaded" as const,
+        kind: "file",
+        timestamp: item.timestamp ? item.timestamp * 1000 : Date.now(),
+        file_type: undefined,
+        deleted: item.action === "deleted",
+      }));
 
       const rows = await normalizeActivityToRows(activityItems);
 

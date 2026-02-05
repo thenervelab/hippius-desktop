@@ -1,11 +1,7 @@
+pub mod account_key;
 pub mod accounts;
 pub mod binary;
 pub mod bookmark_db;
-pub mod file_operations;
-pub mod fs_watcher;
-pub mod ipfs;
 pub mod nebula;
-pub mod s3_client;
-pub mod sync;
 pub mod objectstore_tokens;
-pub mod account_key;
+pub mod sync;

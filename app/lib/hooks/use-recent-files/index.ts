@@ -2,13 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
   FormattedUserFile,
-  parseMinerIds,
 } from "@/app/lib/hooks/use-user-files";
-import { hexToCid } from "@/lib/utils/hexToCid";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useRef } from "react";
+import { SyncActivityItem } from "../useSyncActivity";
 
-// Match the structure from get_user_synced_files
+// Re-export types for backward compatibility
 export type UserProfileFile = {
   fileName: string;
   fileSizeInBytes: number;
@@ -26,16 +25,12 @@ export type UserProfileFile = {
   deleted: boolean;
 };
 
-// Use the same response structure as useUserFiles
 export type RecentFilesResponse = {
   recent?: UserProfileFile[];
   uploading?: UserProfileFile[];
 };
 
-// Remove fastHash and implement a compact deterministic signature for the formatted files
 function makeFilesSignature(files: Array<FormattedUserFile>): string {
-  // Only include the fields that affect rendering and ordering
-  // Sorting by lastChargedAt desc is already applied before this signature
   return files
     .map(
       (f) =>
@@ -49,7 +44,6 @@ const useRecentFiles = () => {
   const { polkadotAddress } = useWalletAuth();
   const queryKey = ["recent-files", polkadotAddress];
 
-  // Track last signature and last data reference to preserve referential equality
   const lastSignatureRef = useRef<string>("");
   const lastDataRef = useRef<Array<FormattedUserFile>>([]);
 
@@ -57,114 +51,79 @@ const useRecentFiles = () => {
     queryKey,
     queryFn: async (): Promise<Array<FormattedUserFile>> => {
       if (!polkadotAddress) {
-        console.log("No wallet connected, returning empty recent files array");
         return [];
       }
 
       try {
-        // Use the same invoke pattern as useUserFiles
-        const response = await invoke<RecentFilesResponse>(
+        // New API returns SyncActivityItem[] directly
+        const items = await invoke<SyncActivityItem[]>(
           "get_sync_activity",
-          {
-            accountId: polkadotAddress,
-          }
+          { limit: 50 }
         );
 
-        // Combine recent and uploading items (if any)
-        const combinedFiles = [...(response.recent || [])];
-
-        if (combinedFiles.length === 0) {
+        if (!items || items.length === 0) {
           return [];
         }
 
-        // Filter out deleted files
-        const nonDeletedFiles = combinedFiles.filter((file) => !file.deleted);
+        // Filter out deleted items
+        const nonDeletedItems = items.filter((item) => item.action !== "deleted");
 
-        if (nonDeletedFiles.length === 0) {
+        if (nonDeletedItems.length === 0) {
           return [];
         }
 
-        // Format the data exactly like useUserFiles does
-        const formattedFiles = nonDeletedFiles.map(
-          (file): FormattedUserFile => {
-            const isErasureCodedFolder = file.fileName?.endsWith(
-              ".folder.ec_metadata"
-            );
-            const isErasureCoded =
-              !isErasureCodedFolder && file.fileName?.endsWith(".ec_metadata");
-            const isFolder =
-              !isErasureCodedFolder &&
-              (file.isFolder || file.fileName?.endsWith(".folder"));
-
-            let displayName = file.fileName;
-            if (isErasureCodedFolder) {
-              displayName = file.fileName.slice(
-                0,
-                -".folder.ec_metadata".length
-              );
-            } else if (isErasureCoded) {
-              displayName = file.fileName.slice(0, -".ec_metadata".length);
-            } else if (isFolder && displayName?.endsWith(".folder")) {
-              displayName = file.fileName.slice(0, -".folder".length);
-            }
-
+        // Format SyncActivityItem[] to FormattedUserFile[]
+        const formattedFiles = nonDeletedItems.map(
+          (item): FormattedUserFile => {
             return {
-              name: displayName || "Unnamed File",
-              actualFileName: file.fileName,
-              size: file.fileSizeInBytes,
-              createdAt: file.createdAt || Date.now(),
-              cid: hexToCid(file.fileHash) ?? "",
-              source: file.source || "Unknown",
-              minerIds: parseMinerIds(file.minerIds || "[]"),
-              isAssigned:
-                file.isAssigned !== undefined ? file.isAssigned : true,
-              lastChargedAt: file.lastChargedAt || file.createdAt || Date.now(),
-              fileHash: file.fileHash,
-              isFolder: isFolder || file.isFolder || false,
-              type:
-                file.type || (file.source === "private" ? "Private" : "Public"),
-              isErasureCoded: isErasureCoded || false,
-              mainReqHash: file.mainReqHash || "",
+              name: item.file_name || "Unknown",
+              actualFileName: item.file_name,
+              size: item.size_bytes,
+              createdAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
+              cid: "",
+              source: "",
+              minerIds: [],
+              isAssigned: true,
+              lastChargedAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
+              fileHash: "",
+              isFolder: false,
+              type: item.action === "uploaded" ? "Uploaded" : item.action,
+              isErasureCoded: false,
+              mainReqHash: "",
             };
           }
         );
 
-        // Remove duplicates based on fileHash (unique identifier)
+        // Remove duplicates based on name
         const uniqueFiles = formattedFiles.filter(
           (file, index, self) =>
             index === self.findIndex((f) => f.name === file.name)
         );
 
-        // Sort by timestamp (newest first) - same as useUserFiles
+        // Sort by timestamp (newest first)
         return uniqueFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
       } catch (error) {
         console.error("Error fetching recent files:", error);
         return [];
       }
     },
-    // Preserve referential equality when no meaningful changes occur
     select: (newData) => {
       const newSignature = makeFilesSignature(newData);
       if (
         lastSignatureRef.current === newSignature &&
         lastDataRef.current.length > 0
       ) {
-        // Data identical; reuse previous array reference
         return lastDataRef.current;
       }
-      // Data changed; update signature and reference
       lastSignatureRef.current = newSignature;
       lastDataRef.current = newData;
       return newData;
     },
-    // Poll frequently, but only notify components when data actually changes
     refetchInterval: 10000,
     refetchOnWindowFocus: true,
     staleTime: 5000,
     enabled: !!polkadotAddress,
-    // Only notify on data changes to avoid re-renders from isFetching toggles
     notifyOnChangeProps: ["data", "dataUpdatedAt"],
-    // We are returning the previous array reference manually when unchanged
     structuralSharing: false,
   });
 };

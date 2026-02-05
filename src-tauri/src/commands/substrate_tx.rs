@@ -1,26 +1,12 @@
 use crate::DB_POOL;
-use crate::commands::syncing::ensure_aws_env;
 use crate::substrate_client::{
     get_current_wss_endpoint, get_substrate_client, update_wss_endpoint,
 };
-use crate::sync_engine::DeletePolicy;
-use crate::sync_shared::{
-    GLOBAL_CANCEL_TOKEN, S3_PRIVATE_SYNC_STATE, S3_PUBLIC_SYNC_STATE, S3SyncState, SYNCING_ACCOUNTS,
-};
-use crate::{start_private_folder_sync_tauri, start_public_folder_sync_tauri};
-use crate::utils::objectstore_tokens::{has_master_token, save_temp_auth_key};
+use crate::utils::account_key::account_key;
 use chrono::Utc;
-
 use serde::Deserialize;
 use serde::Serialize;
-
 use sqlx::Row;
-use crate::utils::account_key::account_key;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
-
-use tauri::Emitter;
-
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -43,7 +29,6 @@ impl TryFrom<FileHashWrapper> for FileHash {
     type Error = String;
 
     fn try_from(wrapper: FileHashWrapper) -> Result<Self, Self::Error> {
-        // Check if the file_hash length exceeds the maximum allowed length
         if wrapper.file_hash.len() > 350u32 as usize {
             return Err(format!(
                 "File hash length {} exceeds maximum allowed length {}",
@@ -51,7 +36,6 @@ impl TryFrom<FileHashWrapper> for FileHash {
                 350u32
             ));
         }
-        // Convert Vec<u8> to BoundedVec<u8, ConstU32<MAX_FILE_HASH_LENGTH>>
         Ok(BoundedVec(wrapper.file_hash))
     }
 }
@@ -70,7 +54,6 @@ pub struct SetSyncPathParams {
     pub path: String,
     pub is_public: bool,
     pub account_id: String,
-    pub temp_auth_key: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -86,26 +69,13 @@ pub struct SyncPathResult {
     pub is_public: bool,
 }
 
-use crate::commands::syncing::get_sync_policy_from_db;
-
 #[tauri::command]
 pub async fn set_sync_path(
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     params: SetSyncPathParams,
 ) -> Result<String, String> {
     crate::utils::sync::set_active_account(&params.account_id);
 
-    // If no master token yet and a temp auth key is provided, store it now for this account.
-    if !has_master_token(&params.account_id).await.unwrap_or(false) {
-        if let Some(tk) = params
-            .temp_auth_key
-            .as_ref()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-        {
-            let _ = save_temp_auth_key(&params.account_id, tk).await;
-        }
-    }
     let path_type = if params.is_public {
         "public"
     } else {
@@ -114,8 +84,8 @@ pub async fn set_sync_path(
     let timestamp = Utc::now().timestamp();
 
     if let Some(pool) = DB_POOL.get() {
-        // Get the current sync path (if any) to detect changes
         let owner = account_key(&params.account_id);
+
         // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
         if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>(
             "SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
@@ -135,66 +105,7 @@ pub async fn set_sync_path(
             .execute(pool)
             .await;
         }
-        let current_path: Option<String> =
-            sqlx::query_scalar("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
-                .bind(&owner)
-                .bind(path_type)
-                .fetch_optional(pool)
-                .await
-                .unwrap_or(None);
 
-        let is_path_changed = current_path
-            .as_ref()
-            .map(|p| p != &params.path)
-            .unwrap_or(true);
-
-        // Always stop any ongoing sync and clear state when setting a new path
-        {
-            println!(
-                "[set_sync_path] Preparing to update sync path for '{}'",
-                path_type
-            );
-
-            // 1. Signal global cancellation to stop any ongoing sync operations
-            GLOBAL_CANCEL_TOKEN.store(true, Ordering::SeqCst);
-
-            // 2. Clear the account from SYNCING_ACCOUNTS
-            {
-                let mut syncing_accounts = SYNCING_ACCOUNTS.lock().unwrap();
-                syncing_accounts
-                    .retain(|(acc, typ)| !(acc == &params.account_id && typ == &path_type));
-                println!(
-                    "[set_sync_path] Cleared sync account for {} {}",
-                    path_type, params.account_id
-                );
-            }
-
-            // 3. Reset the appropriate sync state
-            if params.is_public {
-                let mut state = S3_PUBLIC_SYNC_STATE.lock().unwrap();
-                *state = S3SyncState::default();
-                println!("[set_sync_path] Reset public sync state");
-            } else {
-                let mut state = S3_PRIVATE_SYNC_STATE.lock().unwrap();
-                *state = S3SyncState::default();
-                println!("[set_sync_path] Reset private sync state");
-            }
-
-            // 4. Reset the cancellation token for the new sync
-            GLOBAL_CANCEL_TOKEN.store(false, Ordering::SeqCst);
-
-            // Small delay to ensure all operations are cleaned up
-            tokio::time::sleep(Duration::from_millis(500)).await;
-
-            if is_path_changed && current_path.is_some() {
-                println!(
-                    "[set_sync_path] Sync path changed from {:?} to {}",
-                    current_path, params.path
-                );
-            }
-        }
-
-        // Rest of your existing code for database update and sync start...
         let res = sqlx::query(
             "INSERT INTO sync_paths (owner, path, type, timestamp) VALUES (?, ?, ?, ?)
              ON CONFLICT(owner, type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
@@ -222,186 +133,6 @@ pub async fn set_sync_path(
                             "[set_sync_path] Warning: Failed to create security-scoped bookmark: {}",
                             e
                         );
-                        // Don't fail the entire operation if bookmark creation fails
-                    }
-                }
-
-                // Now spawn the appropriate sync task depending on type
-                if params.is_public {
-                    let app_handle_public = app_handle.clone();
-                    let account = params.account_id.clone();
-
-                    let handle = tokio::spawn(async move {
-                        if let Err(e) = ensure_aws_env(account.clone()).await {
-                            eprintln!("[set_sync_path] Aborting public sync start: {}", e);
-                            return;
-                        }
-
-                        println!("[set_sync_path] Starting PUBLIC sync task...");
-                        match get_sync_policy_from_db().await {
-                            Ok(delete_policy) => {
-                        start_public_folder_sync_tauri(
-                            app_handle_public,
-                            account.clone(),
-                            delete_policy,
-                        )
-                        .await;
-                            }
-                            Err(e) => {
-                                eprintln!("[set_sync_path] Failed to get delete policy: {}", e);
-                                // Fallback to default policy if DB lookup fails
-                                start_public_folder_sync_tauri(
-                                    app_handle_public,
-                                    account.clone(),
-                                    DeletePolicy::UploadOnly,
-                                )
-                                .await;
-                            }
-                        }
-                    });
-                    crate::commands::syncing::register_task(app_handle.clone(), handle).await;
-                    // emit sync started event
-                    match crate::utils::sync::reset_sync_event_state("public").await {
-                        Ok(_) => {
-                            if let Err(e) = app_handle
-                                .emit("started_syncing", serde_json::json!({"type": "public"}))
-                                .map_err(|e| e.to_string())
-                            {
-                                eprintln!("Failed to emit started_syncing event: {}", e);
-                            }
-                            println!("[Sync] public Sync started event emitted");
-                        }
-                        Err(err) => {
-                            eprintln!("Failed to determine if first run: {}", err);
-                        }
-                    }
-
-                    // Start PUBLIC S3 listing cron
-                    if let Some(pool) = crate::DB_POOL.get() {
-                        let pool_pub = pool.clone();
-                        let account_for_cron_pub = params.account_id.clone();
-                        let handle = tokio::spawn(async move {
-                            let interval = 30u64;
-                            loop {
-                                match crate::sync_shared::list_bucket_contents(
-                                    account_for_cron_pub.clone(),
-                                    "public".to_string(),
-                                )
-                                .await
-                                {
-                                    Ok(items) => {
-                                        if let Err(e) =
-                                            crate::sync_shared::store_bucket_listing_in_db(
-                                                &pool_pub,
-                                                &account_for_cron_pub,
-                                                "public",
-                                                &items,
-                                            )
-                                            .await
-                                        {
-                                            eprintln!(
-                                                "[set_sync_path][S3InventoryCron][public] Failed storing listing: {}",
-                                                e
-                                            );
-                                        }
-                                    }
-                                    Err(e) => eprintln!(
-                                        "[set_sync_path][S3InventoryCron][public] List failed: {}",
-                                        e
-                                    ),
-                                }
-                                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-                            }
-                        });
-                        crate::commands::syncing::register_task(app_handle.clone(), handle).await;
-                    }
-                } else {
-                    // Similar logic for private...
-                    let app_handle_private = app_handle.clone();
-                    let account = params.account_id.clone();
-
-                    let handle = tokio::spawn(async move {
-                        if let Err(e) = ensure_aws_env(account.clone()).await {
-                            eprintln!("[set_sync_path] Aborting private sync start: {}", e);
-                            return;
-                        }
-
-                        println!("[set_sync_path] Starting PRIVATE sync task...");
-                        match get_sync_policy_from_db().await {
-                            Ok(delete_policy) => {
-                                start_private_folder_sync_tauri(
-                                    app_handle_private,
-                                    account.clone(),
-                                    delete_policy,
-                                )
-                                .await;
-                            }
-                            Err(e) => {
-                                eprintln!("[set_sync_path] Failed to get delete policy: {}", e);
-                                // Fallback to default policy if DB lookup fails
-                                start_private_folder_sync_tauri(
-                                    app_handle_private,
-                                    account.clone(),
-                                    DeletePolicy::UploadOnly,
-                                )
-                                .await;
-                            }
-                        }
-                    });
-                    crate::commands::syncing::register_task(app_handle.clone(), handle).await;
-                    // emit sync started event
-                    match crate::utils::sync::reset_sync_event_state("private").await {
-                        Ok(_) => {
-                            if let Err(e) = app_handle
-                                .emit("started_syncing", serde_json::json!({"type": "private"}))
-                                .map_err(|e| e.to_string())
-                            {
-                                eprintln!("Failed to emit started_syncing event: {}", e);
-                            }
-                            println!("[Sync] private Sync started event emitted");
-                        }
-                        Err(err) => {
-                            eprintln!("Failed to determine if first run: {}", err);
-                        }
-                    }
-
-                    // Start PRIVATE S3 listing cron
-                    if let Some(pool) = crate::DB_POOL.get() {
-                        let pool_priv = pool.clone();
-                        let account_for_cron_priv = params.account_id.clone();
-                        let handle = tokio::spawn(async move {
-                            let interval = 30u64;
-                            loop {
-                                match crate::sync_shared::list_bucket_contents(
-                                    account_for_cron_priv.clone(),
-                                    "private".to_string(),
-                                )
-                                .await
-                                {
-                                    Ok(items) => {
-                                        if let Err(e) =
-                                            crate::sync_shared::store_bucket_listing_in_db(
-                                                &pool_priv,
-                                                &account_for_cron_priv,
-                                                "private",
-                                                &items,
-                                            )
-                                            .await
-                                        {
-                                            eprintln!(
-                                                "[S3InventoryCron][private] Failed storing listing: {}",
-                                                e
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        eprintln!("[S3InventoryCron][private] List failed: {}", e)
-                                    }
-                                }
-                                tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-                            }
-                        });
-                        crate::commands::syncing::register_task(app_handle.clone(), handle).await;
                     }
                 }
 
@@ -429,26 +160,21 @@ pub async fn transfer_balance_tauri(
     use sp_core::{Pair, crypto::Ss58Codec, sr25519};
     use subxt::tx::PairSigner;
 
-    // Parse the string to u128
     let amount: u128 = amount
         .parse()
         .map_err(|e| format!("Invalid amount: {}", e))?;
 
-    // Create signer from sender's seed
     let pair = sr25519::Pair::from_string(&sender_seed, None)
         .map_err(|e| format!("Failed to create signer pair: {e:?}"))?;
     let signer = PairSigner::new(pair);
 
-    // Parse recipient address
     let recipient = sp_core::crypto::AccountId32::from_ss58check(&recipient_address)
         .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
 
-    // Get API client
     let api = get_substrate_client()
         .await
         .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
 
-    // Use the generated call for transfer_keep_alive
     let tx = custom_runtime::tx()
         .balances()
         .transfer_keep_alive(recipient.into(), amount);
@@ -467,12 +193,14 @@ pub async fn transfer_balance_tauri(
     println!("[Substrate] Transfer submitted with hash: {:?}", tx_hash);
 
     Ok(format!(
-        "✅ Transfer submitted successfully!\n📦 Finalized in block: {tx_hash}"
+        "Transfer submitted successfully! Finalized in block: {tx_hash}"
     ))
 }
 
-// Add this internal function
-pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<SyncPathResult, String> {
+pub async fn get_sync_path_internal(
+    is_public: bool,
+    owner: &str,
+) -> Result<SyncPathResult, String> {
     let path_type = if is_public { "public" } else { "private" };
     if let Some(pool) = DB_POOL.get() {
         // Try scoped entry first
@@ -509,7 +237,6 @@ pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<Sync
                 .map_err(|e| format!("DB error: {}", e))?;
 
                 if let Some((legacy_id, legacy_path)) = legacy {
-                    // Remove any pre-existing scoped row to avoid UNIQUE constraint failures.
                     let _ = sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
                         .bind(owner)
                         .bind(path_type)
@@ -544,7 +271,7 @@ pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<Sync
             Ok(SyncPathResult { path, is_public })
         } else {
             Err(format!(
-                "Sync path for {} not set yet. Please configure encryption key first.",
+                "Sync path for {} not set yet. Please configure it first.",
                 path_type
             ))
         }
@@ -555,7 +282,6 @@ pub async fn get_sync_path_internal(is_public: bool, owner: &str) -> Result<Sync
 
 #[tauri::command]
 pub async fn get_sync_path(params: GetSyncPathParams) -> Result<SyncPathResult, String> {
-    // Allow camelCase param names from the frontend and fall back to the active account if none provided.
     let account_id = match params
         .account_id
         .or_else(|| crate::utils::sync::current_account_id().ok())
@@ -582,4 +308,3 @@ pub async fn update_wss_endpoint_command(endpoint: String) -> Result<String, Str
     update_wss_endpoint(endpoint.clone()).await?;
     Ok(format!("WSS endpoint updated to: {}", endpoint))
 }
-

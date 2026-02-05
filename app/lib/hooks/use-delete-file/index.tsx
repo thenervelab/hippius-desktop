@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import useUserFiles, {
     GET_USER_IPFS_FILES_QUERY_KEY,
 } from "@/app/lib/hooks/use-user-files";
@@ -9,8 +8,6 @@ import { queryClientAtom } from "jotai-tanstack-query";
 import { useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { getFolderPathArray } from "@/app/utils/folderPathUtils";
-import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { toast } from "sonner";
 import { useRef } from "react";
 
@@ -22,13 +19,10 @@ export const useDeleteFile = ({
     files: FileToDelete[],
 }) => {
     const { data: ipfsFiles } = useUserFiles();
-    const { getParam } = useUrlParams();
 
     const { api } = usePolkadotApi();
     const { walletManager, polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
-    const mainFolderActualName = getParam("mainFolderActualName", "");
-    const subFolderPath = getParam("subFolderPath");
 
     // Track toast for proper cleanup
     const loadingToastRef = useRef<string | number | null>(null);
@@ -100,82 +94,29 @@ export const useDeleteFile = ({
             console.log("Files to delete count:", files.length);
             console.log("Is single folder?", files.length === 1 && files[0]?.isFolder);
 
+            // Get sync path for file removal
+            const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
+                "get_sync_path",
+                { isPublic: true, accountId: polkadotAddress }
+            );
+            const syncPath = syncPathResult.path;
+
             for (const file of files) {
-                console.log("Processing file for deletion:", {
-                    name: file.name,
-                    actualFileName: file.actualFileName,
-                    isFolder: file.isFolder,
-                    cid: file.cid
-                });
-
-                let actualFileToDelete = ipfsFiles?.files.find(f => f.actualFileName === file.actualFileName);
-                console.log("Found matching file in ipfsFiles:", actualFileToDelete ? {
-                    name: actualFileToDelete.name,
-                    actualFileName: actualFileToDelete.actualFileName,
-                    isFolder: actualFileToDelete.isFolder
-                } : "NOT FOUND");
+                const actualFileToDelete = ipfsFiles?.files.find(f => f.actualFileName === file.actualFileName) || file;
 
                 if (!actualFileToDelete) {
-                    console.log("File not found in ipfsFiles, using provided file directly");
-                    actualFileToDelete = file;
-                }
-
-                if (!actualFileToDelete) {
-                    console.error("No file to delete - this should not happen");
                     throw new Error(`Cannot find file: ${file.name}`);
                 }
 
-                console.log("Final file to delete:", {
-                    name: actualFileToDelete.name,
-                    actualFileName: actualFileToDelete.actualFileName,
-                    isFolder: actualFileToDelete.isFolder,
-                    cid: actualFileToDelete.cid,
-                    file: actualFileToDelete
-                });
-
                 try {
-                    // Handle file in folder deletion
-                    if (mainFolderActualName) {
-                        const folderPath = getFolderPathArray(mainFolderActualName, subFolderPath);
-                        const mainFolderCid = getParam("mainFolderCid", "");
+                    const fileName = actualFileToDelete.actualFileName || actualFileToDelete.name;
 
-                        const isFolder = actualFileToDelete.isFolder;
-                        // Determine the command based on file type and folder privacy
-                        const command = actualFileToDelete.type === "private"
-                            ? (isFolder ? "remove_folder_from_private_folder" : "remove_file_from_private_folder")
-                            : (isFolder ? "remove_folder_from_public_folder" : "remove_file_from_public_folder");
-
-                        // Create the common base parameters
-                        const params = {
-                            accountId: polkadotAddress,
-                            folderMetadataCid: mainFolderCid,
-                            folderName: mainFolderActualName,
-                            subfolderPath: folderPath || null
-                        };
-
-                        // Add the specific parameter based on whether it's a folder or file
-                        if (isFolder) {
-                            (params as any).folderToRemove = actualFileToDelete.actualFileName;
-                        } else {
-                            (params as any).fileName = actualFileToDelete.actualFileName;
-                        }
-
-                        console.log("command", command)
-                        console.log("params", params)
-
-                        await invoke<string>(command, params);
-                        results.push({ file: actualFileToDelete, success: true });
-                    } else {
-                        console.log("command", "delete_and_unpin_file_by_name")
-                        console.log("params", {
-                            fileName: actualFileToDelete.actualFileName
-                        });
-
-                        await invoke("delete_and_unpin_file_by_name", {
-                            fileName: actualFileToDelete.actualFileName
-                        });
-                        results.push({ file: actualFileToDelete, success: true });
-                    }
+                    // Use remove_file command (removes from sync folder, hcfs-client handles remote deletion)
+                    await invoke("remove_file", {
+                        syncPath,
+                        name: fileName,
+                    });
+                    results.push({ file: actualFileToDelete, success: true });
                 } catch (error) {
                     console.error(`Failed to delete ${actualFileToDelete.isFolder ? 'folder' : 'file'}:`, error);
                     results.push({
@@ -185,6 +126,9 @@ export const useDeleteFile = ({
                     });
                 }
             }
+
+            // Trigger sync to propagate deletions
+            await invoke("trigger_sync_now").catch(() => {});
 
             console.log("Deletion results:", results);
 

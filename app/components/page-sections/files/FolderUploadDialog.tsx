@@ -69,12 +69,20 @@ export default function FolderUploadDialog({
         const toastId = toast.loading("Uploading folder...");
 
         try {
-            const command = useEncryption ? "encrypt_and_upload_folder" : "public_upload_folder";
-            const manifestCid = await invoke<string>(command, {
-                accountId: polkadotAddress,
+            // Get sync path and copy folder into it
+            const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
+                "get_sync_path",
+                { isPublic: true, accountId: polkadotAddress }
+            );
+            const syncPath = syncPathResult.path;
+
+            const name = await invoke<string>("add_folder", {
+                syncPath,
                 folderPath,
-                ...(useEncryption ? { source: folderPath } : {})
             });
+
+            // Trigger sync to push changes
+            await invoke("trigger_sync_now").catch(() => {});
 
             toast.dismiss(toastId);
             toast.success(`Folder uploaded successfully!`);
@@ -84,7 +92,7 @@ export default function FolderUploadDialog({
             }
 
             if (onSuccess) {
-                onSuccess(manifestCid);
+                onSuccess(name);
             }
         } catch (error) {
             console.error("Error uploading folder:", error);

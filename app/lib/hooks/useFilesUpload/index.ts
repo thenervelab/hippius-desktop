@@ -105,22 +105,29 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       console.log("Starting upload for files:", filePaths);
 
-      // upload each file via Tauri using file paths
+      // Get sync path for adding files
+      const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
+        "get_sync_path",
+        { isPublic: !isPrivateView, accountId: polkadotAddress }
+      );
+      const syncPath = syncPathResult.path;
+      if (!syncPath) {
+        throw new Error("Sync path not configured. Please set a sync folder first.");
+      }
+
+      // Add each file to sync folder (hcfs-client will handle upload/encryption)
       for (let i = 0; i < filePaths.length; i++) {
         const filePath = filePaths[i];
         const fileName = fileNames[i]
           ? formatDisplayName(fileNames[i])
           : `file ${i + 1}`;
 
-        console.log("Uploading file:", filePath);
-        const cid = await invoke<string>(
-          isPrivateView ? "encrypt_and_upload_file" : "upload_file_public",
-          {
-            accountId: polkadotAddress,
-            filePath: filePath,
-          }
-        );
-        cids.push(cid);
+        console.log("Adding file to sync folder:", filePath);
+        const name = await invoke<string>("add_file", {
+          syncPath,
+          filePath,
+        });
+        cids.push(name);
 
         // update progress
         const percent = Math.round(((i + 1) / filePaths.length) * 100);
@@ -154,19 +161,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         toast.success(successText, { id: localToastId });
         console.log("Upload successful", filePaths);
 
-        // Clean up temporary files
-        for (const filePath of filePaths) {
-          if (filePath.includes("/tmp/")) {
-            try {
-              await invoke("delete_file", { path: filePath });
-            } catch (error) {
-              console.error(
-                `Failed to delete temporary file ${filePath}:`,
-                error
-              );
-            }
-          }
-        }
+        // Trigger sync to upload newly added files
+        await invoke("trigger_sync_now").catch(() => {});
       }, 500);
     } catch (err) {
       setRequestState("idle");
