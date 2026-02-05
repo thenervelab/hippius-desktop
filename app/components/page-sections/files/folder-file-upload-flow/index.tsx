@@ -151,7 +151,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                 // Get sync path and add file to sync folder
                 const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
                     "get_sync_path",
-                    { isPublic: true, accountId: polkadotAddress }
+                    { params: { isPublic: true, accountId: polkadotAddress } }
                 );
                 const syncPath = syncPathResult.path;
 

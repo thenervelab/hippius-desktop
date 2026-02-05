@@ -362,7 +362,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           return;
         }
 
-        await setPrivateSyncPath(path, polkadotAddress, oauthSession?.token);
+        await setPrivateSyncPath(path, polkadotAddress);
         setSelectedPrivateFolderPath(path);
         toast.success(
           `Private sync folder set successfully, syncing is now in progress.`
@@ -400,7 +400,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       await setPrivateSyncPath(
         emptyPath,
         polkadotAddress,
-        oauthSession?.token
       );
       setSelectedPrivateFolderPath(emptyPath);
 

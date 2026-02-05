@@ -108,7 +108,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       // Get sync path for adding files
       const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
         "get_sync_path",
-        { isPublic: !isPrivateView, accountId: polkadotAddress }
+        { params: { isPublic: !isPrivateView, accountId: polkadotAddress } }
       );
       const syncPath = syncPathResult.path;
       if (!syncPath) {

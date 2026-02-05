@@ -20,7 +20,7 @@ const UpdateSyncFolder: React.FC = () => {
     useState("");
   const [selectedPrivateFolderName, setSelectedPrivateFolderName] =
     useState("");
-  const { polkadotAddress, oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
   const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
   const [isStoppingSync, setIsStoppingSync] = useState(false);
@@ -52,7 +52,7 @@ const UpdateSyncFolder: React.FC = () => {
         return;
       }
 
-      await setPrivateSyncPath(p, polkadotAddress, oauthSession?.token);
+      await setPrivateSyncPath(p, polkadotAddress);
       setSelectedPrivateFolderPath(p);
       setSelectedPrivateFolderName(p.split(/[\\/]/).pop() || "");
       toast.success("Private sync folder updated, syncing is now in progress.");
@@ -78,7 +78,7 @@ const UpdateSyncFolder: React.FC = () => {
     setIsStoppingSync(true);
 
     try {
-      await setPrivateSyncPath("", polkadotAddress, oauthSession?.token);
+      await setPrivateSyncPath("", polkadotAddress);
       setSelectedPrivateFolderPath("");
       setSelectedPrivateFolderName("");
       toast.success("Private folder syncing stopped");
