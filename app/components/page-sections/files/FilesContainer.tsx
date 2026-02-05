@@ -43,6 +43,9 @@ import {
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
+import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
+import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, oauthSession } = useWalletAuth();
@@ -356,28 +359,28 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   // Handle folder selection from SyncFolderSelector
   const handleFolderSelected = useCallback(
     async (path: string) => {
+      if (!polkadotAddress) return;
+
       try {
-        if (!polkadotAddress) {
-          toast.error("Wallet authentication is required");
-          return;
-        }
-
         await setPrivateSyncPath(path, polkadotAddress);
-        setSelectedPrivateFolderPath(path);
-        toast.success(
-          `Private sync folder set successfully, syncing is now in progress.`
-        );
-        setIsSyncPathConfigured(true);
 
-        // Refresh files to get any new files from the configured path
-        refreshUserFilesWithPinningQueue();
-        return true;
-      } catch (error) {
-        console.error("Failed to set sync folder:", error);
-        toast.error(
-          `Failed to set sync folder: ${error instanceof Error ? error.message : "Unknown error"
-          }`
-        );
+        // Check if HCFS config exists
+        const hasConfig = await checkConfig(polkadotAddress);
+
+        if (!hasConfig) {
+          // Need to show setup dialog
+          setShowHcfsSetup(true);
+        } else {
+          // Config exists, initialize sync directly
+          const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+          const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
+
+          if (result?.mnemonic) {
+            setShowMnemonicBackup(true);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to set sync folder:", err);
       }
     },
     [
@@ -387,36 +390,28 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     ]
   );
 
-  // Handle skip sync folder setup
-  const handleSkipSyncFolder = useCallback(async () => {
-    try {
-      if (!polkadotAddress) {
-        toast.error("Wallet authentication is required");
-        return;
-      }
+  const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
+    if (!polkadotAddress) return;
 
-      // Set sync path to empty string to indicate user has skipped
-      const emptyPath = "";
-      await setPrivateSyncPath(
-        emptyPath,
-        polkadotAddress,
-      );
-      setSelectedPrivateFolderPath(emptyPath);
+    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const initResult = await setupAndInitialize(
+      polkadotAddress,
+      result.serverUrl,
+      result.password,
+      mnemonic
+    );
 
-      // Set sync path as configured (with empty string) so selector doesn't show again
-      setIsSyncPathConfigured(true);
-      // Hide the start syncing selector
-      setShowPrivateStartSyncingSelector(false);
+    setShowHcfsSetup(false);
 
-      toast.success("Sync folder setup skipped. You can set it up later.");
-    } catch (error) {
-      console.error("Failed to skip sync folder setup:", error);
-      toast.error(
-        `Failed to skip sync folder setup: ${error instanceof Error ? error.message : "Unknown error"
-        }`
-      );
+    if (initResult?.mnemonic) {
+      setShowMnemonicBackup(true);
     }
-  }, [polkadotAddress, oauthSession?.token]);
+  };
+
+  const handleMnemonicBackupConfirm = () => {
+    setShowMnemonicBackup(false);
+    clearMnemonicBackup();
+  };
 
   // Navigation to settings
   const handleNavigateToSettings = useCallback(() => {
@@ -685,4 +680,2411 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   return content;
 };
 
-export default FilesContainer;
+export function FilesContainer() {
+  // ...existing state and hooks...
+  
+  const {
+    setupAndInitialize,
+    checkConfig,
+    isInitializing,
+    mnemonicToBackup,
+    clearMnemonicBackup,
+  } = useHcfsSync();
+
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
+  const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
+
+  // ...existing code...
+
+  // Modify or add handleFolderSelected function
+  const handleFolderSelected = async (path: string) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await setPrivateSyncPath(path, polkadotAddress);
+      
+      // Check if HCFS config exists
+      const hasConfig = await checkConfig(polkadotAddress);
+      
+      if (!hasConfig) {
+        // Need to show setup dialog
+        setShowHcfsSetup(true);
+      } else {
+        // Config exists, initialize sync directly
+        const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+        const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
+        
+        if (result?.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to set sync path:", err);
+    }
+  };
+
+  const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
+    if (!polkadotAddress) return;
+
+    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const initResult = await setupAndInitialize(
+      polkadotAddress,
+      result.serverUrl,
+      result.password,
+      mnemonic
+    );
+
+    setShowHcfsSetup(false);
+
+    if (initResult?.mnemonic) {
+      setShowMnemonicBackup(true);
+    }
+  };
+
+  const handleMnemonicBackupConfirm = () => {
+    setShowMnemonicBackup(false);
+    clearMnemonicBackup();
+  };
+
+  // Navigation to settings
+  const handleNavigateToSettings = useCallback(() => {
+    setActiveSettingsTab("File Settings");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
+  // Handle start syncing button click
+  const handleStartSyncing = useCallback(() => {
+    // If not on /files page, navigate to settings instead
+    if (isRecentFiles) {
+      handleNavigateToSettings();
+      return;
+    }
+
+    // If on /files page, show the sync folder selector
+    setShowPrivateStartSyncingSelector(true);
+  }, [isRecentFiles, handleNavigateToSettings]);
+
+  // Handle folder selection from Start Syncing flow
+  const handleStartSyncingFolderSelected = useCallback(
+    async (path: string) => {
+      try {
+        await handleFolderSelected(path);
+        // Hide the start syncing selector on success
+        setShowPrivateStartSyncingSelector(false);
+      } catch (error) {
+        // Keep the selector open on error so user can try again
+        console.error("Failed to set sync folder:", error);
+      }
+    },
+    [handleFolderSelected]
+  );
+
+  // Load data on mount and set up interval refresh
+  useEffect(() => {
+    if (isRecentFiles) {
+      return;
+    }
+
+    refreshUserFilesWithPinningQueue();
+  }, [refreshUserFilesWithPinningQueue, isRecentFiles]);
+
+  // Log error for debugging
+  useEffect(() => {
+    if (error) {
+      console.error("Error in useUserFiles:", error);
+    }
+  }, [error]);
+
+  // Get displayed file count
+  const displayedFileCount = useMemo(() => {
+    if (searchTerm || activeFilters.length > 0) {
+      return filteredData.length;
+    }
+    return allFilteredData.length;
+  }, [
+    filteredData.length,
+    allFilteredData.length,
+    searchTerm,
+    activeFilters.length,
+  ]);
+
+  // Handle file drop events
+  useEffect(() => {
+    const handleFileDrop = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.files && addButtonRef.current) {
+        console.log(
+          "Handling files via global event",
+          customEvent.detail.files
+        );
+        addButtonRef.current.openWithFiles(customEvent.detail.files);
+      }
+    };
+
+    window.addEventListener("hippius:file-drop", handleFileDrop);
+    return () => {
+      window.removeEventListener("hippius:file-drop", handleFileDrop);
+    };
+  }, []);
+
+  // Load user's view mode preference on component mount
+  useEffect(() => {
+    async function loadViewModePreference() {
+      const savedViewMode = await getViewModePreference();
+      setViewMode(savedViewMode);
+    }
+    loadViewModePreference();
+  }, []);
+
+  // Update view mode and save preference
+  const handleViewModeChange = useCallback((mode: "list" | "card") => {
+    setViewMode(mode);
+    saveViewModePreference(mode);
+  }, []);
+
+  // Reload sync paths when settings are updated
+  useEffect(() => {
+    if (syncPathRefreshTrigger > 0) {
+      // Reload private sync path
+      (async () => {
+        try {
+          setIsLoadingPrivatePath(true);
+          const privatefolderPath = await getPrivateSyncPath(
+            polkadotAddress || undefined
+          );
+          setSelectedPrivateFolderPath(privatefolderPath);
+        } catch {
+          console.error("Failed to reload private sync folder");
+        } finally {
+          setIsLoadingPrivatePath(false);
+        }
+      })();
+    }
+  }, [syncPathRefreshTrigger, polkadotAddress]);
+
+  // Computed values for current view (always private)
+  const currentSyncPath = selectedPrivateFolderPath;
+  const isCurrentSyncPathEmpty = currentSyncPath === "";
+  const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
+
+  // Recent files specific logic - check if private path is available
+  const hasNoSyncPaths = useMemo(() => {
+    if (!isRecentFiles) return false;
+    return (
+      selectedPrivateFolderPath === null ||
+      selectedPrivateFolderPath === undefined
+    );
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // For recent files, check if sync path is available (not empty)
+  const hasAnySyncPath = useMemo(() => {
+    if (!isRecentFiles) return false;
+    const hasPrivate =
+      selectedPrivateFolderPath !== null &&
+      selectedPrivateFolderPath !== undefined &&
+      selectedPrivateFolderPath !== "";
+    return hasPrivate;
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // Effective is private view (always true for private-only)
+  const effectiveIsPrivateView = useMemo(() => {
+    return true;
+  }, []);
+
+  // Determine what content to render
+  let content;
+
+  // Show loading while checking sync path or while loading sync paths
+  const shouldShowLoading = isCheckingSyncPath || isLoadingPrivatePath;
+
+  if (shouldShowLoading) {
+    content = <WaitAMoment />;
+  } else if (isSyncPathConfigured === false && !isRecentFiles) {
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleFolderSelected}
+        onSkip={handleSkipSyncFolder}
+      />
+    );
+  } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
+    // Show sync folder selector when Start Syncing is clicked
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleStartSyncingFolderSelected}
+        onSkip={handleSkipSyncFolder} // Allow skip option in Start Syncing flow
+      />
+    );
+  } else {
+    // Compute active sync folder path
+    let syncFolderPath = "";
+    let effectiveSyncPathEmpty = false;
+
+    if (isRecentFiles) {
+      // For recent files, use private path
+      const privatePath =
+        selectedPrivateFolderPath !== null &&
+          selectedPrivateFolderPath !== undefined &&
+          selectedPrivateFolderPath !== ""
+          ? selectedPrivateFolderPath
+          : null;
+
+      syncFolderPath = privatePath || "";
+      effectiveSyncPathEmpty = !hasAnySyncPath;
+    } else {
+      // For regular files view, use the private path
+      syncFolderPath = selectedPrivateFolderPath || "";
+      effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
+    }
+
+    // Get file count for view all button
+    const privateFileCount =
+      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
+        .length || 0;
+
+    content = (
+      <FileSelectionProvider>
+        <div className="w-full relative mt-6">
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && !isRecentFiles && (
+            <div className="mb-4">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
+
+          <FilesHeader
+            isRecentFiles={isRecentFiles}
+            isRefetching={isRefetching}
+            isFetching={isFetching}
+            formattedStorageSize={formattedStorageSize}
+            allFilteredDataLength={displayedFileCount}
+            viewMode={viewMode}
+            setViewMode={handleViewModeChange}
+            searchTerm={searchTerm}
+            handleSearchChange={handleSearchChange}
+            activeFilters={activeFilters}
+            handleRemoveFilter={handleRemoveFilter}
+            refetchUserFiles={
+              isRecentFiles
+                ? refreshRecentFilesWithPinningQueue
+                : refreshUserFilesWithPinningQueue
+            }
+            addButtonRef={addButtonRef}
+            syncFolderPath={syncFolderPath}
+            privateFileCount={privateFileCount}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onStartSyncing={handleStartSyncing}
+            hasNoSyncPaths={hasNoSyncPaths}
+            onNavigateToSettings={handleNavigateToSettings}
+            isPrivateView={effectiveIsPrivateView}
+            selectedFileTypes={filterState.fileTypes}
+            selectedDate={filterState.date}
+            selectedFileSizes={filterState.fileSizes}
+            onFileTypesChange={handleFileTypesChange}
+            onDateChange={handleDateChange}
+            onFileSizesChange={handleFileSizesChange}
+          />
+
+          <FilesContent
+            isRecentFiles={isRecentFiles}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            isPrivateView={effectiveIsPrivateView}
+            filteredData={filteredData}
+            displayedData={paginatedData}
+            searchTerm={searchTerm}
+            activeFilters={activeFilters}
+            viewMode={viewMode}
+            shouldResetPagination={shouldResetPagination}
+            handlePaginationReset={handlePaginationReset}
+            error={error}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setCurrentPage={setCurrentPage}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onSyncPathConfigured={
+              isRecentFiles ? handleNavigateToSettings : handleStartSyncing
+            }
+          />
+        </div>
+      </FileSelectionProvider>
+    );
+  }
+
+  return content;
+};
+
+export function FilesContainer() {
+  // ...existing state and hooks...
+  
+  const {
+    setupAndInitialize,
+    checkConfig,
+    isInitializing,
+    mnemonicToBackup,
+    clearMnemonicBackup,
+  } = useHcfsSync();
+
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
+  const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
+
+  // ...existing code...
+
+  // Modify or add handleFolderSelected function
+  const handleFolderSelected = async (path: string) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await setPrivateSyncPath(path, polkadotAddress);
+      
+      // Check if HCFS config exists
+      const hasConfig = await checkConfig(polkadotAddress);
+      
+      if (!hasConfig) {
+        // Need to show setup dialog
+        setShowHcfsSetup(true);
+      } else {
+        // Config exists, initialize sync directly
+        const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+        const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
+        
+        if (result?.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to set sync folder:", err);
+    }
+  };
+
+  const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
+    if (!polkadotAddress) return;
+
+    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const initResult = await setupAndInitialize(
+      polkadotAddress,
+      result.serverUrl,
+      result.password,
+      mnemonic
+    );
+
+    setShowHcfsSetup(false);
+
+    if (initResult?.mnemonic) {
+      setShowMnemonicBackup(true);
+    }
+  };
+
+  const handleMnemonicBackupConfirm = () => {
+    setShowMnemonicBackup(false);
+    clearMnemonicBackup();
+  };
+
+  // Navigation to settings
+  const handleNavigateToSettings = useCallback(() => {
+    setActiveSettingsTab("File Settings");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
+  // Handle start syncing button click
+  const handleStartSyncing = useCallback(() => {
+    // If not on /files page, navigate to settings instead
+    if (isRecentFiles) {
+      handleNavigateToSettings();
+      return;
+    }
+
+    // If on /files page, show the sync folder selector
+    setShowPrivateStartSyncingSelector(true);
+  }, [isRecentFiles, handleNavigateToSettings]);
+
+  // Handle folder selection from Start Syncing flow
+  const handleStartSyncingFolderSelected = useCallback(
+    async (path: string) => {
+      try {
+        await handleFolderSelected(path);
+        // Hide the start syncing selector on success
+        setShowPrivateStartSyncingSelector(false);
+      } catch (error) {
+        // Keep the selector open on error so user can try again
+        console.error("Failed to set sync folder:", error);
+      }
+    },
+    [handleFolderSelected]
+  );
+
+  // Load data on mount and set up interval refresh
+  useEffect(() => {
+    if (isRecentFiles) {
+      return;
+    }
+
+    refreshUserFilesWithPinningQueue();
+  }, [refreshUserFilesWithPinningQueue, isRecentFiles]);
+
+  // Log error for debugging
+  useEffect(() => {
+    if (error) {
+      console.error("Error in useUserFiles:", error);
+    }
+  }, [error]);
+
+  // Get displayed file count
+  const displayedFileCount = useMemo(() => {
+    if (searchTerm || activeFilters.length > 0) {
+      return filteredData.length;
+    }
+    return allFilteredData.length;
+  }, [
+    filteredData.length,
+    allFilteredData.length,
+    searchTerm,
+    activeFilters.length,
+  ]);
+
+  // Handle file drop events
+  useEffect(() => {
+    const handleFileDrop = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.files && addButtonRef.current) {
+        console.log(
+          "Handling files via global event",
+          customEvent.detail.files
+        );
+        addButtonRef.current.openWithFiles(customEvent.detail.files);
+      }
+    };
+
+    window.addEventListener("hippius:file-drop", handleFileDrop);
+    return () => {
+      window.removeEventListener("hippius:file-drop", handleFileDrop);
+    };
+  }, []);
+
+  // Load user's view mode preference on component mount
+  useEffect(() => {
+    async function loadViewModePreference() {
+      const savedViewMode = await getViewModePreference();
+      setViewMode(savedViewMode);
+    }
+    loadViewModePreference();
+  }, []);
+
+  // Update view mode and save preference
+  const handleViewModeChange = useCallback((mode: "list" | "card") => {
+    setViewMode(mode);
+    saveViewModePreference(mode);
+  }, []);
+
+  // Reload sync paths when settings are updated
+  useEffect(() => {
+    if (syncPathRefreshTrigger > 0) {
+      // Reload private sync path
+      (async () => {
+        try {
+          setIsLoadingPrivatePath(true);
+          const privatefolderPath = await getPrivateSyncPath(
+            polkadotAddress || undefined
+          );
+          setSelectedPrivateFolderPath(privatefolderPath);
+        } catch {
+          console.error("Failed to reload private sync folder");
+        } finally {
+          setIsLoadingPrivatePath(false);
+        }
+      })();
+    }
+  }, [syncPathRefreshTrigger, polkadotAddress]);
+
+  // Computed values for current view (always private)
+  const currentSyncPath = selectedPrivateFolderPath;
+  const isCurrentSyncPathEmpty = currentSyncPath === "";
+  const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
+
+  // Recent files specific logic - check if private path is available
+  const hasNoSyncPaths = useMemo(() => {
+    if (!isRecentFiles) return false;
+    return (
+      selectedPrivateFolderPath === null ||
+      selectedPrivateFolderPath === undefined
+    );
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // For recent files, check if sync path is available (not empty)
+  const hasAnySyncPath = useMemo(() => {
+    if (!isRecentFiles) return false;
+    const hasPrivate =
+      selectedPrivateFolderPath !== null &&
+      selectedPrivateFolderPath !== undefined &&
+      selectedPrivateFolderPath !== "";
+    return hasPrivate;
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // Effective is private view (always true for private-only)
+  const effectiveIsPrivateView = useMemo(() => {
+    return true;
+  }, []);
+
+  // Determine what content to render
+  let content;
+
+  // Show loading while checking sync path or while loading sync paths
+  const shouldShowLoading = isCheckingSyncPath || isLoadingPrivatePath;
+
+  if (shouldShowLoading) {
+    content = <WaitAMoment />;
+  } else if (isSyncPathConfigured === false && !isRecentFiles) {
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleFolderSelected}
+        onSkip={handleSkipSyncFolder}
+      />
+    );
+  } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
+    // Show sync folder selector when Start Syncing is clicked
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleStartSyncingFolderSelected}
+        onSkip={handleSkipSyncFolder} // Allow skip option in Start Syncing flow
+      />
+    );
+  } else {
+    // Compute active sync folder path
+    let syncFolderPath = "";
+    let effectiveSyncPathEmpty = false;
+
+    if (isRecentFiles) {
+      // For recent files, use private path
+      const privatePath =
+        selectedPrivateFolderPath !== null &&
+          selectedPrivateFolderPath !== undefined &&
+          selectedPrivateFolderPath !== ""
+          ? selectedPrivateFolderPath
+          : null;
+
+      syncFolderPath = privatePath || "";
+      effectiveSyncPathEmpty = !hasAnySyncPath;
+    } else {
+      // For regular files view, use the private path
+      syncFolderPath = selectedPrivateFolderPath || "";
+      effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
+    }
+
+    // Get file count for view all button
+    const privateFileCount =
+      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
+        .length || 0;
+
+    content = (
+      <FileSelectionProvider>
+        <div className="w-full relative mt-6">
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && !isRecentFiles && (
+            <div className="mb-4">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
+
+          <FilesHeader
+            isRecentFiles={isRecentFiles}
+            isRefetching={isRefetching}
+            isFetching={isFetching}
+            formattedStorageSize={formattedStorageSize}
+            allFilteredDataLength={displayedFileCount}
+            viewMode={viewMode}
+            setViewMode={handleViewModeChange}
+            searchTerm={searchTerm}
+            handleSearchChange={handleSearchChange}
+            activeFilters={activeFilters}
+            handleRemoveFilter={handleRemoveFilter}
+            refetchUserFiles={
+              isRecentFiles
+                ? refreshRecentFilesWithPinningQueue
+                : refreshUserFilesWithPinningQueue
+            }
+            addButtonRef={addButtonRef}
+            syncFolderPath={syncFolderPath}
+            privateFileCount={privateFileCount}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onStartSyncing={handleStartSyncing}
+            hasNoSyncPaths={hasNoSyncPaths}
+            onNavigateToSettings={handleNavigateToSettings}
+            isPrivateView={effectiveIsPrivateView}
+            selectedFileTypes={filterState.fileTypes}
+            selectedDate={filterState.date}
+            selectedFileSizes={filterState.fileSizes}
+            onFileTypesChange={handleFileTypesChange}
+            onDateChange={handleDateChange}
+            onFileSizesChange={handleFileSizesChange}
+          />
+
+          <FilesContent
+            isRecentFiles={isRecentFiles}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            isPrivateView={effectiveIsPrivateView}
+            filteredData={filteredData}
+            displayedData={paginatedData}
+            searchTerm={searchTerm}
+            activeFilters={activeFilters}
+            viewMode={viewMode}
+            shouldResetPagination={shouldResetPagination}
+            handlePaginationReset={handlePaginationReset}
+            error={error}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setCurrentPage={setCurrentPage}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onSyncPathConfigured={
+              isRecentFiles ? handleNavigateToSettings : handleStartSyncing
+            }
+          />
+        </div>
+      </FileSelectionProvider>
+    );
+  }
+
+  return content;
+};
+
+export function FilesContainer() {
+  // ...existing state and hooks...
+  
+  const {
+    setupAndInitialize,
+    checkConfig,
+    isInitializing,
+    mnemonicToBackup,
+    clearMnemonicBackup,
+  } = useHcfsSync();
+
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
+  const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
+
+  // ...existing code...
+
+  // Modify or add handleFolderSelected function
+  const handleFolderSelected = async (path: string) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await setPrivateSyncPath(path, polkadotAddress);
+      
+      // Check if HCFS config exists
+      const hasConfig = await checkConfig(polkadotAddress);
+      
+      if (!hasConfig) {
+        // Need to show setup dialog
+        setShowHcfsSetup(true);
+      } else {
+        // Config exists, initialize sync directly
+        const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+        const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
+        
+        if (result?.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to set sync folder:", err);
+    }
+  };
+
+  const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
+    if (!polkadotAddress) return;
+
+    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const initResult = await setupAndInitialize(
+      polkadotAddress,
+      result.serverUrl,
+      result.password,
+      mnemonic
+    );
+
+    setShowHcfsSetup(false);
+
+    if (initResult?.mnemonic) {
+      setShowMnemonicBackup(true);
+    }
+  };
+
+  const handleMnemonicBackupConfirm = () => {
+    setShowMnemonicBackup(false);
+    clearMnemonicBackup();
+  };
+
+  // Navigation to settings
+  const handleNavigateToSettings = useCallback(() => {
+    setActiveSettingsTab("File Settings");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
+  // Handle start syncing button click
+  const handleStartSyncing = useCallback(() => {
+    // If not on /files page, navigate to settings instead
+    if (isRecentFiles) {
+      handleNavigateToSettings();
+      return;
+    }
+
+    // If on /files page, show the sync folder selector
+    setShowPrivateStartSyncingSelector(true);
+  }, [isRecentFiles, handleNavigateToSettings]);
+
+  // Handle folder selection from Start Syncing flow
+  const handleStartSyncingFolderSelected = useCallback(
+    async (path: string) => {
+      try {
+        await handleFolderSelected(path);
+        // Hide the start syncing selector on success
+        setShowPrivateStartSyncingSelector(false);
+      } catch (error) {
+        // Keep the selector open on error so user can try again
+        console.error("Failed to set sync folder:", error);
+      }
+    },
+    [handleFolderSelected]
+  );
+
+  // Load data on mount and set up interval refresh
+  useEffect(() => {
+    if (isRecentFiles) {
+      return;
+    }
+
+    refreshUserFilesWithPinningQueue();
+  }, [refreshUserFilesWithPinningQueue, isRecentFiles]);
+
+  // Log error for debugging
+  useEffect(() => {
+    if (error) {
+      console.error("Error in useUserFiles:", error);
+    }
+  }, [error]);
+
+  // Get displayed file count
+  const displayedFileCount = useMemo(() => {
+    if (searchTerm || activeFilters.length > 0) {
+      return filteredData.length;
+    }
+    return allFilteredData.length;
+  }, [
+    filteredData.length,
+    allFilteredData.length,
+    searchTerm,
+    activeFilters.length,
+  ]);
+
+  // Handle file drop events
+  useEffect(() => {
+    const handleFileDrop = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.files && addButtonRef.current) {
+        console.log(
+          "Handling files via global event",
+          customEvent.detail.files
+        );
+        addButtonRef.current.openWithFiles(customEvent.detail.files);
+      }
+    };
+
+    window.addEventListener("hippius:file-drop", handleFileDrop);
+    return () => {
+      window.removeEventListener("hippius:file-drop", handleFileDrop);
+    };
+  }, []);
+
+  // Load user's view mode preference on component mount
+  useEffect(() => {
+    async function loadViewModePreference() {
+      const savedViewMode = await getViewModePreference();
+      setViewMode(savedViewMode);
+    }
+    loadViewModePreference();
+  }, []);
+
+  // Update view mode and save preference
+  const handleViewModeChange = useCallback((mode: "list" | "card") => {
+    setViewMode(mode);
+    saveViewModePreference(mode);
+  }, []);
+
+  // Reload sync paths when settings are updated
+  useEffect(() => {
+    if (syncPathRefreshTrigger > 0) {
+      // Reload private sync path
+      (async () => {
+        try {
+          setIsLoadingPrivatePath(true);
+          const privatefolderPath = await getPrivateSyncPath(
+            polkadotAddress || undefined
+          );
+          setSelectedPrivateFolderPath(privatefolderPath);
+        } catch {
+          console.error("Failed to reload private sync folder");
+        } finally {
+          setIsLoadingPrivatePath(false);
+        }
+      })();
+    }
+  }, [syncPathRefreshTrigger, polkadotAddress]);
+
+  // Computed values for current view (always private)
+  const currentSyncPath = selectedPrivateFolderPath;
+  const isCurrentSyncPathEmpty = currentSyncPath === "";
+  const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
+
+  // Recent files specific logic - check if private path is available
+  const hasNoSyncPaths = useMemo(() => {
+    if (!isRecentFiles) return false;
+    return (
+      selectedPrivateFolderPath === null ||
+      selectedPrivateFolderPath === undefined
+    );
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // For recent files, check if sync path is available (not empty)
+  const hasAnySyncPath = useMemo(() => {
+    if (!isRecentFiles) return false;
+    const hasPrivate =
+      selectedPrivateFolderPath !== null &&
+      selectedPrivateFolderPath !== undefined &&
+      selectedPrivateFolderPath !== "";
+    return hasPrivate;
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // Effective is private view (always true for private-only)
+  const effectiveIsPrivateView = useMemo(() => {
+    return true;
+  }, []);
+
+  // Determine what content to render
+  let content;
+
+  // Show loading while checking sync path or while loading sync paths
+  const shouldShowLoading = isCheckingSyncPath || isLoadingPrivatePath;
+
+  if (shouldShowLoading) {
+    content = <WaitAMoment />;
+  } else if (isSyncPathConfigured === false && !isRecentFiles) {
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleFolderSelected}
+        onSkip={handleSkipSyncFolder}
+      />
+    );
+  } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
+    // Show sync folder selector when Start Syncing is clicked
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleStartSyncingFolderSelected}
+        onSkip={handleSkipSyncFolder} // Allow skip option in Start Syncing flow
+      />
+    );
+  } else {
+    // Compute active sync folder path
+    let syncFolderPath = "";
+    let effectiveSyncPathEmpty = false;
+
+    if (isRecentFiles) {
+      // For recent files, use private path
+      const privatePath =
+        selectedPrivateFolderPath !== null &&
+          selectedPrivateFolderPath !== undefined &&
+          selectedPrivateFolderPath !== ""
+          ? selectedPrivateFolderPath
+          : null;
+
+      syncFolderPath = privatePath || "";
+      effectiveSyncPathEmpty = !hasAnySyncPath;
+    } else {
+      // For regular files view, use the private path
+      syncFolderPath = selectedPrivateFolderPath || "";
+      effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
+    }
+
+    // Get file count for view all button
+    const privateFileCount =
+      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
+        .length || 0;
+
+    content = (
+      <FileSelectionProvider>
+        <div className="w-full relative mt-6">
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && !isRecentFiles && (
+            <div className="mb-4">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
+
+          <FilesHeader
+            isRecentFiles={isRecentFiles}
+            isRefetching={isRefetching}
+            isFetching={isFetching}
+            formattedStorageSize={formattedStorageSize}
+            allFilteredDataLength={displayedFileCount}
+            viewMode={viewMode}
+            setViewMode={handleViewModeChange}
+            searchTerm={searchTerm}
+            handleSearchChange={handleSearchChange}
+            activeFilters={activeFilters}
+            handleRemoveFilter={handleRemoveFilter}
+            refetchUserFiles={
+              isRecentFiles
+                ? refreshRecentFilesWithPinningQueue
+                : refreshUserFilesWithPinningQueue
+            }
+            addButtonRef={addButtonRef}
+            syncFolderPath={syncFolderPath}
+            privateFileCount={privateFileCount}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onStartSyncing={handleStartSyncing}
+            hasNoSyncPaths={hasNoSyncPaths}
+            onNavigateToSettings={handleNavigateToSettings}
+            isPrivateView={effectiveIsPrivateView}
+            selectedFileTypes={filterState.fileTypes}
+            selectedDate={filterState.date}
+            selectedFileSizes={filterState.fileSizes}
+            onFileTypesChange={handleFileTypesChange}
+            onDateChange={handleDateChange}
+            onFileSizesChange={handleFileSizesChange}
+          />
+
+          <FilesContent
+            isRecentFiles={isRecentFiles}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            isPrivateView={effectiveIsPrivateView}
+            filteredData={filteredData}
+            displayedData={paginatedData}
+            searchTerm={searchTerm}
+            activeFilters={activeFilters}
+            viewMode={viewMode}
+            shouldResetPagination={shouldResetPagination}
+            handlePaginationReset={handlePaginationReset}
+            error={error}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setCurrentPage={setCurrentPage}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onSyncPathConfigured={
+              isRecentFiles ? handleNavigateToSettings : handleStartSyncing
+            }
+          />
+        </div>
+      </FileSelectionProvider>
+    );
+  }
+
+  return content;
+};
+
+export function FilesContainer() {
+  // ...existing state and hooks...
+  
+  const {
+    setupAndInitialize,
+    checkConfig,
+    isInitializing,
+    mnemonicToBackup,
+    clearMnemonicBackup,
+  } = useHcfsSync();
+
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
+  const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
+
+  // ...existing code...
+
+  // Modify or add handleFolderSelected function
+  const handleFolderSelected = async (path: string) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await setPrivateSyncPath(path, polkadotAddress);
+      
+      // Check if HCFS config exists
+      const hasConfig = await checkConfig(polkadotAddress);
+      
+      if (!hasConfig) {
+        // Need to show setup dialog
+        setShowHcfsSetup(true);
+      } else {
+        // Config exists, initialize sync directly
+        const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+        const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
+        
+        if (result?.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to set sync folder:", err);
+    }
+  };
+
+  const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
+    if (!polkadotAddress) return;
+
+    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const initResult = await setupAndInitialize(
+      polkadotAddress,
+      result.serverUrl,
+      result.password,
+      mnemonic
+    );
+
+    setShowHcfsSetup(false);
+
+    if (initResult?.mnemonic) {
+      setShowMnemonicBackup(true);
+    }
+  };
+
+  const handleMnemonicBackupConfirm = () => {
+    setShowMnemonicBackup(false);
+    clearMnemonicBackup();
+  };
+
+  // Navigation to settings
+  const handleNavigateToSettings = useCallback(() => {
+    setActiveSettingsTab("File Settings");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
+  // Handle start syncing button click
+  const handleStartSyncing = useCallback(() => {
+    // If not on /files page, navigate to settings instead
+    if (isRecentFiles) {
+      handleNavigateToSettings();
+      return;
+    }
+
+    // If on /files page, show the sync folder selector
+    setShowPrivateStartSyncingSelector(true);
+  }, [isRecentFiles, handleNavigateToSettings]);
+
+  // Handle folder selection from Start Syncing flow
+  const handleStartSyncingFolderSelected = useCallback(
+    async (path: string) => {
+      try {
+        await handleFolderSelected(path);
+        // Hide the start syncing selector on success
+        setShowPrivateStartSyncingSelector(false);
+      } catch (error) {
+        // Keep the selector open on error so user can try again
+        console.error("Failed to set sync folder:", error);
+      }
+    },
+    [handleFolderSelected]
+  );
+
+  // Load data on mount and set up interval refresh
+  useEffect(() => {
+    if (isRecentFiles) {
+      return;
+    }
+
+    refreshUserFilesWithPinningQueue();
+  }, [refreshUserFilesWithPinningQueue, isRecentFiles]);
+
+  // Log error for debugging
+  useEffect(() => {
+    if (error) {
+      console.error("Error in useUserFiles:", error);
+    }
+  }, [error]);
+
+  // Get displayed file count
+  const displayedFileCount = useMemo(() => {
+    if (searchTerm || activeFilters.length > 0) {
+      return filteredData.length;
+    }
+    return allFilteredData.length;
+  }, [
+    filteredData.length,
+    allFilteredData.length,
+    searchTerm,
+    activeFilters.length,
+  ]);
+
+  // Handle file drop events
+  useEffect(() => {
+    const handleFileDrop = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.files && addButtonRef.current) {
+        console.log(
+          "Handling files via global event",
+          customEvent.detail.files
+        );
+        addButtonRef.current.openWithFiles(customEvent.detail.files);
+      }
+    };
+
+    window.addEventListener("hippius:file-drop", handleFileDrop);
+    return () => {
+      window.removeEventListener("hippius:file-drop", handleFileDrop);
+    };
+  }, []);
+
+  // Load user's view mode preference on component mount
+  useEffect(() => {
+    async function loadViewModePreference() {
+      const savedViewMode = await getViewModePreference();
+      setViewMode(savedViewMode);
+    }
+    loadViewModePreference();
+  }, []);
+
+  // Update view mode and save preference
+  const handleViewModeChange = useCallback((mode: "list" | "card") => {
+    setViewMode(mode);
+    saveViewModePreference(mode);
+  }, []);
+
+  // Reload sync paths when settings are updated
+  useEffect(() => {
+    if (syncPathRefreshTrigger > 0) {
+      // Reload private sync path
+      (async () => {
+        try {
+          setIsLoadingPrivatePath(true);
+          const privatefolderPath = await getPrivateSyncPath(
+            polkadotAddress || undefined
+          );
+          setSelectedPrivateFolderPath(privatefolderPath);
+        } catch {
+          console.error("Failed to reload private sync folder");
+        } finally {
+          setIsLoadingPrivatePath(false);
+        }
+      })();
+    }
+  }, [syncPathRefreshTrigger, polkadotAddress]);
+
+  // Computed values for current view (always private)
+  const currentSyncPath = selectedPrivateFolderPath;
+  const isCurrentSyncPathEmpty = currentSyncPath === "";
+  const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
+
+  // Recent files specific logic - check if private path is available
+  const hasNoSyncPaths = useMemo(() => {
+    if (!isRecentFiles) return false;
+    return (
+      selectedPrivateFolderPath === null ||
+      selectedPrivateFolderPath === undefined
+    );
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // For recent files, check if sync path is available (not empty)
+  const hasAnySyncPath = useMemo(() => {
+    if (!isRecentFiles) return false;
+    const hasPrivate =
+      selectedPrivateFolderPath !== null &&
+      selectedPrivateFolderPath !== undefined &&
+      selectedPrivateFolderPath !== "";
+    return hasPrivate;
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // Effective is private view (always true for private-only)
+  const effectiveIsPrivateView = useMemo(() => {
+    return true;
+  }, []);
+
+  // Determine what content to render
+  let content;
+
+  // Show loading while checking sync path or while loading sync paths
+  const shouldShowLoading = isCheckingSyncPath || isLoadingPrivatePath;
+
+  if (shouldShowLoading) {
+    content = <WaitAMoment />;
+  } else if (isSyncPathConfigured === false && !isRecentFiles) {
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleFolderSelected}
+        onSkip={handleSkipSyncFolder}
+      />
+    );
+  } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
+    // Show sync folder selector when Start Syncing is clicked
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleStartSyncingFolderSelected}
+        onSkip={handleSkipSyncFolder} // Allow skip option in Start Syncing flow
+      />
+    );
+  } else {
+    // Compute active sync folder path
+    let syncFolderPath = "";
+    let effectiveSyncPathEmpty = false;
+
+    if (isRecentFiles) {
+      // For recent files, use private path
+      const privatePath =
+        selectedPrivateFolderPath !== null &&
+          selectedPrivateFolderPath !== undefined &&
+          selectedPrivateFolderPath !== ""
+          ? selectedPrivateFolderPath
+          : null;
+
+      syncFolderPath = privatePath || "";
+      effectiveSyncPathEmpty = !hasAnySyncPath;
+    } else {
+      // For regular files view, use the private path
+      syncFolderPath = selectedPrivateFolderPath || "";
+      effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
+    }
+
+    // Get file count for view all button
+    const privateFileCount =
+      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
+        .length || 0;
+
+    content = (
+      <FileSelectionProvider>
+        <div className="w-full relative mt-6">
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && !isRecentFiles && (
+            <div className="mb-4">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
+
+          <FilesHeader
+            isRecentFiles={isRecentFiles}
+            isRefetching={isRefetching}
+            isFetching={isFetching}
+            formattedStorageSize={formattedStorageSize}
+            allFilteredDataLength={displayedFileCount}
+            viewMode={viewMode}
+            setViewMode={handleViewModeChange}
+            searchTerm={searchTerm}
+            handleSearchChange={handleSearchChange}
+            activeFilters={activeFilters}
+            handleRemoveFilter={handleRemoveFilter}
+            refetchUserFiles={
+              isRecentFiles
+                ? refreshRecentFilesWithPinningQueue
+                : refreshUserFilesWithPinningQueue
+            }
+            addButtonRef={addButtonRef}
+            syncFolderPath={syncFolderPath}
+            privateFileCount={privateFileCount}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onStartSyncing={handleStartSyncing}
+            hasNoSyncPaths={hasNoSyncPaths}
+            onNavigateToSettings={handleNavigateToSettings}
+            isPrivateView={effectiveIsPrivateView}
+            selectedFileTypes={filterState.fileTypes}
+            selectedDate={filterState.date}
+            selectedFileSizes={filterState.fileSizes}
+            onFileTypesChange={handleFileTypesChange}
+            onDateChange={handleDateChange}
+            onFileSizesChange={handleFileSizesChange}
+          />
+
+          <FilesContent
+            isRecentFiles={isRecentFiles}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            isPrivateView={effectiveIsPrivateView}
+            filteredData={filteredData}
+            displayedData={paginatedData}
+            searchTerm={searchTerm}
+            activeFilters={activeFilters}
+            viewMode={viewMode}
+            shouldResetPagination={shouldResetPagination}
+            handlePaginationReset={handlePaginationReset}
+            error={error}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setCurrentPage={setCurrentPage}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onSyncPathConfigured={
+              isRecentFiles ? handleNavigateToSettings : handleStartSyncing
+            }
+          />
+        </div>
+      </FileSelectionProvider>
+    );
+  }
+
+  return content;
+};
+
+export function FilesContainer() {
+  // ...existing state and hooks...
+  
+  const {
+    setupAndInitialize,
+    checkConfig,
+    isInitializing,
+    mnemonicToBackup,
+    clearMnemonicBackup,
+  } = useHcfsSync();
+
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
+  const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
+
+  // ...existing code...
+
+  // Modify or add handleFolderSelected function
+  const handleFolderSelected = async (path: string) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await setPrivateSyncPath(path, polkadotAddress);
+      
+      // Check if HCFS config exists
+      const hasConfig = await checkConfig(polkadotAddress);
+      
+      if (!hasConfig) {
+        // Need to show setup dialog
+        setShowHcfsSetup(true);
+      } else {
+        // Config exists, initialize sync directly
+        const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+        const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
+        
+        if (result?.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to set sync folder:", err);
+    }
+  };
+
+  const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
+    if (!polkadotAddress) return;
+
+    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const initResult = await setupAndInitialize(
+      polkadotAddress,
+      result.serverUrl,
+      result.password,
+      mnemonic
+    );
+
+    setShowHcfsSetup(false);
+
+    if (initResult?.mnemonic) {
+      setShowMnemonicBackup(true);
+    }
+  };
+
+  const handleMnemonicBackupConfirm = () => {
+    setShowMnemonicBackup(false);
+    clearMnemonicBackup();
+  };
+
+  // Navigation to settings
+  const handleNavigateToSettings = useCallback(() => {
+    setActiveSettingsTab("File Settings");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
+  // Handle start syncing button click
+  const handleStartSyncing = useCallback(() => {
+    // If not on /files page, navigate to settings instead
+    if (isRecentFiles) {
+      handleNavigateToSettings();
+      return;
+    }
+
+    // If on /files page, show the sync folder selector
+    setShowPrivateStartSyncingSelector(true);
+  }, [isRecentFiles, handleNavigateToSettings]);
+
+  // Handle folder selection from Start Syncing flow
+  const handleStartSyncingFolderSelected = useCallback(
+    async (path: string) => {
+      try {
+        await handleFolderSelected(path);
+        // Hide the start syncing selector on success
+        setShowPrivateStartSyncingSelector(false);
+      } catch (error) {
+        // Keep the selector open on error so user can try again
+        console.error("Failed to set sync folder:", error);
+      }
+    },
+    [handleFolderSelected]
+  );
+
+  // Load data on mount and set up interval refresh
+  useEffect(() => {
+    if (isRecentFiles) {
+      return;
+    }
+
+    refreshUserFilesWithPinningQueue();
+  }, [refreshUserFilesWithPinningQueue, isRecentFiles]);
+
+  // Log error for debugging
+  useEffect(() => {
+    if (error) {
+      console.error("Error in useUserFiles:", error);
+    }
+  }, [error]);
+
+  // Get displayed file count
+  const displayedFileCount = useMemo(() => {
+    if (searchTerm || activeFilters.length > 0) {
+      return filteredData.length;
+    }
+    return allFilteredData.length;
+  }, [
+    filteredData.length,
+    allFilteredData.length,
+    searchTerm,
+    activeFilters.length,
+  ]);
+
+  // Handle file drop events
+  useEffect(() => {
+    const handleFileDrop = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.files && addButtonRef.current) {
+        console.log(
+          "Handling files via global event",
+          customEvent.detail.files
+        );
+        addButtonRef.current.openWithFiles(customEvent.detail.files);
+      }
+    };
+
+    window.addEventListener("hippius:file-drop", handleFileDrop);
+    return () => {
+      window.removeEventListener("hippius:file-drop", handleFileDrop);
+    };
+  }, []);
+
+  // Load user's view mode preference on component mount
+  useEffect(() => {
+    async function loadViewModePreference() {
+      const savedViewMode = await getViewModePreference();
+      setViewMode(savedViewMode);
+    }
+    loadViewModePreference();
+  }, []);
+
+  // Update view mode and save preference
+  const handleViewModeChange = useCallback((mode: "list" | "card") => {
+    setViewMode(mode);
+    saveViewModePreference(mode);
+  }, []);
+
+  // Reload sync paths when settings are updated
+  useEffect(() => {
+    if (syncPathRefreshTrigger > 0) {
+      // Reload private sync path
+      (async () => {
+        try {
+          setIsLoadingPrivatePath(true);
+          const privatefolderPath = await getPrivateSyncPath(
+            polkadotAddress || undefined
+          );
+          setSelectedPrivateFolderPath(privatefolderPath);
+        } catch {
+          console.error("Failed to reload private sync folder");
+        } finally {
+          setIsLoadingPrivatePath(false);
+        }
+      })();
+    }
+  }, [syncPathRefreshTrigger, polkadotAddress]);
+
+  // Computed values for current view (always private)
+  const currentSyncPath = selectedPrivateFolderPath;
+  const isCurrentSyncPathEmpty = currentSyncPath === "";
+  const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
+
+  // Recent files specific logic - check if private path is available
+  const hasNoSyncPaths = useMemo(() => {
+    if (!isRecentFiles) return false;
+    return (
+      selectedPrivateFolderPath === null ||
+      selectedPrivateFolderPath === undefined
+    );
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // For recent files, check if sync path is available (not empty)
+  const hasAnySyncPath = useMemo(() => {
+    if (!isRecentFiles) return false;
+    const hasPrivate =
+      selectedPrivateFolderPath !== null &&
+      selectedPrivateFolderPath !== undefined &&
+      selectedPrivateFolderPath !== "";
+    return hasPrivate;
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // Effective is private view (always true for private-only)
+  const effectiveIsPrivateView = useMemo(() => {
+    return true;
+  }, []);
+
+  // Determine what content to render
+  let content;
+
+  // Show loading while checking sync path or while loading sync paths
+  const shouldShowLoading = isCheckingSyncPath || isLoadingPrivatePath;
+
+  if (shouldShowLoading) {
+    content = <WaitAMoment />;
+  } else if (isSyncPathConfigured === false && !isRecentFiles) {
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleFolderSelected}
+        onSkip={handleSkipSyncFolder}
+      />
+    );
+  } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
+    // Show sync folder selector when Start Syncing is clicked
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleStartSyncingFolderSelected}
+        onSkip={handleSkipSyncFolder} // Allow skip option in Start Syncing flow
+      />
+    );
+  } else {
+    // Compute active sync folder path
+    let syncFolderPath = "";
+    let effectiveSyncPathEmpty = false;
+
+    if (isRecentFiles) {
+      // For recent files, use private path
+      const privatePath =
+        selectedPrivateFolderPath !== null &&
+          selectedPrivateFolderPath !== undefined &&
+          selectedPrivateFolderPath !== ""
+          ? selectedPrivateFolderPath
+          : null;
+
+      syncFolderPath = privatePath || "";
+      effectiveSyncPathEmpty = !hasAnySyncPath;
+    } else {
+      // For regular files view, use the private path
+      syncFolderPath = selectedPrivateFolderPath || "";
+      effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
+    }
+
+    // Get file count for view all button
+    const privateFileCount =
+      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
+        .length || 0;
+
+    content = (
+      <FileSelectionProvider>
+        <div className="w-full relative mt-6">
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && !isRecentFiles && (
+            <div className="mb-4">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
+
+          <FilesHeader
+            isRecentFiles={isRecentFiles}
+            isRefetching={isRefetching}
+            isFetching={isFetching}
+            formattedStorageSize={formattedStorageSize}
+            allFilteredDataLength={displayedFileCount}
+            viewMode={viewMode}
+            setViewMode={handleViewModeChange}
+            searchTerm={searchTerm}
+            handleSearchChange={handleSearchChange}
+            activeFilters={activeFilters}
+            handleRemoveFilter={handleRemoveFilter}
+            refetchUserFiles={
+              isRecentFiles
+                ? refreshRecentFilesWithPinningQueue
+                : refreshUserFilesWithPinningQueue
+            }
+            addButtonRef={addButtonRef}
+            syncFolderPath={syncFolderPath}
+            privateFileCount={privateFileCount}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onStartSyncing={handleStartSyncing}
+            hasNoSyncPaths={hasNoSyncPaths}
+            onNavigateToSettings={handleNavigateToSettings}
+            isPrivateView={effectiveIsPrivateView}
+            selectedFileTypes={filterState.fileTypes}
+            selectedDate={filterState.date}
+            selectedFileSizes={filterState.fileSizes}
+            onFileTypesChange={handleFileTypesChange}
+            onDateChange={handleDateChange}
+            onFileSizesChange={handleFileSizesChange}
+          />
+
+          <FilesContent
+            isRecentFiles={isRecentFiles}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            isPrivateView={effectiveIsPrivateView}
+            filteredData={filteredData}
+            displayedData={paginatedData}
+            searchTerm={searchTerm}
+            activeFilters={activeFilters}
+            viewMode={viewMode}
+            shouldResetPagination={shouldResetPagination}
+            handlePaginationReset={handlePaginationReset}
+            error={error}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setCurrentPage={setCurrentPage}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onSyncPathConfigured={
+              isRecentFiles ? handleNavigateToSettings : handleStartSyncing
+            }
+          />
+        </div>
+      </FileSelectionProvider>
+    );
+  }
+
+  return content;
+};
+
+export function FilesContainer() {
+  // ...existing state and hooks...
+  
+  const {
+    setupAndInitialize,
+    checkConfig,
+    isInitializing,
+    mnemonicToBackup,
+    clearMnemonicBackup,
+  } = useHcfsSync();
+
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
+  const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
+
+  // ...existing code...
+
+  // Modify or add handleFolderSelected function
+  const handleFolderSelected = async (path: string) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await setPrivateSyncPath(path, polkadotAddress);
+      
+      // Check if HCFS config exists
+      const hasConfig = await checkConfig(polkadotAddress);
+      
+      if (!hasConfig) {
+        // Need to show setup dialog
+        setShowHcfsSetup(true);
+      } else {
+        // Config exists, initialize sync directly
+        const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+        const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
+        
+        if (result?.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to set sync folder:", err);
+    }
+  };
+
+  const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
+    if (!polkadotAddress) return;
+
+    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const initResult = await setupAndInitialize(
+      polkadotAddress,
+      result.serverUrl,
+      result.password,
+      mnemonic
+    );
+
+    setShowHcfsSetup(false);
+
+    if (initResult?.mnemonic) {
+      setShowMnemonicBackup(true);
+    }
+  };
+
+  const handleMnemonicBackupConfirm = () => {
+    setShowMnemonicBackup(false);
+    clearMnemonicBackup();
+  };
+
+  // Navigation to settings
+  const handleNavigateToSettings = useCallback(() => {
+    setActiveSettingsTab("File Settings");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
+  // Handle start syncing button click
+  const handleStartSyncing = useCallback(() => {
+    // If not on /files page, navigate to settings instead
+    if (isRecentFiles) {
+      handleNavigateToSettings();
+      return;
+    }
+
+    // If on /files page, show the sync folder selector
+    setShowPrivateStartSyncingSelector(true);
+  }, [isRecentFiles, handleNavigateToSettings]);
+
+  // Handle folder selection from Start Syncing flow
+  const handleStartSyncingFolderSelected = useCallback(
+    async (path: string) => {
+      try {
+        await handleFolderSelected(path);
+        // Hide the start syncing selector on success
+        setShowPrivateStartSyncingSelector(false);
+      } catch (error) {
+        // Keep the selector open on error so user can try again
+        console.error("Failed to set sync folder:", error);
+      }
+    },
+    [handleFolderSelected]
+  );
+
+  // Load data on mount and set up interval refresh
+  useEffect(() => {
+    if (isRecentFiles) {
+      return;
+    }
+
+    refreshUserFilesWithPinningQueue();
+  }, [refreshUserFilesWithPinningQueue, isRecentFiles]);
+
+  // Log error for debugging
+  useEffect(() => {
+    if (error) {
+      console.error("Error in useUserFiles:", error);
+    }
+  }, [error]);
+
+  // Get displayed file count
+  const displayedFileCount = useMemo(() => {
+    if (searchTerm || activeFilters.length > 0) {
+      return filteredData.length;
+    }
+    return allFilteredData.length;
+  }, [
+    filteredData.length,
+    allFilteredData.length,
+    searchTerm,
+    activeFilters.length,
+  ]);
+
+  // Handle file drop events
+  useEffect(() => {
+    const handleFileDrop = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.files && addButtonRef.current) {
+        console.log(
+          "Handling files via global event",
+          customEvent.detail.files
+        );
+        addButtonRef.current.openWithFiles(customEvent.detail.files);
+      }
+    };
+
+    window.addEventListener("hippius:file-drop", handleFileDrop);
+    return () => {
+      window.removeEventListener("hippius:file-drop", handleFileDrop);
+    };
+  }, []);
+
+  // Load user's view mode preference on component mount
+  useEffect(() => {
+    async function loadViewModePreference() {
+      const savedViewMode = await getViewModePreference();
+      setViewMode(savedViewMode);
+    }
+    loadViewModePreference();
+  }, []);
+
+  // Update view mode and save preference
+  const handleViewModeChange = useCallback((mode: "list" | "card") => {
+    setViewMode(mode);
+    saveViewModePreference(mode);
+  }, []);
+
+  // Reload sync paths when settings are updated
+  useEffect(() => {
+    if (syncPathRefreshTrigger > 0) {
+      // Reload private sync path
+      (async () => {
+        try {
+          setIsLoadingPrivatePath(true);
+          const privatefolderPath = await getPrivateSyncPath(
+            polkadotAddress || undefined
+          );
+          setSelectedPrivateFolderPath(privatefolderPath);
+        } catch {
+          console.error("Failed to reload private sync folder");
+        } finally {
+          setIsLoadingPrivatePath(false);
+        }
+      })();
+    }
+  }, [syncPathRefreshTrigger, polkadotAddress]);
+
+  // Computed values for current view (always private)
+  const currentSyncPath = selectedPrivateFolderPath;
+  const isCurrentSyncPathEmpty = currentSyncPath === "";
+  const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
+
+  // Recent files specific logic - check if private path is available
+  const hasNoSyncPaths = useMemo(() => {
+    if (!isRecentFiles) return false;
+    return (
+      selectedPrivateFolderPath === null ||
+      selectedPrivateFolderPath === undefined
+    );
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // For recent files, check if sync path is available (not empty)
+  const hasAnySyncPath = useMemo(() => {
+    if (!isRecentFiles) return false;
+    const hasPrivate =
+      selectedPrivateFolderPath !== null &&
+      selectedPrivateFolderPath !== undefined &&
+      selectedPrivateFolderPath !== "";
+    return hasPrivate;
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // Effective is private view (always true for private-only)
+  const effectiveIsPrivateView = useMemo(() => {
+    return true;
+  }, []);
+
+  // Determine what content to render
+  let content;
+
+  // Show loading while checking sync path or while loading sync paths
+  const shouldShowLoading = isCheckingSyncPath || isLoadingPrivatePath;
+
+  if (shouldShowLoading) {
+    content = <WaitAMoment />;
+  } else if (isSyncPathConfigured === false && !isRecentFiles) {
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleFolderSelected}
+        onSkip={handleSkipSyncFolder}
+      />
+    );
+  } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
+    // Show sync folder selector when Start Syncing is clicked
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleStartSyncingFolderSelected}
+        onSkip={handleSkipSyncFolder} // Allow skip option in Start Syncing flow
+      />
+    );
+  } else {
+    // Compute active sync folder path
+    let syncFolderPath = "";
+    let effectiveSyncPathEmpty = false;
+
+    if (isRecentFiles) {
+      // For recent files, use private path
+      const privatePath =
+        selectedPrivateFolderPath !== null &&
+          selectedPrivateFolderPath !== undefined &&
+          selectedPrivateFolderPath !== ""
+          ? selectedPrivateFolderPath
+          : null;
+
+      syncFolderPath = privatePath || "";
+      effectiveSyncPathEmpty = !hasAnySyncPath;
+    } else {
+      // For regular files view, use the private path
+      syncFolderPath = selectedPrivateFolderPath || "";
+      effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
+    }
+
+    // Get file count for view all button
+    const privateFileCount =
+      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
+        .length || 0;
+
+    content = (
+      <FileSelectionProvider>
+        <div className="w-full relative mt-6">
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && !isRecentFiles && (
+            <div className="mb-4">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
+
+          <FilesHeader
+            isRecentFiles={isRecentFiles}
+            isRefetching={isRefetching}
+            isFetching={isFetching}
+            formattedStorageSize={formattedStorageSize}
+            allFilteredDataLength={displayedFileCount}
+            viewMode={viewMode}
+            setViewMode={handleViewModeChange}
+            searchTerm={searchTerm}
+            handleSearchChange={handleSearchChange}
+            activeFilters={activeFilters}
+            handleRemoveFilter={handleRemoveFilter}
+            refetchUserFiles={
+              isRecentFiles
+                ? refreshRecentFilesWithPinningQueue
+                : refreshUserFilesWithPinningQueue
+            }
+            addButtonRef={addButtonRef}
+            syncFolderPath={syncFolderPath}
+            privateFileCount={privateFileCount}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onStartSyncing={handleStartSyncing}
+            hasNoSyncPaths={hasNoSyncPaths}
+            onNavigateToSettings={handleNavigateToSettings}
+            isPrivateView={effectiveIsPrivateView}
+            selectedFileTypes={filterState.fileTypes}
+            selectedDate={filterState.date}
+            selectedFileSizes={filterState.fileSizes}
+            onFileTypesChange={handleFileTypesChange}
+            onDateChange={handleDateChange}
+            onFileSizesChange={handleFileSizesChange}
+          />
+
+          <FilesContent
+            isRecentFiles={isRecentFiles}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            isPrivateView={effectiveIsPrivateView}
+            filteredData={filteredData}
+            displayedData={paginatedData}
+            searchTerm={searchTerm}
+            activeFilters={activeFilters}
+            viewMode={viewMode}
+            shouldResetPagination={shouldResetPagination}
+            handlePaginationReset={handlePaginationReset}
+            error={error}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setCurrentPage={setCurrentPage}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onSyncPathConfigured={
+              isRecentFiles ? handleNavigateToSettings : handleStartSyncing
+            }
+          />
+        </div>
+      </FileSelectionProvider>
+    );
+  }
+
+  return content;
+};
+
+export function FilesContainer() {
+  // ...existing state and hooks...
+  
+  const {
+    setupAndInitialize,
+    checkConfig,
+    isInitializing,
+    mnemonicToBackup,
+    clearMnemonicBackup,
+  } = useHcfsSync();
+
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
+  const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
+
+  // ...existing code...
+
+  // Modify or add handleFolderSelected function
+  const handleFolderSelected = async (path: string) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await setPrivateSyncPath(path, polkadotAddress);
+      
+      // Check if HCFS config exists
+      const hasConfig = await checkConfig(polkadotAddress);
+      
+      if (!hasConfig) {
+        // Need to show setup dialog
+        setShowHcfsSetup(true);
+      } else {
+        // Config exists, initialize sync directly
+        const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+        const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
+        
+        if (result?.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to set sync folder:", err);
+    }
+  };
+
+  const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
+    if (!polkadotAddress) return;
+
+    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const initResult = await setupAndInitialize(
+      polkadotAddress,
+      result.serverUrl,
+      result.password,
+      mnemonic
+    );
+
+    setShowHcfsSetup(false);
+
+    if (initResult?.mnemonic) {
+      setShowMnemonicBackup(true);
+    }
+  };
+
+  const handleMnemonicBackupConfirm = () => {
+    setShowMnemonicBackup(false);
+    clearMnemonicBackup();
+  };
+
+  // Navigation to settings
+  const handleNavigateToSettings = useCallback(() => {
+    setActiveSettingsTab("File Settings");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
+  // Handle start syncing button click
+  const handleStartSyncing = useCallback(() => {
+    // If not on /files page, navigate to settings instead
+    if (isRecentFiles) {
+      handleNavigateToSettings();
+      return;
+    }
+
+    // If on /files page, show the sync folder selector
+    setShowPrivateStartSyncingSelector(true);
+  }, [isRecentFiles, handleNavigateToSettings]);
+
+  // Handle folder selection from Start Syncing flow
+  const handleStartSyncingFolderSelected = useCallback(
+    async (path: string) => {
+      try {
+        await handleFolderSelected(path);
+        // Hide the start syncing selector on success
+        setShowPrivateStartSyncingSelector(false);
+      } catch (error) {
+        // Keep the selector open on error so user can try again
+        console.error("Failed to set sync folder:", error);
+      }
+    },
+    [handleFolderSelected]
+  );
+
+  // Load data on mount and set up interval refresh
+  useEffect(() => {
+    if (isRecentFiles) {
+      return;
+    }
+
+    refreshUserFilesWithPinningQueue();
+  }, [refreshUserFilesWithPinningQueue, isRecentFiles]);
+
+  // Log error for debugging
+  useEffect(() => {
+    if (error) {
+      console.error("Error in useUserFiles:", error);
+    }
+  }, [error]);
+
+  // Get displayed file count
+  const displayedFileCount = useMemo(() => {
+    if (searchTerm || activeFilters.length > 0) {
+      return filteredData.length;
+    }
+    return allFilteredData.length;
+  }, [
+    filteredData.length,
+    allFilteredData.length,
+    searchTerm,
+    activeFilters.length,
+  ]);
+
+  // Handle file drop events
+  useEffect(() => {
+    const handleFileDrop = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      if (customEvent.detail?.files && addButtonRef.current) {
+        console.log(
+          "Handling files via global event",
+          customEvent.detail.files
+        );
+        addButtonRef.current.openWithFiles(customEvent.detail.files);
+      }
+    };
+
+    window.addEventListener("hippius:file-drop", handleFileDrop);
+    return () => {
+      window.removeEventListener("hippius:file-drop", handleFileDrop);
+    };
+  }, []);
+
+  // Load user's view mode preference on component mount
+  useEffect(() => {
+    async function loadViewModePreference() {
+      const savedViewMode = await getViewModePreference();
+      setViewMode(savedViewMode);
+    }
+    loadViewModePreference();
+  }, []);
+
+  // Update view mode and save preference
+  const handleViewModeChange = useCallback((mode: "list" | "card") => {
+    setViewMode(mode);
+    saveViewModePreference(mode);
+  }, []);
+
+  // Reload sync paths when settings are updated
+  useEffect(() => {
+    if (syncPathRefreshTrigger > 0) {
+      // Reload private sync path
+      (async () => {
+        try {
+          setIsLoadingPrivatePath(true);
+          const privatefolderPath = await getPrivateSyncPath(
+            polkadotAddress || undefined
+          );
+          setSelectedPrivateFolderPath(privatefolderPath);
+        } catch {
+          console.error("Failed to reload private sync folder");
+        } finally {
+          setIsLoadingPrivatePath(false);
+        }
+      })();
+    }
+  }, [syncPathRefreshTrigger, polkadotAddress]);
+
+  // Computed values for current view (always private)
+  const currentSyncPath = selectedPrivateFolderPath;
+  const isCurrentSyncPathEmpty = currentSyncPath === "";
+  const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
+
+  // Recent files specific logic - check if private path is available
+  const hasNoSyncPaths = useMemo(() => {
+    if (!isRecentFiles) return false;
+    return (
+      selectedPrivateFolderPath === null ||
+      selectedPrivateFolderPath === undefined
+    );
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // For recent files, check if sync path is available (not empty)
+  const hasAnySyncPath = useMemo(() => {
+    if (!isRecentFiles) return false;
+    const hasPrivate =
+      selectedPrivateFolderPath !== null &&
+      selectedPrivateFolderPath !== undefined &&
+      selectedPrivateFolderPath !== "";
+    return hasPrivate;
+  }, [isRecentFiles, selectedPrivateFolderPath]);
+
+  // Effective is private view (always true for private-only)
+  const effectiveIsPrivateView = useMemo(() => {
+    return true;
+  }, []);
+
+  // Determine what content to render
+  let content;
+
+  // Show loading while checking sync path or while loading sync paths
+  const shouldShowLoading = isCheckingSyncPath || isLoadingPrivatePath;
+
+  if (shouldShowLoading) {
+    content = <WaitAMoment />;
+  } else if (isSyncPathConfigured === false && !isRecentFiles) {
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleFolderSelected}
+        onSkip={handleSkipSyncFolder}
+      />
+    );
+  } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
+    // Show sync folder selector when Start Syncing is clicked
+    content = (
+      <SyncFolderSelector
+        onFolderSelected={handleStartSyncingFolderSelected}
+        onSkip={handleSkipSyncFolder} // Allow skip option in Start Syncing flow
+      />
+    );
+  } else {
+    // Compute active sync folder path
+    let syncFolderPath = "";
+    let effectiveSyncPathEmpty = false;
+
+    if (isRecentFiles) {
+      // For recent files, use private path
+      const privatePath =
+        selectedPrivateFolderPath !== null &&
+          selectedPrivateFolderPath !== undefined &&
+          selectedPrivateFolderPath !== ""
+          ? selectedPrivateFolderPath
+          : null;
+
+      syncFolderPath = privatePath || "";
+      effectiveSyncPathEmpty = !hasAnySyncPath;
+    } else {
+      // For regular files view, use the private path
+      syncFolderPath = selectedPrivateFolderPath || "";
+      effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
+    }
+
+    // Get file count for view all button
+    const privateFileCount =
+      regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
+        .length || 0;
+
+    content = (
+      <FileSelectionProvider>
+        <div className="w-full relative mt-6">
+          {/* Sync Paused Alert */}
+          {IS_SYNC_PAUSED && !isRecentFiles && (
+            <div className="mb-4">
+              <SyncPausedAlert variant="inline" />
+            </div>
+          )}
+
+          <FilesHeader
+            isRecentFiles={isRecentFiles}
+            isRefetching={isRefetching}
+            isFetching={isFetching}
+            formattedStorageSize={formattedStorageSize}
+            allFilteredDataLength={displayedFileCount}
+            viewMode={viewMode}
+            setViewMode={handleViewModeChange}
+            searchTerm={searchTerm}
+            handleSearchChange={handleSearchChange}
+            activeFilters={activeFilters}
+            handleRemoveFilter={handleRemoveFilter}
+            refetchUserFiles={
+              isRecentFiles
+                ? refreshRecentFilesWithPinningQueue
+                : refreshUserFilesWithPinningQueue
+            }
+            addButtonRef={addButtonRef}
+            syncFolderPath={syncFolderPath}
+            privateFileCount={privateFileCount}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onStartSyncing={handleStartSyncing}
+            hasNoSyncPaths={hasNoSyncPaths}
+            onNavigateToSettings={handleNavigateToSettings}
+            isPrivateView={effectiveIsPrivateView}
+            selectedFileTypes={filterState.fileTypes}
+            selectedDate={filterState.date}
+            selectedFileSizes={filterState.fileSizes}
+            onFileTypesChange={handleFileTypesChange}
+            onDateChange={handleDateChange}
+            onFileSizesChange={handleFileSizesChange}
+          />
+
+          <FilesContent
+            isRecentFiles={isRecentFiles}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            isPrivateView={effectiveIsPrivateView}
+            filteredData={filteredData}
+            displayedData={paginatedData}
+            searchTerm={searchTerm}
+            activeFilters={activeFilters}
+            viewMode={viewMode}
+            shouldResetPagination={shouldResetPagination}
+            handlePaginationReset={handlePaginationReset}
+            error={error}
+            currentPage={currentPage}
+            totalPages={totalPages}
+            setCurrentPage={setCurrentPage}
+            isSyncPathEmpty={effectiveSyncPathEmpty}
+            onSyncPathConfigured={
+              isRecentFiles ? handleNavigateToSettings : handleStartSyncing
+            }
+          />
+        </div>
+      </FileSelectionProvider>
+    );
+  }
+
+  return content;
+};
+
+export function FilesContainer() {
+  // ...existing state and hooks...
+  
+  const {
+    setupAndInitialize,
+    checkConfig,
+    isInitializing,
+    mnemonicToBackup,
+    clearMnemonicBackup,
+  } = useHcfsSync();
+
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
+  const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
+
+  // ...existing code...
+
+  // Modify or add handleFolderSelected function
+  const handleFolderSelected = async (path: string) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await setPrivateSyncPath(path, polkadotAddress);
+      
+      // Check if HCFS config exists
+      const hasConfig = await checkConfig(polkadotAddress);
+      
+      if (!hasConfig) {
+        // Need to show setup dialog
+        setShowHcfsSetup(true);
+      } else {
+        // Config exists, initialize sync directly
+        const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+        const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
+        
+        if (result?.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to set sync folder:", err);
+    }
+  };
+
+  const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
+    if (!polkadotAddress) return;
+
+    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const initResult = await setupAndInitialize(
+      polkadotAddress,
+      result.serverUrl,
+      result.password,
+      mnemonic
+    );
+
+    setShowHcfsSetup(false);
+
+    if (initResult?.mnemonic) {
+      setShowMnemonicBackup(true);
+    }
+  };
+
+  const handleMnemonicBackupConfirm = () => {
+    setShowMnemonicBackup(false);
+    clearMnemonicBackup();
+  };
+
+  // Navigation to settings
+  const handleNavigateToSettings = useCallback(() => {
+    setActiveSettingsTab("File Settings");
+    setSettingsDialogOpen(true);
+  }, [setActiveSettingsTab, setSettingsDialogOpen]);
+
+  // Handle start syncing button click
+  const handleStartSyncing = useCallback(() => {
+    // If not on /files page, navigate to settings instead
+    if (isRecentFiles) {
+      handleNavigateToSettings

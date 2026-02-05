@@ -29,6 +29,7 @@ import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
+import { tryAutoInitSync } from "./hooks/useHcfsSync";
 
 interface WalletContextType {
   isAuthenticated: boolean;

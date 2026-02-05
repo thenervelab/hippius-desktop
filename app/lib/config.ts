@@ -109,3 +109,8 @@ export const SUPPORT_CONFIG = {
     list: "/tickets/",
   },
 } as const;
+
+export const HCFS_CONFIG = {
+  defaultServerUrl: "https://hcfs.hippius.com",
+  apiKey: "PLACEHOLDER_API_KEY",
+} as const;

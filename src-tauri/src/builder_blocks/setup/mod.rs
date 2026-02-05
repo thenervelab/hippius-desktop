@@ -2,7 +2,7 @@ use crate::{DB_POOL, constants::substrate::WSS_ENDPOINT};
 use dirs;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
-use tauri::{path::BaseDirectory, Builder, Manager, Wry};
+use tauri::{Builder, Manager, Wry, path::BaseDirectory};
 #[cfg(target_os = "linux")]
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -21,7 +21,10 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "nebula_binary_status",
             &[
                 ("id", "INTEGER PRIMARY KEY CHECK (id = 1)"),
-                ("is_nebula_binary_installed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                (
+                    "is_nebula_binary_installed",
+                    "BOOLEAN NOT NULL DEFAULT FALSE",
+                ),
                 ("last_updated", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
             ],
         ),
@@ -126,6 +129,19 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             scope_type TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // HCFS config table
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS hcfs_config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL UNIQUE,
+            server_url TEXT NOT NULL DEFAULT '',
+            drive_password TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )",
     )
     .execute(pool)
@@ -376,3 +392,4 @@ async fn verify_nebula_setup(app: tauri::AppHandle) -> Result<(), String> {
 
     Ok(())
 }
+

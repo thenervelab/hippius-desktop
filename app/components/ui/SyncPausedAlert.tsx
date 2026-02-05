@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 // Global constant to control sync pause state
 // Set to false to re-enable sync functionality
-export const IS_SYNC_PAUSED = true;
+export const IS_SYNC_PAUSED = false;
 
 export const SYNC_PAUSED_MESSAGE = {
     title: "Sync Engine Temporarily Paused",

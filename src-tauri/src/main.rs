@@ -122,6 +122,9 @@ fn main() {
             save_temp_auth_key_command,
             has_master_token_command,
             request_master_token_command,
+            // HCFS config commands
+            commands::syncing::save_hcfs_config,
+            commands::syncing::get_hcfs_config,
         ]);
 
     let builder = setup(builder);
