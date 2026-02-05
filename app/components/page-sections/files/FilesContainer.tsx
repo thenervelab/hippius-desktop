@@ -47,7 +47,7 @@ import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
-  const { polkadotAddress } = useWalletAuth();
+  const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
 
   // Regular files hook
   const {
@@ -383,14 +383,15 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           // Need to show setup dialog
           setShowHcfsSetup(true);
         } else {
-          // Config exists, just initialize (reads config from DB)
-          await tryInitializeSync(polkadotAddress, undefined);
+          // Config exists, just initialize with mnemonic from session
+          const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+          await tryInitializeSync(polkadotAddress, mnemonic ?? undefined);
         }
       } catch (err) {
         console.error("Failed to set sync folder:", err);
       }
     },
-    [polkadotAddress, checkConfig, tryInitializeSync]
+    [polkadotAddress, checkConfig, tryInitializeSync, authType, getMnemonic]
   );
 
   // Handle skipping sync folder setup
@@ -406,11 +407,12 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const handleHcfsSetupComplete = useCallback(async (result: { serverUrl: string; password: string }) => {
     if (!polkadotAddress) return;
 
+    const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
     const initResult = await setupAndInitialize(
       polkadotAddress,
       result.serverUrl,
       result.password,
-      undefined
+      mnemonic ?? undefined
     );
 
     setShowHcfsSetup(false);
@@ -418,7 +420,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     if (initResult?.mnemonic) {
       setShowMnemonicBackup(true);
     }
-  }, [polkadotAddress, setupAndInitialize]);
+  }, [polkadotAddress, setupAndInitialize, authType, getMnemonic]);
 
   const handleMnemonicBackupConfirm = useCallback(() => {
     setShowMnemonicBackup(false);

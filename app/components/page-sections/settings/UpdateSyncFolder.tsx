@@ -25,7 +25,7 @@ const UpdateSyncFolder: React.FC = () => {
     useState("");
   const [selectedPrivateFolderName, setSelectedPrivateFolderName] =
     useState("");
-  const { polkadotAddress } = useWalletAuth();
+  const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
   const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
   const [isStoppingSync, setIsStoppingSync] = useState(false);
@@ -33,6 +33,7 @@ const UpdateSyncFolder: React.FC = () => {
 
   const {
     setupAndInitialize,
+    tryInitializeSync,
     checkConfig,
     isInitializing,
     mnemonicToBackup,
@@ -65,16 +66,12 @@ const UpdateSyncFolder: React.FC = () => {
       // Check if HCFS config exists
       const hasConfig = await checkConfig(polkadotAddress);
 
-      if (!hasConfig) {
+      if (!hasConfig.has_password) {
         setShowHcfsSetup(true);
       } else {
-        // Re-initialize sync with new path
-        const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
-        const result = await setupAndInitialize(polkadotAddress, "", "", mnemonic);
-
-        if (result?.mnemonic) {
-          setShowMnemonicBackup(true);
-        }
+        // Config exists, just initialize with mnemonic from session
+        const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+        await tryInitializeSync(polkadotAddress, mnemonic ?? undefined);
       }
     } catch (err) {
       console.error("Failed to update sync path:", err);
@@ -84,12 +81,12 @@ const UpdateSyncFolder: React.FC = () => {
   const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
     if (!polkadotAddress) return;
 
-    const mnemonic = authType === "mnemonic" ? session?.mnemonic : undefined;
+    const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
     const initResult = await setupAndInitialize(
       polkadotAddress,
       result.serverUrl,
       result.password,
-      mnemonic
+      mnemonic ?? undefined
     );
 
     setShowHcfsSetup(false);

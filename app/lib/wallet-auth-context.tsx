@@ -29,6 +29,7 @@ import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
+import { tryAutoInitSync } from "./hooks/useHcfsSync";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -40,6 +41,7 @@ interface WalletContextType {
   } | null;
   authType: "mnemonic" | "oauth" | null;
   oauthSession: import("@/app/lib/types/oAuth").OAuthSession | null;
+  getMnemonic: () => Promise<string | null>;
   login: (mnemonic: string) => Promise<void>;
   setOAuthSession: (
     session: import("@/app/lib/types/oAuth").OAuthSession
@@ -125,6 +127,15 @@ export function WalletAuthProvider({
     },
     []
   );
+
+  const getMnemonic = useCallback(async (): Promise<string | null> => {
+    try {
+      const session = await getSession();
+      return session?.mnemonic || null;
+    } catch {
+      return null;
+    }
+  }, []);
 
   const logout = useCallback(
     async (redirectPath?: string) => {
@@ -248,6 +259,9 @@ export function WalletAuthProvider({
               ) {
                 try {
                   syncInitialized.current = true;
+                  tryAutoInitSync(oauthSessionData.substrateAddress).catch((err) =>
+                    console.error("[WalletAuth] Failed to start sync for OAuth restore:", err)
+                  );
                 } catch (err) {
                   console.error("[WalletAuth] Failed to start sync for OAuth restore:", err);
                 }
@@ -268,9 +282,15 @@ export function WalletAuthProvider({
 
                   setWalletManager({ polkadotPair: pair });
 
-                  // Initialize sync
+                  // Initialize sync with the mnemonic
                   if (!syncInitialized.current) {
                     syncInitialized.current = true;
+                    tryAutoInitSync(
+                      oauthSessionData.substrateAddress,
+                      mnemonicSession.mnemonic
+                    ).catch((err) =>
+                      console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err)
+                    );
                   }
                   console.log(
                     "[WalletAuth] ✅ Mnemonic session restored with sync"
@@ -432,6 +452,9 @@ export function WalletAuthProvider({
 
       if (!syncInitialized.current) {
         syncInitialized.current = true;
+        tryAutoInitSync(pair.address, inputMnemonic).catch((err) =>
+          console.error("[WalletAuth] Failed to start sync from setSession:", err)
+        );
       }
 
       return true;
@@ -514,6 +537,9 @@ export function WalletAuthProvider({
       // Initialize sync with the mnemonic
       if (!syncInitialized.current) {
         syncInitialized.current = true;
+        tryAutoInitSync(polkadotAddr, inputMnemonic).catch((err) =>
+          console.error("[WalletAuth] Failed to start sync from login:", err)
+        );
       }
 
       // Ensure temp auth key is stored for S3 access if no master token yet
@@ -556,6 +582,9 @@ export function WalletAuthProvider({
     // Kick off sync for OAuth login if not already started
     if (session.substrateAddress && !syncInitialized.current) {
       syncInitialized.current = true;
+      tryAutoInitSync(session.substrateAddress).catch((err) =>
+        console.error("[WalletAuth] Failed to start sync from OAuth login:", err)
+      );
     }
   };
 
@@ -577,6 +606,7 @@ export function WalletAuthProvider({
         walletManager,
         authType,
         oauthSession,
+        getMnemonic,
         login,
         setOAuthSession,
         setSession,

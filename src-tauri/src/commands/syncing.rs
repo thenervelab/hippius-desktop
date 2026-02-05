@@ -134,7 +134,7 @@ pub async fn initialize_sync(
     let config = get_hcfs_config(account_id.clone()).await?;
 
     let server_url = if config.server_url.is_empty() {
-        "https://hcfs.hippius.com".to_string()
+        "https://57.129.36.43:9999".to_string()
     } else {
         config.server_url
     };
@@ -174,9 +174,9 @@ pub async fn initialize_sync(
     // 6. Set HCFS client config (server URL + auth)
     manager.set_config(HcfsClientConfig {
         base_url: server_url,
-        api_key: String::new(),
+        api_key: "Arion".to_string(),
         bearer_token: user_id.clone(),
-        accept_invalid_certs: false,
+        accept_invalid_certs: true,
     })?;
 
     // 7. Setup progress event handlers

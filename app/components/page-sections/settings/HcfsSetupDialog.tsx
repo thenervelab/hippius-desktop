@@ -88,7 +88,7 @@ export function HcfsSetupDialog({
               type="url"
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}
-              placeholder="https://hcfs.hippius.com"
+              placeholder="https://57.129.36.43:9999"
               disabled={loading}
             />
             <p className="text-xs text-grey-400">
