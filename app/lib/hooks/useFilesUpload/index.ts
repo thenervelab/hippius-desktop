@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
 import { triggerUnpinnedFilesRefetchAtom } from "../../global-atoms/unpinAtoms";
+import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 
 export type UploadFilesHandlers = {
   onSuccess?: () => void;
@@ -103,14 +104,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       const cids: string[] = [];
 
-      console.log("Starting upload for files:", filePaths);
-
-      // Get sync path for adding files
-      const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
-        "get_sync_path",
-        { params: { isPublic: !isPrivateView, accountId: polkadotAddress } }
-      );
-      const syncPath = syncPathResult.path;
+      const syncPath = await getPrivateSyncPath(polkadotAddress);
       if (!syncPath) {
         throw new Error("Sync path not configured. Please set a sync folder first.");
       }
@@ -122,7 +116,6 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
           ? formatDisplayName(fileNames[i])
           : `file ${i + 1}`;
 
-        console.log("Adding file to sync folder:", filePath);
         const name = await invoke<string>("add_file", {
           syncPath,
           filePath,
@@ -147,6 +140,15 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       // finish up
       setRequestState("idle");
       idleTimeout.current = setTimeout(async () => {
+        // Trigger sync first so newly added files start uploading
+        await invoke("trigger_sync_now").catch((err) => {
+          console.error("[Upload] trigger_sync_now failed:", err);
+          toast.warning("File added but sync failed to start. It will retry automatically.", {
+            duration: 5000,
+          });
+        });
+
+        // Refetch after sync trigger so the file list reflects current state
         refetchUserFiles();
         setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
         onSuccess?.();
@@ -157,12 +159,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
             `${filePaths.length} files successfully uploaded!`
             : msgs?.successSingle ?? `${firstFileName} successfully uploaded!`;
 
-        // Convert loading -> success on the same toast id (auto-closes)
         toast.success(successText, { id: localToastId });
-        console.log("Upload successful", filePaths);
-
-        // Trigger sync to upload newly added files
-        await invoke("trigger_sync_now").catch(() => {});
       }, 500);
     } catch (err) {
       setRequestState("idle");

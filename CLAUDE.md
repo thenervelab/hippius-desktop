@@ -4,90 +4,86 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Hippius Desktop is a Tauri 2.0 desktop application combining a Next.js 15 frontend with a Rust backend. It provides decentralized file sync with S3, IPFS, and Polkadot blockchain integration.
+Hippius Desktop is a Tauri 2.0 desktop application combining a Next.js 15 frontend with a Rust backend. It provides decentralized file sync (via hcfs-client), IPFS monitoring, Polkadot blockchain integration, VPN management (Nebula), and VM provisioning.
 
 ## Development Commands
 
 ```bash
-# Install dependencies
-pnpm install
-
-# Frontend-only development (hot reload at localhost:3000)
-pnpm dev
-
-# Full desktop development (builds frontend, opens Tauri window)
-pnpm tauri:dev
-
-# Production builds
-pnpm build          # Next.js static export to ./out
-pnpm tauri:build    # Platform-specific desktop installers
-
-# Linting
-pnpm lint
+pnpm install                  # Install dependencies
+pnpm dev                      # Frontend dev server (localhost:3000)
+pnpm tauri:dev                # Full desktop dev (builds frontend + opens Tauri window)
+pnpm build                    # Next.js static export to ./out
+pnpm tauri:build              # Platform-specific desktop installers
+pnpm lint                     # Lint frontend
+pnpm test                     # Frontend tests (Vitest)
 ```
 
-## Testing
+### Rust Backend
 
-### Rust Integration Tests
 ```bash
 cd src-tauri
-
-# Run a specific test file
-cargo test --test hippius_upload_only_s3_race
-
-# Run all tests
-cargo test
+cargo build                   # Build backend
+cargo test                    # Run all Rust tests
+cargo test --test <name>      # Run specific test file
+cargo clippy -- -D warnings   # Lint Rust code
 ```
 
-Key test files in `src-tauri/tests/`:
-- `hippius_policy_harness.rs` - Base testing framework
-- `hippius_upload_only.rs` - Conflict detection tests
-- `hippius_upload_only_s3_race.rs` - S3 race condition tests
-- `hippius_mirror_local_deletes.rs` - Mirror delete policy tests
-- `hippius_restore_from_remote.rs` - Restore mode tests
-
-### Frontend Tests
-```bash
-pnpm test   # Vitest
-```
+**Note**: `SQLX_OFFLINE=true` is required for building (uses offline SQLx mode).
 
 ## Architecture
 
 ### Frontend (app/)
-- **Framework**: Next.js 15 with App Router, React 19
+
+- **Framework**: Next.js 15 with App Router, React 19, static export (`output: "export"`)
 - **State**: Jotai atoms (`app/lib/global-atoms/`)
-- **Auth Context**: `app/lib/wallet-auth-context.tsx` - manages wallet/mnemonic auth
-- **API Hooks**: `app/lib/hooks/api/` - 30+ TanStack Query hooks
+- **Data Fetching**: TanStack Query hooks (`app/lib/hooks/api/` — 30+ hooks)
+- **Auth**: `app/lib/wallet-auth-context.tsx` — mnemonic-based challenge auth + OAuth (Google/GitHub/Apple)
 - **UI**: Radix UI components, TailwindCSS
-- **Config**: `app/lib/config.ts` - API endpoints and constants
+- **API Config**: `app/lib/config.ts` — all API endpoints and constants
+
+**Key routes** (`app/(pages)/`): dashboard, files, wallet, billing, stake, bridge, referrals, tokens, vm (create/instance-details), support, notifications.
 
 ### Backend (src-tauri/)
-- **Entry Point**: `src/main.rs` - Tauri command registration
-- **Sync Engine**: `src/sync_engine.rs` (89KB) - core sync logic with conflict detection
-- **Commands**: `src/commands/` - Tauri IPC handlers
-  - `ipfs_commands.rs` - IPFS operations
-  - `accounts.rs` - encryption keys, account management
-  - `syncing.rs` - sync control
-  - `substrate_tx.rs` - blockchain transactions
-- **S3 Client**: `src/utils/s3_client.rs` - AWS SDK integration
-- **Database**: SQLite via SQLx (schema in `src/builder_blocks/setup/`)
+
+- **Entry Point**: `src/main.rs` — all Tauri commands registered via `tauri::generate_handler![]`
+- **HCFS Drive**: `src/hcfs_drive.rs` — wrapper around hcfs-client `Drive`, manages global `HCFS_DRIVE` instance, file watcher (notify crate), and sync loop (30s heartbeat, 5s debounce)
+- **Sync State**: `src/sync_shared.rs` — shared cancellation token and sync status
+- **Blockchain Tracking**: `src/user_profile_sync.rs` — tracks files on-chain via `user_profiles`/`file_paths` DB tables
+- **Commands**: `src/commands/` — Tauri IPC handlers:
+  - `syncing.rs` — initialize/stop/trigger sync, save/get HCFS config
+  - `file_commands.rs` — add/remove/list/export files
+  - `accounts.rs` — account management, import/export, reset
+  - `substrate_tx.rs` — blockchain transactions (balance transfers, sync path)
+  - `objectstore_auth.rs` — S3 auth token management
+  - `indexer.rs`, `vpn_enabled.rs`, `types.rs`
 
 ### Frontend-Backend Communication
+
 Frontend calls Rust via Tauri's `invoke()`:
 ```typescript
 import { invoke } from "@tauri-apps/api/core";
 const result = await invoke("command_name", { param: value });
 ```
-Commands are registered in `main.rs` using `tauri::generate_handler![]`.
 
-### Sync Architecture
-Four deletion policies defined in sync engine:
-- `UploadOnly` - never delete remote files
-- `MirrorLocalDeletes` - delete remote when local deleted
-- `RestoreFromRemote` - restore deleted local files from remote
-- `LocalOnlyDeletes` - delete local files not in remote
+### HCFS Sync Architecture
 
-Conflict detection uses CID (Content ID) and ETag comparison. See `CONFLICT_DETECTION_LOGIC.md` for detailed documentation.
+The old S3/CAS/manifest sync engine has been **fully replaced** by hcfs-client. Key points:
+
+- **hcfs-client** handles all sync, encryption (BIP-39 mnemonic), and file operations
+- Single global `HCFS_DRIVE` instance (`Arc<Mutex<Option<HcfsDriveManager>>>`)
+- File watcher triggers sync on local changes (5s debounce)
+- Heartbeat sync every 30 seconds
+- All files encrypted — no public/private separation at HCFS level
+- Events emitted: `hcfs_sync_started`, `hcfs_sync_completed`, `hcfs_sync_error`, `hcfs_upload_progress`, `hcfs_download_progress`, `hcfs_encrypt_progress`, `hcfs_decrypt_progress`, `hcfs_scan_progress`, `hcfs_fetch_progress`
+- Frontend listens via `useSyncEvents` hook
+
+### VPN/Nebula Integration
+
+Managed entirely through Tauri commands: download, install, verify, start, stop Nebula. Status tracked in SQLite (`vpn_status`, `nebula_binary_status`, `nebula_certificate` tables).
+
+### Database (SQLite via SQLx)
+
+Schema defined in `src/builder_blocks/setup/`. Key tables: `hcfs_config`, `sync_paths`, `objectstore_auth`, `vpn_status`, `nebula_*`, `sub_accounts`, `wss_endpoint`, `security_scoped_bookmarks` (macOS).
 
 ## Key Files
 
@@ -95,24 +91,36 @@ Conflict detection uses CID (Content ID) and ETag comparison. See `CONFLICT_DETE
 |---------|----------|
 | Tauri config | `src-tauri/tauri.conf.json` |
 | Next.js config | `next.config.ts` |
-| API endpoints | `app/lib/config.ts` |
-| Auth state | `app/lib/wallet-auth-context.tsx` |
-| Sync engine | `src-tauri/src/sync_engine.rs` |
-| Test harness | `src-tauri/tests/hippius_policy_harness.rs` |
+| API endpoints & constants | `app/lib/config.ts` |
+| Auth state & session mgmt | `app/lib/wallet-auth-context.tsx` |
+| HCFS Drive wrapper | `src-tauri/src/hcfs_drive.rs` |
+| Command registration | `src-tauri/src/main.rs` |
+| DB schema setup | `src-tauri/src/builder_blocks/setup/` |
+| Sync event listener | `app/lib/hooks/useSyncEvents.ts` |
 
-## Path Aliases
+## Path Aliases (tsconfig.json)
 
-```typescript
-@/* → ./*
+```
+@/*            → ./*
 @/components/* → ./app/components/*
-@/lib/* → ./app/lib/*
-@/services/* → ./app/lib/services/*
-@/data/* → ./app/data/*
+@/lib/*        → ./app/lib/*
+@/services/*   → ./app/lib/services/*
+@/data/*       → ./app/data/*
+@/config/*     → ./app/config/*
 ```
 
 ## Build Environment
 
-- **Node**: v18+
+- **Node**: v18+ (use `nvm use 18` if needed)
 - **pnpm**: v9.12.3+
 - **Rust**: Edition 2024
-- **SQLx**: Offline mode (SQLX_OFFLINE=true)
+- **hcfs-client**: Git dependency from `ssh://git@github.com/thenervelab/hcfs.git` (pinned rev)
+- **SQLx**: Offline mode (`SQLX_OFFLINE=true`)
+- `src-tauri/.env` must exist (bundled as Tauri resource, loaded via dotenvy)
+
+## Gotchas
+
+- `src-tauri/src/lib.rs` is a vestigial Tauri template file — actual app entry is `main.rs`
+- `user_profile_sync.rs` uses `user_profiles`/`file_paths` DB tables for blockchain file tracking — separate from HCFS sync
+- Old sync engine test files (`src-tauri/tests/hippius_*.rs`) were removed during hcfs-client migration
+- The deep-link scheme is `hippiusapp://`

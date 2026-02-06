@@ -101,7 +101,6 @@ export function useFileViewShared(
   }
 
   const deleteFile = async () => {
-    console.log("we are here in delete File");
     await deleteFileMutation();
   };
 

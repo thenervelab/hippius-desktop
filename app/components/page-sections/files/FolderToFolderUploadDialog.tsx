@@ -30,6 +30,7 @@ export default function FolderToFolderUploadDialog({
     onClose,
     onSuccess,
     onRefresh,
+    isPrivateFolder,
     parentFolderName,
 }: Props) {
     const { polkadotAddress } = useWalletAuth();

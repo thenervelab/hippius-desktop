@@ -34,25 +34,31 @@ export function useSyncEvents() {
   useEffect(() => {
     const unsubs: (() => void)[] = [];
 
-    listen("hcfs_sync_started", () => setIsSyncing(true)).then((u) =>
-      unsubs.push(u)
-    );
+    listen("hcfs_sync_started", () => {
+      console.log("[SyncEvents] Sync started");
+      setIsSyncing(true);
+      setLastError(null);
+    }).then((u) => unsubs.push(u));
     listen<SyncOutcome>("hcfs_sync_completed", (e) => {
+      console.log("[SyncEvents] Sync completed:", e.payload);
       setIsSyncing(false);
       setLastOutcome(e.payload);
       setUploadProgress(null);
       setDownloadProgress(null);
     }).then((u) => unsubs.push(u));
     listen<SyncError>("hcfs_sync_error", (e) => {
+      console.error("[SyncEvents] Sync error:", e.payload);
       setIsSyncing(false);
       setLastError(e.payload);
     }).then((u) => unsubs.push(u));
-    listen<ProgressPayload>("hcfs_upload_progress", (e) =>
-      setUploadProgress(e.payload)
-    ).then((u) => unsubs.push(u));
-    listen<ProgressPayload>("hcfs_download_progress", (e) =>
-      setDownloadProgress(e.payload)
-    ).then((u) => unsubs.push(u));
+    listen<ProgressPayload>("hcfs_upload_progress", (e) => {
+      console.debug("[SyncEvents] Upload progress:", e.payload);
+      setUploadProgress(e.payload);
+    }).then((u) => unsubs.push(u));
+    listen<ProgressPayload>("hcfs_download_progress", (e) => {
+      console.debug("[SyncEvents] Download progress:", e.payload);
+      setDownloadProgress(e.payload);
+    }).then((u) => unsubs.push(u));
 
     return () => unsubs.forEach((u) => u());
   }, []);

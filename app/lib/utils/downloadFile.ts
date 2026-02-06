@@ -1,8 +1,8 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
-import { open } from "@tauri-apps/plugin-dialog";
+import { save, open } from "@tauri-apps/plugin-dialog";
+import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 
 const getFileSavePath = async (name: string) => {
   const fileExtension = name.split(".").pop() || "";
@@ -37,12 +37,7 @@ const downloadFileExport = async (
   const toastId = toast.loading(`Preparing download: ${name}`);
 
   try {
-    // Get sync path
-    const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
-      "get_sync_path",
-      { params: { isPublic: false, accountId: polkadotAddress } }
-    );
-    const syncPath = syncPathResult.path;
+    const syncPath = await getPrivateSyncPath(polkadotAddress);
 
     const filePath = await getFileSavePath(name);
     if (!filePath) {
@@ -88,16 +83,10 @@ const downloadFolderExport = async (
       return { success: false, error: "Download cancelled" };
     }
 
-    // Get sync path
-    const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
-      "get_sync_path",
-      { params: { isPublic: false, accountId: polkadotAddress } }
-    );
-    const syncPath = syncPathResult.path;
+    const syncPath = await getPrivateSyncPath(polkadotAddress);
 
     toast.loading(`Exporting folder: ${name}`, { id: toastId });
 
-    // Export the folder by listing and copying contents
     await invoke("export_file", {
       syncPath,
       fileName: file.actualFileName || name,

@@ -319,33 +319,18 @@ const FilesTable: FC<FilesTableProps> = memo(
     // Handle file deletion with captured files from confirmation dialog
     const handleDeleteSelectedFiles = useCallback(
       (capturedFiles: FormattedUserFile[]) => {
-        console.log(
-          "FilesTable - handleDeleteSelectedFiles called with captured files:",
-          capturedFiles.map((f) => ({
-            name: f.name,
-            actualFileName: f.actualFileName,
-            isFolder: f.isFolder,
-          }))
-        );
+        if (capturedFiles.length === 0) return;
 
-        if (capturedFiles.length === 0) {
-          console.log("No files to delete, aborting");
-          return;
-        }
-
-        // Set the files to delete and trigger the delete operation
         setFilesToDelete(capturedFiles);
 
         // Use setTimeout to ensure the delete hook reinitializes with new files
         setTimeout(() => {
           deleteFiles(undefined, {
             onSuccess: () => {
-              console.log("Delete successful, clearing filesToDelete state");
               setFilesToDelete([]);
               setCurrentPage(Math.max(1, totalPages));
             },
-            onError: (error) => {
-              console.error("Delete failed:", error);
+            onError: () => {
               setFilesToDelete([]);
             },
           });
@@ -850,7 +835,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       // Check if we have a significant change in the number of files
       // which indicates a view switch (private/public) or major filter change
       if (prevFileCount > 0 && Math.abs(allFiles.length - prevFileCount) > 5) {
-        console.log('Files changed significantly, resetting sorting');
         setSorting([]);
       }
 
@@ -859,7 +843,6 @@ const FilesTable: FC<FilesTableProps> = memo(
     }, [allFiles.length, prevFileCount]);
 
     const handleSortingChange = useCallback((updaterOrValue: SortingState | ((old: SortingState) => SortingState)) => {
-      console.log('Sorting changed:', updaterOrValue);
       setSorting(updaterOrValue);
     }, []);
 

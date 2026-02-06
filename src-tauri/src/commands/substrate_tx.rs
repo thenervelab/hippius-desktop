@@ -50,6 +50,7 @@ impl From<FileInputWrapper> for FileInput {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetSyncPathParams {
     pub path: String,
     pub is_public: bool,

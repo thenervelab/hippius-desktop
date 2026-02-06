@@ -45,6 +45,7 @@ import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
+import { invoke } from "@tauri-apps/api/core";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
@@ -111,6 +112,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     triggerUnpinnedFilesRefetchAtom
   );
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
+  const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
 
@@ -130,7 +132,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
     if (isRecentFiles) {
-      console.log("recentFilesData", recentFilesData);
       return recentFilesData || [];
     } else if (regularFilesData?.files) {
       return regularFilesData.files.filter((file) => !file.deleted);
@@ -374,7 +375,11 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       if (!polkadotAddress) return;
 
       try {
+        // Stop any existing sync loop before changing paths
+        await invoke("stop_sync");
+
         await setPrivateSyncPath(path, polkadotAddress);
+        setSelectedPrivateFolderPath(path);
 
         // Check if HCFS config exists
         const hasConfig = await checkConfig(polkadotAddress);
@@ -387,11 +392,14 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
           await tryInitializeSync(polkadotAddress, mnemonic ?? undefined);
         }
+
+        // Signal other components (e.g. settings, dashboard) about the path change
+        triggerSyncPathRefresh((prev) => prev + 1);
       } catch (err) {
         console.error("Failed to set sync folder:", err);
       }
     },
-    [polkadotAddress, checkConfig, tryInitializeSync, authType, getMnemonic]
+    [polkadotAddress, checkConfig, tryInitializeSync, authType, getMnemonic, triggerSyncPathRefresh]
   );
 
   // Handle skipping sync folder setup
@@ -534,6 +542,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             polkadotAddress || undefined
           );
           setSelectedPrivateFolderPath(privatefolderPath);
+          // Refetch file list so it reads from the new sync folder
+          refetchUserFiles();
         } catch {
           console.error("Failed to reload private sync folder");
         } finally {
@@ -541,7 +551,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         }
       })();
     }
-  }, [syncPathRefreshTrigger, polkadotAddress]);
+  }, [syncPathRefreshTrigger, polkadotAddress, refetchUserFiles]);
 
   // Computed values for current view (always private)
   const currentSyncPath = selectedPrivateFolderPath;

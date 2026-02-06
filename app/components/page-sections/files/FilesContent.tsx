@@ -378,7 +378,7 @@ const FilesContent: FC<FilesContentProps> = ({
             deleteFile()
               .then(() => {
                 toast.success(
-                  `${truncatedName} removed locally. App will auto sync with S3 in a moment.`,
+                  `${truncatedName} deleted successfully.`,
                   { id: toastId }
                 );
                 setFileToDelete(null);

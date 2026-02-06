@@ -1,10 +1,10 @@
-use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, HCFS_DRIVE};
-use crate::sync_shared::{clear_cancel, request_cancel, HCFS_SYNC_STATE};
+use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, HCFS_DRIVE, SYNC_LOOP_HANDLE};
+use crate::sync_shared::{clear_cancel, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
 use crate::utils::account_key::account_key;
 use crate::DB_POOL;
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
@@ -46,6 +46,29 @@ pub async fn save_hcfs_config(
     .execute(db)
     .await
     .map_err(|e| format!("Failed to save HCFS config: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_hcfs_server_url(account_id: String, server_url: String) -> Result<(), String> {
+    let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let owner = account_key(&account_id);
+
+    let result = sqlx::query(
+        r#"
+        UPDATE hcfs_config SET server_url = ?, updated_at = CURRENT_TIMESTAMP WHERE owner = ?
+        "#,
+    )
+    .bind(&server_url)
+    .bind(&owner)
+    .execute(db)
+    .await
+    .map_err(|e| format!("Failed to update HCFS server URL: {}", e))?;
+
+    if result.rows_affected() == 0 {
+        return Err("HCFS config not found. Please set up sync first.".to_string());
+    }
 
     Ok(())
 }
@@ -156,11 +179,10 @@ pub async fn initialize_sync(
     } else {
         println!("[Setup] Drive not initialized, creating...");
         let mnemonic_str = manager.init(&drive_password, existing_mnemonic.as_deref())?;
-        let uid = manager
-            .user_id()
-            .map(|s| s.to_string())
-            .ok_or_else(|| "Failed to get user_id after init".to_string())?;
-        println!("[Setup] Drive initialized, user_id: {}", uid);
+        // After init(), the drive is not yet unlocked — user_id is only derived during unlock().
+        // We must unlock to populate signing_key, encryption_key, and user_id.
+        let uid = manager.unlock(&drive_password)?;
+        println!("[Setup] Drive initialized and unlocked, user_id: {}", uid);
 
         // Only return mnemonic for backup if we generated a new one (no existing mnemonic provided)
         let mnemonic_to_return = if existing_mnemonic.is_none() {
@@ -209,6 +231,15 @@ pub async fn initialize_sync(
 #[tauri::command]
 pub async fn stop_sync() -> Result<(), String> {
     request_cancel();
+
+    // Abort the background sync loop task to prevent spurious error events
+    {
+        let mut handle_guard = SYNC_LOOP_HANDLE.lock().await;
+        if let Some(prev) = handle_guard.take() {
+            prev.abort();
+        }
+    }
+
     let mut guard = HCFS_DRIVE.lock().await;
     *guard = None;
     HCFS_SYNC_STATE.lock().unwrap().reset();
@@ -235,13 +266,49 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
                 "hcfs_upload_progress",
                 serde_json::json!({"bytes": b, "total": t, "path": p}),
             );
+            // Record individual file activity when upload completes
+            if b == t && t > 0 {
+                if let Some(path_str) = p {
+                    let file_name = Path::new(path_str)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path_str.to_string());
+                    println!("[Sync] Upload completed: {}", file_name);
+                    let mut s = HCFS_SYNC_STATE.lock().unwrap();
+                    s.add_activity(SyncActivityItem {
+                        file_name,
+                        action: "uploaded".to_string(),
+                        timestamp: chrono::Utc::now().timestamp(),
+                        size_bytes: t,
+                    });
+                }
+            }
         })),
         on_download_progress: Some(Arc::new(move |b, t, p| {
             let _ = a2.emit(
                 "hcfs_download_progress",
                 serde_json::json!({"bytes": b, "total": t, "path": p}),
             );
+            // Record individual file activity when download completes
+            if b == t && t > 0 {
+                if let Some(path_str) = p {
+                    let file_name = Path::new(path_str)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path_str.to_string());
+                    println!("[Sync] Download completed: {}", file_name);
+                    let mut s = HCFS_SYNC_STATE.lock().unwrap();
+                    s.add_activity(SyncActivityItem {
+                        file_name,
+                        action: "downloaded".to_string(),
+                        timestamp: chrono::Utc::now().timestamp(),
+                        size_bytes: t,
+                    });
+                }
+            }
         })),
+        // Note: encrypt/decrypt/scan/fetch progress events are emitted but not yet
+        // consumed by the frontend. They're available for future UI enhancements.
         on_encrypt_progress: Some(Arc::new(move |b, t, p| {
             let _ = a3.emit(
                 "hcfs_encrypt_progress",

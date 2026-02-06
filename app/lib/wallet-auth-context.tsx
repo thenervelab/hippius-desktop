@@ -141,7 +141,7 @@ export function WalletAuthProvider({
     async (redirectPath?: string) => {
       try {
         console.log("[WalletAuth] Starting sync cleanup...");
-        invoke("stop_sync").catch(() => {});
+        await invoke("stop_sync").catch(() => {});
         console.log("[WalletAuth] Sync cleanup completed");
 
         await clearSession();
@@ -452,6 +452,8 @@ export function WalletAuthProvider({
 
       if (!syncInitialized.current) {
         syncInitialized.current = true;
+        // Fire-and-forget: sync init runs in background so login isn't blocked.
+        // list_sync_folder tolerates missing directories during the brief race window.
         tryAutoInitSync(pair.address, inputMnemonic).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from setSession:", err)
         );

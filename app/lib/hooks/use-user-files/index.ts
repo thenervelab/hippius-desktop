@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
-import { hexToCid } from "@/lib/utils/hexToCid";
+import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 
 export type FileDetail = {
   filename: string;
@@ -32,26 +32,12 @@ export type FormattedUserFile = {
   mainReqHash: string;
 };
 
-export type UserProfileFile = {
-  fileName: string;
-  fileSizeInBytes: number;
-  lastChargedAt: number;
-  cid?: string;
-  createdAt: number;
-  fileHash: string;
-  selectedValidator?: string;
-  isAssigned: boolean;
-  source: string;
-  minerIds: string;
-  isFolder: boolean;
-  type: string;
-  mainReqHash: string;
+type FileEntry = {
+  name: string;
+  is_folder: boolean;
+  size: number;
+  modified: number | null;
 };
-
-export interface FileSizeBreakdown {
-  publicSize: number;
-  privateSize: number;
-}
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
 
@@ -82,10 +68,10 @@ export const useUserFiles = () => {
 
   return useQuery({
     queryKey,
-    refetchInterval: 1080000,
+    refetchInterval: 10000,
     refetchIntervalInBackground: true,
     refetchOnWindowFocus: false,
-    staleTime: 30000,
+    staleTime: 5000,
     notifyOnChangeProps: "all",
     queryFn: async () => {
       if (!polkadotAddress) {
@@ -93,93 +79,47 @@ export const useUserFiles = () => {
       }
 
       try {
-        let publicStorageSize = BigInt(0);
-        let privateStorageSize = BigInt(0);
+        const syncPath = await getPrivateSyncPath(polkadotAddress);
 
-        try {
-          const sizeBreakdown = await invoke<FileSizeBreakdown>(
-            "get_user_total_file_size",
-            {
-              owner: polkadotAddress,
-            }
-          );
+        const entries = await invoke<FileEntry[]>("list_sync_folder", {
+          syncPath,
+          subfolder: null,
+        });
 
-          publicStorageSize = BigInt(sizeBreakdown.publicSize);
-          privateStorageSize = BigInt(sizeBreakdown.privateSize);
-        } catch (error) {
-          console.error(
-            "Error fetching storage size breakdown from DB:",
-            error
-          );
-        }
-
-        // Fetch files from local database
-        const dbFiles = await invoke<UserProfileFile[]>(
-          "get_user_synced_files",
-          {
-            owner: polkadotAddress,
-          }
+        const privateStorageSize = entries.reduce(
+          (sum, entry) => sum + BigInt(entry.size),
+          BigInt(0)
         );
 
-        console.log("Fetched files from DB:", dbFiles);
-
-        // Format the data to match what the UI expects
-        const formattedFiles = dbFiles.map(
-          (
-            file
-          ): FormattedUserFile & {
-            isErasureCoded: boolean;
-            createdAt: number;
-          } => {
-            const isErasureCodedFolder = file.fileName.endsWith(
-              ".folder.ec_metadata"
-            );
-            const isErasureCoded =
-              !isErasureCodedFolder && file.fileName.endsWith(".ec_metadata");
-            const isFolder =
-              !isErasureCodedFolder && file.fileName.endsWith(".folder");
-
-            let displayName = file.fileName;
-            if (isErasureCodedFolder) {
-              displayName = file.fileName.slice(
-                0,
-                -".folder.ec_metadata".length
-              );
-            } else if (isErasureCoded) {
-              displayName = file.fileName.slice(0, -".ec_metadata".length);
-            } else if (isFolder) {
-              displayName = file.fileName.slice(0, -".folder".length);
-            }
-
-            return {
-              name: displayName || "Unnamed File",
-              actualFileName: file.fileName,
-              size: file.fileSizeInBytes,
-              createdAt: file.createdAt,
-              cid: hexToCid(file.fileHash) ?? "",
-              source: file.source || "Unknown",
-              minerIds: parseMinerIds(file.minerIds),
-              isAssigned: file.isAssigned,
-              lastChargedAt: file.lastChargedAt,
-              fileHash: file.fileHash,
-              fileDetails: [],
-              isFolder: file.isFolder,
-              type: file.type,
-              isErasureCoded,
-              mainReqHash: file.mainReqHash,
-            };
-          }
-        );
+        const formattedFiles: FormattedUserFile[] = entries.map((entry) => {
+          const modifiedMs = (entry.modified ?? 0) * 1000;
+          return {
+            name: entry.name,
+            actualFileName: entry.name,
+            size: entry.size,
+            createdAt: modifiedMs,
+            cid: "",
+            source: "local",
+            minerIds: [],
+            isAssigned: true,
+            lastChargedAt: modifiedMs,
+            fileDetails: [],
+            isFolder: entry.is_folder,
+            type: "private",
+            isErasureCoded: false,
+            mainReqHash: "",
+          };
+        });
 
         formattedFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
 
         return {
           files: formattedFiles,
-          publicStorageSize,
+          publicStorageSize: BigInt(0),
           privateStorageSize,
         };
       } catch (error) {
-        console.error("Error fetching user files from DB:", error);
+        console.error("Error fetching files from sync folder:", error);
         throw new Error("Failed to retrieve your files");
       }
     },

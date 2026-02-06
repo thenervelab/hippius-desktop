@@ -2,17 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 
 export interface DownloadIpfsFolderOptions {
-    folderCid: string;
     folderName: string;
     polkadotAddress: string;
-    isPrivate: boolean;
-    encryptionKey?: string | null;
     outputDir?: string | null;
     file?: FormattedUserFile;
-    source?: string | null;
-    mainReqHash?: string | null;
 }
 
 export const downloadFolder = async ({
@@ -35,16 +31,9 @@ export const downloadFolder = async ({
     const toastId = toast.info("Downloading folder...", { duration: Infinity });
 
     try {
-        // Get sync path
-        const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
-            "get_sync_path",
-            { params: { isPublic: true, accountId: polkadotAddress } }
-        );
-        const syncPath = syncPathResult.path;
-
+        const syncPath = await getPrivateSyncPath(polkadotAddress);
         const fileName = file?.actualFileName || folderName;
 
-        // Export folder from sync folder to chosen location
         await invoke("export_file", {
             syncPath,
             fileName,
@@ -56,7 +45,7 @@ export const downloadFolder = async ({
         return { success: true };
     } catch (error) {
         toast.dismiss(toastId);
-        console.log("Download failed:", error);
+        console.error("Folder download failed:", error);
         return {
             success: false,
             error: "DOWNLOAD_FAILED",

@@ -19,6 +19,7 @@ import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import { MnemonicBackupDialog } from "./MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
+import { invoke } from "@tauri-apps/api/core";
 
 const UpdateSyncFolder: React.FC = () => {
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] =
@@ -46,7 +47,7 @@ const UpdateSyncFolder: React.FC = () => {
   useEffect(() => {
     (async () => {
       try {
-        const privatefolderPath = await getPrivateSyncPath();
+        const privatefolderPath = await getPrivateSyncPath(polkadotAddress ?? undefined);
         setSelectedPrivateFolderPath(privatefolderPath);
         setSelectedPrivateFolderName(
           privatefolderPath.split(/[\\/]/).pop() || ""
@@ -55,13 +56,20 @@ const UpdateSyncFolder: React.FC = () => {
         console.error("Failed to load sync folder");
       }
     })();
-  }, []);
+  }, [polkadotAddress]);
 
   const handlePrivateFolderSelected = async (path: string) => {
     if (!polkadotAddress) return;
 
     try {
+      // Stop the existing sync loop before changing paths
+      await invoke("stop_sync");
+
       await setPrivateSyncPath(path, polkadotAddress);
+
+      // Update local state immediately
+      setSelectedPrivateFolderPath(path);
+      setSelectedPrivateFolderName(path.split(/[\\/]/).pop() || "");
 
       // Check if HCFS config exists
       const hasConfig = await checkConfig(polkadotAddress);
@@ -73,6 +81,9 @@ const UpdateSyncFolder: React.FC = () => {
         const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
         await tryInitializeSync(polkadotAddress, mnemonic ?? undefined);
       }
+
+      // Trigger files page refresh
+      triggerSyncPathRefresh((prev) => prev + 1);
     } catch (err) {
       console.error("Failed to update sync path:", err);
     }
@@ -115,6 +126,8 @@ const UpdateSyncFolder: React.FC = () => {
     setIsStoppingSync(true);
 
     try {
+      // Stop the Rust sync loop first
+      await invoke("stop_sync");
       await setPrivateSyncPath("", polkadotAddress);
       setSelectedPrivateFolderPath("");
       setSelectedPrivateFolderName("");

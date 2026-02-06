@@ -43,6 +43,8 @@ export function useHcfsSync(): UseHcfsSyncResult {
     }
   }, []);
 
+  /** Initialize sync if HCFS config already exists.
+   *  Callers MUST call `invoke("stop_sync")` before this if a sync loop is already running. */
   const tryInitializeSync = useCallback(
     async (accountId: string, mnemonic?: string): Promise<boolean> => {
       setError(null);
@@ -81,6 +83,8 @@ export function useHcfsSync(): UseHcfsSyncResult {
     [checkConfig]
   );
 
+  /** Save HCFS config and initialize sync.
+   *  Callers MUST call `invoke("stop_sync")` before this if a sync loop is already running. */
   const setupAndInitialize = useCallback(
     async (
       accountId: string,
@@ -141,7 +145,9 @@ export function useHcfsSync(): UseHcfsSyncResult {
   };
 }
 
-// Standalone function for use outside React components (e.g., in wallet-auth-context)
+/** Standalone function for use outside React components (e.g., in wallet-auth-context).
+ *  Safe to call on login — skips if no sync path or config exists.
+ *  Does NOT call stop_sync internally; callers should ensure no sync loop is running. */
 export async function tryAutoInitSync(
   accountId: string,
   mnemonic?: string

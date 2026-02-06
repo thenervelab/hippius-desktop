@@ -27,8 +27,6 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
     };
 
     const handleConfirm = () => {
-        console.log("Delete confirmation - files being deleted:", selectedFiles.map(f => ({ name: f.name, actualFileName: f.actualFileName })));
-
         // Capture the files before clearing selection
         const filesToDelete = [...selectedFiles];
 
@@ -102,7 +100,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
                             <div className="text-xs text-grey-50 mb-2">Files to delete:</div>
                             <ul className="text-sm space-y-1">
                                 {selectedFiles.slice(0, 5).map((file) => (
-                                    <li key={file.cid} className="text-grey-20 truncate">
+                                    <li key={file.actualFileName || file.name} className="text-grey-20 truncate">
                                         • {file.actualFileName || file.name}
                                     </li>
                                 ))}

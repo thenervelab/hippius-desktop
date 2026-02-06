@@ -1,16 +1,12 @@
 import { useEffect, useState } from "react";
 import {
   getPrivateSyncPath,
-  getPublicSyncPath,
 } from "@/lib/utils/syncPathUtils";
 import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 
 export function useFilesNavigation() {
   const [privateSyncPathConfigured, setPrivateSyncPathConfigured] = useState<
-    boolean | null
-  >(null);
-  const [publicSyncPathConfigured, setPublicSyncPathConfigured] = useState<
     boolean | null
   >(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -20,19 +16,11 @@ export function useFilesNavigation() {
     async function checkSyncPaths() {
       try {
         setIsLoading(true);
-
-        // Check both paths in parallel
-        const [privatePath, publicPath] = await Promise.all([
-          getPrivateSyncPath(),
-          getPublicSyncPath(),
-        ]);
-
+        const privatePath = await getPrivateSyncPath();
         setPrivateSyncPathConfigured(!!privatePath);
-        setPublicSyncPathConfigured(!!publicPath);
       } catch (error) {
         console.error("Failed to check sync paths:", error);
         setPrivateSyncPathConfigured(false);
-        setPublicSyncPathConfigured(false);
       } finally {
         setIsLoading(false);
       }
@@ -42,14 +30,9 @@ export function useFilesNavigation() {
   }, []);
 
   // Determine which view to navigate to based on configured paths
-  // and file counts (optional)
   const getTargetFilesView = () => {
-    // If only one is configured, use that one
     if (privateSyncPathConfigured) return "Private";
-    if (publicSyncPathConfigured) return "Public";
-
-    // Default case: neither is configured
-    return ""; // Default to Private view
+    return "";
   };
 
   // Navigate to the appropriate view
@@ -60,7 +43,7 @@ export function useFilesNavigation() {
 
   return {
     privateSyncPathConfigured,
-    publicSyncPathConfigured,
+    publicSyncPathConfigured: false,
     isLoading,
     getTargetFilesView,
     navigateToFilesView,

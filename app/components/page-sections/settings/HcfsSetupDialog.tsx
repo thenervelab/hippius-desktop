@@ -21,7 +21,7 @@ export function HcfsSetupDialog({
   onComplete,
   loading = false,
 }: HcfsSetupDialogProps) {
-  const [serverUrl, setServerUrl] = useState(HCFS_CONFIG.defaultServerUrl);
+  const [serverUrl, setServerUrl] = useState<string>(HCFS_CONFIG.defaultServerUrl);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");

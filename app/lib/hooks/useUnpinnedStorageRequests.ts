@@ -2,11 +2,24 @@ import { useQuery } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { hexToCid } from "@/lib/utils/hexToCid";
-import { UserProfileFile } from "./use-user-files";
+type UserProfileFile = {
+  fileName: string;
+  fileSizeInBytes: number;
+  lastChargedAt: number;
+  cid?: string;
+  createdAt: number;
+  fileHash: string;
+  selectedValidator?: string;
+  isAssigned: boolean;
+  source: string;
+  minerIds: string;
+  isFolder: boolean;
+  type: string;
+  mainReqHash: string;
+};
 import { FileDetail } from "@/app/(pages)/UnpinFilesDialog";
 import {
   getPrivateSyncPath,
-  getPublicSyncPath,
 } from "@/lib/utils/syncPathUtils";
 
 export const useUnpinnedStorageRequests = () => {
@@ -25,9 +38,8 @@ export const useUnpinnedStorageRequests = () => {
         throw new Error("Wallet not connected");
       }
 
-      // Check if sync paths exist
+      // Check if sync path exists (all files use private/encrypted HCFS path)
       let hasPrivatePath = false;
-      let hasPublicPath = false;
 
       try {
         const privatePath = await getPrivateSyncPath();
@@ -37,16 +49,8 @@ export const useUnpinnedStorageRequests = () => {
         hasPrivatePath = false;
       }
 
-      try {
-        const publicPath = await getPublicSyncPath();
-        hasPublicPath = !!publicPath;
-      } catch (error) {
-        console.log("No public sync path found", error);
-        hasPublicPath = false;
-      }
-
-      // If neither sync path exists, return empty array
-      if (!hasPrivatePath && !hasPublicPath) {
+      // If sync path doesn't exist, return empty array
+      if (!hasPrivatePath) {
         return [];
       }
 
@@ -59,12 +63,8 @@ export const useUnpinnedStorageRequests = () => {
           }
         );
 
-        let filteredFiles = dbFiles;
-        if (hasPrivatePath && !hasPublicPath) {
-          filteredFiles = dbFiles.filter((file) => file.type === "private");
-        } else if (!hasPrivatePath && hasPublicPath) {
-          filteredFiles = dbFiles.filter((file) => file.type === "public");
-        }
+        // All HCFS files are encrypted/private
+        const filteredFiles = dbFiles.filter((file) => file.type === "private");
 
         const unassignedRequests = filteredFiles.filter(
           (req) => !req.isAssigned

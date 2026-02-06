@@ -416,14 +416,20 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
     if needs_update {
         let nebula_dir = get_nebula_dir().map_err(|e| e.to_string())?;
         let temp_path = nebula_dir.join("temp_download.file");
-        
+
         if temp_path.exists() {
              println!("[Nebula] Installing from temp file...");
+
+             // Remove existing binaries before extraction.
+             // Previous installs may have chown'd them to root (for setuid),
+             // which prevents overwriting without elevated privileges.
+             remove_existing_binaries(&nebula_dir).await;
+
              let bytes = fs::read(&temp_path).await.map_err(|e| e.to_string())?;
-             
+
              // Determine archive type from asset name
              let asset_name = get_asset_name().map_err(|e| e.to_string())?;
-             
+
              if asset_name.ends_with(".zip") {
                  extract_zip(&bytes, &nebula_dir).await.map_err(|e| e.to_string())?;
              } else if asset_name.ends_with(".tar.gz") {
@@ -1026,6 +1032,78 @@ pub async fn start_nebula_internal() -> Result<(), String> {
 // --- End New Commands ---
 
 /// Check if the binary has required permissions
+/// Remove existing nebula binaries before re-extraction.
+/// Previous installs may have chown'd them to root (setuid for TUN/TAP),
+/// so a normal fs::remove_file will fail with "Permission denied".
+/// On macOS we use osascript to remove with admin privileges; on Linux, pkexec rm.
+async fn remove_existing_binaries(nebula_dir: &Path) {
+    let binary_names: &[&str] = if cfg!(target_os = "windows") {
+        &["nebula.exe", "nebula-cert.exe"]
+    } else {
+        &["nebula", "nebula-cert"]
+    };
+
+    for name in binary_names {
+        let path = nebula_dir.join(name);
+        if !path.exists() {
+            continue;
+        }
+
+        // Try normal removal first (works if user-owned)
+        if fs::remove_file(&path).await.is_ok() {
+            println!("[Nebula] Removed existing binary: {}", name);
+            continue;
+        }
+
+        // Normal removal failed (likely root-owned), try elevated removal
+        println!("[Nebula] Binary {} is not user-writable, requesting elevated removal...", name);
+        let path_str = path.to_string_lossy().to_string();
+
+        #[cfg(target_os = "macos")]
+        {
+            let script = format!(
+                "do shell script \"rm -f '{}'\" with administrator privileges",
+                path_str
+            );
+            match std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .status()
+            {
+                Ok(status) if status.success() => {
+                    println!("[Nebula] Removed root-owned binary via elevated privileges: {}", name);
+                }
+                Ok(_) => {
+                    eprintln!("[Nebula] Warning: Failed to remove {} with elevated privileges", name);
+                }
+                Err(e) => {
+                    eprintln!("[Nebula] Warning: Could not run osascript to remove {}: {}", name, e);
+                }
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            match std::process::Command::new("pkexec")
+                .arg("rm")
+                .arg("-f")
+                .arg(&path_str)
+                .status()
+            {
+                Ok(status) if status.success() => {
+                    println!("[Nebula] Removed root-owned binary via pkexec: {}", name);
+                }
+                Ok(_) => {
+                    eprintln!("[Nebula] Warning: Failed to remove {} with pkexec", name);
+                }
+                Err(e) => {
+                    eprintln!("[Nebula] Warning: Could not run pkexec to remove {}: {}", name, e);
+                }
+            }
+        }
+    }
+}
+
 async fn check_permissions(binary_path: &Path) -> Result<bool> {
     #[cfg(target_os = "linux")]
     {

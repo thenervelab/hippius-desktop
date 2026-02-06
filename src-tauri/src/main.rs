@@ -126,6 +126,7 @@ fn main() {
             // HCFS config commands
             commands::syncing::save_hcfs_config,
             commands::syncing::get_hcfs_config,
+            commands::syncing::update_hcfs_server_url,
         ]);
 
     let builder = setup(builder);

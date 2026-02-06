@@ -6,9 +6,7 @@ import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
 import useUserFiles from "@/app/lib/hooks/use-user-files";
-import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
-import { formatStorageForChartByRange } from "@/app/lib/utils/getFormatDataForStorageUsageChart";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { toast } from "sonner";
@@ -32,12 +30,6 @@ export default function DetailList() {
     data: userFilesData,
     isLoading: isUserFilesLoading,
   } = useUserFiles();
-
-  const {
-    data: filesData,
-    isLoading: isFilesLoading,
-    error: filesError,
-  } = useFiles();
 
   // Fetch marketplace credits for Total Credits Used (all-time)
   const { data: marketplaceCredits, isLoading: isLoadingMarketplaceCredits } =
@@ -63,8 +55,8 @@ export default function DetailList() {
 
   const getCreditsValue = () => {
     if (isCreditsLoading) return "Loading...";
-    if (creditsError) return "Error";
     if (credits !== undefined) return formatCreditBalance(credits);
+    if (creditsError) return "0";
     return "--";
   };
 
@@ -129,10 +121,9 @@ export default function DetailList() {
     return "≈0 GB/mo Storage";
   };
 
-  // Helper functions for file data - count only private files
+  // Helper functions for file data - count only private files from local sync folder
   const getTotalFiles = () => {
-    if (isFilesLoading) return "Loading...";
-    if (filesError) return "Error";
+    if (isUserFilesLoading) return "Loading...";
     if (!userFilesData?.files) return 0;
     // Filter for private files only (matching FilesContainer logic)
     const privateFiles = userFilesData.files.filter(
@@ -153,24 +144,12 @@ export default function DetailList() {
     return allTimeTotal.toFixed(6);
   }, [transformedCreditsData, isLoadingMarketplaceCredits]);
 
-  // Calculate all-time Total Storage Used from files data
-  // Using the SAME LOGIC as StorageUsageTrends component
+  // Calculate Total Storage Used from local sync folder data
   const getTotalStorageUsed = useMemo(() => {
-    if (isFilesLoading) return "Loading...";
-    if (!filesData || filesData.length === 0) return "0 B";
-
-    // Format the raw data using the same transformer as the chart
-    const formattedData = formatStorageForChartByRange(
-      filesData,
-      "last7days" // Use last7days as base range
-    );
-
-    if (!formattedData || formattedData.length === 0) return "0 B";
-
-    // Get the last entry's value (most recent day) - same as the chart component
-    const lastEntry = formattedData[formattedData.length - 1];
-    return formatBytes(lastEntry.balance || 0, 2);
-  }, [filesData, isFilesLoading]);
+    if (isUserFilesLoading) return "Loading...";
+    if (!userFilesData?.privateStorageSize) return "0 B";
+    return formatBytes(Number(userFilesData.privateStorageSize), 2);
+  }, [userFilesData, isUserFilesLoading]);
 
 
 
@@ -211,8 +190,8 @@ export default function DetailList() {
       title: "Total Storage Used",
       value: getTotalStorageUsed,
       showRefresh: false,
-      isLoading: isFilesLoading,
-      info: "All time total storage space used across all synced files from the desktop app and console.",
+      isLoading: isUserFilesLoading,
+      info: "Total storage space used across all synced files.",
     },
   ];
 

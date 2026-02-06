@@ -43,7 +43,6 @@ import { usePagination } from "@/lib/hooks";
 import { List } from "lucide-react";
 import {
   getPrivateSyncPath,
-  getPublicSyncPath,
 } from "@/lib/utils/syncPathUtils";
 import { useAtomValue } from "jotai";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
@@ -226,14 +225,12 @@ export default function FolderView({
     loadFolderContents();
   }, [loadFolderContents]);
 
-  // Load sync path based on current view (private/public)
+  // Load sync path (all files use private/encrypted HCFS path)
   useEffect(() => {
     (async () => {
       try {
         setIsLoadingSyncPath(true);
-        const path = isPrivateFolder
-          ? await getPrivateSyncPath()
-          : await getPublicSyncPath();
+        const path = await getPrivateSyncPath();
         setSyncFolderPath(path || "");
       } catch (error) {
         console.error("Failed to load sync path:", error);
@@ -250,9 +247,7 @@ export default function FolderView({
       (async () => {
         try {
           setIsLoadingSyncPath(true);
-          const path = isPrivateFolder
-            ? await getPrivateSyncPath()
-            : await getPublicSyncPath();
+          const path = await getPrivateSyncPath();
           setSyncFolderPath(path || "");
         } catch (error) {
           console.error("Failed to reload sync path:", error);
@@ -283,19 +278,12 @@ export default function FolderView({
         return; // User canceled directory selection
       }
 
-      const folderSource = getParam("folderSource");
-      const mainReqHash = getParam("mainReqHash");
-
       // Download folder
       setIsDownloading(true);
       const result = await downloadFolder({
-        folderCid,
         folderName,
         polkadotAddress: polkadotAddress ?? "",
-        isPrivate: isPrivateFolder,
         outputDir,
-        source: folderSource,
-        mainReqHash: mainReqHash,
       });
 
       if (result && !result.success) {
