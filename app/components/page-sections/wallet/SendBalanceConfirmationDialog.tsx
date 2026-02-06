@@ -1,12 +1,14 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import React from "react";
+import React, { useState } from "react";
 import { Icons } from "@/components/ui";
-import { ShieldCheck } from "lucide-react";
+import { ShieldCheck, AlertCircle } from "lucide-react";
+import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
+import { PasscodeInput } from "./local-wallet";
 
 interface SendBalanceConfirmationDialogProps {
   open: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: (mnemonic: string) => void;
   loading: boolean;
   recipientAddress: string;
   amount: string;
@@ -15,8 +17,41 @@ interface SendBalanceConfirmationDialogProps {
 const SendBalanceConfirmationDialog: React.FC<
   SendBalanceConfirmationDialogProps
 > = ({ open, onClose, onConfirm, loading, recipientAddress, amount }) => {
+  const { activeWallet, getDecryptedMnemonic, hasWallets } = useLocalWallet();
+  const [passcode, setPasscode] = useState("");
+  const [passcodeError, setPasscodeError] = useState<string | null>(null);
+
+  const handleConfirm = () => {
+    if (!hasWallets || !activeWallet) {
+      // No local wallet, proceed without passcode (legacy flow)
+      onConfirm("");
+      return;
+    }
+
+    if (!passcode) {
+      setPasscodeError("Please enter your passcode");
+      return;
+    }
+
+    const mnemonic = getDecryptedMnemonic(passcode);
+    if (!mnemonic) {
+      setPasscodeError("Incorrect passcode");
+      return;
+    }
+
+    setPasscodeError(null);
+    onConfirm(mnemonic);
+  };
+
+  const handleClose = () => {
+    setPasscode("");
+    setPasscodeError(null);
+    onClose();
+  };
+
+  const showPasscodeInput = hasWallets && activeWallet;
   return (
-    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && handleClose()}>
       <Dialog.Portal>
         <Dialog.Overlay className="bg-black/40 fixed inset-0 flex items-center justify-center data-[state=open]:animate-fade-in-0.3 z-[60]" />
         <Dialog.Content className="fixed top-1/2 left-1/2 w-[90%] max-w-md -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg p-6 shadow-xl z-[70] animate-fade-in-0.2">
@@ -27,7 +62,7 @@ const SendBalanceConfirmationDialog: React.FC<
             </Dialog.Title>
             <Dialog.Close asChild>
               <button
-                onClick={onClose}
+                onClick={handleClose}
                 disabled={loading}
                 className="text-grey-50 hover:text-grey-30"
               >
@@ -59,20 +94,53 @@ const SendBalanceConfirmationDialog: React.FC<
                   )}`}
                 </span>
               </div>
+
+              {showPasscodeInput && activeWallet && (
+                <div className="flex justify-between items-start mt-3 pt-3 border-t border-grey-80">
+                  <span className="text-grey-50 font-semibold">From:</span>
+                  <span className="text-grey-10 text-right">
+                    {activeWallet.name}
+                  </span>
+                </div>
+              )}
             </div>
+
+            {/* Passcode Input for Local Wallet */}
+            {showPasscodeInput && (
+              <div className="mb-4">
+                <PasscodeInput
+                  value={passcode}
+                  onChange={(val) => {
+                    setPasscode(val);
+                    setPasscodeError(null);
+                  }}
+                  label="Enter passcode to sign transaction"
+                  placeholder="Enter your passcode"
+                  disabled={loading}
+                  autoFocus
+                  onSubmit={handleConfirm}
+                />
+                {passcodeError && (
+                  <div className="flex items-center gap-2 text-error-70 text-sm font-medium mt-2">
+                    <AlertCircle className="size-4" />
+                    <span>{passcodeError}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end gap-3">
             <button
-              onClick={onClose}
+              onClick={handleClose}
               disabled={loading}
               className="px-5 py-2.5 border border-grey-80 rounded-lg text-grey-10 hover:bg-grey-95 transition"
             >
               Cancel
             </button>
             <button
-              onClick={onConfirm}
-              disabled={loading}
+              onClick={handleConfirm}
+              disabled={loading || (showPasscodeInput && !passcode)}
               className="px-5 py-2.5 bg-primary-50 text-white rounded-lg hover:bg-primary-40 transition disabled:opacity-50 flex items-center gap-2"
             >
               {loading ? (

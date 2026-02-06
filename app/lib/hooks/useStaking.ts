@@ -30,6 +30,7 @@ interface StakingOperations {
 export const useStaking = () => {
     const { api, isConnected } = usePolkadotApi();
     const { polkadotAddress, walletManager } = useWalletAuth();
+
     const [stakingInfo, setStakingInfo] = useState<StakingInfo>({
         bonded: '0',
         rewards: '0',

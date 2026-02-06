@@ -40,11 +40,11 @@ export const navItems: NavItemData[] = [
     path: "/vm",
     icon: <Server className="size-4" />,
   },
-  // {
-  //   label: "Wallet",
-  //   path: "/wallet",
-  //   icon: <Icons.Wallet />
-  // },
+  {
+    label: "Wallet",
+    path: "/wallet",
+    icon: <Icons.Wallet />
+  },
   {
     label: "Billing",
     path: "/billing",

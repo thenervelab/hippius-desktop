@@ -28,7 +28,6 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
   const { polkadotAddress } = useWalletAuth();
-  const mnemonic = ""
 
   const handleSendBalance = () => {
     if (!balanceInfo?.data?.free) {
@@ -142,7 +141,6 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
         availableBalance={
           +formatCreditBalance(balanceInfo?.data?.free ?? null)
         }
-        mnemonic={mnemonic || ""}
         refetchBalance={() => {
           refetch();
           refetchSystemBalance?.();

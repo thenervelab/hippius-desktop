@@ -19,7 +19,6 @@ export interface SendBalanceDialogProps {
   open: boolean;
   onClose: () => void;
   availableBalance: number | undefined;
-  mnemonic: string;
   refetchBalance?: () => void;
   polkadotAddress: string;
 }
@@ -28,7 +27,6 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   open,
   onClose,
   availableBalance,
-  mnemonic,
   refetchBalance,
   polkadotAddress
 }) => {
@@ -107,7 +105,12 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     setShowConfirmation(false);
   };
 
-  const handleTransfer = async () => {
+  const handleTransfer = async (mnemonic: string) => {
+    if (!mnemonic) {
+      toast.error("No wallet mnemonic available");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       // Convert amount (string) to plancks (u128) with 18 decimals
