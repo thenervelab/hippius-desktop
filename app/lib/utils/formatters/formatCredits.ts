@@ -16,14 +16,11 @@ export const formatCreditBalance = (credits: bigint | null): string => {
   const integerPart = credits / divisor;
   const fractionalPart = credits % divisor;
 
-  // Format with up to 6 decimal places, and trim trailing zeros
+  // Format with exactly 6 decimal places for consistency
   const fractionalStr = fractionalPart.toString().padStart(18, "0");
-  const formattedFractional = fractionalStr.substring(0, 6).replace(/0+$/, "");
+  const formattedFractional = fractionalStr.substring(0, 6);
 
-  // Only show decimal point if there's a fractional part
-  return formattedFractional
-    ? `${integerPart}.${formattedFractional}`
-    : integerPart.toString();
+  return `${integerPart}.${formattedFractional}`;
 };
 
 export function formatBalance(credits: number | bigint): string {

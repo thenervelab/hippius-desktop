@@ -13,6 +13,7 @@ import CustomizeRPC from "./CustomizeRPC";
 import OAuthTokenSection from "./OAuthTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
 import VPNSettings from "./VPNSettings";
+import WalletSettings from "./WalletSettings";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -37,6 +38,10 @@ const SettingsDialogContent: React.FC = () => {
     {
       tabName: "Notifications",
       icon: <Icons.Notification className="size-4" />,
+    },
+    {
+      tabName: "Wallet Settings",
+      icon: <Icons.Wallet className="size-4" />,
     },
     {
       tabName: "Customize RPC",
@@ -138,6 +143,19 @@ const SettingsDialogContent: React.FC = () => {
                   parentClassName="w-full"
                 >
                   <CustomizeRPC />
+                </RevealTextLine>
+              </div>
+            )}
+
+            {activeTab === "Wallet Settings" && (
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <WalletSettings />
                 </RevealTextLine>
               </div>
             )}

@@ -4,7 +4,7 @@ import {
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useActiveWalletAddress } from "@/app/lib/hooks/useActiveWalletAddress";
 import { indexerGet } from "@/lib/api/indexerClient";
 
 /** Row as returned by the new API */
@@ -112,7 +112,7 @@ export default function useSystemBalance(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<BalanceObject[], Error> {
-  const { polkadotAddress } = useWalletAuth();
+  const polkadotAddress = useActiveWalletAddress();
 
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 20000;

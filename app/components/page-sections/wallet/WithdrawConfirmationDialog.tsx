@@ -7,32 +7,24 @@ import { ShieldCheck, AlertCircle } from "lucide-react";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { PasscodeInput } from "./local-wallet";
 
-interface StakeConfirmationDialogProps {
+interface WithdrawConfirmationDialogProps {
     open: boolean;
     onClose: () => void;
     onConfirm: (mnemonic: string) => void;
     loading: boolean;
     amount: string;
-    isUnstaking?: boolean;
 }
 
-const StakeConfirmationDialog: React.FC<StakeConfirmationDialogProps> = ({
+const WithdrawConfirmationDialog: React.FC<WithdrawConfirmationDialogProps> = ({
     open,
     onClose,
     onConfirm,
     loading,
     amount,
-    isUnstaking = false,
 }) => {
     const { activeWallet, getDecryptedMnemonic, hasWallets } = useLocalWallet();
     const [passcode, setPasscode] = useState("");
     const [passcodeError, setPasscodeError] = useState<string | null>(null);
-
-    const title = isUnstaking ? "Confirm Unstaking" : "Confirm Staking";
-    const action = isUnstaking ? "Unstake" : "Stake";
-    const description = isUnstaking
-        ? "This transaction cannot be reversed once confirmed. Your tokens will be scheduled for withdrawal and will be available after the unbonding period."
-        : "This transaction cannot be reversed once confirmed. Your tokens will be staked and start earning rewards.";
 
     const showPasscodeInput = hasWallets && activeWallet;
 
@@ -74,7 +66,7 @@ const StakeConfirmationDialog: React.FC<StakeConfirmationDialogProps> = ({
                     <div className="flex justify-between items-center mb-5">
                         <Dialog.Title className="text-xl font-semibold text-grey-10 flex items-center gap-2">
                             <ShieldCheck className="text-primary-50 size-6" />
-                            {title}
+                            Confirm Withdrawal
                         </Dialog.Title>
                         <Dialog.Close asChild>
                             <button
@@ -89,13 +81,13 @@ const StakeConfirmationDialog: React.FC<StakeConfirmationDialogProps> = ({
 
                     <div className="mb-6 text-grey-10">
                         <p className="mb-4">
-                            {description}
+                            This transaction cannot be reversed once confirmed. Your unbonded tokens will be transferred to your free balance.
                         </p>
 
                         <div className="bg-grey-90 rounded-lg mb-4 border border-grey-80 p-4">
                             <div className="flex justify-between mb-3">
                                 <span className="text-grey-50 font-semibold">Action:</span>
-                                <span className="text-grey-10">{action} Tokens</span>
+                                <span className="text-grey-10">Withdraw Tokens</span>
                             </div>
 
                             <div className="flex justify-between items-start">
@@ -107,18 +99,9 @@ const StakeConfirmationDialog: React.FC<StakeConfirmationDialogProps> = ({
 
                             {showPasscodeInput && activeWallet && (
                                 <div className="flex justify-between items-start mt-3 pt-3 border-t border-grey-80">
-                                    <span className="text-grey-50 font-semibold">From:</span>
+                                    <span className="text-grey-50 font-semibold">Wallet:</span>
                                     <span className="text-grey-10 text-right">
                                         {activeWallet.name}
-                                    </span>
-                                </div>
-                            )}
-
-                            {isUnstaking && (
-                                <div className="flex justify-between items-start mt-3 pt-3 border-t border-grey-80">
-                                    <span className="text-grey-50 font-semibold">Note:</span>
-                                    <span className="text-grey-10 text-right text-sm max-w-[200px]">
-                                        Tokens will be available after unbonding period
                                     </span>
                                 </div>
                             )}
@@ -165,10 +148,10 @@ const StakeConfirmationDialog: React.FC<StakeConfirmationDialogProps> = ({
                             {loading ? (
                                 <>
                                     <Icons.Loader className="size-4 animate-spin" />
-                                    <span>{action}ing...</span>
+                                    <span>Withdrawing...</span>
                                 </>
                             ) : (
-                                `Confirm ${action}`
+                                "Confirm Withdraw"
                             )}
                         </button>
                     </div>
@@ -178,4 +161,4 @@ const StakeConfirmationDialog: React.FC<StakeConfirmationDialogProps> = ({
     );
 };
 
-export default StakeConfirmationDialog;
+export default WithdrawConfirmationDialog;

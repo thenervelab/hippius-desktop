@@ -5,39 +5,38 @@ import { useRouter } from "next/navigation";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { formatStakingAmount } from "@/app/lib/utils/staking";
-// import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
+import WithdrawConfirmationDialog from "./WithdrawConfirmationDialog";
 
 const StakeWidget: FC = () => {
     const router = useRouter();
     const { stakingInfo, operations } = useStaking();
-    // const { polkadotAddress } = useWalletAuth();
     const [isWithdrawing, setIsWithdrawing] = useState(false);
+    const [showWithdrawConfirmation, setShowWithdrawConfirmation] = useState(false);
 
     const handleStakeNow = () => {
-        router.push("/stake?tab=stake");
+        router.push("/stake");
     };
 
     const handleUnstakeAlpha = () => {
         router.push("/unstake");
     };
 
-    // const handleViewRewards = () => {
-    //     if (polkadotAddress) {
-    //         openInExplorer(polkadotAddress, 'account');
-    //     }
-    // };
+    const handleWithdrawClick = () => {
+        setShowWithdrawConfirmation(true);
+    };
 
-    const handleWithdrawUnbonded = async () => {
+    const handleConfirmWithdraw = async (mnemonic: string) => {
         if (!operations.withdrawUnbonded) return;
 
         setIsWithdrawing(true);
+        setShowWithdrawConfirmation(false);
         const loadingToast = toast.loading("Withdrawing unbonded tokens...", {
             duration: Infinity,
         });
 
         try {
-            await operations.withdrawUnbonded();
+            await operations.withdrawUnbonded(mnemonic);
             toast.dismiss(loadingToast);
             toast.success("Successfully withdrew unbonded tokens!");
         } catch (error) {
@@ -54,10 +53,11 @@ const StakeWidget: FC = () => {
     const formattedUnbonding = formatStakingAmount(stakingInfo.unbonding);
     const formattedWithdrawable = formatStakingAmount(stakingInfo.withdrawable);
 
-    const hasRewards = parseFloat(stakingInfo.rewards) > 0;
-    const hasStakedTokens = parseFloat(stakingInfo.bonded) > 0;
-    const hasUnbonding = parseFloat(stakingInfo.unbonding) > 0;
-    const hasWithdrawable = parseFloat(stakingInfo.withdrawable) > 0;
+    // Only show sections when not loading and values are > 0
+    const hasRewards = !stakingInfo.isLoading && parseFloat(stakingInfo.rewards) > 0;
+    const hasStakedTokens = !stakingInfo.isLoading && parseFloat(stakingInfo.bonded) > 0;
+    const hasUnbonding = !stakingInfo.isLoading && parseFloat(stakingInfo.unbonding) > 0;
+    const hasWithdrawable = !stakingInfo.isLoading && parseFloat(stakingInfo.withdrawable) > 0;
 
     return (
         <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between min-h-[310px]">
@@ -95,7 +95,7 @@ const StakeWidget: FC = () => {
                                     </div>
                                 </div>
                                 <button
-                                    onClick={handleWithdrawUnbonded}
+                                    onClick={handleWithdrawClick}
                                     disabled={isWithdrawing}
                                     className="ml-2 text-green-500 hover:text-green-400 transition-colors disabled:opacity-50"
                                     title="Withdraw to free balance"
@@ -145,7 +145,7 @@ const StakeWidget: FC = () => {
                 {hasWithdrawable && (
                     <CardButton
                         className="w-full mt-4 h-[50px]"
-                        onClick={handleWithdrawUnbonded}
+                        onClick={handleWithdrawClick}
                         disabled={isWithdrawing}
                         variant="secondary"
                     >
@@ -184,6 +184,15 @@ const StakeWidget: FC = () => {
                 </CardButton>
 
             </div>
+
+            {/* Withdraw Confirmation Dialog */}
+            <WithdrawConfirmationDialog
+                open={showWithdrawConfirmation}
+                onClose={() => setShowWithdrawConfirmation(false)}
+                onConfirm={handleConfirmWithdraw}
+                loading={isWithdrawing}
+                amount={formattedWithdrawable}
+            />
         </div>
     );
 };

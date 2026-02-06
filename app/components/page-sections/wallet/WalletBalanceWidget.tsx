@@ -7,7 +7,7 @@ import * as Typography from "@/components/ui/typography";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import Warning from "@/components/ui/icons/Warning";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useActiveWalletAddress } from "@/app/lib/hooks/useActiveWalletAddress";
 import { toast } from "sonner";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import SendBalanceDialog, { TRANSACTION_FEE } from "./SendBalanceDialog";
@@ -27,7 +27,7 @@ const WalletBalanceWidget: FC<WalletBalanceWidgetProps> = ({
   const { data: balanceInfo, isLoading, error, refetch } = useHippiusBalance();
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [receiveDialogOpen, setReceiveDialogOpen] = useState(false);
-  const { polkadotAddress } = useWalletAuth();
+  const polkadotAddress = useActiveWalletAddress();
 
   const handleSendBalance = () => {
     if (!balanceInfo?.data?.free) {

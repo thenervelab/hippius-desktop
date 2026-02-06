@@ -1,29 +1,47 @@
 /**
- * Formats blockchain balance values by dividing by 10^18 and formatting with commas
- * @param balance - The balance string (in smallest unit)
- * @param decimals - Number of decimal places to show (default: 5)
+ * Formats blockchain balance values from planck (18 decimals) to human-readable format.
+ * Uses string manipulation to avoid Number precision loss for large values.
+ * @param balance - The balance string (in smallest unit / planck)
+ * @param decimals - Number of decimal places to show (default: 6)
  * @returns Formatted balance string
  */
 export function formatBalance(
   balance: string | number,
-  decimals: number = 5
+  decimals: number = 6
 ): string {
   try {
-    // Convert to number and divide by 10^18
-    const balanceNum = Number(balance) / Math.pow(10, 18);
+    const planckStr = balance.toString();
 
-    // If the result is 0, return "0"
-    if (balanceNum === 0) {
+    // Handle zero case
+    if (!planckStr || planckStr === '0') {
       return "0";
     }
 
-    // Format with specified decimal places and add commas
-    const formatted = balanceNum.toLocaleString("en-US", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: decimals,
-    });
+    // Pad with leading zeros if needed (for values less than 1 token)
+    const paddedStr = planckStr.padStart(19, '0'); // 18 decimals + at least 1 integer digit
 
-    return formatted;
+    // Split into integer and fractional parts
+    const splitIndex = paddedStr.length - 18;
+    const integerPart = paddedStr.slice(0, splitIndex) || '0';
+    const fractionalPart = paddedStr.slice(splitIndex);
+
+    // Take specified number of decimals for display
+    const formattedFractional = fractionalPart.substring(0, decimals);
+
+    // Remove leading zeros from integer part
+    const cleanIntegerPart = integerPart.replace(/^0+/, '') || '0';
+
+    // Add thousand separators to integer part
+    const withCommas = cleanIntegerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+    // Trim trailing zeros from fractional part for cleaner display
+    const trimmedFractional = formattedFractional.replace(/0+$/, '');
+
+    // Return with or without decimal part
+    if (trimmedFractional) {
+      return `${withCommas}.${trimmedFractional}`;
+    }
+    return withCommas;
   } catch (error) {
     console.error("Error formatting balance:", error);
     return "0";

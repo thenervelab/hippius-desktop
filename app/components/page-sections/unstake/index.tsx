@@ -9,13 +9,17 @@ import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { toPlancks } from "@/app/lib/utils/staking";
+import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
+import { LocalWalletSelector, AddWalletDialog, LocalWalletSetup } from "../wallet/local-wallet";
 
 const Unstake = () => {
     const router = useRouter();
     const { stakingInfo, operations } = useStaking();
+    const { setupStep, activeWallet } = useLocalWallet();
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [pendingAmount, setPendingAmount] = useState("");
+    const [showAddWalletDialog, setShowAddWalletDialog] = useState(false);
 
     const handleUnstakeSubmit = async (amount?: string) => {
         if (!amount || parseFloat(amount) <= 0) {
@@ -34,7 +38,7 @@ const Unstake = () => {
         setShowConfirmation(true);
     };
 
-    const handleConfirmUnstake = async () => {
+    const handleConfirmUnstake = async (mnemonic: string) => {
         setIsLoading(true);
         setShowConfirmation(false);
 
@@ -48,7 +52,7 @@ const Unstake = () => {
             // Convert amount to planck (18 decimals)
             const amountInPlanck = toPlancks(pendingAmount);
 
-            await operations.unbond(amountInPlanck);
+            await operations.unbond(amountInPlanck, mnemonic);
             toast.dismiss(loadingToast);
             toast.success(`Successfully initiated unstaking of ${pendingAmount} hALPHA! Tokens will be available after the unbonding period.`);
 
@@ -69,11 +73,33 @@ const Unstake = () => {
         setPendingAmount("");
     };
 
-    return (
-        <>
+    // Show wallet setup if no wallet is ready
+    if (setupStep !== "ready") {
+        return (
             <DashboardTitleWrapper mainText="Wallet">
                 <div className="mb-6">
                     <BackButton text="Go Back" href="/wallet" />
+                </div>
+                <div className="flex items-center justify-center min-h-[400px]">
+                    <div className="bg-white rounded-lg shadow-menu border border-grey-80 overflow-hidden">
+                        <LocalWalletSetup />
+                    </div>
+                </div>
+            </DashboardTitleWrapper>
+        );
+    }
+
+    return (
+        <>
+            <DashboardTitleWrapper
+                mainText="Wallet"
+                subText="Manage your wallet, view balances, stake, and bridge tokens"
+            >
+                <div className="my-6 flex items-center justify-between">
+                    <BackButton text="Go Back" href="/wallet" />
+                    <LocalWalletSelector
+                        onAddWallet={() => setShowAddWalletDialog(true)}
+                    />
                 </div>
                 <TokenForm
                     title="Unstake hAlpha"
@@ -98,6 +124,12 @@ const Unstake = () => {
                 loading={isLoading}
                 amount={pendingAmount}
                 isUnstaking={true}
+            />
+
+            {/* Add Wallet Dialog */}
+            <AddWalletDialog
+                open={showAddWalletDialog}
+                onClose={() => setShowAddWalletDialog(false)}
             />
         </>
     );

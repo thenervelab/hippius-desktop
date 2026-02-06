@@ -8,7 +8,7 @@ const BridgeWidget: FC = () => {
     const router = useRouter();
 
     const handleBridgeTokens = () => {
-        router.push("/stake?tab=bridge");
+        router.push("/bridge");
     };
 
     return (
@@ -28,7 +28,7 @@ const BridgeWidget: FC = () => {
                             Bridge tokens on Hippius
                         </div>
                         <div className="text-base font-medium text-grey-50 mt-2">
-                            Transfer tokens between alpha and TAO easily on Hippius
+                            Transfer tokens between alpha and hAlpha easily on Hippius
                         </div>
                     </div>
                 </div>

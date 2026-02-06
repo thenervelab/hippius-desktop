@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Suppress macOS native focus indicators in Tauri/WebKit */
+button:focus,
+button:focus-visible,
+[role="button"]:focus,
+[role="button"]:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  -webkit-focus-ring-color: transparent !important;
+}
+
+/* Remove webkit tap highlight color */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
 :root {
   /* Primary Shades */
   --primary-100: 233 239 251;

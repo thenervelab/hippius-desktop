@@ -5,7 +5,7 @@ import { Input, CardButton, Icons, AbstractIconWrapper } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { formatStakingAmount } from "@/app/lib/utils/staking";
-import { formatPreciseBalance } from "@/app/lib/utils/formatters/formatPreciseBalance";
+import { formatPreciseBalance, formatPlanckToDecimal } from "@/app/lib/utils/formatters/formatPreciseBalance";
 
 interface TokenFormProps {
     title: string;
@@ -131,7 +131,7 @@ const TokenForm: FC<TokenFormProps> = ({
                             <span className="ml-1">
                                 {isUnstaking
                                     ? `${formatStakingAmount(stakingInfo.bonded)} hALPHA`
-                                    : formatPreciseBalance(availableAmount, 8)
+                                    : formatPlanckToDecimal(balanceAmount)
                                 }
                             </span>
                         </div>

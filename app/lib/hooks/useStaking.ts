@@ -1,8 +1,11 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect, useCallback } from 'react';
 import { usePolkadotApi } from '@/app/lib/polkadot-api-context';
-import { useWalletAuth } from '@/app/lib/wallet-auth-context';
+import { useActiveWalletAddress } from '@/app/lib/hooks/useActiveWalletAddress';
 import { BN } from '@polkadot/util';
+import { Keyring } from '@polkadot/keyring';
+import { cryptoWaitReady } from '@polkadot/util-crypto';
+import type { KeyringPair } from '@polkadot/keyring/types';
 
 interface StakingInfo {
     bonded: string;
@@ -20,16 +23,16 @@ interface StakingInfo {
 }
 
 interface StakingOperations {
-    bond: (amount: string) => Promise<void>;
-    bondExtra: (amount: string) => Promise<void>;
-    unbond: (amount: string) => Promise<void>;
-    withdrawUnbonded: () => Promise<void>;
-    claimRewards: () => Promise<void>;
+    bond: (amount: string, mnemonic?: string) => Promise<void>;
+    bondExtra: (amount: string, mnemonic?: string) => Promise<void>;
+    unbond: (amount: string, mnemonic?: string) => Promise<void>;
+    withdrawUnbonded: (mnemonic?: string) => Promise<void>;
+    claimRewards: (mnemonic?: string) => Promise<void>;
 }
 
 export const useStaking = () => {
     const { api, isConnected } = usePolkadotApi();
-    const { polkadotAddress, walletManager } = useWalletAuth();
+    const polkadotAddress = useActiveWalletAddress();
 
     const [stakingInfo, setStakingInfo] = useState<StakingInfo>({
         bonded: '0',
@@ -224,12 +227,23 @@ export const useStaking = () => {
         }
     }, [api, isConnected, polkadotAddress]);
 
+    // Helper to get a signing pair from mnemonic
+    const getSigningPair = useCallback(async (mnemonic?: string): Promise<KeyringPair> => {
+        if (!mnemonic) {
+            throw new Error('Mnemonic required for signing transaction');
+        }
+        await cryptoWaitReady();
+        const keyring = new Keyring({ type: 'sr25519' });
+        return keyring.addFromMnemonic(mnemonic);
+    }, []);
+
     // Bond tokens (first time staking or additional staking)
-    const bond = useCallback(async (amount: string): Promise<void> => {
-        if (!api || !polkadotAddress || !walletManager?.polkadotPair) {
-            throw new Error('API, address, or wallet not available');
+    const bond = useCallback(async (amount: string, mnemonic?: string): Promise<void> => {
+        if (!api || !polkadotAddress) {
+            throw new Error('API or address not available');
         }
 
+        const signingPair = await getSigningPair(mnemonic);
         const amountBN = new BN(amount);
 
         // Check if user already has staked tokens
@@ -247,7 +261,7 @@ export const useStaking = () => {
         }
 
         return new Promise<void>((resolve, reject) => {
-            tx.signAndSend(walletManager.polkadotPair, (result: any) => {
+            tx.signAndSend(signingPair, (result: any) => {
                 if (result.status.isInBlock) {
                     console.log('Transaction included in block');
                 } else if (result.status.isFinalized) {
@@ -259,14 +273,15 @@ export const useStaking = () => {
                 }
             }).catch(reject);
         });
-    }, [api, polkadotAddress, walletManager, fetchStakingInfo, stakingInfo.bonded]);
+    }, [api, polkadotAddress, getSigningPair, fetchStakingInfo, stakingInfo.bonded]);
 
     // Add more tokens to existing bond
-    const bondExtra = useCallback(async (amount: string): Promise<void> => {
-        if (!api || !polkadotAddress || !walletManager?.polkadotPair) {
-            throw new Error('API, address, or wallet not available');
+    const bondExtra = useCallback(async (amount: string, mnemonic?: string): Promise<void> => {
+        if (!api || !polkadotAddress) {
+            throw new Error('API or address not available');
         }
 
+        const signingPair = await getSigningPair(mnemonic);
         const amountBN = new BN(amount);
 
         // Check if user has any bonded tokens
@@ -279,7 +294,7 @@ export const useStaking = () => {
         const tx = api.tx.staking.bondExtra(amountBN);
 
         return new Promise<void>((resolve, reject) => {
-            tx.signAndSend(walletManager.polkadotPair, (result: any) => {
+            tx.signAndSend(signingPair, (result: any) => {
                 if (result.status.isFinalized) {
                     fetchStakingInfo(); // Refresh staking info
                     resolve();
@@ -288,14 +303,15 @@ export const useStaking = () => {
                 }
             }).catch(reject);
         });
-    }, [api, polkadotAddress, walletManager, fetchStakingInfo, stakingInfo.bonded]);
+    }, [api, polkadotAddress, getSigningPair, fetchStakingInfo, stakingInfo.bonded]);
 
     // Unbond tokens (schedule for withdrawal)
-    const unbond = useCallback(async (amount: string): Promise<void> => {
-        if (!api || !polkadotAddress || !walletManager?.polkadotPair) {
-            throw new Error('API, address, or wallet not available');
+    const unbond = useCallback(async (amount: string, mnemonic?: string): Promise<void> => {
+        if (!api || !polkadotAddress) {
+            throw new Error('API or address not available');
         }
 
+        const signingPair = await getSigningPair(mnemonic);
         const amountBN = new BN(amount);
 
         // Check if user has enough bonded tokens
@@ -308,7 +324,7 @@ export const useStaking = () => {
         const tx = api.tx.staking.unbond(amountBN);
 
         return new Promise<void>((resolve, reject) => {
-            tx.signAndSend(walletManager.polkadotPair, (result: any) => {
+            tx.signAndSend(signingPair, (result: any) => {
                 if (result.status.isInBlock) {
                     console.log('Unbond transaction included in block');
                 } else if (result.status.isFinalized) {
@@ -320,13 +336,15 @@ export const useStaking = () => {
                 }
             }).catch(reject);
         });
-    }, [api, polkadotAddress, walletManager, fetchStakingInfo, stakingInfo.bonded]);
+    }, [api, polkadotAddress, getSigningPair, fetchStakingInfo, stakingInfo.bonded]);
 
     // Withdraw unbonded tokens after unbonding period
-    const withdrawUnbonded = useCallback(async (): Promise<void> => {
-        if (!api || !polkadotAddress || !walletManager?.polkadotPair) {
-            throw new Error('API, address, or wallet not available');
+    const withdrawUnbonded = useCallback(async (mnemonic?: string): Promise<void> => {
+        if (!api || !polkadotAddress) {
+            throw new Error('API or address not available');
         }
+
+        const signingPair = await getSigningPair(mnemonic);
 
         // Get the number of slashing spans to determine the parameter
         const slashingSpans = await api.query.staking.slashingSpans(polkadotAddress);
@@ -335,7 +353,7 @@ export const useStaking = () => {
         const tx = api.tx.staking.withdrawUnbonded(numSlashingSpans);
 
         return new Promise<void>((resolve, reject) => {
-            tx.signAndSend(walletManager.polkadotPair, (result: any) => {
+            tx.signAndSend(signingPair, (result: any) => {
                 if (result.status.isFinalized) {
                     fetchStakingInfo(); // Refresh staking info
                     resolve();
@@ -344,13 +362,15 @@ export const useStaking = () => {
                 }
             }).catch(reject);
         });
-    }, [api, polkadotAddress, walletManager, fetchStakingInfo]);
+    }, [api, polkadotAddress, getSigningPair, fetchStakingInfo]);
 
     // Claim staking rewards
-    const claimRewards = useCallback(async (): Promise<void> => {
-        if (!api || !polkadotAddress || !walletManager?.polkadotPair) {
-            throw new Error('API, address, or wallet not available');
+    const claimRewards = useCallback(async (mnemonic?: string): Promise<void> => {
+        if (!api || !polkadotAddress) {
+            throw new Error('API or address not available');
         }
+
+        const signingPair = await getSigningPair(mnemonic);
 
         // Get current era
         const currentEra = await api.query.staking.currentEra();
@@ -362,7 +382,7 @@ export const useStaking = () => {
         const tx = api.tx.staking.payoutStakers(polkadotAddress, era - 1); // Payout previous era
 
         return new Promise<void>((resolve, reject) => {
-            tx.signAndSend(walletManager.polkadotPair, (result: any) => {
+            tx.signAndSend(signingPair, (result: any) => {
                 if (result.status.isFinalized) {
                     fetchStakingInfo(); // Refresh staking info
                     resolve();
@@ -371,7 +391,7 @@ export const useStaking = () => {
                 }
             }).catch(reject);
         });
-    }, [api, polkadotAddress, walletManager, fetchStakingInfo]);
+    }, [api, polkadotAddress, getSigningPair, fetchStakingInfo]);
 
     // Fetch staking info on mount and when dependencies change
     useEffect(() => {

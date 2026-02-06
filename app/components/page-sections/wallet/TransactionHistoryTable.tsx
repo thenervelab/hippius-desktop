@@ -22,7 +22,7 @@ import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import { Dollar } from "@/components/ui/icons";
 import { TransactionObject } from "@/app/lib/hooks/api/useBalanceTransactions";
 import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useActiveWalletAddress } from "@/app/lib/hooks/useActiveWalletAddress";
 
 export const formatDate = (
   date: Date,
@@ -65,7 +65,7 @@ const TransactionHistoryTable: React.FC<TransactionHistoryTableProps> = ({
   transactions,
   isPending,
 }) => {
-  const { polkadotAddress } = useWalletAuth();
+  const polkadotAddress = useActiveWalletAddress();
   const [currentPage, setCurrentPage] = useState(1);
 
   const totalPages = useMemo(

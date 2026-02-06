@@ -20,6 +20,7 @@ import {
   hasLocalWallets,
   updateWalletName,
   getLocalWalletById,
+  importWalletFromEncryptedBackup,
 } from "@/app/lib/helpers/localWalletDb";
 import {
   hashPasscode,
@@ -64,6 +65,12 @@ interface LocalWalletContextValue {
     mnemonic: string,
     passcode: string
   ) => Promise<boolean>;
+  importEncryptedWallet: (data: {
+    name: string;
+    address: string;
+    encryptedMnemonic: string;
+    passcodeHash: string;
+  }) => Promise<boolean>;
   switchWallet: (walletId: number) => Promise<boolean>;
   renameWallet: (walletId: number, name: string) => Promise<boolean>;
   removeWallet: (walletId: number) => Promise<boolean>;
@@ -84,6 +91,7 @@ interface LocalWalletContextValue {
   // Utilities
   truncateAddress: (address: string, start?: number, end?: number) => string;
   getDecryptedMnemonic: (passcode: string) => string | null;
+  getDecryptedMnemonicById: (walletId: number, passcode: string) => Promise<string | null>;
 }
 
 const LocalWalletContext = createContext<LocalWalletContextValue | undefined>(
@@ -241,6 +249,26 @@ export function LocalWalletProvider({
         return true;
       } catch (error) {
         console.error("Failed to import wallet:", error);
+        return false;
+      }
+    },
+    [refreshWallets]
+  );
+
+  // Import wallet from encrypted backup (preserves original encryption)
+  const importEncryptedWallet = useCallback(
+    async (data: {
+      name: string;
+      address: string;
+      encryptedMnemonic: string;
+      passcodeHash: string;
+    }): Promise<boolean> => {
+      try {
+        await importWalletFromEncryptedBackup(data);
+        await refreshWallets();
+        return true;
+      } catch (error) {
+        console.error("Failed to import encrypted wallet:", error);
         return false;
       }
     },
@@ -460,6 +488,31 @@ export function LocalWalletProvider({
     [activeWallet]
   );
 
+  // Get decrypted mnemonic by wallet ID (for exporting any wallet)
+  const getDecryptedMnemonicById = useCallback(
+    async (walletId: number, passcode: string): Promise<string | null> => {
+      try {
+        const wallet = wallets.find((w) => w.id === walletId);
+        if (!wallet) return null;
+
+        const passcodeHash = hashPasscode(passcode);
+        if (passcodeHash !== wallet.passcodeHash) {
+          return null;
+        }
+
+        const mnemonic = decryptMnemonic(wallet.encryptedMnemonic, passcode);
+        if (!isMnemonicValid(mnemonic)) {
+          return null;
+        }
+
+        return mnemonic;
+      } catch {
+        return null;
+      }
+    },
+    [wallets]
+  );
+
   const value = useMemo(
     () => ({
       wallets,
@@ -471,6 +524,7 @@ export function LocalWalletProvider({
       generateMnemonic,
       createWallet,
       importWallet,
+      importEncryptedWallet,
       switchWallet,
       renameWallet,
       removeWallet,
@@ -483,6 +537,7 @@ export function LocalWalletProvider({
       refreshWallets,
       truncateAddress,
       getDecryptedMnemonic,
+      getDecryptedMnemonicById,
     }),
     [
       wallets,
@@ -494,6 +549,7 @@ export function LocalWalletProvider({
       generateMnemonic,
       createWallet,
       importWallet,
+      importEncryptedWallet,
       switchWallet,
       renameWallet,
       removeWallet,
@@ -505,6 +561,7 @@ export function LocalWalletProvider({
       refreshWallets,
       truncateAddress,
       getDecryptedMnemonic,
+      getDecryptedMnemonicById,
     ]
   );
 

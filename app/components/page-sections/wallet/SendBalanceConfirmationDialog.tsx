@@ -39,6 +39,8 @@ const SendBalanceConfirmationDialog: React.FC<
       return;
     }
 
+    // Clear passcode after successful decryption
+    setPasscode("");
     setPasscodeError(null);
     onConfirm(mnemonic);
   };
@@ -134,19 +136,17 @@ const SendBalanceConfirmationDialog: React.FC<
             <button
               onClick={handleClose}
               disabled={loading}
-              className="px-5 py-2.5 border border-grey-80 rounded-lg text-grey-10 hover:bg-grey-95 transition"
+              className="px-5 py-2.5 border border-grey-80 rounded-lg text-grey-10 hover:bg-grey-95 transition outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0 disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               onClick={handleConfirm}
-              disabled={loading || (showPasscodeInput && !passcode)}
-              className="px-5 py-2.5 bg-primary-50 text-white rounded-lg hover:bg-primary-40 transition disabled:opacity-50 flex items-center gap-2"
+              disabled={loading || (!!showPasscodeInput && !passcode)}
+              className="px-5 py-2.5 bg-primary-50 text-white rounded-lg hover:bg-primary-40 transition disabled:opacity-50 flex items-center gap-2 outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0"
             >
               {loading ? (
-                <>
-                  <span>Sending...</span>
-                </>
+                <span>Sending...</span>
               ) : (
                 "Confirm Transfer"
               )}

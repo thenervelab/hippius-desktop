@@ -4,7 +4,7 @@ import {
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useActiveWalletAddress } from "@/app/lib/hooks/useActiveWalletAddress";
 import { indexerGet } from "@/lib/api/indexerClient";
 
 // Define types based on the indexer API response
@@ -55,7 +55,7 @@ export default function useBalanceTransactions(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<TransactionObject[], Error> {
-  const { polkadotAddress } = useWalletAuth();
+  const polkadotAddress = useActiveWalletAddress();
   const page = params?.page || 1;
   const limit = params?.limit || 10;
 

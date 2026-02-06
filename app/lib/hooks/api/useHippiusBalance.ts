@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { usePolkadotApi } from "@/lib/polkadot-api-context";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useActiveWalletAddress } from "@/app/lib/hooks/useActiveWalletAddress";
 import { useQuery } from "@tanstack/react-query";
 
 export interface FrameSystemAccountInfo {
@@ -16,23 +16,39 @@ export interface FrameSystemAccountInfo {
   };
 }
 
+// Default empty account info for when API is not ready
+const DEFAULT_ACCOUNT_INFO: FrameSystemAccountInfo = {
+  nonce: 0,
+  consumers: 0,
+  providers: 0,
+  sufficients: 0,
+  data: {
+    free: BigInt(0),
+    reserved: BigInt(0),
+    frozen: BigInt(0),
+    flags: "0x0",
+  },
+};
+
 /**
  * Read `system.account(AccountId32) -> FrameSystemAccountInfo`
  * Returns account info with balance data (free, reserved, frozen)
- * Returns undefined → api not ready or any error
+ * Returns default empty account info when api not ready or any error
  */
 export function useHippiusBalance() {
   const { api, isConnected } = usePolkadotApi();
-  const { polkadotAddress } = useWalletAuth();
+  const polkadotAddress = useActiveWalletAddress();
 
-  return useQuery<FrameSystemAccountInfo | undefined>({
+  return useQuery<FrameSystemAccountInfo>({
     queryKey: ["hippius-balance", polkadotAddress],
-    enabled: !!polkadotAddress, // don't run before we have an address
+    enabled: !!polkadotAddress && !!api && isConnected,
     refetchInterval: 30_000,
 
     queryFn: async () => {
       /* ── Guard: API not ready ───────────────────────────── */
-      if (!api || !isConnected || !polkadotAddress) return undefined;
+      if (!api || !isConnected || !polkadotAddress) {
+        return DEFAULT_ACCOUNT_INFO;
+      }
 
       try {
         const accountInfo = await api.query.system.account(polkadotAddress);
@@ -54,8 +70,8 @@ export function useHippiusBalance() {
         };
       } catch (err) {
         console.error("system.account query failed:", err);
-        /* any error → treat as no data */
-        return undefined;
+        /* any error → return default empty account */
+        return DEFAULT_ACCOUNT_INFO;
       }
     },
   });

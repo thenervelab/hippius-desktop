@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { BackButton, Icons } from "@/components/ui";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import TokenForm from "../wallet/shared/TokenForm";
@@ -11,28 +11,42 @@ import { useStaking } from "@/app/lib/hooks/useStaking";
 import { toPlancks } from "@/app/lib/utils/staking";
 import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
 import { BN } from "@polkadot/util";
+import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
+import { LocalWalletSelector, AddWalletDialog, LocalWalletSetup } from "../wallet/local-wallet";
+import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 
 const StakeBridge = () => {
     const searchParams = useSearchParams();
     const router = useRouter();
+    const pathname = usePathname();
     const tabParam = searchParams.get("tab");
     const { stakingInfo, operations } = useStaking();
+    const { setupStep, activeWallet } = useLocalWallet();
+    const { data: balanceInfo } = useHippiusBalance();
 
-    // Set initial tab based on URL parameter, default to "Stake hAlpha"
+    // Add wallet dialog state
+    const [showAddWalletDialog, setShowAddWalletDialog] = useState(false);
+
+    // Set initial tab based on URL parameter or pathname
+    // If on /bridge route, default to bridge tab
     const [activeTab, setActiveTab] = useState(() => {
-        return tabParam === "bridge" ? "Bridge hAlpha" : "Stake hAlpha";
+        if (tabParam === "bridge" || pathname === "/bridge") {
+            return "Bridge hAlpha";
+        }
+        return "Stake hAlpha";
     });
 
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [pendingAmount, setPendingAmount] = useState("");
 
-    // Update URL when tab changes
+    // Update URL when tab changes - navigate to appropriate route
     useEffect(() => {
-        const newTab = activeTab === "Bridge hAlpha" ? "bridge" : "stake";
-        const currentPath = window.location.pathname;
-        const newUrl = `${currentPath}?tab=${newTab}`;
-        router.replace(newUrl, { scroll: false });
+        if (activeTab === "Bridge hAlpha") {
+            router.replace("/bridge", { scroll: false });
+        } else {
+            router.replace("/stake", { scroll: false });
+        }
     }, [activeTab, router]);
 
     const tabs: TabOption[] = [
@@ -63,7 +77,7 @@ const StakeBridge = () => {
         setShowConfirmation(true);
     };
 
-    const handleConfirmStake = async () => {
+    const handleConfirmStake = async (mnemonic: string) => {
         setIsLoading(true);
         setShowConfirmation(false);
 
@@ -77,7 +91,7 @@ const StakeBridge = () => {
             // Convert amount to planck (18 decimals)
             const amountInPlanck = toPlancks(pendingAmount);
 
-            await operations.bond(amountInPlanck);
+            await operations.bond(amountInPlanck, mnemonic);
             toast.dismiss(loadingToast);
             toast.success(`Successfully staked ${pendingAmount} hALPHA!`);
 
@@ -103,10 +117,13 @@ const StakeBridge = () => {
     };
 
     // Calculate available balance for staking (excluding staked and unbonding amounts)
+    // Uses balanceInfo from useHippiusBalance for consistency with wallet page
     const calculateAvailableBalance = () => {
-        if (!stakingInfo.balance) return "0";
+        // Use balanceInfo.data.free from useHippiusBalance (same as WalletBalanceWidget)
+        const freeBalance = balanceInfo?.data?.free;
+        if (!freeBalance) return "0";
 
-        const totalFreeBalance = stakingInfo.balance.toString();
+        const totalFreeBalance = freeBalance.toString();
         const bondedAmount = stakingInfo.bonded || "0";
         const unbondingAmount = stakingInfo.unbonding || "0";
 
@@ -130,11 +147,33 @@ const StakeBridge = () => {
     // Get available balance for staking (truly free amount)
     const availableBalance = calculateAvailableBalance();
 
-    return (
-        <>
+    // Show wallet setup if no wallet is ready
+    if (setupStep !== "ready") {
+        return (
             <DashboardTitleWrapper mainText="Wallet">
                 <div className="mb-6">
                     <BackButton text="Go Back" href="/wallet" />
+                </div>
+                <div className="flex items-center justify-center min-h-[400px]">
+                    <div className="bg-white rounded-lg shadow-menu border border-grey-80 overflow-hidden">
+                        <LocalWalletSetup />
+                    </div>
+                </div>
+            </DashboardTitleWrapper>
+        );
+    }
+
+    return (
+        <>
+            <DashboardTitleWrapper
+                mainText="Wallet"
+                subText="Manage your wallet, view balances, stake, and bridge tokens"
+            >
+                <div className="my-6 flex items-center justify-between">
+                    <BackButton text="Go Back" href="/wallet" />
+                    <LocalWalletSelector
+                        onAddWallet={() => setShowAddWalletDialog(true)}
+                    />
                 </div>
 
                 {/* Tabs */}
@@ -189,6 +228,12 @@ const StakeBridge = () => {
                 loading={isLoading}
                 amount={pendingAmount}
                 isUnstaking={false}
+            />
+
+            {/* Add Wallet Dialog */}
+            <AddWalletDialog
+                open={showAddWalletDialog}
+                onClose={() => setShowAddWalletDialog(false)}
             />
         </>
     );

@@ -419,3 +419,58 @@ export async function importWalletFromBackup(
     throw error;
   }
 }
+
+/**
+ * Import wallet from encrypted backup (preserves original encryption)
+ * No passcode needed - wallet is imported with its original encryption
+ */
+export async function importWalletFromEncryptedBackup(
+  data: {
+    name: string;
+    address: string;
+    encryptedMnemonic: string;
+    passcodeHash: string;
+  }
+): Promise<LocalWallet | null> {
+  try {
+    const db = await getDb();
+
+    // Check if wallet with this address already exists
+    const existing = db.exec(
+      `SELECT id FROM local_wallets WHERE address = ?`,
+      [data.address]
+    );
+
+    if (existing.length > 0 && existing[0]?.values.length > 0) {
+      throw new Error("A wallet with this address already exists");
+    }
+
+    // If this is the first wallet, make it active
+    const walletCount = db.exec(`SELECT COUNT(*) FROM local_wallets`);
+    const isFirst =
+      walletCount.length === 0 ||
+      (walletCount[0]?.values[0]?.[0] as number) === 0;
+
+    const now = Date.now();
+    db.run(
+      `INSERT INTO local_wallets (name, address, encrypted_mnemonic, passcode_hash, is_active, created_at, updated_at) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        data.name,
+        data.address,
+        data.encryptedMnemonic,
+        data.passcodeHash,
+        isFirst ? 1 : 0,
+        now,
+        now,
+      ]
+    );
+
+    await saveBytes(db.export());
+
+    return getLocalWalletByAddress(data.address);
+  } catch (error) {
+    console.error("Failed to import wallet from encrypted backup:", error);
+    throw error;
+  }
+}

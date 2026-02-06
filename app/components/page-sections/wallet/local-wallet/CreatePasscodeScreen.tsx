@@ -124,6 +124,22 @@ const CreatePasscodeScreen: React.FC = () => {
         />
       </div>
 
+      {/* Security Warning */}
+      <div className="w-full mb-6 p-4 bg-warning-95 border border-warning-80 rounded-lg">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="size-5 text-warning-50 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-grey-30">
+            <p className="font-semibold text-grey-10 mb-1">Important Security Notice</p>
+            <ul className="space-y-1 list-disc list-inside">
+              <li>Your passcode is <strong>not stored anywhere</strong> and cannot be recovered</li>
+              <li>You must remember this passcode - it&apos;s required to sign all transactions</li>
+              <li>It encrypts and decrypts your mnemonic for secure signing</li>
+              <li>If you forget it, you&apos;ll need to re-import your wallet using your mnemonic</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
       {/* Error */}
       {error && (
         <div className="w-full flex items-center gap-2 text-error-70 text-sm font-medium mb-4 p-3 bg-error-95 rounded-lg">
