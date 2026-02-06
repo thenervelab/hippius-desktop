@@ -1,6 +1,15 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+//! Hippius Desktop — Tauri 2.0 backend entry point.
+//!
+//! This binary is the sole entry point for the desktop app. It initializes
+//! the Tauri runtime, registers all IPC commands, sets up the SQLite database,
+//! and starts platform-specific services (Nebula VPN, deep links).
+//!
+//! **Note**: `lib.rs` in this crate is a vestigial template file — this `main.rs`
+//! is the actual application entry point.
+
 mod builder_blocks;
 mod commands;
 mod constants;
@@ -33,8 +42,12 @@ use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Manager};
 
+/// Global SQLite connection pool. Set once during `setup()` and read by all
+/// command handlers. Access with `DB_POOL.get().ok_or("Database not initialized")?`.
 pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
+/// Load environment variables from `.env` file(s). Tries both the working
+/// directory and the `CARGO_MANIFEST_DIR` path (for development builds).
 fn load_env() {
     let _ = dotenvy::dotenv();
     let manifest_dir = env!("CARGO_MANIFEST_DIR");

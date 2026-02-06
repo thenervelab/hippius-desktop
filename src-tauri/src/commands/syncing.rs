@@ -1,3 +1,14 @@
+//! HCFS sync control commands and configuration.
+//!
+//! This module contains the Tauri commands for managing the sync lifecycle:
+//! - `initialize_sync` — reads config from DB, creates Drive, starts sync loop
+//! - `stop_sync` — cancels the sync loop, drops the Drive
+//! - `trigger_sync_now` — runs one immediate sync cycle
+//! - `save_hcfs_config` / `get_hcfs_config` / `update_hcfs_server_url` — config CRUD
+//!
+//! It also contains `setup_progress_handlers()` which registers callbacks on the
+//! Drive that emit Tauri events for upload/download/encrypt/decrypt progress.
+
 use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, HCFS_DRIVE, SYNC_LOOP_HANDLE};
 use crate::sync_shared::{clear_cancel, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
 use crate::utils::account_key::account_key;
@@ -242,7 +253,7 @@ pub async fn stop_sync() -> Result<(), String> {
 
     let mut guard = HCFS_DRIVE.lock().await;
     *guard = None;
-    HCFS_SYNC_STATE.lock().unwrap().reset();
+    HCFS_SYNC_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).reset();
     Ok(())
 }
 
@@ -274,7 +285,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
                     println!("[Sync] Upload completed: {}", file_name);
-                    let mut s = HCFS_SYNC_STATE.lock().unwrap();
+                    let mut s = HCFS_SYNC_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     s.add_activity(SyncActivityItem {
                         file_name,
                         action: "uploaded".to_string(),
@@ -297,7 +308,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
                     println!("[Sync] Download completed: {}", file_name);
-                    let mut s = HCFS_SYNC_STATE.lock().unwrap();
+                    let mut s = HCFS_SYNC_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     s.add_activity(SyncActivityItem {
                         file_name,
                         action: "downloaded".to_string(),

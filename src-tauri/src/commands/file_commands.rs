@@ -1,3 +1,11 @@
+//! File operations on the local sync folder.
+//!
+//! These commands let the frontend add, remove, list, and export files
+//! from the sync folder. The hcfs-client file watcher picks up changes
+//! automatically and syncs them to the remote server.
+//!
+//! All path-accepting commands include traversal protection via `ensure_within()`.
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -34,10 +42,19 @@ pub async fn add_file(sync_path: String, file_path: String) -> Result<String, St
         .ok_or("Invalid file name")?
         .to_string();
 
-    let dest = Path::new(&sync_path).join(&name);
+    // Reject names containing path separators or traversal components
+    if name.contains('/') || name.contains('\\') || name == ".." || name == "." {
+        return Err("Invalid file name".to_string());
+    }
+
+    let parent = Path::new(&sync_path);
+    let dest = parent.join(&name);
     tokio::fs::copy(source, &dest)
         .await
         .map_err(|e| format!("Copy failed: {e}"))?;
+
+    // Verify the created file is within the sync folder
+    ensure_within(parent, &dest)?;
 
     Ok(name)
 }
@@ -52,8 +69,17 @@ pub async fn add_folder(sync_path: String, folder_path: String) -> Result<String
         .ok_or("Invalid folder name")?
         .to_string();
 
-    let dest = Path::new(&sync_path).join(&name);
+    // Reject names containing path separators or traversal components
+    if name.contains('/') || name.contains('\\') || name == ".." || name == "." {
+        return Err("Invalid folder name".to_string());
+    }
+
+    let parent = Path::new(&sync_path);
+    let dest = parent.join(&name);
     copy_dir_recursive(source, &dest).await?;
+
+    // Verify the created folder is within the sync folder
+    ensure_within(parent, &dest)?;
 
     Ok(name)
 }
