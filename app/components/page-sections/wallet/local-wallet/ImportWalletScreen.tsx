@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
-import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
+import React, { useState, useCallback, useRef } from "react";
+import { AbstractIconWrapper, CardButton, Icons, Graphsheet } from "@/components/ui";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import PasscodeInput from "./PasscodeInput";
 import { ArrowRight, AlertCircle, Upload, FileText, X } from "lucide-react";
@@ -10,24 +10,24 @@ import { isMnemonicValid } from "@/app/lib/helpers/validateMnemonic";
 import { decryptMnemonic } from "@/app/lib/helpers/crypto";
 
 /**
- * Screen for importing an existing wallet
+ * Screen for importing an existing wallet from file
  */
 const ImportWalletScreen: React.FC = () => {
   const { importWallet, setSetupStep } = useLocalWallet();
-  const [importMethod, setImportMethod] = useState<"file" | "mnemonic">("file");
-  const [mnemonic, setMnemonic] = useState("");
   const [passcode, setPasscode] = useState("");
-  const [walletName, setWalletName] = useState("");
   const [importedFile, setImportedFile] = useState<{
     name: string;
     encryptedMnemonic: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileDrop = useCallback(
     async (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
+      setIsDragging(false);
       const file = e.dataTransfer.files[0];
       if (file) {
         await processFile(file);
@@ -60,7 +60,6 @@ const ImportWalletScreen: React.FC = () => {
         name: data.name || "Imported Wallet",
         encryptedMnemonic: data.encryptedMnemonic,
       });
-      setWalletName(data.name || "Imported Wallet");
       setError(null);
     } catch {
       setError("Failed to read wallet backup file");
@@ -69,6 +68,11 @@ const ImportWalletScreen: React.FC = () => {
 
   const handleImport = async () => {
     setError(null);
+
+    if (!importedFile) {
+      setError("Please upload a wallet backup file");
+      return;
+    }
 
     if (!passcode) {
       setError("Please enter a passcode");
@@ -83,35 +87,25 @@ const ImportWalletScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      let mnemonicToImport = mnemonic;
-
-      // If importing from file, decrypt with provided passcode
-      if (importMethod === "file" && importedFile) {
-        try {
-          mnemonicToImport = decryptMnemonic(
-            importedFile.encryptedMnemonic,
-            passcode
-          );
-          if (!isMnemonicValid(mnemonicToImport)) {
-            setError("Incorrect passcode for this wallet backup");
-            setIsLoading(false);
-            return;
-          }
-        } catch {
+      // Decrypt with provided passcode
+      let mnemonicToImport: string;
+      try {
+        mnemonicToImport = decryptMnemonic(
+          importedFile.encryptedMnemonic,
+          passcode
+        );
+        if (!isMnemonicValid(mnemonicToImport)) {
           setError("Incorrect passcode for this wallet backup");
           setIsLoading(false);
           return;
         }
-      } else {
-        // Importing with mnemonic directly
-        if (!isMnemonicValid(mnemonicToImport)) {
-          setError("Invalid mnemonic phrase");
-          setIsLoading(false);
-          return;
-        }
+      } catch {
+        setError("Incorrect passcode for this wallet backup");
+        setIsLoading(false);
+        return;
       }
 
-      const name = walletName || "Imported Wallet";
+      const name = importedFile.name || "Imported Wallet";
       const success = await importWallet(name, mnemonicToImport, passcode);
 
       if (success) {
@@ -137,133 +131,85 @@ const ImportWalletScreen: React.FC = () => {
 
   const clearFile = () => {
     setImportedFile(null);
-    setWalletName("");
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   return (
-    <div className="flex flex-col items-center w-full max-w-[428px] mx-auto px-4 pt-16 pb-8">
-      {/* Logo */}
-      <div className="mb-8">
-        <Icons.HippiusLogo className="size-16" />
+    <div className="flex flex-col items-center w-full max-w-[430px] mx-auto px-4 pt-16 pb-8">
+      {/* Logo with Graphsheet background */}
+      <div className="relative flex items-center justify-center mb-8 size-[100px]">
+        <Graphsheet className="absolute inset-0 size-full rounded-full border border-grey-90" />
+        <Icons.SplashHippiusLogo className="size-14 z-10" />
       </div>
 
       {/* Title */}
-      <h1 className="text-2xl font-semibold text-grey-10 mb-8">
-        Import Wallet
+      <h1 className="text-2xl font-semibold text-grey-10 mb-2">
+        Import Your Wallet
       </h1>
+      <p className="text-base text-grey-60 text-center mb-8">
+        Import your wallet from a backup file
+      </p>
 
-      {/* Import Method Toggle */}
-      <div className="w-full flex gap-2 mb-6 p-1 bg-grey-95 rounded-lg">
-        <button
-          onClick={() => setImportMethod("file")}
-          className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${importMethod === "file"
-              ? "bg-white text-grey-10 shadow-sm"
-              : "text-grey-50 hover:text-grey-30"
-            }`}
+      {/* File Drop Zone */}
+      {!importedFile ? (
+        <div
+          onDrop={handleFileDrop}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragging(true);
+          }}
+          onDragLeave={() => setIsDragging(false)}
+          className="w-full mb-6"
         >
-          From File
-        </button>
-        <button
-          onClick={() => setImportMethod("mnemonic")}
-          className={`flex-1 py-2 px-4 rounded-md text-sm font-medium transition-colors ${importMethod === "mnemonic"
-              ? "bg-white text-grey-10 shadow-sm"
-              : "text-grey-50 hover:text-grey-30"
+          <label 
+            className={`flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors bg-grey-98 ${
+              isDragging 
+                ? "border-primary-50 bg-primary-95" 
+                : "border-grey-80 hover:border-primary-50"
             }`}
-        >
-          From Mnemonic
-        </button>
-      </div>
-
-      {importMethod === "file" ? (
-        <>
-          {/* File Drop Zone */}
-          {!importedFile ? (
-            <div
-              onDrop={handleFileDrop}
-              onDragOver={(e) => e.preventDefault()}
-              className="w-full mb-6"
-            >
-              <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-grey-80 rounded-lg cursor-pointer hover:border-primary-50 transition-colors bg-grey-98">
-                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                  <AbstractIconWrapper className="size-12 text-primary-40 mb-3">
-                    <Upload className="absolute size-6 text-primary-50" />
-                  </AbstractIconWrapper>
-                  <p className="mb-2 text-sm font-medium text-grey-10">
-                    Upload a File Here
-                  </p>
-                  <p className="text-xs text-grey-50">
-                    Drag and drop or click to add one or more files here to upload
-                  </p>
-                </div>
-                <input
-                  type="file"
-                  className="hidden"
-                  accept=".json"
-                  onChange={handleFileSelect}
-                />
-              </label>
+          >
+            <div className="flex flex-col items-center justify-center pt-5 pb-6">
+              <AbstractIconWrapper className="size-12 text-primary-40 mb-3">
+                <Upload className="absolute size-6 text-primary-50" />
+              </AbstractIconWrapper>
+              <p className="mb-2 text-sm font-medium text-grey-10">
+                Upload a File Here
+              </p>
+              <p className="text-xs text-grey-50">
+                Drag and drop or click to select your wallet backup file
+              </p>
             </div>
-          ) : (
-            <div className="w-full mb-6 p-4 bg-grey-98 border border-grey-80 rounded-lg">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <FileText className="size-5 text-primary-50" />
-                  <div>
-                    <p className="text-sm font-medium text-grey-10">
-                      {importedFile.name}
-                    </p>
-                    <p className="text-xs text-grey-50">Wallet backup file</p>
-                  </div>
-                </div>
-                <button
-                  onClick={clearFile}
-                  className="p-1 text-grey-50 hover:text-grey-30 transition-colors"
-                >
-                  <X className="size-4" />
-                </button>
-              </div>
-            </div>
-          )}
-        </>
-      ) : (
-        <>
-          {/* Mnemonic Input */}
-          <div className="w-full mb-4">
-            <label className="text-sm font-medium text-grey-60 mb-2 block">
-              Mnemonic Phrase
-            </label>
-            <textarea
-              value={mnemonic}
-              onChange={(e) => {
-                setMnemonic(e.target.value);
-                setError(null);
-              }}
-              placeholder="Enter your 12 or 24 word mnemonic phrase"
-              className="w-full h-24 px-4 py-3 border border-grey-80 rounded-lg bg-transparent text-grey-10 text-base placeholder:text-grey-60 outline-none transition-all duration-300 hover:shadow-input-focus focus:shadow-input-focus resize-none"
-              disabled={isLoading}
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept=".json"
+              onChange={handleFileSelect}
             />
-          </div>
-
-          {/* Wallet Name Input */}
-          <div className="w-full mb-4">
-            <label className="text-sm font-medium text-grey-60 mb-2 block">
-              Wallet Name
-            </label>
-            <div className="relative">
-              <div className="absolute left-4 top-1/2 -translate-y-1/2 text-grey-50">
-                <Icons.UserSquare className="size-5" />
+          </label>
+        </div>
+      ) : (
+        <div className="w-full mb-6 p-4 bg-grey-98 border border-grey-80 rounded-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <FileText className="size-5 text-primary-50" />
+              <div>
+                <p className="text-sm font-medium text-grey-10">
+                  {importedFile.name}
+                </p>
+                <p className="text-xs text-grey-50">Wallet backup file</p>
               </div>
-              <input
-                type="text"
-                value={walletName}
-                onChange={(e) => setWalletName(e.target.value)}
-                placeholder="Choose a name for your wallet"
-                className="w-full h-14 pl-12 pr-4 border border-grey-80 rounded-lg bg-transparent text-grey-10 text-base placeholder:text-grey-60 outline-none transition-all duration-300 hover:shadow-input-focus focus:shadow-input-focus"
-                disabled={isLoading}
-              />
             </div>
+            <button
+              onClick={clearFile}
+              className="p-1 text-grey-50 hover:text-grey-30 transition-colors"
+            >
+              <X className="size-4" />
+            </button>
           </div>
-        </>
+        </div>
       )}
 
       {/* Passcode Input */}
@@ -280,9 +226,7 @@ const ImportWalletScreen: React.FC = () => {
           onSubmit={handleImport}
         />
         <p className="text-xs text-grey-50 mt-2">
-          {importMethod === "file"
-            ? "Enter the passcode used when exporting this wallet"
-            : "Set a new passcode to secure your imported wallet"}
+          Enter the passcode used when exporting this wallet
         </p>
       </div>
 
@@ -298,12 +242,7 @@ const ImportWalletScreen: React.FC = () => {
       <CardButton
         className="w-full h-12 mb-6"
         onClick={handleImport}
-        disabled={
-          isLoading ||
-          !passcode ||
-          (importMethod === "file" && !importedFile) ||
-          (importMethod === "mnemonic" && !mnemonic)
-        }
+        disabled={isLoading || !passcode || !importedFile}
         loading={isLoading}
       >
         <div className="flex items-center justify-center gap-2 text-lg font-medium">
@@ -328,8 +267,8 @@ const ImportWalletScreen: React.FC = () => {
           className="text-base text-grey-50 hover:text-grey-30 transition-colors block w-full"
           disabled={isLoading}
         >
-          Have an existing wallet?{" "}
-          <span className="font-semibold text-grey-10">Import Your Wallet</span>
+          Already have a wallet?{" "}
+          <span className="font-semibold text-grey-10">Access Wallet</span>
         </button>
       </div>
     </div>

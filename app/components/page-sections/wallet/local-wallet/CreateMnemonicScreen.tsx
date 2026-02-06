@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { CardButton, Icons, Input } from "@/components/ui";
+import { CardButton, Icons, Input, Graphsheet } from "@/components/ui";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { ArrowRight, Copy, Check, AlertTriangle } from "lucide-react";
 
@@ -46,10 +46,11 @@ const CreateMnemonicScreen: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col items-center w-full max-w-[428px] mx-auto px-4 pt-16 pb-8">
-      {/* Logo */}
-      <div className="mb-8">
-        <Icons.HippiusLogo className="size-16" />
+    <div className="flex flex-col items-center w-full max-w-[430px] mx-auto px-4 pt-16 pb-8">
+      {/* Logo with Graphsheet background */}
+      <div className="relative flex items-center justify-center mb-8 size-[100px]">
+        <Graphsheet className="absolute inset-0 size-full rounded-full border border-grey-90" />
+        <Icons.SplashHippiusLogo className="size-14 z-10" />
       </div>
 
       {/* Title */}
