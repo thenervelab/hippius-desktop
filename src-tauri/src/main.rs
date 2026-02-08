@@ -140,6 +140,10 @@ fn main() {
             commands::syncing::save_hcfs_config,
             commands::syncing::get_hcfs_config,
             commands::syncing::update_hcfs_server_url,
+            // Stage & conflict resolution
+            commands::syncing::stage_changes,
+            commands::syncing::sync_with_conflict_resolutions,
+            commands::syncing::cancel_review,
         ]);
 
     let builder = setup(builder);

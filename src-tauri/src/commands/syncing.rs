@@ -9,13 +9,15 @@
 //! It also contains `setup_progress_handlers()` which registers callbacks on the
 //! Drive that emit Tauri events for upload/download/encrypt/decrypt progress.
 
-use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, HCFS_DRIVE, SYNC_LOOP_HANDLE};
+use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, StagedChanges, HCFS_DRIVE, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE};
 use crate::sync_shared::{clear_cancel, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
 use crate::utils::account_key::account_key;
 use crate::DB_POOL;
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
@@ -345,4 +347,125 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
             );
         })),
     });
+}
+
+/// Stage changes and return a preview of what will sync.
+/// Pauses auto-sync while the user reviews.
+#[tauri::command]
+pub async fn stage_changes() -> Result<StagedChanges, String> {
+    // Pause auto-sync so the review is stable
+    SYNC_REVIEW_MODE.store(true, Ordering::Relaxed);
+
+    let guard = HCFS_DRIVE.lock().await;
+    match guard.as_ref() {
+        Some(m) if m.is_unlocked() => match m.stage_with_paths() {
+            Ok(changes) => Ok(changes),
+            Err(e) => {
+                SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+                Err(e)
+            }
+        },
+        Some(_) => {
+            SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+            Err("Drive is not unlocked".to_string())
+        }
+        None => {
+            SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+            Err("Drive not initialized".to_string())
+        }
+    }
+}
+
+/// Sync with user-provided conflict resolutions, then resume auto-sync.
+/// `resolutions` maps hex-encoded FileId → resolution string
+/// (one of: "keep_local", "accept_remote", "keep_both", "skip").
+#[tauri::command]
+pub async fn sync_with_conflict_resolutions(
+    app: AppHandle,
+    resolutions: HashMap<String, String>,
+) -> Result<(), String> {
+    // Mark syncing in shared state
+    {
+        let mut s = HCFS_SYNC_STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        s.is_syncing = true;
+    }
+
+    let _ = app.emit("hcfs_sync_started", ());
+
+    // Suppress file watcher during sync to prevent feedback loops
+    SYNC_IN_PROGRESS.store(true, Ordering::Relaxed);
+
+    let result = {
+        let mut guard = HCFS_DRIVE.lock().await;
+        match guard.as_mut() {
+            Some(m) if m.is_unlocked() => Some(m.sync_with_resolutions(resolutions).await),
+            _ => None,
+        }
+    };
+
+    // Re-enable file watcher after a short delay to ignore trailing FS events
+    {
+        let flag = SYNC_IN_PROGRESS.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            flag.store(false, Ordering::Relaxed);
+        });
+    }
+
+    // Resume auto-sync
+    SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+
+    // Update shared state
+    {
+        let mut s = HCFS_SYNC_STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        s.is_syncing = false;
+        s.last_sync_time = Some(chrono::Utc::now().timestamp());
+    }
+
+    match result {
+        Some(Ok(outcome)) => {
+            println!(
+                "[Sync] Reviewed sync completed: uploaded={}, downloaded={}, deleted_local={}, deleted_remote={}, conflicts_resolved={}, conflicts_skipped={}",
+                outcome.files_uploaded,
+                outcome.files_downloaded,
+                outcome.files_deleted_locally,
+                outcome.files_deleted_remotely,
+                outcome.conflicts_resolved,
+                outcome.conflicts_skipped,
+            );
+            let _ = app.emit(
+                "hcfs_sync_completed",
+                serde_json::json!({
+                    "files_uploaded": outcome.files_uploaded,
+                    "files_downloaded": outcome.files_downloaded,
+                    "files_deleted_locally": outcome.files_deleted_locally,
+                    "files_deleted_remotely": outcome.files_deleted_remotely,
+                    "conflicts_resolved": outcome.conflicts_resolved,
+                    "conflicts_skipped": outcome.conflicts_skipped,
+                }),
+            );
+            Ok(())
+        }
+        Some(Err(e)) => {
+            let _ = app.emit("hcfs_sync_error", serde_json::json!({"error": e}));
+            Err(e)
+        }
+        None => {
+            let msg = "Drive not initialized or not unlocked";
+            let _ = app.emit("hcfs_sync_error", serde_json::json!({"error": msg}));
+            Err(msg.to_string())
+        }
+    }
+}
+
+/// Cancel the review dialog and resume auto-sync without syncing.
+#[tauri::command]
+pub async fn cancel_review() -> Result<(), String> {
+    SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+    println!("[Sync] Review cancelled, auto-sync resumed");
+    Ok(())
 }

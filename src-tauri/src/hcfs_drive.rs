@@ -17,9 +17,13 @@
 use crate::sync_shared::{is_cancelled, HCFS_SYNC_STATE};
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::drive::Drive;
-use hcfs_client::sync::{SyncMode, SyncOutcome, SyncPlan, SyncProgress};
+use hcfs_client::sync::{
+    SyncConflict, SyncConflictResolution, SyncConflictType, SyncMode, SyncOutcome, SyncProgress,
+};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use once_cell::sync::Lazy;
+use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -30,7 +34,38 @@ use tokio::task::JoinHandle;
 
 /// Flag to suppress file watcher events while a sync is in progress,
 /// preventing a feedback loop where sync-generated file changes trigger more syncs.
-static SYNC_IN_PROGRESS: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
+pub(crate) static SYNC_IN_PROGRESS: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
+
+/// Flag to pause auto-sync while the user is reviewing staged changes.
+/// When true, `trigger_sync` becomes a no-op so the review dialog has stable data.
+pub static SYNC_REVIEW_MODE: AtomicBool = AtomicBool::new(false);
+
+// --- Serializable types for staged changes ---
+
+#[derive(Debug, Serialize, Clone)]
+pub struct StagedFile {
+    pub file_id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct StagedConflict {
+    pub file_id: String,
+    pub path: String,
+    pub conflict_type: String,
+    pub has_local: bool,
+    pub has_remote: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct StagedChanges {
+    pub uploads: Vec<StagedFile>,
+    pub downloads: Vec<StagedFile>,
+    pub local_deletes: Vec<StagedFile>,
+    pub remote_deletes: Vec<StagedFile>,
+    pub conflicts: Vec<StagedConflict>,
+    pub unchanged_count: usize,
+}
 
 /// Thin wrapper around `hcfs_client::Drive` that adds error mapping to `String`
 /// (required for Tauri IPC) and tracks the sync folder path.
@@ -88,9 +123,96 @@ impl HcfsDriveManager {
             .map_err(|e| e.to_string())
     }
 
-    #[allow(dead_code)]
-    pub fn stage(&self) -> Result<SyncPlan, String> {
-        self.drive.stage().map_err(|e| e.to_string())
+    /// Stage changes and resolve FileIds to human-readable paths using the path_index.
+    ///
+    /// Note: `drive.stage()` internally calls `load_sync_state()` + `scan_local_files()`
+    /// but does not expose the resulting `SyncState`. We must load it again to access
+    /// `path_index` for FileId → path resolution. This doubles the I/O, but `stage()`
+    /// is a third-party API that doesn't return its internal state.
+    pub fn stage_with_paths(&self) -> Result<StagedChanges, String> {
+        let plan = self.drive.stage().map_err(|e| e.to_string())?;
+
+        // Load state separately for path_index (see doc comment above)
+        let mut state = self.drive.load_sync_state().map_err(|e| e.to_string())?;
+        self.drive
+            .scan_local_files(&mut state)
+            .map_err(|e| e.to_string())?;
+
+        let resolve_path = |file_id: &[u8; 32]| -> String {
+            state
+                .path_index
+                .get(file_id)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| hex::encode(file_id))
+        };
+
+        let resolve_file = |file_id: &[u8; 32]| -> StagedFile {
+            StagedFile {
+                file_id: hex::encode(file_id),
+                path: resolve_path(file_id),
+            }
+        };
+
+        let uploads = plan.uploads.iter().map(resolve_file).collect();
+        let downloads = plan.downloads.iter().map(resolve_file).collect();
+        let local_deletes = plan.local_deletes.iter().map(resolve_file).collect();
+        let remote_deletes = plan.remote_deletes.iter().map(resolve_file).collect();
+
+        let conflicts = plan
+            .conflicts
+            .iter()
+            .map(|c| {
+                let conflict_type_str = match c.conflict_type {
+                    SyncConflictType::ModifyModify => "modify_modify",
+                    SyncConflictType::ModifyDelete => "modify_delete",
+                    SyncConflictType::DeleteModify => "delete_modify",
+                    SyncConflictType::CreateCreate => "create_create",
+                };
+                StagedConflict {
+                    file_id: hex::encode(c.path_hash),
+                    path: resolve_path(&c.path_hash),
+                    conflict_type: conflict_type_str.to_string(),
+                    has_local: c.local_hash.is_some(),
+                    has_remote: c.remote_hash.is_some(),
+                }
+            })
+            .collect();
+
+        Ok(StagedChanges {
+            uploads,
+            downloads,
+            local_deletes,
+            remote_deletes,
+            conflicts,
+            unchanged_count: plan.unchanged.len(),
+        })
+    }
+
+    /// Sync with pre-collected conflict resolutions.
+    /// The `resolutions` map keys are hex-encoded FileIds, values are resolution strings.
+    pub async fn sync_with_resolutions(
+        &mut self,
+        resolutions: HashMap<String, String>,
+    ) -> Result<SyncOutcome, String> {
+        self.drive
+            .sync_with_resolver(SyncMode::NonInteractive, |conflict| {
+                let file_id_hex = match conflict {
+                    SyncConflict::Plan(c) => hex::encode(c.file_id),
+                    SyncConflict::Upload(c) => hex::encode(c.file_id),
+                };
+
+                resolutions
+                    .get(&file_id_hex)
+                    .map(|r| match r.as_str() {
+                        "keep_local" => SyncConflictResolution::KeepLocal,
+                        "accept_remote" => SyncConflictResolution::AcceptRemote,
+                        "keep_both" => SyncConflictResolution::KeepBoth,
+                        _ => SyncConflictResolution::Skip,
+                    })
+                    .unwrap_or(SyncConflictResolution::Skip)
+            })
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub fn cleanup_temp(&self) {
@@ -231,6 +353,12 @@ pub async fn start_sync_loop(app: AppHandle) {
 
 /// Execute one sync cycle
 pub async fn trigger_sync(app: &AppHandle) {
+    // Skip auto-sync while the user is reviewing staged changes
+    if SYNC_REVIEW_MODE.load(Ordering::Relaxed) {
+        println!("[Sync] Review mode active, skipping auto-sync");
+        return;
+    }
+
     {
         let mut s = HCFS_SYNC_STATE
             .lock()

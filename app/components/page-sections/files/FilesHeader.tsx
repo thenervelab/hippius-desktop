@@ -8,6 +8,7 @@ import StorageStateList from "./storage-stats";
 import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
+import StagedChangesDialog from "./StagedChangesDialog";
 import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
 import { toast } from "sonner";
 import { useLocalStorage } from "@/lib/hooks/useLocalStorage";
@@ -19,6 +20,8 @@ import FilterPills from "./FilterPills";
 import { FileTypes } from "@/lib/types/fileTypes";
 import ManageButton from "./ManageButton";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import { useStagedChanges } from "@/lib/hooks/useStagedChanges";
+import type { ConflictResolution } from "@/lib/types/syncTypes";
 
 interface FilesHeaderProps {
   isRecentFiles?: boolean;
@@ -82,10 +85,42 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   onFileSizesChange,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
+  const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [syncFolderPermissionGranted, setSyncFolderPermissionGranted] =
     useLocalStorage("hippius-sync-folder-permission", false);
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
+  const {
+    stagedChanges,
+    isLoading: isStaging,
+    isSyncing: isReviewSyncing,
+    fetchStagedChanges,
+    syncWithResolutions,
+    cancelReview,
+  } = useStagedChanges();
+
+  const handleReviewChanges = async () => {
+    const changes = await fetchStagedChanges();
+    if (changes) {
+      setIsReviewOpen(true);
+    } else {
+      toast.error("Failed to stage changes. Is the drive initialized?");
+    }
+  };
+
+  const handleReviewClose = () => {
+    setIsReviewOpen(false);
+  };
+
+  const handleReviewSync = async (resolutions: Record<string, ConflictResolution>) => {
+    await syncWithResolutions(resolutions);
+    setIsReviewOpen(false);
+    refetchUserFiles();
+  };
+
+  const handleReviewCancel = async () => {
+    await cancelReview();
+  };
 
   const handleViewAllFiles = () => {
     navigateToFilesView();
@@ -234,6 +269,27 @@ const FilesHeader: FC<FilesHeaderProps> = ({
 
 
           <>
+            {/* Review Changes button - only when sync is active */}
+            {!isSyncPathEmpty && !hasNoSyncPaths && (
+              <button
+                onClick={handleReviewChanges}
+                disabled={IS_SYNC_PAUSED || isStaging}
+                className={cn(
+                  "flex items-center justify-center gap-1 h-9 px-2 py-2 rounded bg-grey-90 border border-grey-80 text-grey-10 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50",
+                  IS_SYNC_PAUSED || isStaging
+                    ? "opacity-50 cursor-not-allowed"
+                    : "hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white"
+                )}
+              >
+                {isStaging ? (
+                  <Icons.Loader className="size-4 animate-spin" />
+                ) : (
+                  <Icons.Document className="size-4" />
+                )}
+                <span className="ml-1">Review Changes</span>
+              </button>
+            )}
+
             {/* Folder Upload button - disabled for recent files with no sync paths or when sync is paused */}
             {(!isRecentFiles || !hasNoSyncPaths) && !isSyncPathEmpty && (
               <button
@@ -316,6 +372,16 @@ const FilesHeader: FC<FilesHeaderProps> = ({
         open={isFolderUploadOpen}
         onClose={() => setIsFolderUploadOpen(false)}
         onRefresh={refetchUserFiles}
+      />
+
+      {/* Staged Changes Review Dialog */}
+      <StagedChangesDialog
+        open={isReviewOpen}
+        onClose={handleReviewClose}
+        stagedChanges={stagedChanges}
+        isSyncing={isReviewSyncing}
+        onSync={handleReviewSync}
+        onCancel={handleReviewCancel}
       />
     </>
   );
