@@ -43,7 +43,6 @@ const UpdateSyncFolder: React.FC = () => {
 
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
   const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
-  const [directMnemonic, setDirectMnemonic] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -110,18 +109,7 @@ const UpdateSyncFolder: React.FC = () => {
 
   const handleMnemonicBackupConfirm = () => {
     setShowMnemonicBackup(false);
-    setDirectMnemonic(null);
     clearMnemonicBackup();
-  };
-
-  const handleBackupRecoveryPhrase = async () => {
-    const mnemonic = await getMnemonic();
-    if (mnemonic) {
-      setDirectMnemonic(mnemonic);
-      setShowMnemonicBackup(true);
-    } else {
-      toast.error("Unable to retrieve recovery phrase. Please log in again.");
-    }
   };
 
   const handleBackClick = () => {
@@ -216,14 +204,6 @@ const UpdateSyncFolder: React.FC = () => {
                         </div>
                       )}
                       <div className="flex self-start gap-3">
-                        {selectedPrivateFolderPath && authType === "mnemonic" && (
-                          <button
-                            onClick={handleBackupRecoveryPhrase}
-                            className="h-10 border border-grey-80 p-1.5 sm:px-3 sm:py-1.5 rounded text-base font-medium bg-grey-100 hover:bg-grey-90 text-grey-10 hover:text-grey-20 transition"
-                          >
-                            Backup Recovery Phrase
-                          </button>
-                        )}
                         {selectedPrivateFolderPath && (
                           <button
                             onClick={() => setStopSyncTarget("private")}
@@ -302,10 +282,10 @@ const UpdateSyncFolder: React.FC = () => {
         loading={isInitializing}
       />
 
-      {(directMnemonic ?? mnemonicToBackup) != null && (
+      {mnemonicToBackup && (
         <MnemonicBackupDialog
           open={showMnemonicBackup}
-          mnemonic={directMnemonic ?? mnemonicToBackup ?? ""}
+          mnemonic={mnemonicToBackup}
           onConfirm={handleMnemonicBackupConfirm}
         />
       )}
