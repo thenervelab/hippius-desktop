@@ -86,6 +86,8 @@ export const useUserFiles = () => {
           subfolder: null,
         });
 
+        console.log("Fetched file entries from sync folder:", entries);
+
         const privateStorageSize = entries.reduce(
           (sum, entry) => sum + BigInt(entry.size),
           BigInt(0)
