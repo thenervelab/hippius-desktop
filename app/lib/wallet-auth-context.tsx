@@ -252,23 +252,7 @@ export function WalletAuthProvider({
                 oauthSessionData.token
               );
 
-              // Initialize sync for OAuth session if not already started
-              if (
-                oauthSessionData.substrateAddress &&
-                !syncInitialized.current
-              ) {
-                try {
-                  syncInitialized.current = true;
-                  await invoke("stop_sync").catch(() => {});
-                  tryAutoInitSync(oauthSessionData.substrateAddress).catch((err) =>
-                    console.error("[WalletAuth] Failed to start sync for OAuth restore:", err)
-                  );
-                } catch (err) {
-                  console.error("[WalletAuth] Failed to start sync for OAuth restore:", err);
-                }
-              }
-
-              // For mnemonic-based auth, also restore mnemonic from database for sync
+              // For mnemonic-based auth, restore mnemonic from database and pass to sync
               if (oauthSessionData.provider === "mnemonic") {
                 const mnemonicSession = await getSession();
                 if (mnemonicSession && mnemonicSession.mnemonic) {
@@ -283,20 +267,42 @@ export function WalletAuthProvider({
 
                   setWalletManager({ polkadotPair: pair });
 
-                  // Initialize sync with the mnemonic
-                  if (!syncInitialized.current) {
-                    syncInitialized.current = true;
-                    await invoke("stop_sync").catch(() => {});
-                    tryAutoInitSync(
-                      oauthSessionData.substrateAddress,
-                      mnemonicSession.mnemonic
-                    ).catch((err) =>
-                      console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err)
-                    );
+                  if (
+                    oauthSessionData.substrateAddress &&
+                    !syncInitialized.current
+                  ) {
+                    try {
+                      syncInitialized.current = true;
+                      await invoke("stop_sync").catch(() => {});
+                      tryAutoInitSync(
+                        oauthSessionData.substrateAddress,
+                        mnemonicSession.mnemonic
+                      ).catch((err) =>
+                        console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err)
+                      );
+                    } catch (err) {
+                      console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err);
+                    }
                   }
                   console.log(
                     "[WalletAuth] ✅ Mnemonic session restored with sync"
                   );
+                }
+              }
+
+              // For pure OAuth sessions (no mnemonic available), initialize sync without mnemonic
+              if (
+                oauthSessionData.substrateAddress &&
+                !syncInitialized.current
+              ) {
+                try {
+                  syncInitialized.current = true;
+                  await invoke("stop_sync").catch(() => {});
+                  tryAutoInitSync(oauthSessionData.substrateAddress).catch((err) =>
+                    console.error("[WalletAuth] Failed to start sync for OAuth restore:", err)
+                  );
+                } catch (err) {
+                  console.error("[WalletAuth] Failed to start sync for OAuth restore:", err);
                 }
               }
 
