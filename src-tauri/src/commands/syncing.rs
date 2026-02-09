@@ -10,7 +10,7 @@
 //! Drive that emit Tauri events for upload/download/encrypt/decrypt progress.
 
 use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, StagedChanges, HCFS_DRIVE, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE};
-use crate::sync_shared::{clear_cancel, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
+use crate::sync_shared::{add_pending_activity, clear_cancel, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
 use crate::utils::account_key::account_key;
 use crate::DB_POOL;
 use hcfs_client::client::HcfsClientConfig;
@@ -279,16 +279,16 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
                 "hcfs_upload_progress",
                 serde_json::json!({"bytes": b, "total": t, "path": p}),
             );
-            // Record individual file activity when upload completes
+            // Buffer file activity when all bytes are sent. The item is only committed
+            // to the real activity log after trigger_sync confirms the sync succeeded.
             if b == t && t > 0 {
                 if let Some(path_str) = p {
                     let file_name = Path::new(path_str)
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
-                    println!("[Sync] Upload completed: {}", file_name);
-                    let mut s = HCFS_SYNC_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                    s.add_activity(SyncActivityItem {
+                    println!("[Sync] Upload sent: {}", file_name);
+                    add_pending_activity(SyncActivityItem {
                         file_name,
                         action: "uploaded".to_string(),
                         timestamp: chrono::Utc::now().timestamp(),
@@ -302,16 +302,16 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
                 "hcfs_download_progress",
                 serde_json::json!({"bytes": b, "total": t, "path": p}),
             );
-            // Record individual file activity when download completes
+            // Buffer file activity when all bytes are received. Only committed after
+            // trigger_sync confirms the sync succeeded.
             if b == t && t > 0 {
                 if let Some(path_str) = p {
                     let file_name = Path::new(path_str)
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
-                    println!("[Sync] Download completed: {}", file_name);
-                    let mut s = HCFS_SYNC_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                    s.add_activity(SyncActivityItem {
+                    println!("[Sync] Download received: {}", file_name);
+                    add_pending_activity(SyncActivityItem {
                         file_name,
                         action: "downloaded".to_string(),
                         timestamp: chrono::Utc::now().timestamp(),
@@ -358,7 +358,7 @@ pub async fn stage_changes() -> Result<StagedChanges, String> {
 
     let guard = HCFS_DRIVE.lock().await;
     match guard.as_ref() {
-        Some(m) if m.is_unlocked() => match m.stage_with_paths() {
+        Some(m) if m.is_unlocked() => match m.stage_with_paths().await {
             Ok(changes) => Ok(changes),
             Err(e) => {
                 SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);

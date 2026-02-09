@@ -259,6 +259,7 @@ export function WalletAuthProvider({
               ) {
                 try {
                   syncInitialized.current = true;
+                  await invoke("stop_sync").catch(() => {});
                   tryAutoInitSync(oauthSessionData.substrateAddress).catch((err) =>
                     console.error("[WalletAuth] Failed to start sync for OAuth restore:", err)
                   );
@@ -285,6 +286,7 @@ export function WalletAuthProvider({
                   // Initialize sync with the mnemonic
                   if (!syncInitialized.current) {
                     syncInitialized.current = true;
+                    await invoke("stop_sync").catch(() => {});
                     tryAutoInitSync(
                       oauthSessionData.substrateAddress,
                       mnemonicSession.mnemonic
@@ -452,6 +454,7 @@ export function WalletAuthProvider({
 
       if (!syncInitialized.current) {
         syncInitialized.current = true;
+        await invoke("stop_sync").catch(() => {});
         // Fire-and-forget: sync init runs in background so login isn't blocked.
         // list_sync_folder tolerates missing directories during the brief race window.
         tryAutoInitSync(pair.address, inputMnemonic).catch((err) =>
@@ -539,6 +542,7 @@ export function WalletAuthProvider({
       // Initialize sync with the mnemonic
       if (!syncInitialized.current) {
         syncInitialized.current = true;
+        await invoke("stop_sync").catch(() => {});
         tryAutoInitSync(polkadotAddr, inputMnemonic).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from login:", err)
         );
@@ -584,6 +588,7 @@ export function WalletAuthProvider({
     // Kick off sync for OAuth login if not already started
     if (session.substrateAddress && !syncInitialized.current) {
       syncInitialized.current = true;
+      await invoke("stop_sync").catch(() => {});
       tryAutoInitSync(session.substrateAddress).catch((err) =>
         console.error("[WalletAuth] Failed to start sync from OAuth login:", err)
       );

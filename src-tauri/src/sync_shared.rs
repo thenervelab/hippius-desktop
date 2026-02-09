@@ -73,6 +73,53 @@ impl HcfsSyncState {
     }
 }
 
+// === Pending Activity Buffer ===
+//
+// Progress callbacks fire when bytes are sent to the network, but before the
+// server confirms success. To avoid recording "uploaded" activity for files
+// that the server actually rejected (e.g. 502), we buffer pending items here
+// and only commit them to `HCFS_SYNC_STATE` after `trigger_sync` confirms
+// the sync outcome was successful.
+
+pub static PENDING_ACTIVITY: Lazy<Arc<Mutex<Vec<SyncActivityItem>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
+
+/// Add an item to the pending activity buffer (called from progress callbacks).
+pub fn add_pending_activity(item: SyncActivityItem) {
+    let mut pending = PENDING_ACTIVITY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    pending.push(item);
+}
+
+/// Commit all pending activity items to the real activity log.
+/// Called after a successful sync cycle.
+pub fn commit_pending_activity() {
+    let items: Vec<SyncActivityItem> = {
+        let mut pending = PENDING_ACTIVITY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.drain(..).collect()
+    };
+    if !items.is_empty() {
+        let mut state = HCFS_SYNC_STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for item in items {
+            state.add_activity(item);
+        }
+    }
+}
+
+/// Discard all pending activity items.
+/// Called when a sync cycle fails or produces no uploads/downloads.
+pub fn discard_pending_activity() {
+    let mut pending = PENDING_ACTIVITY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    pending.clear();
+}
+
 // === Tauri Commands ===
 #[tauri::command]
 pub fn get_sync_status() -> HcfsSyncState {

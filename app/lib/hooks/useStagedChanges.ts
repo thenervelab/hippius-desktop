@@ -42,6 +42,7 @@ export function useStagedChanges() {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
+        reviewActiveRef.current = false;
       } finally {
         setIsSyncing(false);
       }

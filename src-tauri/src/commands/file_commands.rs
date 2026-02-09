@@ -49,12 +49,20 @@ pub async fn add_file(sync_path: String, file_path: String) -> Result<String, St
 
     let parent = Path::new(&sync_path);
     let dest = parent.join(&name);
+
+    // Validate destination is within the sync folder BEFORE writing
+    // (canonicalize parent only — dest doesn't exist yet)
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_dest = canonical_parent.join(&name);
+    if !canonical_dest.starts_with(&canonical_parent) {
+        return Err("Path escapes sync folder".to_string());
+    }
+
     tokio::fs::copy(source, &dest)
         .await
         .map_err(|e| format!("Copy failed: {e}"))?;
-
-    // Verify the created file is within the sync folder
-    ensure_within(parent, &dest)?;
 
     Ok(name)
 }
@@ -76,10 +84,17 @@ pub async fn add_folder(sync_path: String, folder_path: String) -> Result<String
 
     let parent = Path::new(&sync_path);
     let dest = parent.join(&name);
-    copy_dir_recursive(source, &dest).await?;
 
-    // Verify the created folder is within the sync folder
-    ensure_within(parent, &dest)?;
+    // Validate destination is within the sync folder BEFORE writing
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_dest = canonical_parent.join(&name);
+    if !canonical_dest.starts_with(&canonical_parent) {
+        return Err("Path escapes sync folder".to_string());
+    }
+
+    copy_dir_recursive(source, &dest, 0).await?;
 
     Ok(name)
 }
@@ -166,7 +181,7 @@ pub async fn export_file(
     let source = ensure_within(parent, &source)?;
 
     if source.is_dir() {
-        copy_dir_recursive(&source, Path::new(&output_path)).await?;
+        copy_dir_recursive(&source, Path::new(&output_path), 0).await?;
     } else {
         tokio::fs::copy(&source, &output_path)
             .await
@@ -175,7 +190,14 @@ pub async fn export_file(
     Ok(())
 }
 
-async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+/// Maximum recursion depth for directory copies to prevent symlink loops
+const MAX_COPY_DEPTH: u32 = 64;
+
+async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<(), String> {
+    if depth > MAX_COPY_DEPTH {
+        return Err(format!("Directory nesting exceeds maximum depth ({MAX_COPY_DEPTH})"));
+    }
+
     tokio::fs::create_dir_all(dst)
         .await
         .map_err(|e| e.to_string())?;
@@ -185,8 +207,19 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            Box::pin(copy_dir_recursive(&src_path, &dst_path)).await?;
+
+        // Use symlink_metadata to detect symlinks without following them
+        let meta = tokio::fs::symlink_metadata(&src_path)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Skip symlinks to prevent traversal loops and escaping the source tree
+        if meta.is_symlink() {
+            continue;
+        }
+
+        if meta.is_dir() {
+            Box::pin(copy_dir_recursive(&src_path, &dst_path, depth + 1)).await?;
         } else {
             tokio::fs::copy(&src_path, &dst_path)
                 .await
