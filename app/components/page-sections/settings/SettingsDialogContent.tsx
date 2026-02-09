@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { Icons, RevealTextLine } from "@/components/ui";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import { InView } from "react-intersection-observer";
@@ -13,10 +13,13 @@ import HcfsServerSettings from "./HcfsServerSettings";
 import OAuthTokenSection from "./OAuthTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
 import VPNSettings from "./VPNSettings";
+import RecoveryPhraseSettings from "./RecoveryPhraseSettings";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
+  const { authType } = useWalletAuth();
 
   // Refresh notification types when the settings dialog shows the notifications tab
   useEffect(() => {
@@ -25,28 +28,47 @@ const SettingsDialogContent: React.FC = () => {
     }
   }, [activeTab, refreshEnabledTypes]);
 
-  const tabs: TabOption[] = [
-    {
-      tabName: "File Settings",
-      icon: <Icons.File2 className="size-4" />,
-    },
-    {
-      tabName: "API Token",
-      icon: <Icons.Key className="size-4" />,
-    },
-    {
-      tabName: "Notifications",
-      icon: <Icons.Notification className="size-4" />,
-    },
-    {
-      tabName: "Customize RPC",
-      icon: <Icons.Box className="size-4" />,
-    },
-    {
-      tabName: "VPN Settings",
-      icon: <Icons.ShieldSecurity className="size-4" />,
-    },
-  ];
+  const tabs: TabOption[] = useMemo(() => {
+    const baseTabs: TabOption[] = [
+      {
+        tabName: "File Settings",
+        icon: <Icons.File2 className="size-4" />,
+      },
+      ...(authType === "mnemonic"
+        ? [
+            {
+              tabName: "Recovery Phrase",
+              icon: <Icons.KeySquare className="size-4" />,
+            },
+          ]
+        : []),
+      {
+        tabName: "API Token",
+        icon: <Icons.Key className="size-4" />,
+      },
+      {
+        tabName: "Notifications",
+        icon: <Icons.Notification className="size-4" />,
+      },
+      {
+        tabName: "Customize RPC",
+        icon: <Icons.Box className="size-4" />,
+      },
+      {
+        tabName: "VPN Settings",
+        icon: <Icons.ShieldSecurity className="size-4" />,
+      },
+    ];
+    return baseTabs;
+  }, [authType]);
+
+  // Reset to default tab if current tab is no longer available (e.g. auth type changed)
+  useEffect(() => {
+    const tabNames = tabs.map((t) => t.tabName);
+    if (!tabNames.includes(activeTab)) {
+      setActiveTab("File Settings");
+    }
+  }, [tabs, activeTab, setActiveTab]);
 
   return (
     <div className="flex h-full w-full">
@@ -89,6 +111,19 @@ const SettingsDialogContent: React.FC = () => {
                     <EmailNotificationSection />
                   </RevealTextLine>
                 </div>
+              </div>
+            )}
+
+            {activeTab === "Recovery Phrase" && authType === "mnemonic" && (
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-300 w-full"
+                  parentClassName="w-full"
+                >
+                  <RecoveryPhraseSettings />
+                </RevealTextLine>
               </div>
             )}
 

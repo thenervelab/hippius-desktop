@@ -32,35 +32,52 @@ export function useSyncEvents() {
   const [lastError, setLastError] = useState<SyncError | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     const unsubs: (() => void)[] = [];
 
-    listen("hcfs_sync_started", () => {
-      console.log("[SyncEvents] Sync started");
-      setIsSyncing(true);
-      setLastError(null);
-    }).then((u) => unsubs.push(u));
-    listen<SyncOutcome>("hcfs_sync_completed", (e) => {
-      console.log("[SyncEvents] Sync completed:", e.payload);
-      setIsSyncing(false);
-      setLastOutcome(e.payload);
-      setUploadProgress(null);
-      setDownloadProgress(null);
-    }).then((u) => unsubs.push(u));
-    listen<SyncError>("hcfs_sync_error", (e) => {
-      console.error("[SyncEvents] Sync error:", e.payload);
-      setIsSyncing(false);
-      setLastError(e.payload);
-    }).then((u) => unsubs.push(u));
-    listen<ProgressPayload>("hcfs_upload_progress", (e) => {
-      console.debug("[SyncEvents] Upload progress:", e.payload);
-      setUploadProgress(e.payload);
-    }).then((u) => unsubs.push(u));
-    listen<ProgressPayload>("hcfs_download_progress", (e) => {
-      console.debug("[SyncEvents] Download progress:", e.payload);
-      setDownloadProgress(e.payload);
-    }).then((u) => unsubs.push(u));
+    (async () => {
+      try {
+        const results = await Promise.all([
+          listen("hcfs_sync_started", () => {
+            console.log("[SyncEvents] Sync started");
+            setIsSyncing(true);
+            setLastError(null);
+          }),
+          listen<SyncOutcome>("hcfs_sync_completed", (e) => {
+            console.log("[SyncEvents] Sync completed:", e.payload);
+            setIsSyncing(false);
+            setLastOutcome(e.payload);
+            setUploadProgress(null);
+            setDownloadProgress(null);
+          }),
+          listen<SyncError>("hcfs_sync_error", (e) => {
+            console.error("[SyncEvents] Sync error:", e.payload);
+            setIsSyncing(false);
+            setLastError(e.payload);
+          }),
+          listen<ProgressPayload>("hcfs_upload_progress", (e) => {
+            console.debug("[SyncEvents] Upload progress:", e.payload);
+            setUploadProgress(e.payload);
+          }),
+          listen<ProgressPayload>("hcfs_download_progress", (e) => {
+            console.debug("[SyncEvents] Download progress:", e.payload);
+            setDownloadProgress(e.payload);
+          }),
+        ]);
+        if (cancelled) {
+          results.forEach((u) => u());
+        } else {
+          unsubs.push(...results);
+        }
+      } catch (err) {
+        console.warn("[SyncEvents] Failed to register event listeners:", err);
+      }
+    })();
 
-    return () => unsubs.forEach((u) => u());
+    return () => {
+      cancelled = true;
+      unsubs.forEach((u) => u());
+    };
   }, []);
 
   return {
