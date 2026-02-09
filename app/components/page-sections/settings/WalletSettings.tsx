@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useMemo, useEffect } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Icons,
@@ -22,11 +22,31 @@ import BoxSimple from "@/components/ui/icons/BoxSimple";
 import {
   Edit2,
   Download,
-  Trash2,
-  Copy,
   X,
   AlertTriangle,
 } from "lucide-react";
+import {
+  getCoreRowModel,
+  useReactTable,
+  getSortedRowModel,
+} from "@tanstack/react-table";
+import * as TableModule from "@/components/ui/alt-table";
+import { getWalletColumns } from "./WalletColumns";
+
+// Column widths for the wallet table (defined outside component to avoid recreating)
+const DEFAULT_COLUMN_WIDTHS = {
+  wallet: 35,
+  date_imported: 25,
+  status: 25,
+  actions: 15,
+};
+
+const MIN_COLUMN_WIDTHS = {
+  wallet: 20,
+  date_imported: 15,
+  status: 15,
+  actions: 10,
+};
 
 const WalletSettings: React.FC = () => {
   const {
@@ -72,42 +92,131 @@ const WalletSettings: React.FC = () => {
   const [isImporting, setIsImporting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Format date
-  const formatDate = (timestamp: number): string => {
-    const date = new Date(timestamp);
-    return (
-      date.toLocaleDateString("en-US", {
-        month: "2-digit",
-        day: "2-digit",
-        year: "2-digit",
-      }) +
-      " " +
-      date
-        .toLocaleTimeString("en-US", {
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-        })
-        .toLowerCase()
-    );
-  };
+  const [columnWidths, setColumnWidths] = useState(() => {
+    try {
+      const stored = localStorage.getItem('walletSettingsTable_columnWidths');
+      return stored ? JSON.parse(stored) : DEFAULT_COLUMN_WIDTHS;
+    } catch {
+      return DEFAULT_COLUMN_WIDTHS;
+    }
+  });
+
+  const [isResizing, setIsResizing] = useState(false);
+  const [resizeData, setResizeData] = useState<{
+    columnId: string;
+    startX: number;
+    startWidth: number;
+    nextColumnId: string;
+    nextStartWidth: number;
+  } | null>(null);
+  const [justResized, setJustResized] = useState(false);
+
+  // Save column widths to localStorage
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      try {
+        localStorage.setItem('walletSettingsTable_columnWidths', JSON.stringify(columnWidths));
+      } catch { }
+    }, 300);
+    return () => clearTimeout(timeoutId);
+  }, [columnWidths]);
+
+  const handleResizeStart = useCallback((columnId: string, startX: number) => {
+    const columnIds = Object.keys(columnWidths);
+    const currentIndex = columnIds.indexOf(columnId);
+    const nextColumnId = columnIds[currentIndex + 1];
+
+    if (nextColumnId && columnId !== 'actions') {
+      setIsResizing(true);
+      setResizeData({
+        columnId,
+        startX,
+        startWidth: columnWidths[columnId],
+        nextColumnId,
+        nextStartWidth: columnWidths[nextColumnId],
+      });
+    }
+  }, [columnWidths]);
+
+  const handleResizeMove = useCallback((clientX: number) => {
+    if (!resizeData || !isResizing) return;
+
+    requestAnimationFrame(() => {
+      const diff = clientX - resizeData.startX;
+      const standardTableWidth = 1200;
+      const sensitivity = 2.2;
+      const diffPercent = (diff / standardTableWidth) * 100 * sensitivity;
+
+      const proposedCurrentWidth = resizeData.startWidth + diffPercent;
+      const proposedNextWidth = resizeData.nextStartWidth - diffPercent;
+
+      const currentMinWidth = MIN_COLUMN_WIDTHS[resizeData.columnId as keyof typeof MIN_COLUMN_WIDTHS] || 8;
+      const nextMinWidth = MIN_COLUMN_WIDTHS[resizeData.nextColumnId as keyof typeof MIN_COLUMN_WIDTHS] || 8;
+
+      let newCurrentWidth = proposedCurrentWidth;
+      let newNextWidth = proposedNextWidth;
+
+      if (proposedCurrentWidth < currentMinWidth) {
+        newCurrentWidth = currentMinWidth;
+        newNextWidth = resizeData.startWidth + resizeData.nextStartWidth - currentMinWidth;
+      } else if (proposedNextWidth < nextMinWidth) {
+        newNextWidth = nextMinWidth;
+        newCurrentWidth = resizeData.startWidth + resizeData.nextStartWidth - nextMinWidth;
+      }
+
+      newCurrentWidth = Math.min(80, newCurrentWidth);
+      newNextWidth = Math.min(80, newNextWidth);
+
+      if (newCurrentWidth >= currentMinWidth && newNextWidth >= nextMinWidth) {
+        setColumnWidths((prev: Record<string, number>) => ({
+          ...prev,
+          [resizeData.columnId]: newCurrentWidth,
+          [resizeData.nextColumnId]: newNextWidth,
+        }));
+      }
+    });
+  }, [resizeData, isResizing]);
+
+  const handleResizeEnd = useCallback(() => {
+    setIsResizing(false);
+    setResizeData(null);
+    setJustResized(true);
+    setTimeout(() => {
+      setJustResized(false);
+    }, 100);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => handleResizeMove(e.clientX);
+    const handleMouseUp = () => handleResizeEnd();
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, handleResizeMove, handleResizeEnd]);
 
   // Handle make active wallet
-  const handleMakeActive = async (walletId: number) => {
+  const handleMakeActive = useCallback(async (walletId: number) => {
     const success = await switchWallet(walletId);
     if (success) {
       toast.success("Wallet set as active");
     } else {
       toast.error("Failed to switch wallet");
     }
-  };
+  }, [switchWallet]);
 
   // Handle edit wallet name via dialog
-  const handleEditClick = (wallet: LocalWallet) => {
+  const handleEditClick = useCallback((wallet: LocalWallet) => {
     setWalletToEdit(wallet);
     setEditingName(wallet.name);
     setShowEditDialog(true);
-  };
+  }, []);
 
   const handleSaveEdit = async () => {
     if (!walletToEdit || !editingName.trim()) return;
@@ -129,10 +238,10 @@ const WalletSettings: React.FC = () => {
   };
 
   // Handle export wallet (no passcode needed - exports encrypted data)
-  const handleExportClick = (wallet: LocalWallet) => {
+  const handleExportClick = useCallback((wallet: LocalWallet) => {
     setWalletToExport(wallet);
     setShowExportDialog(true);
-  };
+  }, []);
 
   const handleExportWallet = async () => {
     if (!walletToExport) return;
@@ -175,10 +284,10 @@ const WalletSettings: React.FC = () => {
   };
 
   // Handle delete wallet
-  const handleDeleteClick = (wallet: LocalWallet) => {
+  const handleDeleteClick = useCallback((wallet: LocalWallet) => {
     setWalletToDelete(wallet);
     setShowDeleteDialog(true);
-  };
+  }, []);
 
   const handleConfirmDelete = async () => {
     if (!walletToDelete) return;
@@ -196,12 +305,6 @@ const WalletSettings: React.FC = () => {
       setShowDeleteDialog(false);
       setWalletToDelete(null);
     }
-  };
-
-  // Copy address to clipboard
-  const handleCopyAddress = (address: string) => {
-    navigator.clipboard.writeText(address);
-    toast.success("Address copied to clipboard");
   };
 
   // Import file handling
@@ -307,6 +410,71 @@ const WalletSettings: React.FC = () => {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  // Copy address to clipboard
+  const handleCopyAddress = useCallback((address: string) => {
+    navigator.clipboard.writeText(address);
+    toast.success("Address copied to clipboard");
+  }, []);
+
+  // Memoized columns
+  const columns = useMemo(() => getWalletColumns({
+    truncateAddress,
+    onCopyAddress: handleCopyAddress,
+    onMakeActive: handleMakeActive,
+    onEdit: handleEditClick,
+    onExport: handleExportClick,
+    onDelete: handleDeleteClick,
+  }), [truncateAddress, handleCopyAddress, handleMakeActive, handleEditClick, handleExportClick, handleDeleteClick]);
+
+  // Table instance
+  const table = useReactTable({
+    columns,
+    data: wallets || [],
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    enableColumnResizing: true,
+  });
+
+  // Memoized header rows (same pattern as files table)
+  const headerRows = useMemo(
+    () =>
+      table.getHeaderGroups().map((headerGroup) => (
+        <TableModule.Tr key={headerGroup.id} draggable={false}>
+          {headerGroup.headers.map((header) => (
+            <TableModule.Th
+              key={header.id}
+              header={header}
+              align="left"
+              columnWidth={columnWidths[header.id]}
+              onResizeStart={handleResizeStart}
+              preventSort={justResized}
+            />
+          ))}
+        </TableModule.Tr>
+      )),
+    [table, columnWidths, handleResizeStart, justResized]
+  );
+
+  // Memoized table body (same pattern as files table)
+  const tableBody = useMemo(
+    () =>
+      table.getRowModel().rows.map((row) => (
+        <TableModule.Tr
+          rowHover
+          key={row.id}
+        >
+          {row.getVisibleCells().map((cell) => (
+            <TableModule.Td
+              key={cell.id}
+              cell={cell}
+              columnWidth={columnWidths[cell.column.id]}
+            />
+          ))}
+        </TableModule.Tr>
+      )),
+    [table, columnWidths]
+  );
+
   return (
     <>
       <InView triggerOnce>
@@ -358,112 +526,20 @@ const WalletSettings: React.FC = () => {
               </div>
 
               {/* Wallets Table */}
-              <RevealTextLine
-                rotate
-                reveal={inView}
-                parentClassName="w-full"
-                className="delay-300 w-full mt-6"
-              >
-                <div className="w-full rounded-lg overflow-hidden bg-white">
-                  {/* Table Header */}
-                  <div className="grid grid-cols-[2fr_1fr_1fr_120px] gap-4 px-6 py-4 border-b border-grey-90">
-                    <div className="text-xs font-semibold text-grey-60 uppercase tracking-wider">
-                      Wallet
-                    </div>
-                    <div className="text-xs font-semibold text-grey-60 uppercase tracking-wider">
-                      Date
-                    </div>
-                    <div className="text-xs font-semibold text-grey-60 uppercase tracking-wider">
-                      Status
-                    </div>
-                    <div className="text-xs font-semibold text-grey-60 uppercase tracking-wider">
-                      Actions
-                    </div>
+              <div className="w-full mt-6">
+                {!wallets || wallets.length === 0 ? (
+                  <div className="w-full overflow-hidden border border-grey-80 rounded-lg bg-white px-6 py-12 text-center text-grey-60">
+                    No wallets found. Add a wallet to get started.
                   </div>
-
-                  {/* Table Body */}
-                  {wallets.length === 0 ? (
-                    <div className="px-6 py-12 text-center text-grey-60">
-                      No wallets found. Add a wallet to get started.
-                    </div>
-                  ) : (
-                    wallets.map((wallet, index) => (
-                      <div
-                        key={wallet.id}
-                        className={cn(
-                          "grid grid-cols-[2fr_1fr_1fr_120px] gap-4 px-6 py-4 items-center",
-                          index !== wallets.length - 1 && "border-b border-grey-90"
-                        )}
-                      >
-                        {/* Wallet Name & Address */}
-                        <div className="flex flex-col">
-                          <span className="text-sm font-medium text-grey-10">
-                            {wallet.name}
-                          </span>
-                          <div className="flex items-center gap-1">
-                            <span className="text-xs text-grey-50">
-                              {truncateAddress(wallet.address, 8, 8)}
-                            </span>
-                            <button
-                              onClick={() => handleCopyAddress(wallet.address)}
-                              className="p-0.5 text-grey-50 hover:text-primary-50 transition-colors"
-                              title="Copy address"
-                            >
-                              <Copy className="size-3" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Date */}
-                        <div className="text-sm text-grey-50">
-                          {formatDate(wallet.createdAt)}
-                        </div>
-
-                        {/* Status */}
-                        <div>
-                          {wallet.isActive ? (
-                            <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium text-primary-50 border border-primary-50">
-                              Active Wallet
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() => handleMakeActive(wallet.id)}
-                              className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-grey-95 text-grey-40 border border-grey-80 hover:bg-grey-90 hover:text-grey-30 transition-colors"
-                            >
-                              Make Active Wallet
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Actions */}
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => handleEditClick(wallet)}
-                            className="p-2 text-grey-50 hover:text-primary-50 hover:bg-grey-95 rounded-lg transition-colors"
-                            title="Edit name"
-                          >
-                            <Edit2 className="size-4" />
-                          </button>
-                          <button
-                            onClick={() => handleExportClick(wallet)}
-                            className="p-2 text-grey-50 hover:text-primary-50 hover:bg-grey-95 rounded-lg transition-colors"
-                            title="Export wallet"
-                          >
-                            <Download className="size-4" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteClick(wallet)}
-                            className="p-2 text-grey-50 hover:text-error-50 hover:bg-error-95 rounded-lg transition-colors"
-                            title="Delete wallet"
-                          >
-                            <Trash2 className="size-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </RevealTextLine>
+                ) : (
+                  <TableModule.TableWrapper>
+                    <TableModule.Table className="w-full table-fixed">
+                      <TableModule.THead>{headerRows}</TableModule.THead>
+                      <TableModule.TBody>{tableBody}</TableModule.TBody>
+                    </TableModule.Table>
+                  </TableModule.TableWrapper>
+                )}
+              </div>
             </div>
           </div>
         )}
