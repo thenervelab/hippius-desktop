@@ -132,7 +132,7 @@ impl HcfsDriveManager {
     /// + `fetch_remote_state()` but does not expose the resulting `SyncState`. We must
     /// load it again to access `path_index` for FileId → path resolution.
     pub async fn stage_with_paths(&self) -> Result<StagedChanges, String> {
-        let plan = self.drive.stage().map_err(|e| e.to_string())?;
+        let plan = self.drive.stage().await.map_err(|e| e.to_string())?;
 
         // Load state separately for path_index (see doc comment above)
         let mut state = self.drive.load_sync_state().map_err(|e| e.to_string())?;
