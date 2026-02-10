@@ -427,7 +427,10 @@ pub async fn trigger_sync(app: &AppHandle) {
                             staged.local_deletes.len(),
                             staged.remote_deletes.len(),
                         );
-                        SyncResult::Synced(m.sync().await)
+                        // Use sync_with_resolutions (not sync) so any unexpected
+                        // conflicts default to Skip rather than the NonInteractive
+                        // default of AcceptRemote which re-downloads deleted files.
+                        SyncResult::Synced(m.sync_with_resolutions(HashMap::new()).await)
                     }
                     Ok(staged) => {
                         println!(
