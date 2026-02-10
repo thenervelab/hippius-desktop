@@ -12,6 +12,7 @@ import { open as openSelection } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 
 type Props = {
     open: boolean;
@@ -71,11 +72,7 @@ export default function FolderToFolderUploadDialog({
 
         try {
             // Get sync path and copy folder into it
-            const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
-                "get_sync_path",
-                { params: { isPublic: true, accountId: polkadotAddress } }
-            );
-            const syncPath = syncPathResult.path;
+            const syncPath = await getPrivateSyncPath(polkadotAddress);
 
             const name = await invoke<string>("add_folder", {
                 syncPath,

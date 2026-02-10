@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { Icons, CardButton } from "@/components/ui";
 import FileDropzone from "@/app/components/page-sections/files/upload-files-flow/FileDropzone";
 import { basename } from '@tauri-apps/api/path';
@@ -149,11 +150,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                 }
 
                 // Get sync path and add file to sync folder
-                const syncPathResult = await invoke<{ path: string; is_public: boolean }>(
-                    "get_sync_path",
-                    { params: { isPublic: true, accountId: polkadotAddress } }
-                );
-                const syncPath = syncPathResult.path;
+                const syncPath = await getPrivateSyncPath(polkadotAddress);
 
                 await invoke<string>("add_file", {
                     syncPath,

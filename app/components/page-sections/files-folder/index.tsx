@@ -15,7 +15,6 @@ import { Icons, RefreshButton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import {
   FormattedUserFile,
-  parseMinerIds,
 } from "@/app/lib/hooks/use-user-files";
 import FilesContent from "@/app/components/page-sections/files/FilesContent";
 import { toast } from "sonner";
@@ -35,7 +34,7 @@ import {
   getViewModePreference,
   saveViewModePreference,
 } from "@/lib/utils/userPreferencesDb";
-import { getFolderPathArray } from "@/app/utils/folderPathUtils";
+import { getFullPath } from "@/app/utils/folderPathUtils";
 import AddFolderToFolderButton from "@/app/components/page-sections/files/AddFolderToFolderButton";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
@@ -49,17 +48,11 @@ import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import FolderBreadcrumb from "./FolderBreadcrumb";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
-interface FileEntry {
-  file_name: string;
-  file_size: number;
-  cid: string;
-  created_at: string;
-  file_hash: string;
-  last_charged_at: string;
-  miner_ids: string | string[];
-  source: string;
+interface SyncFileEntry {
+  name: string;
   is_folder: boolean;
-  main_req_hash: string;
+  size: number;
+  modified: number | null;
 }
 
 interface FolderViewProps {
@@ -142,67 +135,42 @@ export default function FolderView({
           setIsRefreshing(true);
         }
 
-        // Parse the folder path into an array of folder names
-        const folderPath = getFolderPathArray(
-          mainFolderActualName,
-          subFolderPath
-        );
+        const syncPath = await getPrivateSyncPath(polkadotAddress);
 
-        const fileEntries = await invoke<FileEntry[]>("list_folder_contents", {
-          accountId: polkadotAddress,
-          scope: isPrivateFolder ? "private" : "public",
-          mainFolderName: mainFolderActualName || null,
-          subfolderPath: folderPath || null,
+        // Build the subfolder path relative to the sync root
+        const subfolder = getFullPath(mainFolderActualName, subFolderPath) || null;
+
+        const entries = await invoke<SyncFileEntry[]>("list_sync_folder", {
+          syncPath,
+          subfolder,
         });
 
-        console.log("Fetched folder contents:", fileEntries);
+        console.log("Fetched folder contents:", entries);
 
-        const formattedFiles = fileEntries.map((entry): FormattedUserFile => {
-          const isErasureCodedFolder = entry.file_name.endsWith(
-            ".folder.ec_metadata"
-          );
-          const isErasureCoded =
-            !isErasureCodedFolder && entry.file_name.endsWith(".ec_metadata");
-          const isFolder =
-            !isErasureCodedFolder && entry.file_name.endsWith(".folder");
-
-          let displayName = entry.file_name;
-          if (isErasureCodedFolder) {
-            displayName = entry.file_name.slice(
-              0,
-              -".folder.ec_metadata".length
-            );
-          } else if (isErasureCoded) {
-            displayName = entry.file_name.slice(0, -".ec_metadata".length);
-          } else if (isFolder) {
-            displayName = entry.file_name.slice(0, -".folder".length);
-          }
+        const formattedFiles = entries.map((entry): FormattedUserFile => {
+          const modifiedMs = (entry.modified ?? 0) * 1000;
           return {
-            cid: entry.cid,
-            name: displayName || "Unnamed File",
-            actualFileName: entry.file_name,
-            size: entry.file_size,
-            type: isPrivateFolder ? "private" : "public",
-            fileHash: entry.file_hash,
+            name: entry.name,
+            actualFileName: entry.name,
+            size: entry.size,
+            createdAt: modifiedMs,
+            cid: "",
+            source: "local",
+            minerIds: [],
             isAssigned: true,
-            source: entry.source || "Unknown",
-            createdAt: Number(entry.created_at),
-            minerIds: parseMinerIds(entry.miner_ids),
-            lastChargedAt: Number(entry.last_charged_at),
-            isErasureCoded,
-            isFolder: isFolder || entry.is_folder,
+            lastChargedAt: modifiedMs,
+            isFolder: entry.is_folder,
+            type: "private",
+            isErasureCoded: false,
             parentFolderId: folderCid,
             parentFolderName: folderName,
-            mainReqHash: entry.main_req_hash,
+            mainReqHash: "",
           };
         });
 
         setFiles(formattedFiles);
       } catch (error) {
         console.error("Error loading folder contents:", error);
-        // toast.error(
-        //     `Failed to load folder contents: ${error instanceof Error ? error.message : String(error)}`
-        // );
       } finally {
         if (showLoading) {
           setIsLoading(false);
@@ -216,7 +184,6 @@ export default function FolderView({
       folderName,
       mainFolderActualName,
       subFolderPath,
-      isPrivateFolder,
       polkadotAddress,
     ]
   );
