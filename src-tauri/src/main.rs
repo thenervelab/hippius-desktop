@@ -146,6 +146,8 @@ fn main() {
             commands::syncing::stage_changes,
             commands::syncing::sync_with_conflict_resolutions,
             commands::syncing::cancel_review,
+            // Encrypted backup
+            commands::syncing::create_encrypted_backup,
         ]);
 
     let builder = setup(builder);

@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import DialogContainer from "../../ui/DialogContainer";
 import { Button } from "../../ui/button";
 import ProgressBar from "../../auth/onboarding/ProgressBar";
-import CryptoJS from "crypto-js";
+import { toast } from "sonner";
 import {
   Eye,
   EyeOff,
@@ -124,34 +124,11 @@ export function MnemonicBackupDialog({
 
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
-      const { getVersion } = await import("@tauri-apps/api/app");
-
-      let appVersion = "unknown";
-      try {
-        appVersion = await getVersion();
-      } catch {
-        // ignore version fetch failure
-      }
-
-      const encrypted = CryptoJS.AES.encrypt(mnemonic, encryptPassword).toString();
-
-      const backupData = JSON.stringify(
-        {
-          version: 1,
-          app: "hippius-desktop",
-          app_version: appVersion,
-          created_at: new Date().toISOString(),
-          encryption: "crypto-js-aes-passphrase",
-          data: encrypted,
-        },
-        null,
-        2
-      );
+      const { invoke } = await import("@tauri-apps/api/core");
 
       const filePath = await save({
-        filters: [{ name: "JSON File", extensions: ["json"] }],
-        defaultPath: `hippius-recovery-backup-${new Date().toISOString().slice(0, 10)}.json`,
+        filters: [{ name: "Zip Archive", extensions: ["zip"] }],
+        defaultPath: `hippius-recovery-backup-${new Date().toISOString().slice(0, 10)}.zip`,
       });
 
       if (!filePath) {
@@ -160,13 +137,19 @@ export function MnemonicBackupDialog({
         return;
       }
 
-      await writeTextFile(filePath, backupData);
+      await invoke("create_encrypted_backup", {
+        mnemonic,
+        password: encryptPassword,
+        outputPath: filePath,
+      });
+
       setBackupCreated(true);
       setShowEncryptForm(false);
       setEncryptPassword("");
       setEncryptConfirm("");
     } catch (err) {
       console.error("Backup file save failed:", err);
+      toast.error("Failed to save encrypted backup. Please try again.");
     } finally {
       setIsCreatingBackup(false);
     }
@@ -398,6 +381,9 @@ export function MnemonicBackupDialog({
                   >
                     {isCreatingBackup ? "Encrypting..." : "Encrypt & Save"}
                   </Button>
+                  <p className="text-xs text-grey-50">
+                    Saves a password-protected zip file. Use 7-Zip or a compatible app to open it.
+                  </p>
                 </div>
               )}
 

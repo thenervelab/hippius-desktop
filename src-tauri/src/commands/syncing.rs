@@ -17,6 +17,7 @@ use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
 use std::collections::HashMap;
 use std::error::Error as _;
+use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -517,4 +518,45 @@ pub async fn cancel_review() -> Result<(), String> {
     SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
     println!("[Sync] Review cancelled, auto-sync resumed");
     Ok(())
+}
+
+/// Create a password-protected zip file containing the plaintext mnemonic.
+/// Uses AES-256 encryption on the zip entry.
+#[tauri::command]
+pub async fn create_encrypted_backup(
+    mut mnemonic: String,
+    mut password: String,
+    output_path: String,
+) -> Result<(), String> {
+    let result = (|| -> Result<(), String> {
+        let buf = Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(buf);
+
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .with_aes_encryption(zip::AesMode::Aes256, &password);
+
+        zip.start_file("recovery-phrase.txt", options)
+            .map_err(|e| format!("Failed to create zip entry: {e}"))?;
+        zip.write_all(mnemonic.as_bytes())
+            .map_err(|e| format!("Failed to write mnemonic: {e}"))?;
+
+        let cursor = zip.finish().map_err(|e| format!("Failed to finalize zip: {e}"))?;
+        std::fs::write(&output_path, cursor.into_inner())
+            .map_err(|e| format!("Failed to write backup file: {e}"))?;
+
+        Ok(())
+    })();
+
+    // SAFETY: Clear sensitive data from memory before dropping
+    // (best-effort; the compiler may not re-use the allocation, but this
+    // prevents the plaintext lingering in the heap after the function returns).
+    unsafe {
+        let mnemonic_bytes = mnemonic.as_bytes_mut();
+        mnemonic_bytes.fill(0);
+        let password_bytes = password.as_bytes_mut();
+        password_bytes.fill(0);
+    }
+
+    result
 }
