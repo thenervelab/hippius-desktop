@@ -18,8 +18,6 @@ import {
 } from "@tanstack/react-table";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import * as TableModule from "@/components/ui/alt-table";
-import { isLocalFile } from "@/app/lib/utils/ipfsUrlResolver";
-import { shouldAllowPreview } from "@/app/lib/utils/filePreviewPermissions";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
@@ -35,7 +33,6 @@ import { decodeHexCid } from "@/lib/utils/decodeHexCid";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
-import CustomTooltip from "@/components/ui/CustomTooltip";
 import SelectionActionBar from "../SelectionActionBar";
 import { SelectionColumn, SelectionHeaderColumn } from "../SelectionColumn";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
@@ -146,32 +143,6 @@ interface FilesTableProps {
   totalPages: number;
   setCurrentPage: (page: number) => void;
 }
-
-// Component to wrap NameCell with checkmark positioned outside dialog triggers
-const NameCellWithCheckmark: React.FC<{
-  children: React.ReactNode;
-  hasCheckmark: boolean;
-}> = ({ children, hasCheckmark }) => {
-  return (
-    <>
-      {children}
-      {/* Checkmark positioned at the end of the cell, outside any dialog triggers */}
-      {hasCheckmark && (
-        <div
-          className="absolute right-4 top-1/2 -translate-y-[36%] z-20 cursor-pointer"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <CustomTooltip
-            tooltip="Synced from your computer"
-            tooltipClassName="z-[9999]"
-          >
-            <Icons.TickCircle className="size-4 text-primary-70 hover:text-primary-60 transition-colors" />
-          </CustomTooltip>
-        </div>
-      )}
-    </>
-  );
-};
 
 // Create stable action functions outside component to prevent recreation
 const openExplorerUrl = async (decodedCid: string) => {
@@ -427,17 +398,13 @@ const FilesTable: FC<FilesTableProps> = memo(
       ]
     );
 
-    // Create a unique key that changes when page or files change
-    // This forces useMemo to re-run when user navigates pages
-    const pageKey = `${currentPage}-${files[0]?.actualFileName || 'empty'}`;
-
     // Create a stable memo of columns that doesn't depend on every prop
     const columns = useMemo(
       () => {
         // Create selection column inside useMemo to capture fresh values
         const selectionColumn = !isSelectionMode ? [] : [
           columnHelper.display({
-            id: `selection-page-${currentPage}`, // Unique ID per page
+            id: "selection",
             header: () => {
               // CRITICAL: Read from refs to get latest values, not closure captures
               const latestFiles = filesRef.current;
@@ -469,14 +436,10 @@ const FilesTable: FC<FilesTableProps> = memo(
               const { fileFormat } = getFilePartsFromFileName(info.getValue());
               const fileType = getFileTypeFromExtension(fileFormat || null);
 
-              // Check if file has checkmark (locally synced)
-              const hasCheckmark = isLocalFile(info.row.original.source);
-              const canPreview = shouldAllowPreview(info.row.original, hasCheckmark, isPrivateFolder);
-
               if (fileType === "video") {
                 return (
-                  <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                    {isSelectionMode || !canPreview ? (
+                  <>
+                    {isSelectionMode ? (
                       <NameCell
                         className="px-4 py-[22px]"
                         rawName={info.getValue()}
@@ -492,7 +455,6 @@ const FilesTable: FC<FilesTableProps> = memo(
                     ) : (
                       <VideoDialogTrigger
                         onClick={() => handleSetSelectedFile(info.row.original)}
-                        hasCheckmark={hasCheckmark}
                       >
                         <NameCell
                           rawName={info.getValue()}
@@ -507,12 +469,12 @@ const FilesTable: FC<FilesTableProps> = memo(
                         />
                       </VideoDialogTrigger>
                     )}
-                  </NameCellWithCheckmark>
+                  </>
                 );
               } else if (fileType === "image") {
                 return (
-                  <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                    {isSelectionMode || !canPreview ? (
+                  <>
+                    {isSelectionMode ? (
                       <NameCell
                         className="px-4 py-[22px]"
                         rawName={info.getValue()}
@@ -528,7 +490,6 @@ const FilesTable: FC<FilesTableProps> = memo(
                     ) : (
                       <ImageDialogTrigger
                         onClick={() => handleSetSelectedFile(info.row.original)}
-                        hasCheckmark={hasCheckmark}
                       >
                         <NameCell
                           rawName={info.getValue()}
@@ -543,12 +504,12 @@ const FilesTable: FC<FilesTableProps> = memo(
                         />
                       </ImageDialogTrigger>
                     )}
-                  </NameCellWithCheckmark>
+                  </>
                 );
               } else if (fileType === "PDF") {
                 return (
-                  <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                    {isSelectionMode || !canPreview ? (
+                  <>
+                    {isSelectionMode ? (
                       <NameCell
                         className="px-4 py-[22px]"
                         rawName={info.getValue()}
@@ -564,7 +525,6 @@ const FilesTable: FC<FilesTableProps> = memo(
                     ) : (
                       <PdfDialogTrigger
                         onClick={() => handleSetSelectedFile(info.row.original)}
-                        hasCheckmark={hasCheckmark}
                       >
                         <NameCell
                           rawName={info.getValue()}
@@ -579,23 +539,21 @@ const FilesTable: FC<FilesTableProps> = memo(
                         />
                       </PdfDialogTrigger>
                     )}
-                  </NameCellWithCheckmark>
+                  </>
                 );
               }
               return (
-                <NameCellWithCheckmark hasCheckmark={hasCheckmark}>
-                  <NameCell
-                    className="px-4 py-[22px]"
-                    rawName={info.getValue()}
-                    actualName={info.row.original.actualFileName}
-                    cid={info.row.original.cid}
-                    isAssigned={info.row.original.isAssigned}
-                    fileType={fileType || "document"}
-                    isFolder={info.row.original.isFolder}
-                    source={info.row.original.source}
-                    mainReqHash={info.row.original.mainReqHash}
-                  />
-                </NameCellWithCheckmark>
+                <NameCell
+                  className="px-4 py-[22px]"
+                  rawName={info.getValue()}
+                  actualName={info.row.original.actualFileName}
+                  cid={info.row.original.cid}
+                  isAssigned={info.row.original.isAssigned}
+                  fileType={fileType || "document"}
+                  isFolder={info.row.original.isFolder}
+                  source={info.row.original.source}
+                  mainReqHash={info.row.original.mainReqHash}
+                />
               );
             },
           }),
@@ -667,8 +625,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               const decodedCid = decodeHexCid(cid);
               const { fileFormat } = getFilePartsFromFileName(name);
               const fileType = getFileTypeFromExtension(fileFormat || null);
-              const hasCheckmark = isLocalFile(file.source);
-              const canPreview = shouldAllowPreview(file, hasCheckmark, isPrivateFolder); const menuItems = createTableItems(file, fileType, decodedCid, canPreview);
+              const menuItems = createTableItems(file, fileType, decodedCid);
 
               return (
                 <div className="flex justify-center items-center">
@@ -695,7 +652,6 @@ const FilesTable: FC<FilesTableProps> = memo(
         files,
         currentPage,
         selectedFiles,
-        pageKey, // Add pageKey to force re-run when page/files change
       ]
     );
 

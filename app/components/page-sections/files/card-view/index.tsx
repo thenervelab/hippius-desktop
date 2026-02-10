@@ -1,4 +1,4 @@
-import React, { FC, useState, useEffect, useCallback, memo, useMemo } from "react";
+import React, { FC, useState, useEffect, useCallback, memo } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,8 +30,6 @@ import { Folder } from "@/app/components/ui/icons";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import { isLocalFile } from "@/app/lib/utils/ipfsUrlResolver";
-import { shouldAllowPreview } from "@/app/lib/utils/filePreviewPermissions";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
@@ -66,12 +64,6 @@ const CardView: FC<CardViewProps> = ({
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
   const { isSelectionMode, enterSelectionModeAndSelectFile, } = useFileSelection();
-
-  const isPrivateFolder = useMemo(() => {
-    const folderType = getParam('type');
-    if (folderType === 'private') return true;
-    return files.length > 0 && files.some((file: FormattedUserFile) => file.type?.toLowerCase() === 'private');
-  }, [getParam, files]);
 
   // State for captured files to delete (to handle timing issue with clearSelection)
   const [filesToDelete, setFilesToDelete] = useState<FormattedUserFile[]>([]);
@@ -196,11 +188,7 @@ const CardView: FC<CardViewProps> = ({
                           fileType === "image" ||
                           fileType === "PDF"
                         ) {
-                          // Check if preview is allowed for private files
-                          const hasCheckmark = isLocalFile(file.source);
-                          const canPreview = shouldAllowPreview(file, hasCheckmark, isPrivateFolder); if (canPreview) {
-                            setSelectedFile?.(file);
-                          }
+                          setSelectedFile?.(file);
                         } else if (file.isFolder) {
                           router.push(folderUrl);
                         }
@@ -239,18 +227,14 @@ const CardView: FC<CardViewProps> = ({
                             }
                           },
                           ...((fileType === "video" || fileType === "image" || fileType === "PDF")
-                            ? (() => {
-                              const hasCheckmark = isLocalFile(file.source);
-                              const canPreview = shouldAllowPreview(file, hasCheckmark, isPrivateFolder);
-                              return canPreview ? [{
-                                icon: <Icons.Eye className="size-4" />,
-                                itemTitle: "View",
-                                onItemClick: () => {
-                                  setOpenMenuIndex(null);
-                                  setSelectedFile?.(file);
-                                },
-                              }] : [];
-                            })()
+                            ? [{
+                              icon: <Icons.Eye className="size-4" />,
+                              itemTitle: "View",
+                              onItemClick: () => {
+                                setOpenMenuIndex(null);
+                                setSelectedFile?.(file);
+                              },
+                            }]
                             : []),
                           {
                             icon: <Share className="size-4" />,

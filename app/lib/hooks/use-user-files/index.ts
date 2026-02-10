@@ -68,10 +68,8 @@ export const useUserFiles = () => {
 
   return useQuery({
     queryKey,
-    refetchInterval: 10000,
-    refetchIntervalInBackground: true,
     refetchOnWindowFocus: false,
-    staleTime: 5000,
+    staleTime: Infinity,
     notifyOnChangeProps: "all",
     queryFn: async () => {
       if (!polkadotAddress) {
@@ -101,7 +99,7 @@ export const useUserFiles = () => {
             size: entry.size,
             createdAt: modifiedMs,
             cid: "",
-            source: "local",
+            source: `${syncPath}/${entry.name}`,
             minerIds: [],
             isAssigned: true,
             lastChargedAt: modifiedMs,

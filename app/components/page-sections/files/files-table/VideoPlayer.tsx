@@ -36,6 +36,7 @@ interface VideoPlayerProps {
   fileFormat: string;
   file?: FormattedUserFile;
   isFromIpfs?: boolean;
+  isFromLocal?: boolean;
   handleFileDownload: (
     file: FormattedUserFile,
     polkadotAddress: string
@@ -46,6 +47,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   videoUrl,
   fileFormat,
   isFromIpfs = false,
+  isFromLocal = false,
   file,
   handleFileDownload
 }) => {
@@ -188,7 +190,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         return;
       }
 
-      if (isFromIpfs) {
+      if (isFromIpfs || isFromLocal) {
         setPlayUrl(videoUrl);
         return;
       }
@@ -208,7 +210,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         URL.revokeObjectURL(revoke);
       }
     };
-  }, [videoUrl, isFromIpfs]);
+  }, [videoUrl, isFromIpfs, isFromLocal]);
   const finalPlayUrl = playUrl || videoUrl;
 
   // Don't render MediaPlayer if no URL is available

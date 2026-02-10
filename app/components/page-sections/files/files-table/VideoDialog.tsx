@@ -11,25 +11,20 @@ import {
   getViewableFilePosition
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { cn } from "@/lib/utils";
 import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
 
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
   onClick: () => void;
-  hasCheckmark?: boolean;
-}> = ({ children, onClick, hasCheckmark = false }) => {
+}> = ({ children, onClick }) => {
   return (
     <button
       onClick={onClick}
       className="px-4 py-[22px] relative group overflow-hidden flex items-center w-full"
     >
       <span>{children}</span>
-      {/* Play icon on hover - positioned to avoid checkmark */}
-      <div className={cn(
-        "absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white",
-        hasCheckmark ? "right-10" : "right-4"
-      )}>
+      {/* Play icon on hover */}
+      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white right-4">
         <Icons.PlayCircle className="size-5 text-primary-60 [&>path]:stroke-[4px]" />
       </div>
     </button>
@@ -53,6 +48,7 @@ const VideoDialog: React.FC<{
   const [isResolvingUrl, setIsResolvingUrl] = useState<boolean>(false);
   const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
   const [isFromS3, setIsFromS3] = useState<boolean>(false);
+  const [isFromLocal, setIsFromLocal] = useState<boolean>(false);
   const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
   const { polkadotAddress } = useWalletAuth();
 
@@ -94,6 +90,7 @@ const VideoDialog: React.FC<{
           setResolvedUrl(result.url);
           setIsFromIpfs(result.isFromIpfs);
           setIsFromS3(result.isFromS3 || false);
+          setIsFromLocal(result.isFromLocal || false);
           setIsResolvingUrl(false);
         }
       } catch (error) {
@@ -104,6 +101,7 @@ const VideoDialog: React.FC<{
           setResolvedUrl(result.url);
           setIsFromIpfs(result.isFromIpfs);
           setIsFromS3(result.isFromS3 || false);
+          setIsFromLocal(result.isFromLocal || false);
           setIsResolvingUrl(false);
         }
       }
@@ -142,6 +140,22 @@ const VideoDialog: React.FC<{
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [file, nextFile, prevFile, handleNext, handlePrev, onCloseClicked]);
+
+  // Prevent body and html scroll when dialog is open, and scroll to top
+  useEffect(() => {
+    if (file) {
+      const scrollY = window.scrollY;
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+      window.scrollTo(0, 0);
+      return () => {
+        document.documentElement.style.overflow = '';
+        document.body.style.overflow = '';
+        window.scrollTo(0, scrollY);
+      };
+    }
+  }, [file]);
+
   if (!file) return null;
 
   const { fileFormat } = getFilePartsFromFileName(file.name);
@@ -155,7 +169,7 @@ const VideoDialog: React.FC<{
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="bg-black/80 fixed p-3 sm:p-10 md:p-20 z-[999] top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
+        <Dialog.Overlay className="bg-black/80 fixed inset-0 pt-8 sm:pt-10 md:pt-20 p-3 sm:p-10 md:p-20 z-[999] flex items-center justify-center overflow-hidden data-[state=open]:animate-fade-in-0.3">
           <Dialog.Content className="h-full max-w-screen-1.5xl max-h-[90vh] text-grey-10 w-full flex flex-col">
             {(() => {
               if (file) {
@@ -238,12 +252,13 @@ const VideoDialog: React.FC<{
                       </button>
                     )}
 
-                    <div className="animate-scale-in-95-0.4 shadow-dialo bottom-0 grow flex w-full h-full flex-col top-8 rounded overflow-hidden relative data-[state=open]:animate-scale-in-95-0.4">
+                    <div className="animate-scale-in-95-0.4 shadow-dialo grow flex w-full h-full flex-col mt-12 rounded overflow-hidden relative data-[state=open]:animate-scale-in-95-0.4">
                       {!isResolvingUrl && resolvedUrl ? (
                         <VideoPlayer
                           key={resolvedUrl} // Force re-mount on URL change
                           videoUrl={resolvedUrl}
                           isFromIpfs={isFromIpfs}
+                          isFromLocal={isFromLocal}
                           fileFormat={fileFormat}
                           file={file}
                           handleFileDownload={handleFileDownload}

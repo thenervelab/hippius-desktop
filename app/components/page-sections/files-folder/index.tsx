@@ -149,13 +149,16 @@ export default function FolderView({
 
         const formattedFiles = entries.map((entry): FormattedUserFile => {
           const modifiedMs = (entry.modified ?? 0) * 1000;
+          const filePath = subfolder
+            ? `${syncPath}/${subfolder}/${entry.name}`
+            : `${syncPath}/${entry.name}`;
           return {
             name: entry.name,
             actualFileName: entry.name,
             size: entry.size,
             createdAt: modifiedMs,
             cid: "",
-            source: "local",
+            source: filePath,
             minerIds: [],
             isAssigned: true,
             lastChargedAt: modifiedMs,

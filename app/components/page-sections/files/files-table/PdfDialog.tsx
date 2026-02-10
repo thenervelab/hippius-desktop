@@ -16,19 +16,15 @@ import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ip
 export const PdfDialogTrigger: React.FC<{
   children: ReactNode;
   onClick: () => void;
-  hasCheckmark?: boolean;
-}> = ({ children, onClick, hasCheckmark = false }) => {
+}> = ({ children, onClick }) => {
   return (
     <button
       onClick={onClick}
       className="px-4 py-[22px] relative group overflow-hidden flex items-center w-full"
     >
       <span>{children}</span>
-      {/* Eye icon on hover - positioned to avoid checkmark */}
-      <div className={cn(
-        "absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white",
-        hasCheckmark ? "right-10" : "right-4"
-      )}>
+      {/* Eye icon on hover */}
+      <div className="absolute pointer-events-none pl-16 bg-gradient-to-r from-transparent translate-x-6 opacity-0 duration-300 group-hover:translate-x-0 group-hover:opacity-100 to-white right-4">
         <Icons.Eye className="size-5 text-primary-60 [&>path]:stroke-[3px]" />
       </div>
     </button>
@@ -134,6 +130,21 @@ const PdfDialog: React.FC<{
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [file, nextFile, prevFile, onCloseClicked, handleNext, handlePrev]);
 
+  // Prevent body and html scroll when dialog is open, and scroll to top
+  useEffect(() => {
+    if (file) {
+      const scrollY = window.scrollY;
+      document.documentElement.style.overflow = 'hidden';
+      document.body.style.overflow = 'hidden';
+      window.scrollTo(0, 0);
+      return () => {
+        document.documentElement.style.overflow = '';
+        document.body.style.overflow = '';
+        window.scrollTo(0, scrollY);
+      };
+    }
+  }, [file]);
+
   if (!file) return null;
 
   return (
@@ -144,7 +155,7 @@ const PdfDialog: React.FC<{
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="bg-black/80 fixed p-3 sm:p-10 md:p-20 z-[999] top-0 w-full h-full flex items-center justify-center data-[state=open]:animate-fade-in-0.3">
+        <Dialog.Overlay className="bg-black/80 fixed inset-0 pt-8 sm:pt-10 md:pt-20 p-3 sm:p-10 md:p-20 z-[999] flex items-center justify-center overflow-hidden data-[state=open]:animate-fade-in-0.3">
           <Dialog.Content className="h-full max-w-screen-1.5xl text-grey-10 w-full flex flex-col items-center">
             {file && (
               <>

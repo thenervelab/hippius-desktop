@@ -119,9 +119,8 @@ const useRecentFiles = () => {
       lastDataRef.current = newData;
       return newData;
     },
-    refetchInterval: 10000,
-    refetchOnWindowFocus: true,
-    staleTime: 5000,
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
     enabled: !!polkadotAddress,
     notifyOnChangeProps: ["data", "dataUpdatedAt"],
     structuralSharing: false,

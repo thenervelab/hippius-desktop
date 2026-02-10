@@ -129,7 +129,7 @@ const FileCard: React.FC<FileCardProps> = ({
 
     (async () => {
       try {
-        const { url: cidUrl, isFromIpfs } = getFileUrlAndSourceSync(file);
+        const { url: cidUrl, isFromIpfs, isFromLocal } = getFileUrlAndSourceSync(file);
         let finalUrl = cidUrl;
 
         if (fileType === "image") {
@@ -142,7 +142,7 @@ const FileCard: React.FC<FileCardProps> = ({
         } else if (fileType === "video") {
           timeoutRef.current = setTimeout(handleError, 15000);
 
-          if (!isFromIpfs) {
+          if (!isFromIpfs && !isFromLocal) {
             try {
               const blobUrl = await toBlobUrl(finalUrl);
               finalUrl = blobUrl;
@@ -157,8 +157,10 @@ const FileCard: React.FC<FileCardProps> = ({
           }
 
           const video = document.createElement("video");
-          video.crossOrigin = "anonymous";
-          video.src = cidUrl;
+          if (!isFromLocal) {
+            video.crossOrigin = "anonymous";
+          }
+          video.src = finalUrl || cidUrl;
           video.preload = "metadata";
 
           video.onloadedmetadata = () => {
@@ -216,8 +218,11 @@ const FileCard: React.FC<FileCardProps> = ({
         timeoutRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    file,
+    file.cid,
+    file.name,
+    file.isFolder,
     fileType,
     shouldLoadThumbnail,
     thumbnailUrl,
