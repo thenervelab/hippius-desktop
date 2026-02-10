@@ -138,12 +138,16 @@ impl HcfsDriveManager {
 
     /// Stage changes and resolve FileIds to human-readable paths using the path_index.
     ///
-    /// Fetches fresh remote state from the server so the plan accurately reflects
-    /// what would actually happen during a sync.
+    /// **Important:** `drive.stage()` does NOT fetch remote state — it uses the cached
+    /// remote tree saved to disk by the last `sync_with_resolver()` call. This means the
+    /// plan may miss conflicts that only become visible with fresh remote data (TOCTOU gap).
+    /// The caller must handle this; see `trigger_sync()` for the re-staging fallback.
     ///
-    /// Note: `drive.stage()` internally calls `load_sync_state()` + `scan_local_files()`
-    /// + `fetch_remote_state()` but does not expose the resulting `SyncState`. We must
-    /// load it again to access `path_index` for FileId → path resolution.
+    /// `stage()` does not expose the resulting `SyncState`, so we call `load_sync_state()`
+    /// + `scan_local_files()` again to access `path_index` for FileId → path resolution.
+    ///
+    /// This method is `async` for API consistency with the rest of `HcfsDriveManager`,
+    /// though the underlying `drive.stage()` is synchronous.
     pub async fn stage_with_paths(&self) -> Result<StagedChanges, String> {
         let plan = self.drive.stage().map_err(|e| e.to_string())?;
 
@@ -184,6 +188,7 @@ impl HcfsDriveManager {
                     SyncConflictType::CreateCreate => "create_create",
                 };
                 StagedConflict {
+                    // path_hash (from staging) == file_id (from sync resolver) — both are [u8; 32]
                     file_id: hex::encode(c.path_hash),
                     path: resolve_path(&c.path_hash),
                     conflict_type: conflict_type_str.to_string(),
@@ -404,7 +409,6 @@ pub async fn trigger_sync(app: &AppHandle) {
     SYNC_IN_PROGRESS.store(true, Ordering::Release);
 
     println!("[Sync] Starting sync cycle...");
-    let _ = app.emit("hcfs_sync_started", ());
 
     // Tri-state result: synced, conflicts pending (user must resolve), or not available
     enum SyncResult {
@@ -427,12 +431,56 @@ pub async fn trigger_sync(app: &AppHandle) {
                             staged.local_deletes.len(),
                             staged.remote_deletes.len(),
                         );
-                        // Use sync_with_resolutions (not sync) so any unexpected
-                        // conflicts default to Skip rather than the NonInteractive
-                        // default of AcceptRemote which re-downloads deleted files.
-                        SyncResult::Synced(m.sync_with_resolutions(HashMap::new()).await)
+                        // Emit sync_started only when we're actually about to sync.
+                        // Staging alone should not trigger the frontend sync spinner.
+                        let _ = app.emit("hcfs_sync_started", ());
+
+                        // Use sync_with_resolutions so unexpected conflicts default
+                        // to Skip (not AcceptRemote which re-downloads deleted files).
+                        let outcome = m.sync_with_resolutions(HashMap::new()).await;
+
+                        // The sync fetches fresh remote state and may discover conflicts
+                        // that our stale-cached stage() missed (TOCTOU gap). If any
+                        // were skipped, emit sync_completed for the auto-sync part first,
+                        // then re-stage (state is now updated from save_sync_state) and
+                        // enter review mode. This ordering ensures:
+                        //   sync_started → sync_completed → conflicts_pending
+                        // so useSyncEvents clears isSyncing before the banner appears.
+                        match &outcome {
+                            Ok(o) if o.conflicts_skipped > 0 => {
+                                println!(
+                                    "[Sync] {} conflict(s) skipped during auto-sync, re-staging for review",
+                                    o.conflicts_skipped
+                                );
+
+                                // Emit sync_completed for the auto-sync that just finished
+                                let _ = app.emit(
+                                    "hcfs_sync_completed",
+                                    serde_json::json!({
+                                        "files_uploaded": o.files_uploaded,
+                                        "files_downloaded": o.files_downloaded,
+                                        "files_deleted_locally": o.files_deleted_locally,
+                                        "files_deleted_remotely": o.files_deleted_remotely,
+                                        "conflicts_resolved": o.conflicts_resolved,
+                                        "conflicts_skipped": o.conflicts_skipped,
+                                    }),
+                                );
+
+                                match m.stage_with_paths().await {
+                                    Ok(restaged) if !restaged.conflicts.is_empty() => {
+                                        SYNC_REVIEW_MODE.store(true, Ordering::Release);
+                                        let _ = app.emit("hcfs_conflicts_pending", &restaged);
+                                        SyncResult::ConflictsPending
+                                    }
+                                    _ => SyncResult::ConflictsPending, // sync_completed already emitted
+                                }
+                            }
+                            _ => SyncResult::Synced(outcome),
+                        }
                     }
                     Ok(staged) => {
+                        // Conflicts detected from staging — no sync happened, so no
+                        // sync_started/sync_completed events. Enter review mode directly.
                         println!(
                             "[Sync] {} conflict(s) detected, entering review mode",
                             staged.conflicts.len()
@@ -443,6 +491,7 @@ pub async fn trigger_sync(app: &AppHandle) {
                     }
                     Err(e) => {
                         println!("[Sync] Staging failed: {}", e);
+                        let _ = app.emit("hcfs_sync_started", ());
                         SyncResult::Synced(Err(e))
                     }
                 }

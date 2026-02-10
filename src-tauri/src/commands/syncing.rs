@@ -177,6 +177,7 @@ pub async fn initialize_sync(
             println!("[Setup] Dropped previous drive instance");
         }
         SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        SYNC_REVIEW_MODE.store(false, Ordering::Release);
         discard_pending_activity();
         HCFS_SYNC_STATE
             .lock()
@@ -304,6 +305,7 @@ pub async fn stop_sync() -> Result<(), String> {
 
     let mut guard = HCFS_DRIVE.lock().await;
     *guard = None;
+    SYNC_REVIEW_MODE.store(false, Ordering::Release);
     HCFS_SYNC_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).reset();
     Ok(())
 }
