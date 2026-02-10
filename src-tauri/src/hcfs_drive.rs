@@ -125,7 +125,15 @@ impl HcfsDriveManager {
         self.drive
             .sync_async(SyncMode::NonInteractive)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| {
+                let mut msg = format!("{e}");
+                let mut source = std::error::Error::source(&e);
+                while let Some(cause) = source {
+                    msg.push_str(&format!(" -> caused by: {cause}"));
+                    source = std::error::Error::source(cause);
+                }
+                msg
+            })
     }
 
     /// Stage changes and resolve FileIds to human-readable paths using the path_index.

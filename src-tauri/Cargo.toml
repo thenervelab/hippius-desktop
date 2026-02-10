@@ -39,11 +39,12 @@ dirs = "6.0.0"
 lazy_static = "1.5.0"
 flate2 = "1.1.2"
 tar = "0.4.44"
-reqwest = { version = "0.13.1", features = [
+reqwest = { version = "0.13.1", default-features = false, features = [
     "blocking",
     "multipart",
     "json",
-    "native-tls",
+    "stream",
+    "rustls",
 ] }
 zip = "4.2.0"
 dotenvy = "0.15"
@@ -67,7 +68,7 @@ tauri-plugin-process = "2"
 which = "4.4"
 log = "0.4"
 hostname = "0.4"
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", branch = "v0.1.1", commit = "1be8100" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "51df7f0" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"
@@ -77,7 +78,9 @@ objc = "0.2"
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-tauri-plugin-updater = "2"
+tauri-plugin-updater = { version = "2", default-features = false, features = [
+    "rustls-tls",
+] }
 # Directory Traversal
 walkdir = "2.5"
 # Ergonomic Error Handling
@@ -91,7 +94,9 @@ tokio = { version = "1", features = [
     "process",
 ] }
 anyhow = "1"
-reqwest = { version = "0.13.1", features = ["native-tls"] }
+reqwest = { version = "0.13.1", default-features = false, features = [
+    "rustls",
+] }
 rand = "0.10.0"
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }

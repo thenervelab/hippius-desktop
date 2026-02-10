@@ -16,6 +16,7 @@ use crate::DB_POOL;
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
 use std::collections::HashMap;
+use std::error::Error as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -206,7 +207,33 @@ pub async fn initialize_sync(
         (uid, mnemonic_to_return, existing_mnemonic.is_none())
     };
 
-    // 6. Set HCFS client config (server URL + auth)
+    // 6. Test server connectivity before configuring the drive
+    {
+        let test_url = format!("{}/health", &server_url);
+        println!("[Setup] Testing connectivity to: {}", test_url);
+        let test_result = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .map_err(|e| format!("Failed to build test client: {e}"))?
+            .get(&test_url)
+            .header("X-API-Key", "Arion")
+            .send()
+            .await;
+        match test_result {
+            Ok(resp) => println!("[Setup] Health check OK: status={}", resp.status()),
+            Err(e) => {
+                let mut msg = format!("{e}");
+                let mut source: Option<&dyn std::error::Error> = e.source();
+                while let Some(cause) = source {
+                    msg.push_str(&format!("\n  caused by: {cause}"));
+                    source = cause.source();
+                }
+                println!("[Setup] Health check FAILED: {}", msg);
+            }
+        }
+    }
+
+    // Set HCFS client config (server URL + auth)
     manager.set_config(HcfsClientConfig {
         base_url: server_url,
         api_key: "Arion".to_string(),
