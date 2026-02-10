@@ -13,8 +13,6 @@ import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
-import { useAtom } from "jotai";
-import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 type Props = {
@@ -31,8 +29,6 @@ export default function FolderUploadDialog({
     onRefresh
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
-    const [activeSubMenuItem] = useAtom(activeSubMenuItemAtom);
-    const useEncryption = activeSubMenuItem === "Private";
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
@@ -143,9 +139,7 @@ export default function FolderUploadDialog({
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <div className="text-grey-70 text-sm text-center">
                             <RevealTextLine rotate reveal={true} className="delay-300">
-                                {useEncryption
-                                    ? "Upload a folder to private IPFS storage."
-                                    : "Upload a folder to public IPFS storage."}
+                                Upload a folder to encrypted IPFS storage.
                             </RevealTextLine>
                         </div>
 
@@ -155,7 +149,7 @@ export default function FolderUploadDialog({
                         )}
 
                         {/* Privacy Notice */}
-                        {useEncryption && !IS_SYNC_PAUSED && (
+                        {!IS_SYNC_PAUSED && (
                             <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg">
                                 <div className="flex items-start gap-2">
                                     <div className="flex-shrink-0 mt-0.5">

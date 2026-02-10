@@ -44,7 +44,8 @@ export function useHcfsSync(): UseHcfsSyncResult {
   }, []);
 
   /** Initialize sync if HCFS config already exists.
-   *  Callers MUST call `invoke("stop_sync")` before this if a sync loop is already running. */
+   *  The Rust `initialize_sync` command handles cleanup of any previous sync loop internally,
+   *  so callers do not need to call `stop_sync` first. */
   const tryInitializeSync = useCallback(
     async (accountId: string, mnemonic?: string): Promise<boolean> => {
       setError(null);
@@ -145,10 +146,21 @@ export function useHcfsSync(): UseHcfsSyncResult {
   };
 }
 
+/** Derive the same 8-hex-char key the Rust backend uses (SHA-256 of accountId).
+ *  Keeps the per-account directory name consistent with DB namespacing.
+ *  Must match `account_key()` in src-tauri/src/utils/account_key.rs.
+ *  Test vector: accountShortId("5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY") → "9b5f1775" */
+async function accountShortId(accountId: string): Promise<string> {
+  const data = new TextEncoder().encode(accountId);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 8);
+}
+
 /** Standalone function for use outside React components (e.g., in wallet-auth-context).
  *  Safe to call on login — auto-creates sync path if missing, returns "needs_setup" when
  *  HCFS config (password) is not yet configured so callers can prompt the user.
- *  Does NOT call stop_sync internally; callers should ensure no sync loop is running. */
+ *  The Rust `initialize_sync` command handles cleanup of any previous sync loop internally. */
 export async function tryAutoInitSync(
   accountId: string,
   mnemonic?: string
@@ -163,11 +175,14 @@ export async function tryAutoInitSync(
       // No sync path configured yet
     }
     if (!syncPath || syncPath.length === 0) {
-      console.log("[AutoSync] No sync path, creating default ~/Documents/Hippius");
+      // Use a per-account subdirectory so different mnemonics get isolated folders.
+      // Derive the same SHA-256 based short ID the backend uses for DB namespacing.
+      const shortId = await accountShortId(accountId);
+      console.log(`[AutoSync] No sync path, creating default ~/Documents/Hippius/${shortId}`);
       try {
         const { documentDir, join } = await import("@tauri-apps/api/path");
         const docsDir = await documentDir();
-        const defaultPath = await join(docsDir, "Hippius");
+        const defaultPath = await join(docsDir, "Hippius", shortId);
         await setPrivateSyncPath(defaultPath, accountId);
         syncPath = defaultPath;
         console.log("[AutoSync] Default sync path created:", syncPath);

@@ -197,7 +197,7 @@ export default function FolderView({
     (async () => {
       try {
         setIsLoadingSyncPath(true);
-        const path = await getPrivateSyncPath();
+        const path = await getPrivateSyncPath(polkadotAddress ?? undefined);
         setSyncFolderPath(path || "");
       } catch (error) {
         console.error("Failed to load sync path:", error);
@@ -206,7 +206,7 @@ export default function FolderView({
         setIsLoadingSyncPath(false);
       }
     })();
-  }, [isPrivateFolder]);
+  }, [isPrivateFolder, polkadotAddress]);
 
   // Reload sync path when settings are updated
   useEffect(() => {
@@ -214,7 +214,7 @@ export default function FolderView({
       (async () => {
         try {
           setIsLoadingSyncPath(true);
-          const path = await getPrivateSyncPath();
+          const path = await getPrivateSyncPath(polkadotAddress ?? undefined);
           setSyncFolderPath(path || "");
         } catch (error) {
           console.error("Failed to reload sync path:", error);
@@ -224,7 +224,7 @@ export default function FolderView({
         }
       })();
     }
-  }, [syncPathRefreshTrigger, isPrivateFolder]);
+  }, [syncPathRefreshTrigger, isPrivateFolder, polkadotAddress]);
   const handleRefresh = () => {
     loadFolderContents(false);
   };
@@ -387,7 +387,6 @@ export default function FolderView({
                 <AddFolderToFolderButton
                   ref={addFolderButtonRef}
                   className="h-9"
-                  folderCid={folderCid}
                   folderName={folderName}
                   isPrivateFolder={isPrivateFolder}
                   mainFolderActualName={mainFolderActualName}
@@ -399,9 +398,9 @@ export default function FolderView({
                 <AddFileToFolderButton
                   ref={addButtonRef}
                   className="h-9"
-                  folderCid={folderCid}
                   folderName={folderName}
                   isPrivateFolder={isPrivateFolder}
+                  subfolder={getFullPath(mainFolderActualName, subFolderPath) || undefined}
                   onFileAdded={handleRefresh}
                   disabled={IS_SYNC_PAUSED}
                 />

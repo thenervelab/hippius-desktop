@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { getFullPath } from "@/app/utils/folderPathUtils";
 
 type Props = {
     open: boolean;
@@ -20,7 +21,6 @@ type Props = {
     onSuccess?: (folderCid: string) => void;
     onRefresh?: () => void;
     isPrivateFolder: boolean;
-    parentFolderCid: string;
     parentFolderName: string;
     mainFolderActualName?: string;
     subFolderPath?: string;
@@ -33,6 +33,8 @@ export default function FolderToFolderUploadDialog({
     onRefresh,
     isPrivateFolder,
     parentFolderName,
+    mainFolderActualName,
+    subFolderPath,
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
 
@@ -71,11 +73,17 @@ export default function FolderToFolderUploadDialog({
         const toastId = toast.loading("Uploading folder...");
 
         try {
-            // Get sync path and copy folder into it
-            const syncPath = await getPrivateSyncPath(polkadotAddress);
+            // Get sync path and build target directory (current subfolder)
+            const baseSyncPath = await getPrivateSyncPath(polkadotAddress ?? undefined);
+            const subfolder = getFullPath(mainFolderActualName, subFolderPath);
+            let targetPath = baseSyncPath;
+            if (subfolder) {
+                const { join } = await import("@tauri-apps/api/path");
+                targetPath = await join(baseSyncPath, subfolder);
+            }
 
             const name = await invoke<string>("add_folder", {
-                syncPath,
+                syncPath: targetPath,
                 folderPath,
             });
 

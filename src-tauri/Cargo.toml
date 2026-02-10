@@ -68,6 +68,7 @@ tauri-plugin-process = "2"
 which = "4.4"
 log = "0.4"
 hostname = "0.4"
+zeroize = "1"
 hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "51df7f0" }
 
 [target.'cfg(target_os = "macos")'.dependencies]

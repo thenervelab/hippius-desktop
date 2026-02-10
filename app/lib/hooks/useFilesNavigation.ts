@@ -4,6 +4,7 @@ import {
 } from "@/lib/utils/syncPathUtils";
 import { useSetAtom } from "jotai";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 export function useFilesNavigation() {
   const [privateSyncPathConfigured, setPrivateSyncPathConfigured] = useState<
@@ -11,12 +12,13 @@ export function useFilesNavigation() {
   >(null);
   const [isLoading, setIsLoading] = useState(true);
   const setActiveSubMenuItem = useSetAtom(activeSubMenuItemAtom);
+  const { polkadotAddress } = useWalletAuth();
 
   useEffect(() => {
     async function checkSyncPaths() {
       try {
         setIsLoading(true);
-        const privatePath = await getPrivateSyncPath();
+        const privatePath = await getPrivateSyncPath(polkadotAddress ?? undefined);
         setPrivateSyncPathConfigured(!!privatePath);
       } catch (error) {
         console.error("Failed to check sync paths:", error);
@@ -27,7 +29,7 @@ export function useFilesNavigation() {
     }
 
     checkSyncPaths();
-  }, []);
+  }, [polkadotAddress]);
 
   // Determine which view to navigate to based on configured paths
   const getTargetFilesView = () => {

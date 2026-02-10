@@ -10,7 +10,7 @@
 //! Drive that emit Tauri events for upload/download/encrypt/decrypt progress.
 
 use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, StagedChanges, HCFS_DRIVE, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE};
-use crate::sync_shared::{add_pending_activity, clear_cancel, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
+use crate::sync_shared::{add_pending_activity, clear_cancel, discard_pending_activity, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
 use crate::utils::account_key::account_key;
 use crate::DB_POOL;
 use hcfs_client::client::HcfsClientConfig;
@@ -162,6 +162,27 @@ pub async fn initialize_sync(
     existing_mnemonic: Option<String>,
 ) -> Result<InitSyncResult, String> {
     println!("[Setup] initialize_sync called for account: {}", account_id);
+
+    // 0. Stop any previously running sync to ensure clean account switches
+    {
+        request_cancel();
+        let mut handle_guard = SYNC_LOOP_HANDLE.lock().await;
+        if let Some(prev) = handle_guard.take() {
+            prev.abort();
+            println!("[Setup] Aborted previous sync loop");
+        }
+        let mut drive_guard = HCFS_DRIVE.lock().await;
+        if drive_guard.is_some() {
+            *drive_guard = None;
+            println!("[Setup] Dropped previous drive instance");
+        }
+        SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        discard_pending_activity();
+        HCFS_SYNC_STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .reset();
+    }
 
     // 1. Read sync path from database
     let sync_path = get_sync_path(&account_id).await?;
@@ -548,15 +569,10 @@ pub async fn create_encrypted_backup(
         Ok(())
     })();
 
-    // SAFETY: Clear sensitive data from memory before dropping
-    // (best-effort; the compiler may not re-use the allocation, but this
-    // prevents the plaintext lingering in the heap after the function returns).
-    unsafe {
-        let mnemonic_bytes = mnemonic.as_bytes_mut();
-        mnemonic_bytes.fill(0);
-        let password_bytes = password.as_bytes_mut();
-        password_bytes.fill(0);
-    }
+    // Clear sensitive data from memory before dropping.
+    // zeroize prevents the optimizer from eliding these writes.
+    zeroize::Zeroize::zeroize(&mut mnemonic);
+    zeroize::Zeroize::zeroize(&mut password);
 
     result
 }

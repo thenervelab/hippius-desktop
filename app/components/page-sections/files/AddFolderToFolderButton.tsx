@@ -6,7 +6,6 @@ import FolderToFolderUploadDialog from "./FolderToFolderUploadDialog";
 
 interface AddFolderToFolderButtonProps {
     className?: string;
-    folderCid: string;
     folderName: string;
     isPrivateFolder: boolean;
     mainFolderActualName?: string;
@@ -18,7 +17,6 @@ interface AddFolderToFolderButtonProps {
 const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps>(
     (
         {
-            folderCid,
             folderName,
             isPrivateFolder,
             mainFolderActualName,
@@ -48,7 +46,6 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
                     onClose={() => setIsDialogOpen(false)}
                     onRefresh={onFolderAdded}
                     isPrivateFolder={isPrivateFolder}
-                    parentFolderCid={folderCid}
                     parentFolderName={folderName}
                     mainFolderActualName={mainFolderActualName}
                     subFolderPath={subFolderPath}

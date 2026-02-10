@@ -11,6 +11,8 @@ import { basename } from '@tauri-apps/api/path';
 interface FolderFileUploadFlowProps {
     folderName: string;
     isPrivateFolder: boolean;
+    /** Relative path from sync root to the current folder (e.g. "ProjectA/sub"). */
+    subfolder?: string;
     initialFiles?: FileList | null;
     onSuccess: () => void;
     onCancel: () => void;
@@ -24,6 +26,7 @@ interface FilePathInfo {
 
 const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
     folderName,
+    subfolder,
     initialFiles,
     onSuccess,
     onCancel
@@ -149,11 +152,16 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                     }
                 }
 
-                // Get sync path and add file to sync folder
-                const syncPath = await getPrivateSyncPath(polkadotAddress);
+                // Get sync path and build target directory (current subfolder)
+                const baseSyncPath = await getPrivateSyncPath(polkadotAddress ?? undefined);
+                let targetPath = baseSyncPath;
+                if (subfolder) {
+                    const { join } = await import("@tauri-apps/api/path");
+                    targetPath = await join(baseSyncPath, subfolder);
+                }
 
                 await invoke<string>("add_file", {
-                    syncPath,
+                    syncPath: targetPath,
                     filePath,
                 });
 

@@ -298,10 +298,8 @@ export function WalletAuthProvider({
                     "[WalletAuth] ✅ Mnemonic session restored with sync"
                   );
                 }
-              }
-
-              // For pure OAuth sessions (no mnemonic available), generate/retrieve mnemonic and initialize sync
-              if (
+              } else if (
+                // For pure OAuth sessions (no mnemonic login), generate/retrieve mnemonic and initialize sync
                 oauthSessionData.substrateAddress &&
                 !syncInitialized.current
               ) {

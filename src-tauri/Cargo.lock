@@ -52,6 +52,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "which",
+ "zeroize",
  "zip",
 ]
 

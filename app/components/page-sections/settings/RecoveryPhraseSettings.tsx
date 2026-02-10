@@ -6,14 +6,27 @@ import { CardButton, Icons } from "@/components/ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { MnemonicBackupDialog } from "./MnemonicBackupDialog";
 import { toast } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
 
 const RecoveryPhraseSettings: React.FC = () => {
-  const { getMnemonic } = useWalletAuth();
+  const { getMnemonic, polkadotAddress } = useWalletAuth();
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [showDialog, setShowDialog] = useState(false);
 
   const handleBackup = async () => {
-    const result = await getMnemonic();
+    // Try to get mnemonic from the HCFS Drive first (works for both mnemonic and OAuth users),
+    // then fall back to session store.
+    let result: string | null = null;
+    if (polkadotAddress) {
+      try {
+        result = await invoke<string>("get_drive_mnemonic", { accountId: polkadotAddress });
+      } catch {
+        // Drive not initialized or not available — fall back to session store
+      }
+    }
+    if (!result) {
+      result = await getMnemonic();
+    }
     if (result) {
       setMnemonic(result);
       setShowDialog(true);
