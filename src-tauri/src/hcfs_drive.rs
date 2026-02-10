@@ -230,6 +230,14 @@ impl HcfsDriveManager {
             .map_err(|e| e.to_string())
     }
 
+    /// Decrypt and return the Drive's actual BIP-39 mnemonic.
+    pub fn export_mnemonic(&self, password: &str) -> Result<String, String> {
+        let enc_path = self.sync_path.join(".hippius").join("enc_mnemonic.json");
+        let mnemonic = hcfs_client::auth::recover_mnemonic(&enc_path, password)
+            .map_err(|e| e.to_string())?;
+        Ok(mnemonic.to_string())
+    }
+
     pub fn cleanup_temp(&self) {
         self.drive.cleanup_stale_temp_files();
     }

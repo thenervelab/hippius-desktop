@@ -8,7 +8,7 @@ import {
   type InitSyncResult,
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
-import { getPrivateSyncPath } from "../utils/syncPathUtils";
+import { getPrivateSyncPath, setPrivateSyncPath } from "../utils/syncPathUtils";
 
 export interface UseHcfsSyncResult {
   tryInitializeSync: (accountId: string, mnemonic?: string) => Promise<boolean>;
@@ -146,25 +146,42 @@ export function useHcfsSync(): UseHcfsSyncResult {
 }
 
 /** Standalone function for use outside React components (e.g., in wallet-auth-context).
- *  Safe to call on login — skips if no sync path or config exists.
+ *  Safe to call on login — auto-creates sync path if missing, returns "needs_setup" when
+ *  HCFS config (password) is not yet configured so callers can prompt the user.
  *  Does NOT call stop_sync internally; callers should ensure no sync loop is running. */
 export async function tryAutoInitSync(
   accountId: string,
   mnemonic?: string
-): Promise<boolean> {
+): Promise<boolean | "needs_setup"> {
   try {
-    // Check if sync path exists
-    const syncPath = await getPrivateSyncPath(accountId);
+    // Check if sync path exists — auto-create if missing.
+    // getPrivateSyncPath throws when no row exists (fresh install), so treat errors as "no path".
+    let syncPath = "";
+    try {
+      syncPath = await getPrivateSyncPath(accountId);
+    } catch {
+      // No sync path configured yet
+    }
     if (!syncPath || syncPath.length === 0) {
-      console.log("[AutoSync] No sync path, skipping auto-init");
-      return false;
+      console.log("[AutoSync] No sync path, creating default ~/Documents/Hippius");
+      try {
+        const { documentDir, join } = await import("@tauri-apps/api/path");
+        const docsDir = await documentDir();
+        const defaultPath = await join(docsDir, "Hippius");
+        await setPrivateSyncPath(defaultPath, accountId);
+        syncPath = defaultPath;
+        console.log("[AutoSync] Default sync path created:", syncPath);
+      } catch (pathErr) {
+        console.error("[AutoSync] Failed to create default sync path:", pathErr);
+        return false;
+      }
     }
 
     // Check if HCFS config exists
     const config = await getHcfsConfig(accountId);
     if (!config.has_password) {
-      console.log("[AutoSync] No HCFS config, skipping auto-init");
-      return false;
+      console.log("[AutoSync] No HCFS config, setup required");
+      return "needs_setup";
     }
 
     // Initialize sync

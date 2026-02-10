@@ -376,6 +376,28 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
     });
 }
 
+/// Return the Drive's actual BIP-39 mnemonic by decrypting it from disk.
+/// Requires the Drive to be initialized and the password to be stored in DB.
+#[tauri::command]
+pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
+    let drive_password = get_drive_password(&account_id).await?;
+    let guard = HCFS_DRIVE.lock().await;
+    match guard.as_ref() {
+        Some(m) if m.is_initialized() => m.export_mnemonic(&drive_password),
+        Some(_) => Err("Drive is not initialized".to_string()),
+        None => {
+            // Drive not loaded — try to read mnemonic directly from the sync path
+            let sync_path = get_sync_path(&account_id).await?;
+            let manager = HcfsDriveManager::new(PathBuf::from(&sync_path));
+            if manager.is_initialized() {
+                manager.export_mnemonic(&drive_password)
+            } else {
+                Err("Drive is not initialized".to_string())
+            }
+        }
+    }
+}
+
 /// Stage changes and return a preview of what will sync.
 /// Pauses auto-sync while the user reviews.
 #[tauri::command]

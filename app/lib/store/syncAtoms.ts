@@ -19,3 +19,6 @@ export const syncStatusAtom = atom<{
   in_progress: boolean;
   percent: number;
 } | null>(null);
+
+// Signals that HCFS setup is needed (no config/password found on auto-init)
+export const syncNeedsSetupAtom = atom<{ accountId: string; mnemonic?: string } | null>(null);

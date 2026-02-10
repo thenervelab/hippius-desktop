@@ -22,7 +22,7 @@ mod sync_shared;
 mod user_profile_sync;
 mod utils;
 
-use crate::commands::syncing::{initialize_sync, stop_sync, trigger_sync_now};
+use crate::commands::syncing::{get_drive_mnemonic, initialize_sync, stop_sync, trigger_sync_now};
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::sync_shared::{app_close, get_sync_activity, get_sync_status};
 use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size, list_folder_contents};
@@ -136,6 +136,8 @@ fn main() {
             save_temp_auth_key_command,
             has_master_token_command,
             request_master_token_command,
+            // HCFS mnemonic export
+            get_drive_mnemonic,
             // HCFS config commands
             commands::syncing::save_hcfs_config,
             commands::syncing::get_hcfs_config,

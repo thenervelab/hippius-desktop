@@ -30,6 +30,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
 import { tryAutoInitSync } from "./hooks/useHcfsSync";
+import { ensureSyncMnemonic } from "./helpers/ensureSyncMnemonic";
+import { syncNeedsSetupAtom } from "./store/syncAtoms";
+import { appStore } from "./store/jotaiStore";
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -277,7 +280,14 @@ export function WalletAuthProvider({
                       tryAutoInitSync(
                         oauthSessionData.substrateAddress,
                         mnemonicSession.mnemonic
-                      ).catch((err) =>
+                      ).then((result) => {
+                        if (result === "needs_setup") {
+                          appStore.set(syncNeedsSetupAtom, {
+                            accountId: oauthSessionData.substrateAddress!,
+                            mnemonic: mnemonicSession!.mnemonic,
+                          });
+                        }
+                      }).catch((err) =>
                         console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err)
                       );
                     } catch (err) {
@@ -290,7 +300,7 @@ export function WalletAuthProvider({
                 }
               }
 
-              // For pure OAuth sessions (no mnemonic available), initialize sync without mnemonic
+              // For pure OAuth sessions (no mnemonic available), generate/retrieve mnemonic and initialize sync
               if (
                 oauthSessionData.substrateAddress &&
                 !syncInitialized.current
@@ -298,7 +308,15 @@ export function WalletAuthProvider({
                 try {
                   syncInitialized.current = true;
                   await invoke("stop_sync").catch(() => {});
-                  tryAutoInitSync(oauthSessionData.substrateAddress).catch((err) =>
+                  const mnemonic = await ensureSyncMnemonic(oauthSessionData.substrateAddress);
+                  tryAutoInitSync(oauthSessionData.substrateAddress, mnemonic).then((result) => {
+                    if (result === "needs_setup") {
+                      appStore.set(syncNeedsSetupAtom, {
+                        accountId: oauthSessionData.substrateAddress!,
+                        mnemonic,
+                      });
+                    }
+                  }).catch((err) =>
                     console.error("[WalletAuth] Failed to start sync for OAuth restore:", err)
                   );
                 } catch (err) {
@@ -463,7 +481,14 @@ export function WalletAuthProvider({
         await invoke("stop_sync").catch(() => {});
         // Fire-and-forget: sync init runs in background so login isn't blocked.
         // list_sync_folder tolerates missing directories during the brief race window.
-        tryAutoInitSync(pair.address, inputMnemonic).catch((err) =>
+        tryAutoInitSync(pair.address, inputMnemonic).then((result) => {
+          if (result === "needs_setup") {
+            appStore.set(syncNeedsSetupAtom, {
+              accountId: pair.address,
+              mnemonic: inputMnemonic,
+            });
+          }
+        }).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from setSession:", err)
         );
       }
@@ -549,7 +574,14 @@ export function WalletAuthProvider({
       if (!syncInitialized.current) {
         syncInitialized.current = true;
         await invoke("stop_sync").catch(() => {});
-        tryAutoInitSync(polkadotAddr, inputMnemonic).catch((err) =>
+        tryAutoInitSync(polkadotAddr, inputMnemonic).then((result) => {
+          if (result === "needs_setup") {
+            appStore.set(syncNeedsSetupAtom, {
+              accountId: polkadotAddr,
+              mnemonic: inputMnemonic,
+            });
+          }
+        }).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from login:", err)
         );
       }
@@ -595,7 +627,15 @@ export function WalletAuthProvider({
     if (session.substrateAddress && !syncInitialized.current) {
       syncInitialized.current = true;
       await invoke("stop_sync").catch(() => {});
-      tryAutoInitSync(session.substrateAddress).catch((err) =>
+      const mnemonic = await ensureSyncMnemonic(session.substrateAddress);
+      tryAutoInitSync(session.substrateAddress, mnemonic).then((result) => {
+        if (result === "needs_setup") {
+          appStore.set(syncNeedsSetupAtom, {
+            accountId: session.substrateAddress!,
+            mnemonic,
+          });
+        }
+      }).catch((err) =>
         console.error("[WalletAuth] Failed to start sync from OAuth login:", err)
       );
     }

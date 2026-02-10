@@ -18,7 +18,7 @@ const RecoveryPhraseSettings: React.FC = () => {
       setMnemonic(result);
       setShowDialog(true);
     } else {
-      toast.error("Unable to retrieve recovery phrase. Please log in again.");
+      toast.error("Recovery phrase not available yet. Please configure sync first.");
     }
   };
 
