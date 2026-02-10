@@ -383,16 +383,16 @@ pub async fn start_sync_loop(app: AppHandle) {
 
 /// Execute one sync cycle
 pub async fn trigger_sync(app: &AppHandle) {
-    // Skip auto-sync while the user is reviewing staged changes
-    if SYNC_REVIEW_MODE.load(Ordering::Relaxed) {
-        println!("[Sync] Review mode active, skipping auto-sync");
-        return;
-    }
-
+    // Atomically check review mode and is_syncing under the same lock
+    // to prevent a race where two calls both pass review check then compete on is_syncing.
     {
         let mut s = HCFS_SYNC_STATE
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if SYNC_REVIEW_MODE.load(Ordering::Acquire) {
+            println!("[Sync] Review mode active, skipping auto-sync");
+            return;
+        }
         if s.is_syncing {
             println!("[Sync] Sync already in progress, skipping");
             return;
@@ -406,20 +406,51 @@ pub async fn trigger_sync(app: &AppHandle) {
     println!("[Sync] Starting sync cycle...");
     let _ = app.emit("hcfs_sync_started", ());
 
+    // Tri-state result: synced, conflicts pending (user must resolve), or not available
+    enum SyncResult {
+        Synced(Result<SyncOutcome, String>),
+        ConflictsPending,
+        NotAvailable,
+    }
+
     let result = {
         let mut guard = HCFS_DRIVE.lock().await;
         match guard.as_mut() {
             Some(m) if m.is_unlocked() => {
-                println!("[Sync] Drive is unlocked, executing sync...");
-                Some(m.sync().await)
+                println!("[Sync] Drive is unlocked, staging changes...");
+                match m.stage_with_paths().await {
+                    Ok(staged) if staged.conflicts.is_empty() => {
+                        println!(
+                            "[Sync] No conflicts — auto-syncing (uploads={}, downloads={}, local_deletes={}, remote_deletes={})",
+                            staged.uploads.len(),
+                            staged.downloads.len(),
+                            staged.local_deletes.len(),
+                            staged.remote_deletes.len(),
+                        );
+                        SyncResult::Synced(m.sync().await)
+                    }
+                    Ok(staged) => {
+                        println!(
+                            "[Sync] {} conflict(s) detected, entering review mode",
+                            staged.conflicts.len()
+                        );
+                        SYNC_REVIEW_MODE.store(true, Ordering::Release);
+                        let _ = app.emit("hcfs_conflicts_pending", &staged);
+                        SyncResult::ConflictsPending
+                    }
+                    Err(e) => {
+                        println!("[Sync] Staging failed: {}", e);
+                        SyncResult::Synced(Err(e))
+                    }
+                }
             }
             Some(_) => {
                 println!("[Sync] Drive exists but is not unlocked");
-                None
+                SyncResult::NotAvailable
             }
             None => {
                 println!("[Sync] Drive not available (None)");
-                None
+                SyncResult::NotAvailable
             }
         }
     };
@@ -440,7 +471,7 @@ pub async fn trigger_sync(app: &AppHandle) {
     }
 
     match result {
-        Some(Ok(outcome)) => {
+        SyncResult::Synced(Ok(outcome)) => {
             println!(
                 "[Sync] Sync completed: uploaded={}, downloaded={}, deleted_local={}, deleted_remote={}, conflicts_resolved={}, conflicts_skipped={}",
                 outcome.files_uploaded,
@@ -472,12 +503,17 @@ pub async fn trigger_sync(app: &AppHandle) {
                 }),
             );
         }
-        Some(Err(e)) => {
+        SyncResult::Synced(Err(e)) => {
             discard_pending_activity();
             println!("[Sync] Sync failed with error: {}", e);
             let _ = app.emit("hcfs_sync_error", serde_json::json!({"error": e}));
         }
-        None => {
+        SyncResult::ConflictsPending => {
+            // Conflicts event already emitted above — nothing more to do.
+            // SYNC_REVIEW_MODE is set, so subsequent heartbeats will skip.
+            discard_pending_activity();
+        }
+        SyncResult::NotAvailable => {
             discard_pending_activity();
             println!("[Sync] Drive not available or not unlocked, skipping sync");
             let _ = app.emit(

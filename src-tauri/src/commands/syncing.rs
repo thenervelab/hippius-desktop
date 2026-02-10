@@ -425,23 +425,23 @@ pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn stage_changes() -> Result<StagedChanges, String> {
     // Pause auto-sync so the review is stable
-    SYNC_REVIEW_MODE.store(true, Ordering::Relaxed);
+    SYNC_REVIEW_MODE.store(true, Ordering::Release);
 
     let guard = HCFS_DRIVE.lock().await;
     match guard.as_ref() {
         Some(m) if m.is_unlocked() => match m.stage_with_paths().await {
             Ok(changes) => Ok(changes),
             Err(e) => {
-                SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+                SYNC_REVIEW_MODE.store(false, Ordering::Release);
                 Err(e)
             }
         },
         Some(_) => {
-            SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+            SYNC_REVIEW_MODE.store(false, Ordering::Release);
             Err("Drive is not unlocked".to_string())
         }
         None => {
-            SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+            SYNC_REVIEW_MODE.store(false, Ordering::Release);
             Err("Drive not initialized".to_string())
         }
     }
@@ -455,6 +455,19 @@ pub async fn sync_with_conflict_resolutions(
     app: AppHandle,
     resolutions: HashMap<String, String>,
 ) -> Result<(), String> {
+    // Validate resolution values before proceeding
+    for (file_id, resolution) in &resolutions {
+        if !matches!(
+            resolution.as_str(),
+            "keep_local" | "accept_remote" | "keep_both" | "skip"
+        ) {
+            return Err(format!(
+                "Invalid resolution '{}' for file {}",
+                resolution, file_id
+            ));
+        }
+    }
+
     // Mark syncing in shared state
     {
         let mut s = HCFS_SYNC_STATE
@@ -466,7 +479,7 @@ pub async fn sync_with_conflict_resolutions(
     let _ = app.emit("hcfs_sync_started", ());
 
     // Suppress file watcher during sync to prevent feedback loops
-    SYNC_IN_PROGRESS.store(true, Ordering::Relaxed);
+    SYNC_IN_PROGRESS.store(true, Ordering::Release);
 
     let result = {
         let mut guard = HCFS_DRIVE.lock().await;
@@ -481,12 +494,12 @@ pub async fn sync_with_conflict_resolutions(
         let flag = SYNC_IN_PROGRESS.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            flag.store(false, Ordering::Relaxed);
+            flag.store(false, Ordering::Release);
         });
     }
 
     // Resume auto-sync
-    SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+    SYNC_REVIEW_MODE.store(false, Ordering::Release);
 
     // Update shared state
     {
@@ -536,7 +549,7 @@ pub async fn sync_with_conflict_resolutions(
 /// Cancel the review dialog and resume auto-sync without syncing.
 #[tauri::command]
 pub async fn cancel_review() -> Result<(), String> {
-    SYNC_REVIEW_MODE.store(false, Ordering::Relaxed);
+    SYNC_REVIEW_MODE.store(false, Ordering::Release);
     println!("[Sync] Review cancelled, auto-sync resumed");
     Ok(())
 }

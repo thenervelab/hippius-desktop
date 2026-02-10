@@ -5,6 +5,7 @@ import cn from "@/app/lib/utils/cn";
 import HeaderText from "@/components/dashboard-title-wrapper/HeaderText";
 import ProfileCard from "@/components/dashboard-title-wrapper/ProfileCard";
 import BlockChainStats from "@/components/dashboard-title-wrapper/BlockChainStats";
+import ConflictsBanner from "@/components/ui/ConflictsBanner";
 
 export default function ResponsiveContent({
   children,
@@ -28,6 +29,7 @@ export default function ResponsiveContent({
             <ProfileCard />
           </div>
         </div>
+        <ConflictsBanner />
         <div className="w-full">{children}</div>
       </main>
     </div>

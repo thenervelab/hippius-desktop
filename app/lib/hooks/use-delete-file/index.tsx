@@ -101,11 +101,6 @@ export const useDeleteFile = ({
                 }
             }
 
-            // Trigger sync to propagate deletions to remote
-            await invoke("trigger_sync_now").catch((err) => {
-                console.error("[Delete] trigger_sync_now failed:", err);
-            });
-
             const failedDeletions = results.filter(r => !r.success);
             if (failedDeletions.length > 0) {
                 const errorMessages = failedDeletions.map(f => `${f.file.name}: ${f.error}`).join('; ');
