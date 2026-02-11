@@ -135,7 +135,7 @@ export default function FolderView({
           setIsRefreshing(true);
         }
 
-        const syncPath = await getPrivateSyncPath(polkadotAddress);
+        const syncPath = await getPrivateSyncPath(polkadotAddress || "");
 
         // Build the subfolder path relative to the sync root
         const subfolder = getFullPath(mainFolderActualName, subFolderPath) || null;

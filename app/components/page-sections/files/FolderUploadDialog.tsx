@@ -67,7 +67,7 @@ export default function FolderUploadDialog({
 
         try {
             // Get sync path and copy folder into it
-            const syncPath = await getPrivateSyncPath(polkadotAddress);
+            const syncPath = await getPrivateSyncPath(polkadotAddress || "");
 
             const name = await invoke<string>("add_folder", {
                 syncPath,
@@ -75,7 +75,7 @@ export default function FolderUploadDialog({
             });
 
             // Trigger sync to push changes
-            await invoke("trigger_sync_now").catch(() => {});
+            await invoke("trigger_sync_now").catch(() => { });
 
             toast.dismiss(toastId);
             toast.success(`Folder uploaded successfully!`);
