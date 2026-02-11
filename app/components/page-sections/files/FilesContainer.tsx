@@ -37,11 +37,12 @@ import {
 import { usePagination } from "@/lib/hooks";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
-  triggerUnpinnedFilesRefetchAtom,
   triggerSyncPathRefreshAtom,
+  syncEngineStatusAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import { SyncStoppedAlert } from "@/components/ui/SyncStoppedAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
@@ -109,13 +110,65 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const [isCheckingSyncPath, setIsCheckingSyncPath] = useState(true);
   const [showPrivateStartSyncingSelector, setShowPrivateStartSyncingSelector] =
     useState(false);
-  const setTriggerUnpinnedFilesRefetch = useSetAtom(
-    triggerUnpinnedFilesRefetchAtom
-  );
+
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
+  const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
+  const setSyncEngineStatus = useSetAtom(syncEngineStatusAtom);
+
+  // Ref to track current status without creating effect dependencies
+  const syncStatusRef = useRef(syncEngineStatus);
+  useEffect(() => {
+    syncStatusRef.current = syncEngineStatus;
+  }, [syncEngineStatus]);
+
+  // Check if sync engine is active on mount and when sync path refreshes.
+  // Does NOT depend on syncEngineStatus to avoid re-running on every status change.
+  useEffect(() => {
+    // Skip check if user is in the process of stopping or has stopped sync
+    if (syncStatusRef.current === "stopping" || syncStatusRef.current === "stopped") return;
+
+    (async () => {
+      try {
+        const active = await invoke<boolean>("is_drive_active");
+        // Re-check after async gap — user may have clicked stop while await was pending
+        if (syncStatusRef.current === "stopping" || syncStatusRef.current === "stopped") return;
+        setSyncEngineStatus(active ? "active" : "stopped");
+      } catch {
+        // If we can't check, leave status as-is
+      }
+    })();
+  }, [setSyncEngineStatus, syncPathRefreshTrigger]);
+
+  // While stopping, keep checking until the drive is actually dropped
+  useEffect(() => {
+    if (syncEngineStatus !== "stopping") return;
+
+    let cancelled = false;
+
+    const poll = async () => {
+      while (!cancelled) {
+        await new Promise((r) => setTimeout(r, 1000));
+        try {
+          const active = await invoke<boolean>("is_drive_active");
+          if (!active && !cancelled) {
+            setSyncEngineStatus("stopped");
+            break;
+          }
+        } catch {
+          // Ignore transient failures and keep polling
+        }
+      }
+    };
+
+    poll();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [syncEngineStatus, setSyncEngineStatus]);
 
   // HCFS sync integration
   const {
@@ -360,15 +413,13 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     isLoadingPrivatePath,
   ]);
 
-  const refreshUserFilesWithPinningQueue = useCallback(() => {
+  const refreshUserFilesCallback = useCallback(() => {
     refetchUserFiles();
-    setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
-  }, [refetchUserFiles, setTriggerUnpinnedFilesRefetch]);
+  }, [refetchUserFiles]);
 
-  const refreshRecentFilesWithPinningQueue = useCallback(() => {
+  const refreshRecentFilesCallback = useCallback(() => {
     refetchRecentFiles();
-    setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
-  }, [refetchRecentFiles, setTriggerUnpinnedFilesRefetch]);
+  }, [refetchRecentFiles]);
 
   // Handle folder selection from SyncFolderSelector
   const handleFolderSelected = useCallback(
@@ -395,6 +446,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           setIsSyncPathConfigured(true);
           setShowPrivateStartSyncingSelector(false);
           refetchUserFiles();
+
+          // Clear stopped flag — selecting a folder means user wants sync running
+          localStorage.removeItem("hippius_sync_stopped");
 
           // Fire off stop + re-init in background (don't block UI)
           const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
@@ -500,8 +554,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       return;
     }
 
-    refreshUserFilesWithPinningQueue();
-  }, [refreshUserFilesWithPinningQueue, isRecentFiles]);
+    refreshUserFilesCallback();
+  }, [refreshUserFilesCallback, isRecentFiles]);
 
   // Log error for debugging
   useEffect(() => {
@@ -668,6 +722,11 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             </div>
           )}
 
+          {/* Sync Stopped Alert */}
+          <div className="mb-4">
+            <SyncStoppedAlert variant={isRecentFiles ? "compact" : "banner"} />
+          </div>
+
           <FilesHeader
             isRecentFiles={isRecentFiles}
             isRefetching={isRefetching}
@@ -682,8 +741,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             handleRemoveFilter={handleRemoveFilter}
             refetchUserFiles={
               isRecentFiles
-                ? refreshRecentFilesWithPinningQueue
-                : refreshUserFilesWithPinningQueue
+                ? refreshRecentFilesCallback
+                : refreshUserFilesCallback
             }
             addButtonRef={addButtonRef}
             syncFolderPath={syncFolderPath}

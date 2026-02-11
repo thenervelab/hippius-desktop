@@ -607,6 +607,18 @@ pub async fn stop_sync() -> Result<(), String> {
     Ok(())
 }
 
+/// Check whether the HCFS drive is loaded (sync engine is active).
+/// Unlike `get_sync_status().is_syncing` (which indicates an active sync *operation*),
+/// this indicates whether the sync *engine* is running.
+#[tauri::command]
+pub fn is_drive_active() -> bool {
+    match HCFS_DRIVE.try_lock() {
+        Ok(guard) => guard.is_some(),
+        // If the lock is held, the drive is in use (sync in progress) → active
+        Err(_) => true,
+    }
+}
+
 #[tauri::command]
 pub async fn trigger_sync_now(app: AppHandle) -> Result<(), String> {
     crate::hcfs_drive::trigger_sync(&app).await;

@@ -161,6 +161,15 @@ export async function tryAutoInitSync(
   mnemonic?: string
 ): Promise<boolean> {
   try {
+    // If the user explicitly stopped sync, don't auto-start on login / session restore
+    if (
+      typeof window !== "undefined" &&
+      localStorage.getItem("hippius_sync_stopped") === "true"
+    ) {
+      console.log("[AutoSync] Sync was explicitly stopped by user, skipping auto-init");
+      return false;
+    }
+
     // Check if sync path has been configured by the user
     let syncPath = "";
     try {

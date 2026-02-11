@@ -29,8 +29,8 @@ const StopSyncDialog: React.FC<StopSyncDialogProps> = ({
         "We'll stop syncing files between Hippius and this folder. Your local files stay on your computer, and any files already uploaded remain safely in Hippius.";
 
     return (
-        <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit">
+        <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && !loading && onClose()}>
+            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit" preventClose={loading}>
                 <Dialog.Title className="sr-only">Stop folder sync</Dialog.Title>
 
                 <div className="px-4 py-6 flex flex-col gap-5">

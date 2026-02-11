@@ -52,12 +52,17 @@ let menuPromise: Promise<Menu> | null = null;
 let syncItem: MenuItem | null = null;
 let vpnToggleItem: MenuItem | null = null;
 let openItemsSeparator: PredefinedMenuItem | null = null;
+let syncSectionSeparator: PredefinedMenuItem | null = null;
 let openFilesItem: MenuItem | null = null;
 let openVmItem: MenuItem | null = null;
 const syncRowItems = new Map<string, MenuItem>(); // rows under header
 
 // Cache last rendered "rows signature" to avoid flicker
 let lastRowsSignature = "";
+
+// Track last sync state for tray icon updates
+let lastBackendSyncing: boolean | null = null;
+let completedIconTimeout: ReturnType<typeof setTimeout> | null = null;
 
 // Runtime check for icon rows
 const hasIconMenuItems =
@@ -396,9 +401,16 @@ export function useTrayInit() {
         },
       });
 
-      // Build the initial menu
+      // Separator between sync section (top) and nav section
+      syncSectionSeparator = await PredefinedMenuItem.new({
+        item: "Separator",
+      });
+
+      // Build the initial menu — sync items will be inserted at position 0 dynamically
+      // Navigation + action links come after the sync section separator
       const menu = await Menu.new({
         items: [
+          syncSectionSeparator,
           openAppItem,
           openFilesMenuItem,
           openVmMenuItem,
@@ -706,9 +718,8 @@ async function updateTraySyncPercent(percent: number | null) {
 
   const isCompleted = percent >= 100;
   const label = isCompleted
-    ? "Sync: Completed"
-    : `Sync: ${Math.round(percent)} %`;
-  const update = await getAvailableUpdate();
+    ? "✓ Sync: Completed"
+    : `⟳ Sync: ${Math.round(percent)} %`;
 
   // If sync item doesn't exist yet, create it and add it to the menu
   if (!syncItem) {
@@ -718,9 +729,8 @@ async function updateTraySyncPercent(percent: number | null) {
       enabled: false,
     });
 
-    const baseOffset = openItemsSeparator ? 3 : 0;
-    const insertPosition = baseOffset + (update ? 1 : 0);
-    await menu.insert(syncItem, insertPosition);
+    // Insert at position 0 — sync info goes at the very top of the menu
+    await menu.insert(syncItem, 0);
   } else {
     await syncItem.setText(label);
   }
@@ -796,6 +806,13 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
   }
 }
 
+/* ─ Backend sync status type ───────────────────────────────────── */
+type HcfsSyncState = {
+  is_syncing: boolean;
+  last_sync_time: number | null;
+  recent_activity: SyncActivityItem[];
+};
+
 /* ─ Sync Activity watcher (debounced & diffed) ────────────────── */
 function startSyncActivityWatcher() {
   const INTERVAL_MS = 3000;
@@ -805,10 +822,22 @@ function startSyncActivityWatcher() {
       const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
       if (!menu) return;
 
+      // Also check backend sync status to update tray icon
+      try {
+        const syncState = await invoke<HcfsSyncState>("get_sync_status");
+        console.log("sync state", syncState);
+        await handleSyncIconState(syncState.is_syncing);
+      } catch (e) {
+        console.error("[Tray] Error checking sync status:", e);
+      }
+
       // New API returns SyncActivityItem[] directly
       const items = await invoke<SyncActivityItem[]>("get_sync_activity", {
         limit: 50,
       });
+
+      console.log("get_sync_activity items", items)
+
 
       if (!items || items.length === 0) {
         await updateSyncRowsDirectly(menu, []);
@@ -823,8 +852,8 @@ function startSyncActivityWatcher() {
         scope: "",
         action: item.action === "deleted"
           ? "deleted" as const
-          : item.action === "uploaded"
-            ? "uploaded" as const
+          : item.action === "uploading"
+            ? "uploading" as const
             : "uploaded" as const,
         kind: "file",
         timestamp: item.timestamp ? item.timestamp * 1000 : Date.now(),
@@ -858,6 +887,38 @@ function startSyncActivityWatcher() {
     if (window.__hippiusSyncWatcher) clearInterval(window.__hippiusSyncWatcher);
     // @ts-expect-error custom watcher handle
     window.__hippiusSyncWatcher = h;
+  }
+}
+
+/* ─ Handle tray icon transitions based on backend sync state ──── */
+async function handleSyncIconState(isSyncing: boolean) {
+  if (isSyncing) {
+    // Currently syncing — show syncing icon
+    if (lastBackendSyncing !== true) {
+      logTrayAction("Backend reports syncing, updating tray icon");
+      if (completedIconTimeout) {
+        clearTimeout(completedIconTimeout);
+        completedIconTimeout = null;
+      }
+      await setTrayIconSyncing(true, false);
+      lastBackendSyncing = true;
+    }
+  } else {
+    // Not syncing
+    if (lastBackendSyncing === true) {
+      // Transition: was syncing → now done
+      logTrayAction("Backend reports sync completed, showing completed icon");
+      await setTrayIconSyncing(false, true);
+      lastBackendSyncing = false;
+
+      // Revert to default icon after 5 seconds
+      if (completedIconTimeout) clearTimeout(completedIconTimeout);
+      completedIconTimeout = setTimeout(async () => {
+        logTrayAction("Reverting tray icon to default after sync completed");
+        await setTrayIconSyncing(false, false);
+        completedIconTimeout = null;
+      }, 5000);
+    }
   }
 }
 
@@ -958,18 +1019,19 @@ async function normalizeActivityToRows(
   return rows;
 }
 
-/* ─ Add rows (deduped) after sync percentage ─────────────────── */
+/* ─ Add rows (deduped) after sync percentage, above nav links ── */
 async function updateSyncRowsDirectly(menu: Menu, rows: SyncActivityRow[]) {
   try {
-    const items = await menu.items();
-
-    let insertPosition = items.findIndex((i) => i.id === SYNC_ID);
-    insertPosition = insertPosition >= 0 ? insertPosition + 1 : 0;
-
     // Hard-purge old rows to avoid duplicates
     await removeAllSyncActivityRows(menu);
 
     if (rows.length === 0) return;
+
+    // Find the insert position: right after the sync percentage item
+    // If sync item exists, insert after it. Otherwise insert at 0 (top).
+    const items = await menu.items();
+    let insertPosition = items.findIndex((i) => i.id === SYNC_ID);
+    insertPosition = insertPosition >= 0 ? insertPosition + 1 : 0;
 
     for (let i = rows.length - 1; i >= 0; i--) {
       const row = rows[i];
@@ -994,7 +1056,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
     for (const [, item] of [...syncRowItems.entries()]) {
       try {
         await menu.remove(item);
-      } catch {}
+      } catch { }
     }
     syncRowItems.clear();
 
@@ -1003,7 +1065,7 @@ async function removeAllSyncActivityRows(menu: Menu) {
       if (typeof item.id === "string" && item.id.startsWith(SYNC_ITEM_PREFIX)) {
         try {
           await menu.remove(item);
-        } catch {}
+        } catch { }
       }
     }
   } catch (error) {
@@ -1028,17 +1090,16 @@ async function newSyncRowMenuItem(id: string, text: string, iconPath?: string) {
   return await MenuItem.new({ id, text, enabled: false });
 }
 
-/* ─ Row label: 3 lines (name / scope+status / time) ──────────── */
+/* ─ Row label: name + status ──────────────────────────────────── */
 function formatRowText(r: SyncActivityRow) {
   const first = r.fileName;
 
-  let statusText = "Synced";
-  if (r.status === "uploading" && !r.deleted) statusText = "Uploading";
-  if (r.status === "uploading" && r.deleted) statusText = "Deleting";
-  else if (r.status === "uploaded" && !r.deleted) statusText = "Uploaded";
-  else if (r.status === "uploaded" && r.deleted) statusText = "Deleted";
-
-  // const third = r.timestamp ? formatTimeAgo(r.timestamp) : "";
+  let statusText = "✓ Synced";
+  if (r.status === "uploading" && !r.deleted) statusText = "⟳ Uploading…";
+  else if (r.status === "uploading" && r.deleted) statusText = "⟳ Deleting…";
+  else if (r.status === "uploaded" && !r.deleted) statusText = "✓ Uploaded";
+  else if (r.status === "uploaded" && r.deleted) statusText = "✗ Deleted";
+  else if (r.status === "deleted") statusText = "✗ Deleted";
 
   return [first, statusText].filter(Boolean).join("\n");
 }

@@ -46,7 +46,9 @@ function normalizeActivityToRows(items: SyncActivityItem[]): SyncActivityRow[] {
     const status: "uploading" | "uploaded" | "deleted" =
       item.action === "deleted"
         ? "deleted"
-        : "uploaded";
+        : item.action === "uploading"
+          ? "uploading"
+          : "uploaded";
 
     const id = hashId(item);
     if (seen.has(id)) continue;
