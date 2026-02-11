@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Extra safety (helps when nested actions run Cargo)
+  # Helps when nested actions run Cargo and need private git deps
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
@@ -27,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ✅ Fix B: Passphrase-protected deploy key (Base64 secret + non-interactive ssh-add)
+      # ✅ SSH setup (Fix B) for private Rust git deps (passphrase-protected key)
       - name: Setup SSH (private Rust deps)
         shell: bash
         env:
@@ -39,7 +39,7 @@ jobs:
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
-          # Decode the private key from base64 (avoids newline/format issues)
+          # Decode private key from base64
           python3 - <<'PY' > ~/.ssh/arion_key
           import os, base64, sys
           b64 = os.environ["ARION_DEPLOY_KEY_B64"].strip()
@@ -56,7 +56,7 @@ jobs:
           echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
           echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
 
-          # Askpass helper so ssh-add can use the passphrase without prompts
+          # Askpass helper for passphrase (no prompts)
           cat > /tmp/ssh-askpass.sh <<'EOF'
           #!/bin/bash
           echo "$ARION_DEPLOY_KEY_PASSPHRASE"
@@ -155,6 +155,17 @@ jobs:
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
+
+      # ✅ Pattern B: Create src-tauri/.env from a single secret (TAURI_ENV_FILE)
+      - name: Create src-tauri/.env
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src-tauri
+          cat > src-tauri/.env << 'EOF'
+          ${{ secrets.TAURI_ENV_FILE }}
+          EOF
+          chmod 600 src-tauri/.env
 
       - name: Build frontend
         run: pnpm build
