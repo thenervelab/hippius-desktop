@@ -6,7 +6,7 @@ import DialogContainer from "../../ui/DialogContainer";
 import { Button } from "../../ui/button";
 import ProgressBar from "../../auth/onboarding/ProgressBar";
 import { toast } from "sonner";
-import { Graphsheet, Icons } from "@/components/ui";
+import { Graphsheet } from "@/components/ui";
 import {
   Eye,
   EyeOff,
