@@ -27,11 +27,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ✅ Fix B: Passphrase-protected deploy key (non-interactive ssh-add)
+      # ✅ Fix B: Passphrase-protected deploy key (Base64 secret + non-interactive ssh-add)
       - name: Setup SSH (private Rust deps)
         shell: bash
         env:
-          ARION_DEPLOY_KEY: ${{ secrets.ARION_DEPLOY_KEY }}
+          ARION_DEPLOY_KEY_B64: ${{ secrets.ARION_DEPLOY_KEY_B64 }}
           ARION_DEPLOY_KEY_PASSPHRASE: ${{ secrets.ARION_DEPLOY_KEY_PASSPHRASE }}
         run: |
           set -euo pipefail
@@ -39,8 +39,12 @@ jobs:
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
-          # Write the private key from secrets
-          printf '%s' "$ARION_DEPLOY_KEY" > ~/.ssh/arion_key
+          # Decode the private key from base64 (avoids newline/format issues)
+          python3 - <<'PY' > ~/.ssh/arion_key
+          import os, base64, sys
+          b64 = os.environ["ARION_DEPLOY_KEY_B64"].strip()
+          sys.stdout.buffer.write(base64.b64decode(b64))
+          PY
           chmod 600 ~/.ssh/arion_key
 
           # Trust GitHub host key
@@ -52,21 +56,18 @@ jobs:
           echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
           echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
 
-          # Create an askpass helper so ssh-add can run without prompts
+          # Askpass helper so ssh-add can use the passphrase without prompts
           cat > /tmp/ssh-askpass.sh <<'EOF'
           #!/bin/bash
           echo "$ARION_DEPLOY_KEY_PASSPHRASE"
           EOF
           chmod 700 /tmp/ssh-askpass.sh
 
-          # Force ssh-add to use SSH_ASKPASS (no TTY in Actions)
           export SSH_ASKPASS=/tmp/ssh-askpass.sh
           export SSH_ASKPASS_REQUIRE=force
           export DISPLAY=1
 
           ssh-add ~/.ssh/arion_key </dev/null
-
-          # Optional: confirm key is loaded
           ssh-add -l
 
       - name: Force Cargo to use git CLI
@@ -166,7 +167,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Helps tauri-action/cargo use git CLI
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         with:
           tagName: v__VERSION__-dev
