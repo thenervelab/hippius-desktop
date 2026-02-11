@@ -46,6 +46,7 @@ import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
@@ -375,31 +376,40 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       if (!polkadotAddress) return;
 
       try {
-        // Stop any existing sync loop before changing paths
-        await invoke("stop_sync");
-
+        // Save sync path and update UI immediately (fast operations)
         await setPrivateSyncPath(path, polkadotAddress);
         setSelectedPrivateFolderPath(path);
+
+        // Signal other components (e.g. settings, dashboard) about the path change
+        triggerSyncPathRefresh((prev) => prev + 1);
 
         // Check if HCFS config exists
         const hasConfig = await checkConfig(polkadotAddress);
 
         if (!hasConfig.has_password) {
-          // Need to show setup dialog
+          // Need to show setup dialog — user must enter password first
           setShowHcfsSetup(true);
         } else {
-          // Config exists, just initialize with mnemonic from session
-          const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
-          await tryInitializeSync(polkadotAddress, mnemonic ?? undefined);
-        }
+          // Config exists — show success immediately, sync in background
+          toast.success("Sync folder set — syncing started!");
+          setIsSyncPathConfigured(true);
+          setShowPrivateStartSyncingSelector(false);
+          refetchUserFiles();
 
-        // Signal other components (e.g. settings, dashboard) about the path change
-        triggerSyncPathRefresh((prev) => prev + 1);
+          // Fire off stop + re-init in background (don't block UI)
+          const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+          invoke("stop_sync").catch(() => { }).then(() =>
+            tryInitializeSync(polkadotAddress!, mnemonic ?? undefined).catch((err) =>
+              console.error("[FilesContainer] Background sync init failed:", err)
+            )
+          );
+        }
       } catch (err) {
         console.error("Failed to set sync folder:", err);
+        toast.error("Failed to set sync folder");
       }
     },
-    [polkadotAddress, checkConfig, tryInitializeSync, authType, getMnemonic, triggerSyncPathRefresh]
+    [polkadotAddress, checkConfig, tryInitializeSync, authType, getMnemonic, triggerSyncPathRefresh, refetchUserFiles]
   );
 
   // Handle skipping sync folder setup
@@ -415,20 +425,36 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const handleHcfsSetupComplete = useCallback(async (result: { serverUrl: string; password: string }) => {
     if (!polkadotAddress) return;
 
-    const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
-    const initResult = await setupAndInitialize(
-      polkadotAddress,
-      result.serverUrl,
-      result.password,
-      mnemonic ?? undefined
-    );
+    try {
+      const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+      const initResult = await setupAndInitialize(
+        polkadotAddress,
+        result.serverUrl,
+        result.password,
+        mnemonic ?? undefined
+      );
 
-    setShowHcfsSetup(false);
+      setShowHcfsSetup(false);
 
-    if (initResult?.mnemonic) {
-      setShowMnemonicBackup(true);
+      if (initResult) {
+        toast.success("Sync folder set — syncing started!");
+        // Mark sync path as configured and hide selectors so files view shows
+        setIsSyncPathConfigured(true);
+        setShowPrivateStartSyncingSelector(false);
+        // Refresh file list to show the synced files
+        refetchUserFiles();
+        // Signal other components about the change
+        triggerSyncPathRefresh((prev) => prev + 1);
+
+        if (initResult.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to setup HCFS:", err);
+      toast.error("Sync setup failed. Please try again.");
     }
-  }, [polkadotAddress, setupAndInitialize, authType, getMnemonic]);
+  }, [polkadotAddress, setupAndInitialize, authType, getMnemonic, refetchUserFiles, triggerSyncPathRefresh]);
 
   const handleMnemonicBackupConfirm = useCallback(() => {
     setShowMnemonicBackup(false);

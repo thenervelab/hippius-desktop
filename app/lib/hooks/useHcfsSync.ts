@@ -8,7 +8,7 @@ import {
   type InitSyncResult,
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
-import { getPrivateSyncPath, setPrivateSyncPath } from "../utils/syncPathUtils";
+import { getPrivateSyncPath } from "../utils/syncPathUtils";
 
 export interface UseHcfsSyncResult {
   tryInitializeSync: (accountId: string, mnemonic?: string) => Promise<boolean>;
@@ -146,60 +146,42 @@ export function useHcfsSync(): UseHcfsSyncResult {
   };
 }
 
-/** Derive the same 8-hex-char key the Rust backend uses (SHA-256 of accountId).
- *  Keeps the per-account directory name consistent with DB namespacing.
- *  Must match `account_key()` in src-tauri/src/utils/account_key.rs.
- *  Test vector: accountShortId("5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY") → "9b5f1775" */
-async function accountShortId(accountId: string): Promise<string> {
-  const data = new TextEncoder().encode(accountId);
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 8);
-}
-
-/** Standalone function for use outside React components (e.g., in wallet-auth-context).
- *  Safe to call on login — auto-creates sync path if missing, returns "needs_setup" when
- *  HCFS config (password) is not yet configured so callers can prompt the user.
- *  The Rust `initialize_sync` command handles cleanup of any previous sync loop internally. */
+/**
+ * Standalone function for use outside React components (e.g., in wallet-auth-context).
+ *
+ * Called on login / session restore. Only starts sync if BOTH conditions are met:
+ *   1. A sync path has been configured by the user
+ *   2. The HCFS encryption password has been set
+ *
+ * Does NOT auto-create sync paths or prompt for setup.
+ * The user triggers setup explicitly by choosing a sync folder in the Files page.
+ */
 export async function tryAutoInitSync(
   accountId: string,
   mnemonic?: string
-): Promise<boolean | "needs_setup"> {
+): Promise<boolean> {
   try {
-    // Check if sync path exists — auto-create if missing.
-    // getPrivateSyncPath throws when no row exists (fresh install), so treat errors as "no path".
+    // Check if sync path has been configured by the user
     let syncPath = "";
     try {
       syncPath = await getPrivateSyncPath(accountId);
     } catch {
-      // No sync path configured yet
+      // No sync path configured yet — that's fine, user hasn't set one
     }
+
     if (!syncPath || syncPath.length === 0) {
-      // Use a per-account subdirectory so different mnemonics get isolated folders.
-      // Derive the same SHA-256 based short ID the backend uses for DB namespacing.
-      const shortId = await accountShortId(accountId);
-      console.log(`[AutoSync] No sync path, creating default ~/Documents/Hippius/${shortId}`);
-      try {
-        const { documentDir, join } = await import("@tauri-apps/api/path");
-        const docsDir = await documentDir();
-        const defaultPath = await join(docsDir, "Hippius", shortId);
-        await setPrivateSyncPath(defaultPath, accountId);
-        syncPath = defaultPath;
-        console.log("[AutoSync] Default sync path created:", syncPath);
-      } catch (pathErr) {
-        console.error("[AutoSync] Failed to create default sync path:", pathErr);
-        return false;
-      }
+      console.log("[AutoSync] No sync path configured, skipping auto-init");
+      return false;
     }
 
     // Check if HCFS config exists
     const config = await getHcfsConfig(accountId);
     if (!config.has_password) {
-      console.log("[AutoSync] No HCFS config, setup required");
-      return "needs_setup";
+      console.log("[AutoSync] No HCFS config, skipping auto-init (user will be prompted when setting sync folder)");
+      return false;
     }
 
-    // Initialize sync
+    // Both sync path and config exist — initialize sync
     console.log("[AutoSync] Auto-initializing sync...");
     const result = await initializeSync(accountId, mnemonic);
     console.log("[AutoSync] Sync initialized:", result.user_id);

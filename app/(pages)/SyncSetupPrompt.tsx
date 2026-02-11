@@ -1,50 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import { useAtom } from "jotai";
-import { toast } from "sonner";
-import { syncNeedsSetupAtom } from "@/lib/store/syncAtoms";
-import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
-import { saveHcfsConfig, initializeSync } from "@/lib/utils/hcfsConfigUtils";
-
 /**
- * Invisible component that auto-shows the HcfsSetupDialog when
- * tryAutoInitSync detects a missing HCFS config on login.
+ * SyncSetupPrompt is no longer needed.
+ *
+ * HCFS setup is now entirely user-driven:
+ *  1. User selects a sync folder in the Files page
+ *  2. If HCFS config (password) is missing, the HcfsSetupDialog is shown inline
+ *  3. After entering the password, sync starts and a success toast appears
+ *
+ * This file is kept as a no-op to avoid breaking any lazy imports.
  */
 export default function SyncSetupPrompt() {
-  const [setupInfo, setSetupInfo] = useAtom(syncNeedsSetupAtom);
-  const [loading, setLoading] = useState(false);
-
-  if (!setupInfo) return null;
-
-  const handleComplete = async (result: { serverUrl: string; password: string }) => {
-    setLoading(true);
-    try {
-      await saveHcfsConfig(setupInfo.accountId, result.serverUrl, result.password);
-      console.log("[SyncSetupPrompt] Config saved, initializing sync...");
-      const syncResult = await initializeSync(setupInfo.accountId, setupInfo.mnemonic);
-      console.log("[SyncSetupPrompt] Sync initialized:", syncResult.user_id);
-      toast.success("Sync setup complete");
-      setSetupInfo(null);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("[SyncSetupPrompt] Setup failed:", msg);
-      toast.error(`Sync setup failed: ${msg}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleClose = () => {
-    setSetupInfo(null);
-  };
-
-  return (
-    <HcfsSetupDialog
-      open={true}
-      onClose={handleClose}
-      onComplete={handleComplete}
-      loading={loading}
-    />
-  );
+  return null;
 }

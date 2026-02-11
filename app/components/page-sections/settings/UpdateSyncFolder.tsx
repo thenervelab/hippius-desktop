@@ -29,7 +29,6 @@ const UpdateSyncFolder: React.FC = () => {
   const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
   const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
-  const [isStoppingSync, setIsStoppingSync] = useState(false);
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
 
   const {
@@ -62,48 +61,64 @@ const UpdateSyncFolder: React.FC = () => {
     if (!polkadotAddress) return;
 
     try {
-      // Stop the existing sync loop before changing paths
-      await invoke("stop_sync");
-
+      // Save sync path and update UI immediately (fast operations)
       await setPrivateSyncPath(path, polkadotAddress);
-
-      // Update local state immediately
       setSelectedPrivateFolderPath(path);
       setSelectedPrivateFolderName(path.split(/[\\/]/).pop() || "");
+
+      // Trigger files page refresh
+      triggerSyncPathRefresh((prev) => prev + 1);
 
       // Check if HCFS config exists
       const hasConfig = await checkConfig(polkadotAddress);
 
       if (!hasConfig.has_password) {
+        // Need to show setup dialog — user must enter password first
         setShowHcfsSetup(true);
       } else {
-        // Config exists, just initialize with mnemonic from session
-        const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
-        await tryInitializeSync(polkadotAddress, mnemonic ?? undefined);
-      }
+        // Config exists — show success immediately, sync in background
+        toast.success("Sync folder set — syncing started!");
+        setShowSelector(false);
 
-      // Trigger files page refresh
-      triggerSyncPathRefresh((prev) => prev + 1);
+        // Fire off stop + re-init in background (don't block UI)
+        const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+        invoke("stop_sync").catch(() => { }).then(() =>
+          tryInitializeSync(polkadotAddress!, mnemonic ?? undefined).catch((err) =>
+            console.error("[UpdateSyncFolder] Background sync init failed:", err)
+          )
+        );
+      }
     } catch (err) {
       console.error("Failed to update sync path:", err);
+      toast.error("Failed to set sync folder");
     }
   };
 
   const handleHcfsSetupComplete = async (result: { serverUrl: string; password: string }) => {
     if (!polkadotAddress) return;
 
-    const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
-    const initResult = await setupAndInitialize(
-      polkadotAddress,
-      result.serverUrl,
-      result.password,
-      mnemonic ?? undefined
-    );
+    try {
+      const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+      const initResult = await setupAndInitialize(
+        polkadotAddress,
+        result.serverUrl,
+        result.password,
+        mnemonic ?? undefined
+      );
 
-    setShowHcfsSetup(false);
+      setShowHcfsSetup(false);
+      // Close the folder selector view to show the updated folder
+      setShowSelector(false);
 
-    if (initResult?.mnemonic) {
-      setShowMnemonicBackup(true);
+      if (initResult) {
+        toast.success("Sync folder set — syncing started!");
+        if (initResult.mnemonic) {
+          setShowMnemonicBackup(true);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to setup HCFS:", err);
+      toast.error("Sync setup failed. Please try again.");
     }
   };
 
@@ -123,22 +138,22 @@ const UpdateSyncFolder: React.FC = () => {
       return;
     }
 
-    setIsStoppingSync(true);
-
     try {
-      // Stop the Rust sync loop first
-      await invoke("stop_sync");
+      // Clear sync path and update UI immediately
       await setPrivateSyncPath("", polkadotAddress);
       setSelectedPrivateFolderPath("");
       setSelectedPrivateFolderName("");
-      toast.success("Private folder syncing stopped");
+      toast.success("Syncing stopped");
       setStopSyncTarget(null);
       // Trigger files page refresh
       triggerSyncPathRefresh((prev) => prev + 1);
+
+      // Stop the Rust sync loop in background (don't block UI)
+      invoke("stop_sync").catch((err) =>
+        console.error("[UpdateSyncFolder] Background stop_sync failed:", err)
+      );
     } catch {
       toast.error("Failed to stop syncing for this folder");
-    } finally {
-      setIsStoppingSync(false);
     }
   };
 
@@ -269,7 +284,7 @@ const UpdateSyncFolder: React.FC = () => {
               onConfirm={handleStopSyncConfirm}
               folderName={selectedPrivateFolderName}
               folderPath={selectedPrivateFolderPath}
-              loading={isStoppingSync}
+              loading={false}
             />
           </div>
         )}

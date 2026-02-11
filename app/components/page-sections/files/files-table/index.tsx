@@ -836,7 +836,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       const start = (currentPage - 1) * pageSize;
       const end = start + pageSize;
       return sortedRows.slice(start, end);
-    }, [table, currentPage, sorting]);
+    }, [table, currentPage, sorting, allFiles]);
 
     const headerRows = useMemo(
       () =>
