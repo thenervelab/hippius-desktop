@@ -6,7 +6,7 @@ import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Graphsheet, Icons } from "@/components/ui";
 import { Input } from "@/components/ui/input/Input2";
 import { HCFS_CONFIG } from "@/app/lib/config";
-import { AlertCircle, Lock, Server } from "lucide-react";
+import { AlertCircle, Lock } from "lucide-react";
 import { Label } from "@/components/ui/label";
 
 interface HcfsSetupDialogProps {
@@ -22,25 +22,12 @@ export function HcfsSetupDialog({
   onComplete,
   loading = false,
 }: HcfsSetupDialogProps) {
-  const [serverUrl, setServerUrl] = useState<string>(HCFS_CONFIG.defaultServerUrl);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
 
   const handleSubmit = () => {
     setError("");
-
-    if (!serverUrl.trim()) {
-      setError("Server URL is required");
-      return;
-    }
-
-    try {
-      new URL(serverUrl);
-    } catch {
-      setError("Please enter a valid URL");
-      return;
-    }
 
     if (!password) {
       setError("Password is required");
@@ -57,7 +44,7 @@ export function HcfsSetupDialog({
       return;
     }
 
-    onComplete({ serverUrl: serverUrl.trim(), password });
+    onComplete({ serverUrl: HCFS_CONFIG.defaultServerUrl, password });
   };
 
   const handleOpenChange = (isOpen: boolean) => {
@@ -103,8 +90,8 @@ export function HcfsSetupDialog({
               Setup Sync Encryption
             </span>
             <Dialog.Description className="text-sm text-grey-50 text-center max-w-sm">
-              Configure your sync settings. Your password encrypts your files
-              locally before upload.
+              Set an encryption password. Your files are encrypted locally
+              before upload.
             </Dialog.Description>
           </div>
 
@@ -116,35 +103,12 @@ export function HcfsSetupDialog({
             </button>
           </div>
           <p className="text-sm text-grey-50 mb-4 md:hidden">
-            Configure your sync settings. Your password encrypts your files
-            locally before upload.
+            Set an encryption password. Your files are encrypted locally
+            before upload.
           </p>
 
           {/* Form Fields */}
           <div className="flex flex-col gap-4 mb-2">
-            {/* Server URL */}
-            <div className="flex flex-col gap-2 w-full text-grey-10">
-              <Label
-                htmlFor="hcfs-server-url"
-                className="text-sm font-medium text-grey-70 flex items-center gap-2"
-              >
-                <Server className="w-4 h-4" />
-                Server URL
-              </Label>
-              <Input
-                id="hcfs-server-url"
-                type="url"
-                value={serverUrl}
-                onChange={(e) => setServerUrl(e.target.value)}
-                placeholder="https://arion.hippius.com"
-                disabled={loading}
-                className="border-grey-80 h-12 text-grey-30 w-full bg-transparent font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
-              />
-              <p className="text-xs text-grey-50">
-                The HCFS server to sync your encrypted files to
-              </p>
-            </div>
-
             {/* Password */}
             <div className="flex flex-col gap-2 w-full text-grey-10">
               <Label

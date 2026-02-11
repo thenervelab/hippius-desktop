@@ -29,12 +29,8 @@ export async function getHcfsConfig(
   return invoke<HcfsConfigResult>("get_hcfs_config", { accountId });
 }
 
-export async function updateHcfsServerUrl(
-  accountId: string,
-  serverUrl: string
-): Promise<void> {
-  await invoke("update_hcfs_server_url", { accountId, serverUrl });
-}
+
+
 
 export async function initializeSync(
   accountId: string,

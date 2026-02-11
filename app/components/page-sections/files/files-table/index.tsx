@@ -22,15 +22,11 @@ import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
 import {
-  Copy,
   Download,
-  LinkIcon,
   MoreVertical,
-  Share,
   Folder,
 } from "lucide-react";
 import { decodeHexCid } from "@/lib/utils/decodeHexCid";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
@@ -41,7 +37,6 @@ import { VideoDialogTrigger } from "./VideoDialog";
 import { ImageDialogTrigger } from "./ImageDialog";
 import { PdfDialogTrigger } from "./PdfDialog";
 import { Icons } from "@/app/components/ui";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/app/components/page-sections/files/shared/FileViewUtils";
 import FileDetailsDialogContent from "@/app/components/page-sections/files/file-details-dialog-content";
@@ -143,31 +138,6 @@ interface FilesTableProps {
   totalPages: number;
   setCurrentPage: (page: number) => void;
 }
-
-// Create stable action functions outside component to prevent recreation
-const openExplorerUrl = async (decodedCid: string) => {
-  try {
-    await openUrl(`http://hipstats.com/cid-tracker/${decodedCid}`);
-  } catch (error) {
-    console.error("Failed to open Explorer:", error);
-  }
-};
-
-const openIpfsUrl = async (decodedCid: string) => {
-  try {
-    await openUrl(`https://get.hippius.network/ipfs/${decodedCid}`);
-  } catch (error) {
-    console.error("Failed to open IPFS:", error);
-  }
-};
-
-const copyToClipboard = (decodedCid: string) => {
-  navigator.clipboard
-    .writeText(`https://get.hippius.network/ipfs/${decodedCid}`)
-    .then(() => {
-      toast.success("Copied to clipboard successfully!");
-    });
-};
 
 const FilesTable: FC<FilesTableProps> = memo(
   ({
@@ -349,21 +319,7 @@ const FilesTable: FC<FilesTableProps> = memo(
               },
             ]
             : []),
-          {
-            icon: <Share className="size-4" />,
-            itemTitle: "Go To Explorer",
-            onItemClick: () => openExplorerUrl(decodedCid),
-          },
-          {
-            icon: <LinkIcon className="size-4" />,
-            itemTitle: "View on IPFS",
-            onItemClick: () => openIpfsUrl(decodedCid),
-          },
-          {
-            icon: <Copy className="size-4" />,
-            itemTitle: "Copy Link",
-            onItemClick: () => copyToClipboard(decodedCid),
-          },
+
           {
             icon: <Icons.InfoCircle className="size-4" />,
             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
@@ -629,7 +585,7 @@ const FilesTable: FC<FilesTableProps> = memo(
 
               return (
                 <div className="flex justify-center items-center">
-                  <TableActionMenu dropdownTitle="IPFS Options" items={menuItems}>
+                  <TableActionMenu dropdownTitle="" items={menuItems}>
                     <Button
                       variant="ghost"
                       size="md"

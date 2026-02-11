@@ -1,13 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Copy, Download, LinkIcon, Share, Trash2 } from "lucide-react";
+import { Download, Trash2 } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
-import { toast } from "sonner";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
-import { openUrl } from "@tauri-apps/plugin-opener";
+
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Link from "next/link";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
@@ -72,28 +70,9 @@ export default function FileContextMenu({
     left: `${Math.min(x, window.innerWidth - 200)}px`
   };
 
-  // Get file details for menu actions
-  const cid = file.cid;
-  const name = file.name;
-  const { fileFormat } = getFilePartsFromFileName(name);
+  // Get file type for View option
+  const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
-  const decodedCid = decodeHexCid(cid);
-
-  const handleGoToExplorer = async () => {
-    try {
-      await openUrl(`http://hipstats.com/cid-tracker/${decodedCid}`);
-    } catch (error) {
-      console.error("Failed to open Explorer:", error);
-    }
-  };
-
-  const handleGoToIPFS = async () => {
-    try {
-      await openUrl(`https://get.hippius.network/ipfs/${decodedCid}`);
-    } catch (error) {
-      console.error("Failed to open IPFS:", error);
-    }
-  };
 
   const handleShowFileDetails = () => {
     if (onShowFileDetails && file) {
@@ -147,41 +126,8 @@ export default function FileContextMenu({
                 <span>View</span>
               </button>
             )}
-          <button
-            className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
-            onClick={() => {
-              handleGoToExplorer();
-              onClose();
-            }}
-          >
-            <Share className="size-4" />
-            <span>Go To Explorer</span>
-          </button>
-          <button
-            className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
-            onClick={() => {
-              handleGoToIPFS();
-              onClose();
-            }}
-          >
-            <LinkIcon className="size-4" />
-            <span>View on IPFS</span>
-          </button>
 
-          <button
-            className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
-            onClick={() => {
-              navigator.clipboard
-                .writeText(`https://get.hippius.network/ipfs/${decodedCid}`)
-                .then(() => {
-                  toast.success("Copied to clipboard successfully!");
-                });
-              onClose();
-            }}
-          >
-            <Copy className="size-4" />
-            <span>Copy Link</span>
-          </button>
+
 
           <button
             className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"

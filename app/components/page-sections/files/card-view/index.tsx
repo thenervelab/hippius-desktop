@@ -3,24 +3,20 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Button } from "@/components/ui/button";
 import {
   MoreVertical,
-  LinkIcon,
-  Copy,
   Download,
-  Share,
 } from "lucide-react";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
+
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
 import SelectionActionBar from "../SelectionActionBar";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import * as TableModule from "@/components/ui/alt-table";
 import { useRouter } from "next/navigation";
-import { openUrl } from "@tauri-apps/plugin-opener";
+
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { FileViewSharedState } from "@/app/components/page-sections/files/shared/FileViewUtils";
 import FileDetailsDialogContent from "@/app/components/page-sections/files/file-details-dialog-content";
@@ -196,7 +192,7 @@ const CardView: FC<CardViewProps> = ({
                     }}
                     actionMenu={
                       <TableActionMenu
-                        dropdownTitle="IPFS Options"
+                        dropdownTitle=""
                         dropDownMenuTriggerClass="size-5 text-grey-60 flex items-center"
                         open={openMenuIndex === index}
                         onOpenChange={(open) => setOpenMenuIndex(open ? index : null)}
@@ -236,74 +232,7 @@ const CardView: FC<CardViewProps> = ({
                               },
                             }]
                             : []),
-                          {
-                            icon: <Share className="size-4" />,
-                            itemTitle: "Go To Explorer",
-                            onItemClick: async (e?: React.MouseEvent) => {
-                              // Prevent event bubbling to avoid triggering card's onClick
-                              if (e) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                              }
-                              setOpenMenuIndex(null);
-                              try {
-                                await openUrl(
-                                  `http://hipstats.com/cid-tracker/${decodeHexCid(
-                                    file.cid
-                                  )}`
-                                );
-                              } catch (error) {
-                                console.error(
-                                  "Failed to open Explorer:",
-                                  error
-                                );
-                              }
-                            }
-                          },
-                          {
-                            icon: <LinkIcon className="size-4" />,
-                            itemTitle: "View on IPFS",
-                            onItemClick: async (e?: React.MouseEvent) => {
-                              // Prevent event bubbling to avoid triggering card's onClick
-                              if (e) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                              }
-                              setOpenMenuIndex(null);
-                              try {
-                                await openUrl(
-                                  `https://get.hippius.network/ipfs/${decodeHexCid(
-                                    file.cid
-                                  )}`
-                                );
-                              } catch (error) {
-                                console.error("Failed to open on IPFS:", error);
-                              }
-                            }
-                          },
-                          {
-                            icon: <Copy className="size-4" />,
-                            itemTitle: "Copy Link",
-                            onItemClick: (e?: React.MouseEvent) => {
-                              // Prevent event bubbling to avoid triggering card's onClick
-                              if (e) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                              }
-                              setOpenMenuIndex(null);
-                              navigator.clipboard
-                                .writeText(
-                                  `https://get.hippius.network/ipfs/${decodeHexCid(
-                                    file.cid
-                                  )}`
-                                )
-                                .then(() => {
-                                  toast.success(
-                                    "Copied to clipboard successfully!"
-                                  );
-                                });
-                            }
-                          },
+
                           {
                             icon: <Icons.InfoCircle className="size-4" />,
                             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,

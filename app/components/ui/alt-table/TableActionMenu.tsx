@@ -62,9 +62,11 @@ const TableActionMenu = memo(function TableActionMenu({
          rounded-2 overflow-hidden p-0 min-w-[150px]"
       >
         {/* Dropdown title */}
-        <div className="text-xs font-medium !text-grey-40 p-2 border-b border-grey-80 uppercase tracking-wide">
-          {dropdownTitle}
-        </div>
+        {dropdownTitle && (
+          <div className="text-xs font-medium !text-grey-40 p-2 border-b border-grey-80 uppercase tracking-wide">
+            {dropdownTitle}
+          </div>
+        )}
 
         {/* Menu items */}
         {filteredItems.map((item, index) => {
@@ -75,11 +77,11 @@ const TableActionMenu = memo(function TableActionMenu({
             item.disabled
               ? "opacity-60 cursor-not-allowed pointer-events-none"
               : cn(
-                  "cursor-pointer",
-                  item.variant === "destructive"
-                    ? "hover:!text-error-70 !text-error-60"
-                    : "hover:!text-grey-40 !text-grey-30"
-                )
+                "cursor-pointer",
+                item.variant === "destructive"
+                  ? "hover:!text-error-70 !text-error-60"
+                  : "hover:!text-grey-40 !text-grey-30"
+              )
           );
 
           const itemContent = (

@@ -9,7 +9,7 @@ import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { useSetAtom } from "jotai";
 import { refreshEnabledTypesAtom } from "@/components/page-sections/notifications/notificationStore";
 import CustomizeRPC from "./CustomizeRPC";
-import HcfsServerSettings from "./HcfsServerSettings";
+
 import OAuthTokenSection from "./OAuthTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
 import VPNSettings from "./VPNSettings";
@@ -121,16 +121,7 @@ const SettingsDialogContent: React.FC = () => {
                     <UpdateSyncFolder />
                   </RevealTextLine>
                 </div>
-                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                  <RevealTextLine
-                    rotate
-                    reveal={inView}
-                    className="delay-500 w-full"
-                    parentClassName="w-full"
-                  >
-                    <HcfsServerSettings />
-                  </RevealTextLine>
-                </div>
+
               </div>
             )}
             {activeTab === "API Token" && (
