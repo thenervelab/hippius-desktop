@@ -1,0 +1,153 @@
+name: publish-dev
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [sync-engine]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: publish-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Extra safety: force Cargo to use git CLI even inside nested actions
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  publish-tauri-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ✅ Option 1: Deploy key setup for private Rust git deps
+      - name: Setup SSH (private Rust deps)
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.ARION_DEPLOY_KEY }}
+
+      - name: Trust GitHub host key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Force Cargo to use git CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.cargo
+          cat > ~/.cargo/config.toml << 'EOF'
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+      - name: Get release notes
+        id: release_notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          PR_NUMBER="$(git log -1 --pretty=format:'%s' | grep -oE '#[0-9]+' | tr -d '# ' || true)"
+
+          if [[ -z "${PR_NUMBER:-}" ]]; then
+            PR_NUMBER="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/commits/${SHA}/pulls" \
+              | jq -r '.[0].number // empty')"
+          fi
+
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            PR_INFO="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}")"
+
+            TITLE="$(jq -r '.title // empty' <<<"$PR_INFO")"
+            BODY="$(jq -r '.body // empty'  <<<"$PR_INFO")"
+          else
+            TITLE="$(git log -1 --pretty=%s)"
+            BODY="$(git log -1 --pretty=%b)"
+          fi
+
+          TITLE="${TITLE//$'\r'/}"
+          BODY="${BODY//$'\r'/}"
+          if [[ -z "${BODY:-}" ]]; then
+            BODY="See the assets to download this version and install."
+          fi
+
+          BODY="$(printf '%s' "$BODY" | head -c 30000)"
+
+          {
+            echo "title<<__TITLE__"
+            echo "$TITLE"
+            echo "__TITLE__"
+            echo "body<<__BODY__"
+            echo "$BODY"
+            echo "__BODY__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup PNPM
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9.12.3
+          run_install: false
+
+      - name: PNPM store path
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: PNPM cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+        env:
+          NODE_ENV: production
+
+      - name: Build & publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        with:
+          tagName: v__VERSION__-dev
+          releaseName: '[DEV] ${{ steps.release_notes.outputs.title }}'
+          releaseBody: |
+            **⚠️ Development Build - macOS Only**
+
+            ${{ steps.release_notes.outputs.body }}
+          releaseDraft: false
+          prerelease: true
+          makeLatest: false
+          overwrite: true
+          args: '--target universal-apple-darwin'
