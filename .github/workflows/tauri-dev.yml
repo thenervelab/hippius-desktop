@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Extra safety: force Cargo to use git CLI even inside nested actions
+  # Extra safety (helps when nested actions run Cargo)
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
@@ -27,19 +27,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ✅ Option 1: Deploy key setup for private Rust git deps
+      # ✅ Fix B: Passphrase-protected deploy key (non-interactive ssh-add)
       - name: Setup SSH (private Rust deps)
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.ARION_DEPLOY_KEY }}
-
-      - name: Trust GitHub host key
         shell: bash
+        env:
+          ARION_DEPLOY_KEY: ${{ secrets.ARION_DEPLOY_KEY }}
+          ARION_DEPLOY_KEY_PASSPHRASE: ${{ secrets.ARION_DEPLOY_KEY_PASSPHRASE }}
         run: |
           set -euo pipefail
+
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Write the private key from secrets
+          printf '%s' "$ARION_DEPLOY_KEY" > ~/.ssh/arion_key
+          chmod 600 ~/.ssh/arion_key
+
+          # Trust GitHub host key
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+          # Start ssh-agent and persist env vars for later steps/actions
+          eval "$(ssh-agent -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+
+          # Create an askpass helper so ssh-add can run without prompts
+          cat > /tmp/ssh-askpass.sh <<'EOF'
+          #!/bin/bash
+          echo "$ARION_DEPLOY_KEY_PASSPHRASE"
+          EOF
+          chmod 700 /tmp/ssh-askpass.sh
+
+          # Force ssh-add to use SSH_ASKPASS (no TTY in Actions)
+          export SSH_ASKPASS=/tmp/ssh-askpass.sh
+          export SSH_ASKPASS_REQUIRE=force
+          export DISPLAY=1
+
+          ssh-add ~/.ssh/arion_key </dev/null
+
+          # Optional: confirm key is loaded
+          ssh-add -l
 
       - name: Force Cargo to use git CLI
         shell: bash
@@ -138,6 +166,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Helps tauri-action/cargo use git CLI
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         with:
           tagName: v__VERSION__-dev
