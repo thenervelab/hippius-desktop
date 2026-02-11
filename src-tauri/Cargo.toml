@@ -69,7 +69,8 @@ which = "4.4"
 log = "0.4"
 hostname = "0.4"
 zeroize = "1"
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "51df7f0" }
+bip39 = { version = "2.2", features = ["rand"] }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "4325551" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"

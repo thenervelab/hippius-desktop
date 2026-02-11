@@ -71,17 +71,19 @@ pub struct StagedChanges {
 }
 
 /// Thin wrapper around `hcfs_client::Drive` that adds error mapping to `String`
-/// (required for Tauri IPC) and tracks the sync folder path.
+/// (required for Tauri IPC) and tracks the sync folder path and config directory.
 pub struct HcfsDriveManager {
     drive: Drive,
     sync_path: PathBuf,
+    config_dir: PathBuf,
 }
 
 impl HcfsDriveManager {
-    pub fn new(sync_path: PathBuf) -> Self {
+    pub fn new(sync_path: PathBuf, config_dir: PathBuf) -> Self {
         Self {
-            drive: Drive::new(&sync_path),
+            drive: Drive::with_config_dir(&sync_path, &config_dir),
             sync_path,
+            config_dir,
         }
     }
 
@@ -237,10 +239,14 @@ impl HcfsDriveManager {
 
     /// Decrypt and return the Drive's actual BIP-39 mnemonic.
     pub fn export_mnemonic(&self, password: &str) -> Result<String, String> {
-        let enc_path = self.sync_path.join(".hippius").join("enc_mnemonic.json");
+        let enc_path = self.config_dir.join("enc_mnemonic.json");
         let mnemonic = hcfs_client::auth::recover_mnemonic(&enc_path, password)
             .map_err(|e| e.to_string())?;
         Ok(mnemonic.to_string())
+    }
+
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
     }
 
     pub fn cleanup_temp(&self) {

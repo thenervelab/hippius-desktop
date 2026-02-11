@@ -8,6 +8,7 @@ version = "0.1.91"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
+ "bip39",
  "chrono",
  "cocoa",
  "dirs",
@@ -4662,7 +4663,7 @@ dependencies = [
 [[package]]
 name = "hcfs-client"
 version = "0.1.1"
-source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=51df7f0#51df7f0edba1b1e71590b89a80d5f9b9b179de2e"
+source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=4325551#4325551ea055bd16af10318a258d7fe8582c4039"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -4689,7 +4690,7 @@ dependencies = [
 [[package]]
 name = "hcfs-shared"
 version = "0.1.1"
-source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=51df7f0#51df7f0edba1b1e71590b89a80d5f9b9b179de2e"
+source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=4325551#4325551ea055bd16af10318a258d7fe8582c4039"
 dependencies = [
  "ed25519-dalek",
  "hex",
