@@ -194,7 +194,7 @@ pub async fn initialize_sync(
     let config = get_hcfs_config(account_id.clone()).await?;
 
     let server_url = if config.server_url.is_empty() {
-        "https://57.129.36.43:9999".to_string()
+        "https://arion.hippius.com".to_string()
     } else {
         config.server_url
     };

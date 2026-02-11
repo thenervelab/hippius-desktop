@@ -136,7 +136,7 @@ export function HcfsSetupDialog({
                 type="url"
                 value={serverUrl}
                 onChange={(e) => setServerUrl(e.target.value)}
-                placeholder="https://57.129.36.43:9999"
+                placeholder="https://arion.hippius.com"
                 disabled={loading}
                 className="border-grey-80 h-12 text-grey-30 w-full bg-transparent font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
               />

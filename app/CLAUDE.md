@@ -171,7 +171,7 @@ All API endpoints defined in `lib/config.ts`:
 - `API_CONFIG.baseUrl` — `https://api.hippius.com`
 - `IPFS_GATEWAY` — `https://relay-fr.hippius.network`
 - `S3_ENDPOINT` — `https://s3.hippius.com`
-- `HCFS_CONFIG.defaultServerUrl` — `https://57.129.36.43:9999`
+- `HCFS_CONFIG.defaultServerUrl` — `https://arion.hippius.com`
 
 ## Patterns & Conventions
 

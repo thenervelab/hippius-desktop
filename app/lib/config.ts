@@ -111,6 +111,6 @@ export const SUPPORT_CONFIG = {
 } as const;
 
 export const HCFS_CONFIG = {
-  defaultServerUrl: "https://57.129.36.43:9999",
+  defaultServerUrl: "https://arion.hippius.com",
   apiKey: "Arion",
 } as const;
