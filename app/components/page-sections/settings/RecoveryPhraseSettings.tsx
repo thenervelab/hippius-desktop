@@ -69,6 +69,7 @@ const RecoveryPhraseSettings: React.FC = () => {
           open={showDialog}
           mnemonic={mnemonic}
           onConfirm={handleConfirm}
+          onClose={handleConfirm}
         />
       )}
     </>

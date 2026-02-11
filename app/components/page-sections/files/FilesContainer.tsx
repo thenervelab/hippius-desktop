@@ -742,6 +742,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         open={showMnemonicBackup}
         mnemonic={mnemonicToBackup || ""}
         onConfirm={handleMnemonicBackupConfirm}
+        onClose={handleMnemonicBackupConfirm}
       />
     </>
   );

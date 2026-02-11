@@ -6,6 +6,7 @@ import DialogContainer from "../../ui/DialogContainer";
 import { Button } from "../../ui/button";
 import ProgressBar from "../../auth/onboarding/ProgressBar";
 import { toast } from "sonner";
+import { Graphsheet, Icons } from "@/components/ui";
 import {
   Eye,
   EyeOff,
@@ -29,6 +30,7 @@ interface MnemonicBackupDialogProps {
   open: boolean;
   mnemonic: string;
   onConfirm: () => void;
+  onClose?: () => void;
 }
 
 const TOTAL_STEPS = 4;
@@ -39,6 +41,7 @@ export function MnemonicBackupDialog({
   open,
   mnemonic,
   onConfirm,
+  onClose,
 }: MnemonicBackupDialogProps) {
   const [step, setStep] = useState(1);
   const [showMnemonic, setShowMnemonic] = useState(false);
@@ -60,6 +63,18 @@ export function MnemonicBackupDialog({
   const clipboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const words = useMemo(() => mnemonic.split(" "), [mnemonic]);
+
+  // Determine if we can close the dialog (not during sensitive operations)
+  const canClose = !isCreatingBackup;
+
+  const handleClose = useCallback(() => {
+    if (!canClose) return;
+    if (onClose) {
+      onClose();
+    } else {
+      onConfirm();
+    }
+  }, [canClose, onClose, onConfirm]);
 
   // Reset all state when dialog opens or closes
   useEffect(() => {
@@ -110,7 +125,7 @@ export function MnemonicBackupDialog({
       // Clear clipboard after 30 seconds for security
       if (clipboardTimerRef.current) clearTimeout(clipboardTimerRef.current);
       clipboardTimerRef.current = setTimeout(() => {
-        navigator.clipboard.writeText("").catch(() => {});
+        navigator.clipboard.writeText("").catch(() => { });
         clipboardTimerRef.current = null;
       }, 30000);
     } catch (err) {
@@ -193,28 +208,89 @@ export function MnemonicBackupDialog({
 
   if (!mnemonic) return null;
 
+  const handleOpenChange = (isOpen: boolean) => {
+    if (!isOpen && canClose) {
+      handleClose();
+    }
+  };
+
+  // Step icon and title mapping
+  const stepConfig: Record<number, { icon: React.ReactNode; title: string }> = {
+    1: { icon: <Shield className="size-5 text-grey-100" />, title: "Secure Your Recovery Phrase" },
+    2: { icon: <Eye className="size-5 text-grey-100" />, title: "Your Recovery Phrase" },
+    3: { icon: <CheckCircle2 className="size-5 text-grey-100" />, title: "Verify Your Recovery Phrase" },
+    4: { icon: <CheckCircle2 className="size-5 text-grey-100" />, title: "Recovery Phrase Secured!" },
+  };
+
   return (
-    <Dialog.Root open={open}>
-      <DialogContainer preventClose className="sm:max-w-[560px] sm:mx-auto">
-        <div className="p-6 flex flex-col gap-5">
+    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
+      <DialogContainer
+        className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[560px] h-fit"
+        preventClose={!canClose}
+      >
+        <Dialog.Title className="sr-only">{stepConfig[step]?.title}</Dialog.Title>
+
+        <div className="px-5 py-5 flex flex-col gap-4">
+          {/* Header: Back button + Close button */}
+          <div className="flex items-center justify-between">
+            <div className="w-8">
+              {step > 1 && step < 4 && (
+                <button
+                  type="button"
+                  onClick={() => setStep(step - 1)}
+                  className="flex items-center gap-1 text-sm text-grey-40 hover:text-grey-20 transition-colors"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleClose}
+              disabled={!canClose}
+              className="text-grey-50 hover:text-grey-20 transition-colors disabled:opacity-30"
+            >
+              <X className="size-5" />
+            </button>
+          </div>
+
           {/* Progress Bar */}
           <ProgressBar totalSteps={TOTAL_STEPS} currentStep={step} />
+
+          {/* Icon Header — Graphsheet pattern (matching other dialogs) */}
+          <div className="flex flex-col items-center text-center gap-3">
+            <div className="size-14 flex justify-center items-center relative">
+              <Graphsheet
+                majorCell={{
+                  lineColor: [31, 80, 189, 1.0],
+                  lineWidth: 2,
+                  cellDim: 200,
+                }}
+                minorCell={{
+                  lineColor: [49, 103, 211, 1.0],
+                  lineWidth: 1,
+                  cellDim: 20,
+                }}
+                className="absolute w-full h-full duration-500 opacity-30 z-0"
+              />
+              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
+              <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
+                {stepConfig[step]?.icon}
+              </div>
+            </div>
+          </div>
 
           {/* Step 1: Security Best Practices */}
           {step === 1 && (
             <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-primary-50/10 flex items-center justify-center flex-shrink-0">
-                  <Shield className="w-5 h-5 text-primary-50" />
-                </div>
-                <div>
-                  <Dialog.Title className="text-lg font-semibold">
-                    Secure Your Recovery Phrase
-                  </Dialog.Title>
-                  <Dialog.Description className="text-sm text-grey-40 mt-0.5">
-                    Your recovery phrase is the only way to restore access to your encrypted files.
-                  </Dialog.Description>
-                </div>
+              <div className="text-center">
+                <h2 className="text-xl font-semibold text-grey-10">
+                  Secure Your Recovery Phrase
+                </h2>
+                <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
+                  Your recovery phrase is the only way to restore access to your encrypted files.
+                </Dialog.Description>
               </div>
 
               <div className="flex flex-col gap-2">
@@ -251,11 +327,11 @@ export function MnemonicBackupDialog({
           {/* Step 2: Display Recovery Phrase */}
           {step === 2 && (
             <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
-              <div>
-                <Dialog.Title className="text-lg font-semibold">
+              <div className="text-center">
+                <h2 className="text-xl font-semibold text-grey-10">
                   Your Recovery Phrase
-                </Dialog.Title>
-                <Dialog.Description className="text-sm text-grey-40 mt-0.5">
+                </h2>
+                <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
                   Write down each word in order. You&apos;ll need to verify them in the next step.
                 </Dialog.Description>
               </div>
@@ -263,9 +339,8 @@ export function MnemonicBackupDialog({
               {/* Word Grid */}
               <div className="bg-grey-90 rounded-lg p-4 relative">
                 <div
-                  className={`grid grid-cols-3 gap-2 transition-all duration-200 ${
-                    !showMnemonic ? "blur-md select-none" : ""
-                  }`}
+                  className={`grid grid-cols-3 gap-2 transition-all duration-200 ${!showMnemonic ? "blur-md select-none" : ""
+                    }`}
                 >
                   {words.map((word, index) => (
                     <div
@@ -296,7 +371,7 @@ export function MnemonicBackupDialog({
               </div>
 
               {/* Action Buttons */}
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={() => setShowMnemonic(!showMnemonic)}
@@ -387,15 +462,8 @@ export function MnemonicBackupDialog({
                 </div>
               )}
 
-              {/* Navigation */}
-              <div className="flex justify-between mt-1">
-                <button
-                  type="button"
-                  onClick={() => setStep(1)}
-                  className="flex items-center gap-1 text-sm text-grey-40 hover:text-grey-20 transition-colors"
-                >
-                  <ArrowLeft className="w-4 h-4" /> Back
-                </button>
+              {/* Bottom Navigation */}
+              <div className="flex justify-end mt-1">
                 <Button onClick={handleGoToStep3}>
                   I Have Written It Down
                 </Button>
@@ -406,11 +474,11 @@ export function MnemonicBackupDialog({
           {/* Step 3: Verification Challenge */}
           {step === 3 && (
             <div className="animate-fade-in-from-b-0.3 flex flex-col gap-4">
-              <div>
-                <Dialog.Title className="text-lg font-semibold">
+              <div className="text-center">
+                <h2 className="text-xl font-semibold text-grey-10">
                   Verify Your Recovery Phrase
-                </Dialog.Title>
-                <Dialog.Description className="text-sm text-grey-40 mt-0.5">
+                </h2>
+                <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
                   Enter the requested words to confirm you&apos;ve saved your phrase correctly.
                 </Dialog.Description>
               </div>
@@ -436,15 +504,13 @@ export function MnemonicBackupDialog({
                             newAnswers[i] = e.target.value;
                             setAnswers(newAnswers);
                           }}
-                          className={`w-full px-3 py-2.5 text-sm bg-grey-100 border rounded-md focus:outline-none transition-colors pr-10 ${
-                            shakeFields[i] ? "animate-shake" : ""
-                          } ${
-                            isCorrect && answers[i].trim().length > 0
+                          className={`w-full px-3 py-2.5 text-sm bg-grey-100 border rounded-md focus:outline-none transition-colors pr-10 ${shakeFields[i] ? "animate-shake" : ""
+                            } ${isCorrect && answers[i].trim().length > 0
                               ? "border-success-50"
                               : isIncorrect
                                 ? "border-error-50"
                                 : "border-grey-80 focus:border-primary-50"
-                          }`}
+                            }`}
                         />
                         {isCorrect && answers[i].trim().length > 0 && (
                           <Check className="w-4 h-4 text-success-50 absolute right-3 top-1/2 -translate-y-1/2" />
@@ -475,7 +541,7 @@ export function MnemonicBackupDialog({
 
           {/* Step 4: Completion */}
           {step === 4 && (
-            <div className="animate-fade-in-from-b-0.3 flex flex-col items-center gap-5 py-4">
+            <div className="animate-fade-in-from-b-0.3 flex flex-col items-center gap-5 py-2">
               <div className="animate-scale-in-100%-0.3">
                 <div className="w-16 h-16 rounded-full bg-success-50/10 flex items-center justify-center">
                   <CheckCircle2 className="w-9 h-9 text-success-50" />
@@ -483,10 +549,10 @@ export function MnemonicBackupDialog({
               </div>
 
               <div className="text-center">
-                <Dialog.Title className="text-xl font-semibold">
+                <h2 className="text-xl font-semibold text-grey-10">
                   Recovery Phrase Secured!
-                </Dialog.Title>
-                <Dialog.Description className="text-sm text-grey-40 mt-1 max-w-sm mx-auto">
+                </h2>
+                <Dialog.Description className="text-sm text-grey-50 mt-1 max-w-sm mx-auto">
                   Your recovery phrase has been verified. Your files are protected.
                 </Dialog.Description>
               </div>

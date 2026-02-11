@@ -302,6 +302,7 @@ const UpdateSyncFolder: React.FC = () => {
           open={showMnemonicBackup}
           mnemonic={mnemonicToBackup}
           onConfirm={handleMnemonicBackupConfirm}
+          onClose={handleMnemonicBackupConfirm}
         />
       )}
     </>
