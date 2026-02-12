@@ -265,6 +265,12 @@ input[type="password"]::-ms-clear {
   z-index: 100000; /* above page chrome */
 }
 
+html.body-scroll-locked,
+body.body-scroll-locked {
+  height: 100%;
+  overflow: hidden;
+}
+
 /* Custom toast styles with close button on the right */
 [data-sonner-toast] {
   display: flex !important;
