@@ -14,8 +14,14 @@ import {
   getFileIcon,
 } from "@/lib/utils/fileTypeUtils";
 import { Folder2 } from "@/components/ui/icons";
-import { toBlobUrl } from "@/app/components/page-sections/files/files-table/VideoPlayer";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
+
+/** Fetch a URL into a same-origin blob URL (needed for canvas thumbnail extraction). */
+async function toBlobUrl(url: string) {
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
 import { getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';

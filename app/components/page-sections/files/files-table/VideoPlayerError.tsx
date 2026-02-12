@@ -2,7 +2,7 @@ import React from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 
 import { Icons } from "@/components/ui";
-import { AlertCircle, RefreshCw } from "lucide-react";
+import { AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 
 interface VideoPlayerErrorProps {
@@ -15,6 +15,18 @@ interface VideoPlayerErrorProps {
   ) => void;
 }
 
+/**
+ * Try to open the file in the system's default video player (VLC, IINA, etc.)
+ */
+async function openInSystemPlayer(filePath: string) {
+  try {
+    const { openPath } = await import("@tauri-apps/plugin-opener");
+    await openPath(filePath);
+  } catch (err) {
+    console.error("Failed to open in system player:", err);
+  }
+}
+
 const VideoPlayerError: React.FC<VideoPlayerErrorProps> = ({
   message,
   file,
@@ -23,19 +35,37 @@ const VideoPlayerError: React.FC<VideoPlayerErrorProps> = ({
 }) => {
   const { polkadotAddress } = useWalletAuth();
 
+  // Check if this is a local file that can be opened with the system player
+  const localPath = file?.source;
+  const isLocalFile =
+    localPath &&
+    !localPath.startsWith("s3://") &&
+    (localPath.includes("/") || localPath.includes("\\"));
+
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-70 text-white p-4">
       <div className="mb-6 text-center">
         <AlertCircle className="size-12 mx-auto mb-3 text-red-400" />
         <p className="text-lg font-medium">{message}</p>
-        <p className="text-sm text-gray-300 mt-2">
-          {message.includes("Firefox")
-            ? "Please use Chrome instead."
-            : "This format may not be supported by your browser or the connection is slow."}
-        </p>
+        {isLocalFile && (
+          <p className="text-sm text-gray-300 mt-2">
+            This file is on your computer. Open it with your system player instead.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
+        {/* Open in system player — most useful action for local unsupported formats */}
+        {isLocalFile && (
+          <button
+            onClick={() => openInSystemPlayer(localPath)}
+            className="flex items-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium"
+          >
+            <ExternalLink className="size-5" />
+            <span>Open with System Player</span>
+          </button>
+        )}
+
         {onReload && (
           <button
             onClick={onReload}
@@ -49,10 +79,10 @@ const VideoPlayerError: React.FC<VideoPlayerErrorProps> = ({
         {file && (
           <button
             onClick={() => handleFileDownload(file, polkadotAddress ?? "")}
-            className="flex items-center gap-x-2 bg-primary-50 hover:bg-primary-70 transition-colors px-4 py-2 rounded-md font-medium"
+            className="flex items-center gap-x-2 bg-grey-20 hover:bg-grey-30 transition-colors px-4 py-2 rounded-md font-medium"
           >
             <Icons.DocumentDownload className="size-5" />
-            <span>Download File Instead</span>
+            <span>Download File</span>
           </button>
         )}
       </div>

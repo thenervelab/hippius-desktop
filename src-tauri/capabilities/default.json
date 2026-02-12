@@ -38,6 +38,8 @@
             "identifier": "fs:allow-read-file",
             "allow": [{
                 "path": "$APPLOCALDATA/hippius-desktop.db"
+            }, {
+                "path": "$HOME/**"
             }]
         },
         {

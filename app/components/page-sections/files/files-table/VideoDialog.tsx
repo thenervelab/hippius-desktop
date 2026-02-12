@@ -177,13 +177,13 @@ const VideoDialog: React.FC<{
                   <>
                     <div className="absolute flex justify-center top-4 px-2 sm:px-6 animate-fade-in-0.3 left-0 right-0">
                       <div className="flex justify-between gap-2 sm:gap-6 w-full ">
-                        <Dialog.Title className="data-[state=open] font-medium flex items-center gap-x-2 w-full text-xl">
-                          <div className="rounded flex items-center justify-center">
+                        <Dialog.Title className="data-[state=open] font-medium flex items-center gap-x-2 min-w-0 flex-1 text-xl">
+                          <div className="rounded flex-shrink-0 flex items-center justify-center">
                             <Icons.Video className="size-8" />
                           </div>
                           <span
                             title={file.name}
-                            className="truncate max-sm:max-w-[180px] text-grey-100 text-[22px] font-medium"
+                            className="truncate text-grey-100 text-[22px] font-medium"
                           >
                             {file.name}
                           </span>
