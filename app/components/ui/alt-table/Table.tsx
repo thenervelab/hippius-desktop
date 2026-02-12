@@ -6,7 +6,7 @@ export const Table: React.FC<React.TableHTMLAttributes<HTMLTableElement>> = ({
   ...rest
 }) => {
   return (
-    <table className={cn("w-full whitespace-nowrap", className)} {...rest}>
+    <table className={cn("w-full whitespace-nowrap table-fixed", className)} {...rest}>
       {children}
     </table>
   );
