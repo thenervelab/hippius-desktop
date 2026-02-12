@@ -18,19 +18,26 @@ export default function ResponsiveContent({
     <div className="grid w-full">
       <main
         className={cn(
-          "p-4 transition-all duration-300 ease-in-out",
+          "flex flex-col h-screen transition-all duration-300 ease-in-out",
           collapsed ? "ml-[60px]" : "ml-[186px]"
         )}
       >
-        <div className="bg-white justify-between flex relative">
-          <HeaderText />
-          <div className="flex -mt-2 gap-2 items-center justify-center">
-            <BlockChainStats />
-            <ProfileCard />
+        {/* Sticky toolbar — always visible at the top */}
+        <div className="sticky top-0 z-30 bg-white px-4 pt-4 pb-2">
+          <div className="justify-between flex relative">
+            <HeaderText />
+            <div className="flex -mt-2 gap-2 items-center justify-center">
+              <BlockChainStats />
+              <ProfileCard />
+            </div>
           </div>
+          <ConflictsBanner />
         </div>
-        <ConflictsBanner />
-        <div className="w-full">{children}</div>
+
+        {/* Scrollable content area */}
+        <div className="flex-1 overflow-y-auto px-4 pb-4">
+          <div className="w-full">{children}</div>
+        </div>
       </main>
     </div>
   );
