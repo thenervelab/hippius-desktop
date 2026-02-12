@@ -76,9 +76,9 @@ const ProfileCard: React.FC = () => {
             </div>
             <div className="flex gap-x-1 items-center">
               <BoxSimple className="size-4" />
-              {isConnected && (
+              {isConnected && blockNumber != null && (
                 <span className="text-success-40 text-xs font-semibold">
-                  # {blockNumber}
+                  # {blockNumber.toString()}
                 </span>
               )}
             </div>
