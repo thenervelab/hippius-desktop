@@ -79,7 +79,7 @@ export default function FolderView({
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [isDownloading, setIsDownloading] = useState(false);
   const isPrivateFolder = activeSubMenuItem === "Private";
-  const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
+  const addButtonRef = useRef<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean }>(null);
   const addFolderButtonRef = useRef<object>({});
 
   const [searchTerm, setSearchTerm] = useState("");

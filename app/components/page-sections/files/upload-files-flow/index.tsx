@@ -14,6 +14,7 @@ import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 interface UploadFilesFlowProps {
   reset: () => void;
   initialFiles?: FileList | null;
+  initialPaths?: string[] | null;
   isPrivateView: boolean;
 }
 
@@ -26,6 +27,7 @@ interface FilePathInfo {
 const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
   reset,
   initialFiles,
+  initialPaths,
   isPrivateView
 }) => {
   const [revealFiles, setRevealFiles] = useState(false);
@@ -62,6 +64,27 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
       if (fileInfos.length > 1) setRevealFiles(true);
     }
   }, [initialFiles]);
+
+  // Handle initial native file paths from Tauri drag-drop
+  useEffect(() => {
+    if (initialPaths && initialPaths.length > 0) {
+      (async () => {
+        try {
+          const pathInfos = await Promise.all(
+            initialPaths.map(async (p) => ({
+              path: p,
+              name: await basename(p),
+            }))
+          );
+          setFiles(pathInfos);
+          if (pathInfos.length > 1) setRevealFiles(true);
+        } catch (error) {
+          console.error("Error processing dropped paths:", error);
+          toast.error("Failed to process dropped files");
+        }
+      })();
+    }
+  }, [initialPaths]);
 
   // Handle files from both file dialog and drag-and-drop
   const handleFiles = useCallback(async (paths: string[], browserFiles?: File[]) => {

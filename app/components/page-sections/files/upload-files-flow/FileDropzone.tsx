@@ -3,8 +3,8 @@
 import {
   useState,
   useCallback,
+  useEffect,
   FC,
-  DragEvent,
 } from "react";
 import { toast } from "sonner";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -41,49 +41,101 @@ const FileDropzone: FC<{
     }
   }, [setFiles]);
 
-  const handleDrop = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsDragging(false);
+  // Listen to Tauri native drag-drop events for the dropzone
+  useEffect(() => {
+    const unlisteners: Array<() => void> = [];
 
-      // If files were dropped
-      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        // Convert FileList to array
-        const droppedFiles = Array.from(e.dataTransfer.files);
-        if (droppedFiles.length === 0) return;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
 
-        // Send empty paths array and browser files
-        setFiles([], droppedFiles);
+        const unDragEnter = await listen<{ paths: string[] }>(
+          "tauri://drag-enter",
+          () => {
+            setIsDragging(true);
+          }
+        );
+        unlisteners.push(unDragEnter);
+
+        const unDragOver = await listen(
+          "tauri://drag-over",
+          () => {
+            // Keep showing drag state
+          }
+        );
+        unlisteners.push(unDragOver);
+
+        const unDragDrop = await listen<{ paths: string[] }>(
+          "tauri://drag-drop",
+          async (event) => {
+            setIsDragging(false);
+            const paths = event.payload.paths;
+            if (!paths || paths.length === 0) return;
+
+            // Filter out directories
+            try {
+              const { stat } = await import("@tauri-apps/plugin-fs");
+              const { toast } = await import("sonner");
+              const results = await Promise.all(
+                paths.map(async (p) => {
+                  const info = await stat(p);
+                  return { path: p, isDir: info.isDirectory };
+                })
+              );
+              const dirs = results.filter((r) => r.isDir);
+              const filePaths = results.filter((r) => !r.isDir).map((r) => r.path);
+
+              if (dirs.length > 0) {
+                toast.error(
+                  "Folders cannot be uploaded via drag & drop. Please use the \"Add Folder\" button instead.",
+                  { duration: 5000 }
+                );
+              }
+              if (filePaths.length > 0) {
+                setFiles(filePaths);
+              }
+            } catch (err) {
+              console.error("[FileDropzone] Error checking paths:", err);
+              // Fallback: pass all paths through
+              setFiles(paths);
+            }
+          }
+        );
+        unlisteners.push(unDragDrop);
+
+        const unDragLeave = await listen(
+          "tauri://drag-leave",
+          () => {
+            setIsDragging(false);
+          }
+        );
+        unlisteners.push(unDragLeave);
+      } catch (err) {
+        console.error("[FileDropzone] Failed to register drag listeners:", err);
       }
-    },
-    [setFiles]
-  );
+    })();
 
-  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-  };
+    return () => {
+      unlisteners.forEach((fn) => fn());
+    };
+  }, [setFiles]);
 
   return (
     <div
-      className="w-full h-full border border-grey-80 rounded-[8px] p-2"
-      onDrop={handleDrop}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
+      className={cn(
+        "w-full h-full border rounded-[8px] p-2 transition-colors duration-200",
+        isDragging
+          ? "border-primary-50 border-2 bg-primary-50/5"
+          : "border-grey-80"
+      )}
     >
       <button
         onClick={handleSelectFiles}
         className={cn(
-          "h-full w-full flex border border-dashed border-grey-80 justify-center py-10 px-10 bg-white cursor-pointer hover:bg-grey-90 duration-300 rounded-[8px]",
-          isDragging && "bg-grey-90"
+          "h-full w-full flex border border-dashed justify-center py-10 px-10 bg-white cursor-pointer hover:bg-grey-90 duration-300 rounded-[8px]",
+          isDragging
+            ? "border-primary-50 bg-primary-50/10"
+            : "border-grey-80"
         )}
       >
         <div className="flex flex-col items-center">

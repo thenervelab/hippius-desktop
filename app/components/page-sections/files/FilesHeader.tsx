@@ -36,6 +36,8 @@ interface FilesHeaderProps {
   refetchUserFiles: () => void;
   addButtonRef: React.RefObject<{
     openWithFiles(files: FileList): void;
+    openWithPaths(paths: string[]): void;
+    isDialogOpen(): boolean;
   } | null>;
   privateFileCount?: number;
   publicFileCount?: number;

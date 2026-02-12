@@ -29,12 +29,15 @@ export interface AddFileToFolderButtonProps {
 
 export interface AddFileToFolderButtonRef {
     openWithFiles: (files: FileList) => void;
+    openWithPaths: (paths: string[]) => void;
+    isDialogOpen: () => boolean;
 }
 
 const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFolderButtonProps>(
     ({ className, folderName, isPrivateFolder, subfolder, onFileAdded, disabled: externalDisabled }, ref) => {
         const [isOpen, setIsOpen] = useState(false);
         const [droppedFiles, setDroppedFiles] = useState<FileList | null>(null);
+        const [droppedPaths, setDroppedPaths] = useState<string[] | null>(null);
 
         const uploadingState = useAtomValue(
             uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
@@ -45,16 +48,24 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
             ref,
             () => ({
                 openWithFiles: (files: FileList) => {
+                    setDroppedPaths(null);
                     setDroppedFiles(files);
                     setIsOpen(true);
-                }
+                },
+                openWithPaths: (paths: string[]) => {
+                    setDroppedFiles(null);
+                    setDroppedPaths(paths);
+                    setIsOpen(true);
+                },
+                isDialogOpen: () => isOpen
             }),
-            []
+            [isOpen]
         );
 
         const closeDialog = useCallback(() => {
             setIsOpen(false);
             setDroppedFiles(null);
+            setDroppedPaths(null);
         }, []);
 
         const handleSuccess = useCallback(() => {
@@ -83,10 +94,11 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
                 isPrivateFolder={isPrivateFolder}
                 subfolder={subfolder}
                 initialFiles={droppedFiles}
+                initialPaths={droppedPaths}
                 onSuccess={handleSuccess}
                 onCancel={closeDialog}
             />
-        ), [folderName, isPrivateFolder, subfolder, droppedFiles, handleSuccess, closeDialog]);
+        ), [folderName, isPrivateFolder, subfolder, droppedFiles, droppedPaths, handleSuccess, closeDialog]);
 
         return (
             <>

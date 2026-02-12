@@ -41,6 +41,8 @@ type AddButtonProps = {
 // Add ref interface for parent components to trigger the dialog
 export interface AddButtonRef {
   openWithFiles: (files: FileList) => void;
+  openWithPaths: (paths: string[]) => void;
+  isDialogOpen: () => boolean;
 }
 
 const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
@@ -49,6 +51,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     const [isOpen, setIsOpen] = useState(false);
 
     const [droppedFiles, setDroppedFiles] = useState<FileList | null>(null);
+    const [droppedPaths, setDroppedPaths] = useState<string[] | null>(null);
 
     const uploadingState = useAtomValue(
       uploadToIpfsAndSubmitToBlockcahinRequestStateAtom
@@ -64,11 +67,18 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       ref,
       () => ({
         openWithFiles: (files: FileList) => {
+          setDroppedPaths(null);
           setDroppedFiles(files);
           setIsOpen(true);
-        }
+        },
+        openWithPaths: (paths: string[]) => {
+          setDroppedFiles(null);
+          setDroppedPaths(paths);
+          setIsOpen(true);
+        },
+        isDialogOpen: () => isOpen
       }),
-      []
+      [isOpen]
     );
 
     // Memoize title to prevent recalculation
@@ -80,6 +90,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
     const closeDialog = useCallback(() => {
       setIsOpen(false);
       setDroppedFiles(null);
+      setDroppedPaths(null);
     }, []);
 
 
@@ -119,10 +130,12 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           reset={closeDialog}
           isPrivateView={isPrivateView}
           initialFiles={droppedFiles}
+          initialPaths={droppedPaths}
         />
       );
     }, [
       droppedFiles,
+      droppedPaths,
       closeDialog,
       isPrivateView
     ]);
@@ -134,6 +147,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           onClick={() => {
             if (IS_SYNC_PAUSED) return;
             setDroppedFiles(null);
+            setDroppedPaths(null);
             setIsOpen(true);
           }}
           disabled={isLoading || externalDisabled}

@@ -4,10 +4,8 @@ import {
   FC,
   useState,
   useRef,
-  useCallback,
   useEffect,
   memo,
-  DragEvent,
 } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { WaitAMoment } from "@/components/ui";
@@ -46,7 +44,7 @@ interface FilesContentProps {
   handlePaginationReset: () => void;
   error?: unknown;
   isPrivateView: boolean;
-  addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void }>;
+  addButtonRef?: React.RefObject<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean } | null>;
   currentPage: number;
   totalPages: number;
   setCurrentPage: (page: number) => void;
@@ -76,7 +74,6 @@ const FilesContent: FC<FilesContentProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [animateCloud, setAnimateCloud] = useState(false);
-  const dragCounterRef = useRef(0);
   const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Use selection context for delete functionality
@@ -111,134 +108,119 @@ const FilesContent: FC<FilesContentProps> = ({
 
   const selectedFileType = selectedFile ? getFileType(selectedFile) : null;
 
-  // Drag and drop handlers
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Prevent drag and drop when sync path is empty (user skipped setup)
-    if (isSyncPathEmpty && !isRecentFiles) {
-      return;
-    }
-
-    if (
-      e.dataTransfer.items &&
-      Array.from(e.dataTransfer.items).some((item) => item.kind === "file")
-    ) {
-      dragCounterRef.current++;
-      setIsDragging(true);
-
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-      }
-
-      dragTimeoutRef.current = setTimeout(() => {
-        setAnimateCloud(true);
-      }, 200);
-    }
-  }, [isSyncPathEmpty, isRecentFiles]);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    dragCounterRef.current--;
-
-    if (dragCounterRef.current <= 0) {
-      dragCounterRef.current = 0;
-      setIsDragging(false);
-      setAnimateCloud(false);
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
-      }
-    }
-  }, []);
-
-  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  };
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-
-      dragCounterRef.current = 0;
-      setIsDragging(false);
-      setAnimateCloud(false);
-
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
-      }
-
-      // Prevent file drop when sync path is empty (user skipped setup) 
-      if (isSyncPathEmpty && !isRecentFiles) {
-        toast.info("Please set up sync folder first to upload files.");
-        return;
-      }
-
-      if (addButtonRef?.current && e.dataTransfer.files.length > 0) {
-        addButtonRef.current.openWithFiles(e.dataTransfer.files);
-      } else if (e.dataTransfer.files.length > 0) {
-        const customEvent = new CustomEvent("hippius:file-drop", {
-          detail: { files: e.dataTransfer.files },
-        });
-        window.dispatchEvent(customEvent);
-      }
-    },
-    [addButtonRef, isSyncPathEmpty, isRecentFiles]
-  );
-
-  // Add global event listeners to clean up dragging state when dragging ends outside
+  // Tauri native drag-and-drop via global event listeners
   useEffect(() => {
-    const handleDragEnd = () => {
-      // Only reset if we're currently showing dragging state
-      if (isDragging) {
-        dragCounterRef.current = 0;
-        setIsDragging(false);
-        setAnimateCloud(false);
-        if (dragTimeoutRef.current) {
-          clearTimeout(dragTimeoutRef.current);
-          dragTimeoutRef.current = null;
-        }
-      }
-    };
+    const unlisteners: Array<() => void> = [];
 
-    // Only handle document-level dragleave that indicates leaving the window
-    const handleDocumentDragLeave = (e: globalThis.DragEvent) => {
-      // Check if mouse left the document area
-      if (
-        e.clientX <= 0 ||
-        e.clientY <= 0 ||
-        e.clientX >= window.innerWidth ||
-        e.clientY >= window.innerHeight
-      ) {
-        handleDragEnd();
-      }
-    };
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
 
-    document.addEventListener("dragend", handleDragEnd);
-    document.addEventListener("dragleave", handleDocumentDragLeave);
+        console.log("[DragDrop] Registering global Tauri drag-drop listeners");
+
+        const unDragEnter = await listen<{ paths: string[]; position: { x: number; y: number } }>(
+          "tauri://drag-enter",
+          (event) => {
+            console.log("[DragDrop] drag-enter event received", event.payload);
+            if (isSyncPathEmpty && !isRecentFiles) return;
+            // Don't show background overlay if upload dialog is already open
+            if (addButtonRef?.current?.isDialogOpen()) return;
+            setIsDragging(true);
+            dragTimeoutRef.current = setTimeout(() => {
+              setAnimateCloud(true);
+            }, 200);
+          }
+        );
+        unlisteners.push(unDragEnter);
+
+        const unDragOver = await listen<{ position: { x: number; y: number } }>(
+          "tauri://drag-over",
+          () => {
+            // Keep showing drag state
+          }
+        );
+        unlisteners.push(unDragOver);
+
+        const unDragDrop = await listen<{ paths: string[]; position: { x: number; y: number } }>(
+          "tauri://drag-drop",
+          async (event) => {
+            console.log("[DragDrop] drag-drop event received", event.payload);
+            setIsDragging(false);
+            setAnimateCloud(false);
+            if (dragTimeoutRef.current) {
+              clearTimeout(dragTimeoutRef.current);
+              dragTimeoutRef.current = null;
+            }
+
+            // If upload dialog is already open, don't handle here (FileDropzone handles it)
+            if (addButtonRef?.current?.isDialogOpen()) return;
+
+            if (isSyncPathEmpty && !isRecentFiles) {
+              toast.info("Please set up sync folder first to upload files.");
+              return;
+            }
+
+            const paths = event.payload.paths;
+            if (!paths || paths.length === 0 || !addButtonRef?.current) return;
+
+            // Filter out directories
+            try {
+              const { stat } = await import("@tauri-apps/plugin-fs");
+              const results = await Promise.all(
+                paths.map(async (p) => {
+                  const info = await stat(p);
+                  return { path: p, isDir: info.isDirectory };
+                })
+              );
+              const dirs = results.filter((r) => r.isDir);
+              const filePaths = results.filter((r) => !r.isDir).map((r) => r.path);
+
+              if (dirs.length > 0) {
+                toast.error(
+                  "Folders cannot be uploaded via drag & drop. Please use the \"Add Folder\" button instead.",
+                  { duration: 5000 }
+                );
+              }
+              if (filePaths.length > 0) {
+                addButtonRef.current.openWithPaths(filePaths);
+              }
+            } catch (err) {
+              console.error("[DragDrop] Error checking paths:", err);
+              // Fallback: pass all paths through
+              addButtonRef.current.openWithPaths(paths);
+            }
+          }
+        );
+        unlisteners.push(unDragDrop);
+
+        const unDragLeave = await listen(
+          "tauri://drag-leave",
+          () => {
+            console.log("[DragDrop] drag-leave event received");
+            setIsDragging(false);
+            setAnimateCloud(false);
+            if (dragTimeoutRef.current) {
+              clearTimeout(dragTimeoutRef.current);
+              dragTimeoutRef.current = null;
+            }
+          }
+        );
+        unlisteners.push(unDragLeave);
+
+        console.log("[DragDrop] All listeners registered successfully");
+      } catch (err) {
+        console.error("[DragDrop] Failed to register drag-drop listeners:", err);
+      }
+    })();
 
     return () => {
-      document.removeEventListener("dragend", handleDragEnd);
-      document.removeEventListener("dragleave", handleDocumentDragLeave);
-    };
-  }, [isDragging]); // Only re-add listeners if isDragging changes
-
-  // Clean up any timers when component unmounts
-  useEffect(() => {
-    return () => {
+      unlisteners.forEach((fn) => fn());
       if (dragTimeoutRef.current) {
         clearTimeout(dragTimeoutRef.current);
         dragTimeoutRef.current = null;
       }
     };
-  }, []);
+  }, [addButtonRef, isSyncPathEmpty, isRecentFiles]);
 
   const handleFileDownload = (
     file: FormattedUserFile,
@@ -320,10 +302,6 @@ const FilesContent: FC<FilesContentProps> = ({
           isDragging &&
           "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10"
         )}
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDragEnter={handleDragEnter}
       >
         {isDragging && (
           <div className="absolute inset-0 bg-opacity-80 flex flex-col items-center justify-center z-20 pointer-events-none">

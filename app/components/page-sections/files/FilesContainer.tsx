@@ -78,7 +78,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     ? isRecentFilesFetching
     : isRegularFilesFetching;
 
-  const addButtonRef = useRef<{ openWithFiles(files: FileList): void }>(null);
+  const addButtonRef = useRef<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [shouldResetPagination, setShouldResetPagination] = useState(false);
   const [selectedPrivateFolderPath, setSelectedPrivateFolderPath] = useState(
@@ -773,6 +773,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             shouldResetPagination={shouldResetPagination}
             handlePaginationReset={handlePaginationReset}
             error={error}
+            addButtonRef={addButtonRef}
             currentPage={currentPage}
             totalPages={totalPages}
             setCurrentPage={setCurrentPage}
