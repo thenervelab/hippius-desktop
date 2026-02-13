@@ -17,7 +17,6 @@ import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
 import { FileTypes } from "@/lib/types/fileTypes";
-import ManageButton from "./ManageButton";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 
@@ -95,10 +94,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
     push("/files");
   };
 
-  const handleManageBucketClick = () => {
-    push("/tokens");
-  };
-
   const handleOpenSyncFolder = async () => {
     try {
       if (!syncFolderPath) {
@@ -143,11 +138,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               value={searchTerm}
               onChange={handleSearchChange}
               placeholder="Search file"
-            />
-            <ManageButton
-              text="Manage"
-              isLoading={isRefetching || isFetching}
-              onClick={handleManageBucketClick}
             />
             <div className="flex gap-2 border border-grey-80 p-1 rounded justify-end">
               <button
