@@ -3,18 +3,19 @@
 import React, { useState, useCallback, useRef } from "react";
 import { AbstractIconWrapper, CardButton, Icons, Graphsheet } from "@/components/ui";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
-import PasscodeInput from "./PasscodeInput";
+import PasswordInput from "./PasswordInput";
 import { ArrowRight, AlertCircle, Upload, FileText, X } from "lucide-react";
 import { toast } from "sonner";
 import { isMnemonicValid } from "@/app/lib/helpers/validateMnemonic";
 import { decryptMnemonic } from "@/app/lib/helpers/crypto";
+import JSZip from "jszip";
 
 /**
  * Screen for importing an existing wallet from file
  */
 const ImportWalletScreen: React.FC = () => {
   const { importWallet, setSetupStep } = useLocalWallet();
-  const [passcode, setPasscode] = useState("");
+  const [password, setPassword] = useState("");
   const [importedFile, setImportedFile] = useState<{
     name: string;
     encryptedMnemonic: string;
@@ -23,10 +24,12 @@ const ImportWalletScreen: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragCounter = useRef(0);
 
   const handleFileDrop = useCallback(
     async (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
+      dragCounter.current = 0;
       setIsDragging(false);
       const file = e.dataTransfer.files[0];
       if (file) {
@@ -35,6 +38,26 @@ const ImportWalletScreen: React.FC = () => {
     },
     []
   );
+
+  const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragCounter.current++;
+    if (dragCounter.current === 1) {
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+  }, []);
 
   const handleFileSelect = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -48,19 +71,35 @@ const ImportWalletScreen: React.FC = () => {
 
   const processFile = async (file: File) => {
     try {
-      const text = await file.text();
-      const data = JSON.parse(text);
+      // Check if the file is a ZIP file
+      if (file.name.endsWith(".zip") || file.type === "application/zip") {
+        // Read ZIP file and extract wallet-backup.json
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
 
-      if (!data.encryptedMnemonic) {
-        setError("Invalid wallet backup file");
-        return;
+        // Look for wallet-backup.json in the ZIP
+        const jsonFile = zip.file("wallet-backup.json");
+        if (!jsonFile) {
+          setError("Invalid wallet backup ZIP - missing wallet-backup.json");
+          return;
+        }
+
+        const text = await jsonFile.async("string");
+        const data = JSON.parse(text);
+
+        if (!data.encryptedMnemonic) {
+          setError("Invalid wallet backup file");
+          return;
+        }
+
+        setImportedFile({
+          name: data.name || "Imported Wallet",
+          encryptedMnemonic: data.encryptedMnemonic,
+        });
+        setError(null);
+      } else {
+        setError("Please upload a ZIP file exported from Hippius");
       }
-
-      setImportedFile({
-        name: data.name || "Imported Wallet",
-        encryptedMnemonic: data.encryptedMnemonic,
-      });
-      setError(null);
     } catch {
       setError("Failed to read wallet backup file");
     }
@@ -74,39 +113,39 @@ const ImportWalletScreen: React.FC = () => {
       return;
     }
 
-    if (!passcode) {
-      setError("Please enter a passcode");
+    if (!password) {
+      setError("Please enter a password");
       return;
     }
 
-    if (passcode.length < 6) {
-      setError("Passcode must be at least 6 characters");
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
       return;
     }
 
     setIsLoading(true);
 
     try {
-      // Decrypt with provided passcode
+      // Decrypt with provided password
       let mnemonicToImport: string;
       try {
         mnemonicToImport = decryptMnemonic(
           importedFile.encryptedMnemonic,
-          passcode
+          password
         );
         if (!isMnemonicValid(mnemonicToImport)) {
-          setError("Incorrect passcode for this wallet backup");
+          setError("Incorrect password for this wallet backup");
           setIsLoading(false);
           return;
         }
       } catch {
-        setError("Incorrect passcode for this wallet backup");
+        setError("Incorrect password for this wallet backup");
         setIsLoading(false);
         return;
       }
 
       const name = importedFile.name || "Imported Wallet";
-      const success = await importWallet(name, mnemonicToImport, passcode);
+      const success = await importWallet(name, mnemonicToImport, password);
 
       if (success) {
         toast.success("Wallet imported successfully!");
@@ -156,36 +195,33 @@ const ImportWalletScreen: React.FC = () => {
       {!importedFile ? (
         <div
           onDrop={handleFileDrop}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setIsDragging(true);
-          }}
-          onDragLeave={() => setIsDragging(false)}
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
           className="w-full mb-6"
         >
-          <label 
-            className={`flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors bg-grey-98 ${
-              isDragging 
-                ? "border-primary-50 bg-primary-95" 
-                : "border-grey-80 hover:border-primary-50"
-            }`}
+          <label
+            className={`flex flex-col items-center justify-center w-full h-40 border-2 border-dashed rounded-lg cursor-pointer transition-colors bg-grey-98 ${isDragging
+              ? "border-primary-50 bg-primary-95"
+              : "border-grey-80 hover:border-primary-50"
+              }`}
           >
-            <div className="flex flex-col items-center justify-center pt-5 pb-6">
+            <div className="flex flex-col items-center justify-center pt-5 pb-6 pointer-events-none">
               <AbstractIconWrapper className="size-12 text-primary-40 mb-3">
                 <Upload className="absolute size-6 text-primary-50" />
               </AbstractIconWrapper>
               <p className="mb-2 text-sm font-medium text-grey-10">
-                Upload a File Here
+                Upload Backup File
               </p>
               <p className="text-xs text-grey-50">
-                Drag and drop or click to select your wallet backup file
+                Drag and drop or click to select (.zip)
               </p>
             </div>
             <input
               ref={fileInputRef}
               type="file"
               className="hidden"
-              accept=".json"
+              accept=".zip"
               onChange={handleFileSelect}
             />
           </label>
@@ -212,21 +248,21 @@ const ImportWalletScreen: React.FC = () => {
         </div>
       )}
 
-      {/* Passcode Input */}
+      {/* Password Input */}
       <div className="w-full mb-6">
-        <PasscodeInput
-          value={passcode}
+        <PasswordInput
+          value={password}
           onChange={(val) => {
-            setPasscode(val);
+            setPassword(val);
             setError(null);
           }}
-          label="Passcode"
-          placeholder="Enter your passcode"
+          label="Password"
+          placeholder="Enter your password"
           disabled={isLoading}
           onSubmit={handleImport}
         />
         <p className="text-xs text-grey-50 mt-2">
-          Enter the passcode used when exporting this wallet
+          Enter the password used when exporting this wallet
         </p>
       </div>
 
@@ -242,7 +278,7 @@ const ImportWalletScreen: React.FC = () => {
       <CardButton
         className="w-full h-12 mb-6"
         onClick={handleImport}
-        disabled={isLoading || !passcode || !importedFile}
+        disabled={isLoading || !password || !importedFile}
         loading={isLoading}
       >
         <div className="flex items-center justify-center gap-2 text-lg font-medium">

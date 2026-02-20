@@ -9,7 +9,7 @@ type Warning = {
 
 interface ImportantWarningsProps {
     inView?: boolean;
-    usePasscode?: boolean;
+    usePassword?: boolean;
     className?: string;
     customWarnings?: Warning[];
 }

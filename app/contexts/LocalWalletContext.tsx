@@ -23,7 +23,7 @@ import {
   importWalletFromEncryptedBackup,
 } from "@/app/lib/helpers/localWalletDb";
 import {
-  hashPasscode,
+  hashPassword,
   encryptMnemonic,
   decryptMnemonic,
 } from "@/app/lib/helpers/crypto";
@@ -39,8 +39,8 @@ export type WalletSetupStep =
   | "loading"
   | "welcome" // Initial screen - enter mnemonic or create/import
   | "create-mnemonic" // Show generated mnemonic
-  | "create-passcode" // Set passcode for new wallet
-  | "enter-passcode" // Enter passcode for existing wallet
+  | "create-password" // Set password for new wallet
+  | "enter-password" // Enter password for existing wallet
   | "import-wallet" // Import wallet from file
   | "ready"; // Wallet unlocked and ready
 
@@ -58,31 +58,31 @@ interface LocalWalletContextValue {
   createWallet: (
     name: string,
     mnemonic: string,
-    passcode: string
+    password: string
   ) => Promise<boolean>;
   importWallet: (
     name: string,
     mnemonic: string,
-    passcode: string
+    password: string
   ) => Promise<boolean>;
   importEncryptedWallet: (data: {
     name: string;
     address: string;
     encryptedMnemonic: string;
-    passcodeHash: string;
+    passwordHash: string;
   }) => Promise<boolean>;
   switchWallet: (walletId: number) => Promise<boolean>;
   renameWallet: (walletId: number, name: string) => Promise<boolean>;
   removeWallet: (walletId: number) => Promise<boolean>;
 
   // Authentication
-  unlockWallet: (passcode: string) => Promise<KeyringPair | null>;
-  unlockWalletById: (walletId: number, passcode: string) => Promise<KeyringPair | null>;
-  verifyPasscode: (passcode: string) => boolean;
+  unlockWallet: (password: string) => Promise<KeyringPair | null>;
+  unlockWalletById: (walletId: number, password: string) => Promise<KeyringPair | null>;
+  verifyPassword: (password: string) => boolean;
   lockWallet: () => void;
 
   // Transaction signing
-  signTransaction: (passcode: string) => Promise<KeyringPair | null>;
+  signTransaction: (password: string) => Promise<KeyringPair | null>;
 
   // Navigation
   setSetupStep: (step: WalletSetupStep) => void;
@@ -90,8 +90,8 @@ interface LocalWalletContextValue {
 
   // Utilities
   truncateAddress: (address: string, start?: number, end?: number) => string;
-  getDecryptedMnemonic: (passcode: string) => string | null;
-  getDecryptedMnemonicById: (walletId: number, passcode: string) => Promise<string | null>;
+  getDecryptedMnemonic: (password: string) => string | null;
+  getDecryptedMnemonicById: (walletId: number, password: string) => Promise<string | null>;
 }
 
 const LocalWalletContext = createContext<LocalWalletContextValue | undefined>(
@@ -110,7 +110,7 @@ export function LocalWalletProvider({
   const [unlockedPair, setUnlockedPair] = useState<KeyringPair | null>(null);
   const [setupStep, setSetupStep] = useState<WalletSetupStep>("loading");
   const [isLoading, setIsLoading] = useState(true);
-  const [_cachedPasscode, setCachedPasscode] = useState<string | null>(null);
+  const [_cachedPassword, setCachedPassword] = useState<string | null>(null);
 
   // Check if there are any wallets
   const hasWallets = wallets.length > 0;
@@ -156,7 +156,7 @@ export function LocalWalletProvider({
         if (hasAnyWallets) {
           // User has wallet(s) - go directly to ready state
           // They can view wallet info without unlocking
-          // Passcode will be required only for signing transactions
+          // Password will be required only for signing transactions
           setSetupStep("ready");
         } else {
           // No wallet exists - show setup flow
@@ -178,21 +178,21 @@ export function LocalWalletProvider({
     async (
       name: string,
       mnemonic: string,
-      passcode: string
+      password: string
     ): Promise<boolean> => {
       try {
         if (!isMnemonicValid(mnemonic)) {
           throw new Error("Invalid mnemonic");
         }
 
-        const passcodeHash = hashPasscode(passcode);
-        const encrypted = encryptMnemonic(mnemonic, passcode);
+        const passwordHash = hashPassword(password);
+        const encrypted = encryptMnemonic(mnemonic, password);
 
         await createLocalWallet({
           name,
           mnemonic,
           encryptedMnemonic: encrypted,
-          passcodeHash,
+          passwordHash,
         });
 
         await refreshWallets();
@@ -202,7 +202,7 @@ export function LocalWalletProvider({
         const keyring = new Keyring({ type: "sr25519" });
         const pair = keyring.addFromMnemonic(mnemonic);
         setUnlockedPair(pair);
-        setCachedPasscode(passcode);
+        setCachedPassword(password);
         setSetupStep("ready");
 
         return true;
@@ -219,21 +219,21 @@ export function LocalWalletProvider({
     async (
       name: string,
       mnemonic: string,
-      passcode: string
+      password: string
     ): Promise<boolean> => {
       try {
         if (!isMnemonicValid(mnemonic)) {
           throw new Error("Invalid mnemonic");
         }
 
-        const passcodeHash = hashPasscode(passcode);
-        const encrypted = encryptMnemonic(mnemonic, passcode);
+        const passwordHash = hashPassword(password);
+        const encrypted = encryptMnemonic(mnemonic, password);
 
         await createLocalWallet({
           name,
           mnemonic,
           encryptedMnemonic: encrypted,
-          passcodeHash,
+          passwordHash,
         });
 
         await refreshWallets();
@@ -243,7 +243,7 @@ export function LocalWalletProvider({
         const keyring = new Keyring({ type: "sr25519" });
         const pair = keyring.addFromMnemonic(mnemonic);
         setUnlockedPair(pair);
-        setCachedPasscode(passcode);
+        setCachedPassword(password);
         setSetupStep("ready");
 
         return true;
@@ -261,7 +261,7 @@ export function LocalWalletProvider({
       name: string;
       address: string;
       encryptedMnemonic: string;
-      passcodeHash: string;
+      passwordHash: string;
     }): Promise<boolean> => {
       try {
         await importWalletFromEncryptedBackup(data);
@@ -275,22 +275,22 @@ export function LocalWalletProvider({
     [refreshWallets]
   );
 
-  // Unlock wallet with passcode
+  // Unlock wallet with password
   const unlockWallet = useCallback(
-    async (passcode: string): Promise<KeyringPair | null> => {
+    async (password: string): Promise<KeyringPair | null> => {
       try {
         if (!activeWallet) {
           return null;
         }
 
-        const passcodeHash = hashPasscode(passcode);
-        if (passcodeHash !== activeWallet.passcodeHash) {
+        const passwordHash = hashPassword(password);
+        if (passwordHash !== activeWallet.passwordHash) {
           return null;
         }
 
         const mnemonic = decryptMnemonic(
           activeWallet.encryptedMnemonic,
-          passcode
+          password
         );
         if (!isMnemonicValid(mnemonic)) {
           return null;
@@ -300,8 +300,8 @@ export function LocalWalletProvider({
         const keyring = new Keyring({ type: "sr25519" });
         const pair = keyring.addFromMnemonic(mnemonic);
         setUnlockedPair(pair);
-        setCachedPasscode(passcode);
-        
+        setCachedPassword(password);
+
         return pair;
       } catch (error) {
         console.error("Failed to unlock wallet:", error);
@@ -313,17 +313,17 @@ export function LocalWalletProvider({
 
   // Unlock a specific wallet by ID
   const unlockWalletById = useCallback(
-    async (walletId: number, passcode: string): Promise<KeyringPair | null> => {
+    async (walletId: number, password: string): Promise<KeyringPair | null> => {
       try {
         const wallet = await getLocalWalletById(walletId);
         if (!wallet) return null;
 
-        const passcodeHash = hashPasscode(passcode);
-        if (passcodeHash !== wallet.passcodeHash) {
+        const passwordHash = hashPassword(password);
+        if (passwordHash !== wallet.passwordHash) {
           return null;
         }
 
-        const mnemonic = decryptMnemonic(wallet.encryptedMnemonic, passcode);
+        const mnemonic = decryptMnemonic(wallet.encryptedMnemonic, password);
         if (!isMnemonicValid(mnemonic)) {
           return null;
         }
@@ -336,7 +336,7 @@ export function LocalWalletProvider({
         const keyring = new Keyring({ type: "sr25519" });
         const pair = keyring.addFromMnemonic(mnemonic);
         setUnlockedPair(pair);
-        setCachedPasscode(passcode);
+        setCachedPassword(password);
         setSetupStep("ready");
 
         return pair;
@@ -348,12 +348,12 @@ export function LocalWalletProvider({
     [refreshWallets]
   );
 
-  // Verify passcode for current active wallet
-  const verifyPasscode = useCallback(
-    (passcode: string): boolean => {
+  // Verify password for current active wallet
+  const verifyPassword = useCallback(
+    (password: string): boolean => {
       if (!activeWallet) return false;
-      const passcodeHash = hashPasscode(passcode);
-      return passcodeHash === activeWallet.passcodeHash;
+      const passwordHash = hashPassword(password);
+      return passwordHash === activeWallet.passwordHash;
     },
     [activeWallet]
   );
@@ -361,25 +361,25 @@ export function LocalWalletProvider({
   // Lock wallet (clear cached keypair but stay on dashboard)
   const lockWallet = useCallback(() => {
     setUnlockedPair(null);
-    setCachedPasscode(null);
-    // Don't change setupStep - user can still view dashboard without passcode
-    // Passcode will be requested again when signing next transaction
+    setCachedPassword(null);
+    // Don't change setupStep - user can still view dashboard without password
+    // Password will be requested again when signing next transaction
   }, []);
 
   // Get the keypair for signing transactions
   const signTransaction = useCallback(
-    async (passcode: string): Promise<KeyringPair | null> => {
+    async (password: string): Promise<KeyringPair | null> => {
       try {
         if (!activeWallet) return null;
 
-        const passcodeHash = hashPasscode(passcode);
-        if (passcodeHash !== activeWallet.passcodeHash) {
+        const passwordHash = hashPassword(password);
+        if (passwordHash !== activeWallet.passwordHash) {
           return null;
         }
 
         const mnemonic = decryptMnemonic(
           activeWallet.encryptedMnemonic,
-          passcode
+          password
         );
         if (!isMnemonicValid(mnemonic)) {
           return null;
@@ -404,9 +404,9 @@ export function LocalWalletProvider({
         await refreshWallets();
 
         // Clear cached keypair for the previous wallet
-        // User stays on dashboard - passcode only needed for signing
+        // User stays on dashboard - password only needed for signing
         setUnlockedPair(null);
-        setCachedPasscode(null);
+        setCachedPassword(null);
 
         return true;
       } catch (error) {
@@ -443,13 +443,13 @@ export function LocalWalletProvider({
         const remaining = await getAllLocalWallets();
         if (remaining.length === 0) {
           setUnlockedPair(null);
-          setCachedPasscode(null);
+          setCachedPassword(null);
           setSetupStep("welcome");
         } else if (activeWallet?.id === walletId) {
           // Deleted the active wallet - clear keypair, stay on dashboard
           setUnlockedPair(null);
-          setCachedPasscode(null);
-          // setupStep stays "ready" - remaining wallets are viewable without passcode
+          setCachedPassword(null);
+          // setupStep stays "ready" - remaining wallets are viewable without password
         }
 
         return true;
@@ -463,18 +463,18 @@ export function LocalWalletProvider({
 
   // Get decrypted mnemonic (for export)
   const getDecryptedMnemonic = useCallback(
-    (passcode: string): string | null => {
+    (password: string): string | null => {
       if (!activeWallet) return null;
 
       try {
-        const passcodeHash = hashPasscode(passcode);
-        if (passcodeHash !== activeWallet.passcodeHash) {
+        const passwordHash = hashPassword(password);
+        if (passwordHash !== activeWallet.passwordHash) {
           return null;
         }
 
         const mnemonic = decryptMnemonic(
           activeWallet.encryptedMnemonic,
-          passcode
+          password
         );
         if (!isMnemonicValid(mnemonic)) {
           return null;
@@ -490,17 +490,17 @@ export function LocalWalletProvider({
 
   // Get decrypted mnemonic by wallet ID (for exporting any wallet)
   const getDecryptedMnemonicById = useCallback(
-    async (walletId: number, passcode: string): Promise<string | null> => {
+    async (walletId: number, password: string): Promise<string | null> => {
       try {
         const wallet = wallets.find((w) => w.id === walletId);
         if (!wallet) return null;
 
-        const passcodeHash = hashPasscode(passcode);
-        if (passcodeHash !== wallet.passcodeHash) {
+        const passwordHash = hashPassword(password);
+        if (passwordHash !== wallet.passwordHash) {
           return null;
         }
 
-        const mnemonic = decryptMnemonic(wallet.encryptedMnemonic, passcode);
+        const mnemonic = decryptMnemonic(wallet.encryptedMnemonic, password);
         if (!isMnemonicValid(mnemonic)) {
           return null;
         }
@@ -530,7 +530,7 @@ export function LocalWalletProvider({
       removeWallet,
       unlockWallet,
       unlockWalletById,
-      verifyPasscode,
+      verifyPassword,
       lockWallet,
       signTransaction,
       setSetupStep,
@@ -555,7 +555,7 @@ export function LocalWalletProvider({
       removeWallet,
       unlockWallet,
       unlockWalletById,
-      verifyPasscode,
+      verifyPassword,
       lockWallet,
       signTransaction,
       refreshWallets,

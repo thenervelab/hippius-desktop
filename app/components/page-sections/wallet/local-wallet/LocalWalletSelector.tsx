@@ -15,6 +15,7 @@ import { Wallet } from "@/components/ui/icons";
 import { cn } from "@/app/lib/utils";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { toast } from "sonner";
+import { openAppLink } from "@/app/lib/utils/links";
 
 interface LocalWalletSelectorProps {
   className?: string;
@@ -59,9 +60,18 @@ export function LocalWalletSelector({
     setIsOpen(false);
   };
 
-  const openInExplorer = (address: string, e: React.MouseEvent) => {
+  const openInExplorer = async (address: string, e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
-    window.open(`https://hipstats.com/accounts/${address}`, "_blank");
+
+    const accountPageUrl = `https://hipstats.com/accounts/${address}`;
+
+    try {
+      await openAppLink(accountPageUrl);
+    } catch (error) {
+      console.error("Failed to open account page:", error);
+      toast.error("Failed to open account page");
+    }
   };
 
   const copyAddress = async (address: string, e: React.MouseEvent) => {
@@ -106,8 +116,10 @@ export function LocalWalletSelector({
               Active Wallet
             </span>
           </div>
-          <div className="flex items-center gap-2 pl-2 border border-grey-80 rounded p-1.5">
-            <div className="w-2 h-2 rounded-full bg-success-50 flex-shrink-0" />
+          <div className="flex items-center gap-2.5 border border-grey-80 rounded-md px-3 py-2 min-w-[160px]">
+            <div className="flex items-center justify-center w-4 h-4 rounded-full bg-success-70">
+              <div className="w-2.5 h-2.5 rounded-full bg-success-50" />
+            </div>
             <span className="font-geist text-sm font-medium text-grey-10">
               {truncateAddress(activeWallet.address, 6, 4)}
             </span>

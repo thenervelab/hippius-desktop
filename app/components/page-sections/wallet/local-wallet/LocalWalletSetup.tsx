@@ -4,8 +4,8 @@ import React from "react";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import WelcomeScreen from "./WelcomeScreen";
 import CreateMnemonicScreen from "./CreateMnemonicScreen";
-import CreatePasscodeScreen from "./CreatePasscodeScreen";
-import EnterPasscodeScreen from "./EnterPasscodeScreen";
+import CreatePasswordScreen from "./CreatePasswordScreen";
+import EnterPasswordScreen from "./EnterPasswordScreen";
 import ImportWalletScreen from "./ImportWalletScreen";
 import { Icons } from "@/components/ui";
 
@@ -31,10 +31,10 @@ const LocalWalletSetup: React.FC = () => {
       return <WelcomeScreen />;
     case "create-mnemonic":
       return <CreateMnemonicScreen />;
-    case "create-passcode":
-      return <CreatePasscodeScreen />;
-    case "enter-passcode":
-      return <EnterPasscodeScreen />;
+    case "create-password":
+      return <CreatePasswordScreen />;
+    case "enter-password":
+      return <EnterPasswordScreen />;
     case "import-wallet":
       return <ImportWalletScreen />;
     case "ready":

@@ -1,28 +1,25 @@
 "use client";
 
-import React, { useState, useRef, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Icons,
   RevealTextLine,
   CardButton,
   Input,
-  AbstractIconWrapper,
+  Graphsheet,
 } from "@/components/ui";
 import { toast } from "sonner";
 import SectionHeader from "./SectionHeader";
 import { InView } from "react-intersection-observer";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { LocalWallet } from "@/app/lib/helpers/localWalletDb";
-import { cn } from "@/lib/utils";
 import { AddWalletDialog } from "@/app/components/page-sections/wallet/local-wallet";
 import DeleteConfirmationDialog from "@/components/DeleteConfirmationDialog";
 import DialogContainer from "@/components/ui/DialogContainer";
-import BoxSimple from "@/components/ui/icons/BoxSimple";
 import {
   Edit2,
   Download,
-  X,
   AlertTriangle,
 } from "lucide-react";
 import {
@@ -32,20 +29,23 @@ import {
 } from "@tanstack/react-table";
 import * as TableModule from "@/components/ui/alt-table";
 import { getWalletColumns } from "./WalletColumns";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
+import JSZip from "jszip";
 
 // Column widths for the wallet table (defined outside component to avoid recreating)
 const DEFAULT_COLUMN_WIDTHS = {
-  wallet: 35,
-  date_imported: 25,
-  status: 25,
-  actions: 15,
+  wallet: 37,
+  date_imported: 26,
+  status: 32,
+  actions: 5,
 };
 
 const MIN_COLUMN_WIDTHS = {
-  wallet: 20,
-  date_imported: 15,
-  status: 15,
-  actions: 10,
+  wallet: 25,
+  date_imported: 18,
+  status: 20,
+  actions: 5,
 };
 
 const WalletSettings: React.FC = () => {
@@ -54,13 +54,11 @@ const WalletSettings: React.FC = () => {
     switchWallet,
     renameWallet,
     removeWallet,
-    importEncryptedWallet,
-    truncateAddress,
   } = useLocalWallet();
 
   // Dialog states
   const [showAddWalletDialog, setShowAddWalletDialog] = useState(false);
-  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [showImportWalletDialog, setShowImportWalletDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [walletToDelete, setWalletToDelete] = useState<LocalWallet | null>(
     null
@@ -79,18 +77,6 @@ const WalletSettings: React.FC = () => {
   const [walletToEdit, setWalletToEdit] = useState<LocalWallet | null>(null);
   const [editingName, setEditingName] = useState("");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
-
-  // Import file state
-  const [importedFile, setImportedFile] = useState<{
-    name: string;
-    address: string;
-    encryptedMnemonic: string;
-    passcodeHash: string;
-  } | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [importError, setImportError] = useState("");
-  const [isImporting, setIsImporting] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [columnWidths, setColumnWidths] = useState(() => {
     try {
@@ -237,7 +223,7 @@ const WalletSettings: React.FC = () => {
     }
   };
 
-  // Handle export wallet (no passcode needed - exports encrypted data)
+  // Handle export wallet (no password needed - exports encrypted data)
   const handleExportClick = useCallback((wallet: LocalWallet) => {
     setWalletToExport(wallet);
     setShowExportDialog(true);
@@ -249,30 +235,38 @@ const WalletSettings: React.FC = () => {
     setIsExporting(true);
 
     try {
+      // Ask user where to save the file
+      const defaultFileName = `hippius-wallet-${walletToExport.name.replace(/\s+/g, "-")}-backup.zip`;
+      const filePath = await save({
+        filters: [{ name: "ZIP File", extensions: ["zip"] }],
+        defaultPath: defaultFileName,
+      });
+
+      if (!filePath) {
+        // User cancelled the dialog
+        setIsExporting(false);
+        return;
+      }
+
       // Export the encrypted wallet data directly (no decryption needed)
       const backupData = {
         version: 2, // Version 2 = encrypted backup format
         name: walletToExport.name,
         address: walletToExport.address,
         encryptedMnemonic: walletToExport.encryptedMnemonic,
-        passcodeHash: walletToExport.passcodeHash,
+        passwordHash: walletToExport.passwordHash,
         exportedAt: new Date().toISOString(),
       };
 
-      // Create and download the file
-      const blob = new Blob([JSON.stringify(backupData, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `hippius-wallet-${walletToExport.name.replace(/\s+/g, "-")}-backup.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      // Create ZIP file containing the wallet backup JSON
+      const zip = new JSZip();
+      zip.file("wallet-backup.json", JSON.stringify(backupData, null, 2));
+      const zipContent = await zip.generateAsync({ type: "uint8array" });
 
-      toast.success("Wallet backup downloaded successfully");
+      // Write the ZIP file to the selected location
+      await writeFile(filePath, zipContent);
+
+      toast.success("Wallet backup saved successfully");
       setShowExportDialog(false);
       setWalletToExport(null);
     } catch (error) {
@@ -307,109 +301,6 @@ const WalletSettings: React.FC = () => {
     }
   };
 
-  // Import file handling
-  const processFile = async (file: File) => {
-    try {
-      const text = await file.text();
-      const data = JSON.parse(text);
-
-      // Check for version 2 format (encrypted backup)
-      if (data.version === 2 && data.encryptedMnemonic && data.passcodeHash && data.address) {
-        setImportedFile({
-          name: data.name || "Imported Wallet",
-          address: data.address,
-          encryptedMnemonic: data.encryptedMnemonic,
-          passcodeHash: data.passcodeHash,
-        });
-        setImportError("");
-      } else if (data.encryptedMnemonic && data.passcodeHash) {
-        // Older format with encrypted mnemonic but might not have address
-        // This shouldn't happen with our exports, but handle gracefully
-        setImportError(
-          "This backup file format is not supported. Please export a new backup."
-        );
-      } else if (data.mnemonic) {
-        // Version 1 format with plain mnemonic - not supported in this import flow
-        setImportError(
-          "This backup contains an unencrypted mnemonic. Please use 'Add Wallet' and enter the mnemonic manually."
-        );
-      } else {
-        setImportError("Invalid wallet backup file");
-      }
-    } catch {
-      setImportError("Failed to read wallet backup file");
-    }
-  };
-
-  const handleFileDrop = useCallback(
-    async (e: React.DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      setIsDragging(false);
-      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const droppedFile = e.dataTransfer.files[0];
-        await processFile(droppedFile);
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      }
-    },
-    []
-  );
-
-  const handleFileSelect = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) {
-        await processFile(file);
-      }
-    },
-    []
-  );
-
-  const clearImportFile = () => {
-    setImportedFile(null);
-    setImportError("");
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleImportWallet = async () => {
-    if (!importedFile) return;
-
-    setIsImporting(true);
-    setImportError("");
-
-    try {
-      const success = await importEncryptedWallet({
-        name: importedFile.name,
-        address: importedFile.address,
-        encryptedMnemonic: importedFile.encryptedMnemonic,
-        passcodeHash: importedFile.passcodeHash,
-      });
-
-      if (success) {
-        toast.success("Wallet imported successfully!");
-        setShowImportDialog(false);
-        setImportedFile(null);
-      } else {
-        setImportError(
-          "Failed to import wallet. This wallet may already exist."
-        );
-      }
-    } catch (error) {
-      console.error("Failed to import wallet:", error);
-      setImportError(
-        error instanceof Error ? error.message : "Failed to import wallet"
-      );
-    } finally {
-      setIsImporting(false);
-    }
-  };
-
-  const closeImportDialog = () => {
-    setShowImportDialog(false);
-    setImportedFile(null);
-    setImportError("");
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
   // Copy address to clipboard
   const handleCopyAddress = useCallback((address: string) => {
     navigator.clipboard.writeText(address);
@@ -418,13 +309,12 @@ const WalletSettings: React.FC = () => {
 
   // Memoized columns
   const columns = useMemo(() => getWalletColumns({
-    truncateAddress,
     onCopyAddress: handleCopyAddress,
     onMakeActive: handleMakeActive,
     onEdit: handleEditClick,
     onExport: handleExportClick,
     onDelete: handleDeleteClick,
-  }), [truncateAddress, handleCopyAddress, handleMakeActive, handleEditClick, handleExportClick, handleDeleteClick]);
+  }), [handleCopyAddress, handleMakeActive, handleEditClick, handleExportClick, handleDeleteClick]);
 
   // Table instance
   const table = useReactTable({
@@ -472,7 +362,8 @@ const WalletSettings: React.FC = () => {
           ))}
         </TableModule.Tr>
       )),
-    [table, columnWidths]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- wallets needed to force re-render when data changes
+    [table, columnWidths, wallets]
   );
 
   return (
@@ -496,8 +387,8 @@ const WalletSettings: React.FC = () => {
                       Icon={Icons.Wallet}
                       title="Wallet Settings"
                       subtitle="Manage your local wallets, import new wallets, or export backups."
-                      info="Your wallets are stored locally with encrypted mnemonics. You can add multiple wallets and switch between them. Export your wallet to create an encrypted backup file that can be imported later."
                       learnMoreUrl="https://docs.hippius.com/use/desktop/settings#wallet-settings"
+                      helpButtonOnly
                     />
                     <div className="flex gap-2">
                       <CardButton
@@ -513,11 +404,11 @@ const WalletSettings: React.FC = () => {
                       <CardButton
                         variant="dialog"
                         className="h-10 px-4"
-                        onClick={() => setShowImportDialog(true)}
+                        onClick={() => setShowImportWalletDialog(true)}
                       >
                         <div className="flex items-center gap-2 text-sm font-medium">
                           <Icons.DocumentDownload className="size-4" />
-                          Import New Wallet
+                          Import Wallet
                         </div>
                       </CardButton>
                     </div>
@@ -532,7 +423,7 @@ const WalletSettings: React.FC = () => {
                     No wallets found. Add a wallet to get started.
                   </div>
                 ) : (
-                  <TableModule.TableWrapper>
+                  <TableModule.TableWrapper className="bg-white">
                     <TableModule.Table className="w-full table-fixed">
                       <TableModule.THead>{headerRows}</TableModule.THead>
                       <TableModule.TBody>{tableBody}</TableModule.TBody>
@@ -549,6 +440,13 @@ const WalletSettings: React.FC = () => {
       <AddWalletDialog
         open={showAddWalletDialog}
         onClose={() => setShowAddWalletDialog(false)}
+      />
+
+      {/* Import Wallet Dialog */}
+      <AddWalletDialog
+        open={showImportWalletDialog}
+        onClose={() => setShowImportWalletDialog(false)}
+        initialStep="import"
       />
 
       {/* Delete Confirmation Dialog */}
@@ -584,8 +482,24 @@ const WalletSettings: React.FC = () => {
           <Dialog.Title className="sr-only">Edit Wallet Name</Dialog.Title>
 
           <div className="flex flex-col items-center px-6 py-8">
-            <div className="h-12 w-12 bg-primary-50/10 rounded-lg flex items-center justify-center mb-4">
-              <Edit2 className="size-6 text-primary-50" />
+            <div className="size-14 flex justify-center items-center relative mb-4">
+              <Graphsheet
+                majorCell={{
+                  lineColor: [31, 80, 189, 1.0],
+                  lineWidth: 2,
+                  cellDim: 200,
+                }}
+                minorCell={{
+                  lineColor: [49, 103, 211, 1.0],
+                  lineWidth: 1,
+                  cellDim: 20,
+                }}
+                className="absolute w-full h-full duration-500 opacity-30 z-0"
+              />
+              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
+              <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
+                <Edit2 className="size-5 text-white" />
+              </div>
             </div>
 
             <h2 className="text-xl font-semibold text-grey-10 mb-2">
@@ -651,8 +565,24 @@ const WalletSettings: React.FC = () => {
           <Dialog.Title className="sr-only">Export Wallet</Dialog.Title>
 
           <div className="flex flex-col items-center px-6 py-8">
-            <div className="h-12 w-12 bg-primary-50/10 rounded-lg flex items-center justify-center mb-4">
-              <Download className="size-6 text-primary-50" />
+            <div className="size-14 flex justify-center items-center relative mb-4">
+              <Graphsheet
+                majorCell={{
+                  lineColor: [31, 80, 189, 1.0],
+                  lineWidth: 2,
+                  cellDim: 200,
+                }}
+                minorCell={{
+                  lineColor: [49, 103, 211, 1.0],
+                  lineWidth: 1,
+                  cellDim: 20,
+                }}
+                className="absolute w-full h-full duration-500 opacity-30 z-0"
+              />
+              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
+              <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
+                <Download className="size-5 text-white" />
+              </div>
             </div>
 
             <h2 className="text-xl font-semibold text-grey-10 mb-2">
@@ -669,11 +599,11 @@ const WalletSettings: React.FC = () => {
                 <div className="text-sm text-grey-40">
                   <p className="mb-2">
                     Your wallet will be exported in encrypted form. You&apos;ll need
-                    your passcode when signing transactions after importing.
+                    your password when signing transactions after importing.
                   </p>
                   <p className="text-amber-600">
                     <strong className="text-amber-700">Warning:</strong> Keep this backup file
-                    secure. Anyone with this file and your passcode can access
+                    secure. Anyone with this file and your password can access
                     your wallet.
                   </p>
                 </div>
@@ -699,139 +629,6 @@ const WalletSettings: React.FC = () => {
                 disabled={isExporting}
               >
                 {isExporting ? "Exporting..." : "Download Backup"}
-              </CardButton>
-            </div>
-          </div>
-        </DialogContainer>
-      </Dialog.Root>
-
-      {/* Import Wallet Dialog */}
-      <Dialog.Root
-        open={showImportDialog}
-        onOpenChange={(isOpen) => {
-          if (!isOpen) closeImportDialog();
-        }}
-      >
-        <DialogContainer className="md:inset-0 md:m-auto w-[450px] h-fit">
-          <Dialog.Title className="sr-only">Import Wallet</Dialog.Title>
-
-          <div className="flex flex-col items-center px-6 py-8">
-            <div className="h-12 w-12 bg-primary-50/10 rounded-lg flex items-center justify-center mb-4">
-              <Icons.DocumentDownload className="size-6 text-primary-50" />
-            </div>
-
-            <h2 className="text-xl font-semibold text-grey-10 mb-2">
-              Import Wallet Backup
-            </h2>
-            <p className="text-sm text-grey-60 text-center mb-6">
-              Import an encrypted wallet backup file
-            </p>
-
-            {/* File Drop Zone */}
-            {!importedFile ? (
-              <div
-                className={cn(
-                  "w-full rounded-lg h-[140px] p-2 transition mb-4",
-                  isDragging
-                    ? "bg-primary-50/5 border-2 border-dashed border-primary-50"
-                    : "border border-grey-80"
-                )}
-              >
-                <div
-                  className="cursor-pointer border border-grey-80 rounded-xl border-dashed flex flex-col items-center justify-center h-full w-full transition hover:bg-grey-98"
-                  onClick={() => fileInputRef.current?.click()}
-                  onDrop={handleFileDrop}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDragEnter={(e) => {
-                    e.preventDefault();
-                    setIsDragging(true);
-                  }}
-                  onDragLeave={(e) => {
-                    e.preventDefault();
-                    setIsDragging(false);
-                  }}
-                >
-                  <div className="mb-2">
-                    <AbstractIconWrapper className="size-8">
-                      <BoxSimple className="size-5 text-primary-50 absolute" />
-                    </AbstractIconWrapper>
-                  </div>
-                  <div className="text-sm font-medium text-grey-10">
-                    Upload Backup File
-                  </div>
-                  <div className="text-grey-60 text-xs">
-                    Drag & drop or click to select
-                  </div>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".json"
-                    className="hidden"
-                    onChange={handleFileSelect}
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="w-full mb-4 p-4 bg-grey-98 border border-grey-80 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Icons.File className="size-5 text-primary-50" />
-                    <div>
-                      <p className="text-sm font-medium text-grey-10">
-                        {importedFile.name}
-                      </p>
-                      <p className="text-xs text-grey-50">
-                        {truncateAddress(importedFile.address, 8, 8)}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={clearImportFile}
-                    className="p-1 text-grey-50 hover:text-grey-30 transition-colors"
-                  >
-                    <X className="size-4" />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Info box */}
-            <div className="w-full bg-primary-50/5 border border-primary-50/20 rounded-lg p-4 mb-4">
-              <div className="flex items-start gap-3">
-                <Icons.InfoCircle className="size-5 text-primary-50 flex-shrink-0 mt-0.5" />
-                <div className="text-sm text-grey-40">
-                  <p>
-                    Your wallet will be imported with its original encryption.
-                    You&apos;ll need your original passcode when signing transactions.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Error */}
-            {importError && (
-              <div className="w-full flex items-center gap-2 text-error-70 text-sm font-medium mb-4 p-3 bg-error-95 rounded-lg">
-                <AlertTriangle className="size-4 flex-shrink-0" />
-                <span>{importError}</span>
-              </div>
-            )}
-
-            <div className="flex gap-3 w-full">
-              <CardButton
-                variant="secondary"
-                className="flex-1 h-10"
-                onClick={closeImportDialog}
-                disabled={isImporting}
-              >
-                Cancel
-              </CardButton>
-              <CardButton
-                variant="dialog"
-                className="flex-1 h-10"
-                onClick={handleImportWallet}
-                disabled={!importedFile || isImporting}
-              >
-                {isImporting ? "Importing..." : "Import Wallet"}
               </CardButton>
             </div>
           </div>

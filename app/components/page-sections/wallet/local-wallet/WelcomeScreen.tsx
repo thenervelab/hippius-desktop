@@ -27,10 +27,10 @@ const WelcomeScreen: React.FC = () => {
       return;
     }
 
-    // Store mnemonic and go to passcode screen
+    // Store mnemonic and go to password screen
     // We'll pass mnemonic through the context in the next step
     sessionStorage.setItem("temp_mnemonic", trimmed);
-    setSetupStep("enter-passcode");
+    setSetupStep("enter-password");
   };
 
   const handleCreateNew = () => {

@@ -24,7 +24,7 @@ export function Td<TData, TValue>(props: TdProps<TData, TValue>) {
         "font-medium px-4 py-3.5 border-x border-grey-80 text-grey-60 last:border-r-0 first:border-l-0",
         "",
         cell.column.id === "actions" && "w-10 p-0",
-        cell.column.id === "name" && "max-w-0",
+        (cell.column.id === "name" || cell.column.id === "wallet") && "max-w-0",
         className,
         canSort && sortOrder && activeSortClassName
       )}
@@ -33,7 +33,7 @@ export function Td<TData, TValue>(props: TdProps<TData, TValue>) {
     >
       <div className={cn(
         "w-full",
-        cell.column.id !== "actions" && cell.column.id !== "selection" && "truncate"
+        cell.column.id !== "actions" && cell.column.id !== "selection" && cell.column.id !== "wallet" && "truncate"
       )}>
         {flexRender(cell.column.columnDef.cell, cell.getContext())}
       </div>

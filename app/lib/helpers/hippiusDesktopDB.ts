@@ -238,14 +238,14 @@ export async function ensureWalletTable(): Promise<boolean> {
 
 export async function saveWallet(
   encryptedMnemonic: string,
-  passcodeHash: string
+  passwordHash: string
 ) {
   try {
     await ensureWalletTable();
     const db = await initHippiusDesktopDB();
     db.run(
       "INSERT INTO wallet (encryptedMnemonic, passcodeHash) VALUES (?, ?)",
-      [encryptedMnemonic, passcodeHash]
+      [encryptedMnemonic, passwordHash]
     );
     await saveBytes(db.export());
     return true;
@@ -257,7 +257,7 @@ export async function saveWallet(
 
 export async function updateWallet(
   encryptedMnemonic: string,
-  passcodeHash: string
+  passwordHash: string
 ) {
   const db = await initHippiusDesktopDB();
   const res = db.exec("SELECT id FROM wallet ORDER BY id DESC LIMIT 1");
@@ -267,14 +267,14 @@ export async function updateWallet(
   const id = res[0].values[0][0];
   db.run(
     "UPDATE wallet SET encryptedMnemonic = ?, passcodeHash = ? WHERE id = ?",
-    [encryptedMnemonic, passcodeHash, id]
+    [encryptedMnemonic, passwordHash, id]
   );
   await saveBytes(db.export());
 }
 
 export async function getWalletRecord(): Promise<{
   encryptedMnemonic: string;
-  passcodeHash: string;
+  passwordHash: string;
 } | null> {
   try {
     await ensureWalletTable();
@@ -286,8 +286,8 @@ export async function getWalletRecord(): Promise<{
 
     if (!res.length || !res[0]?.values.length) return null;
 
-    const [encryptedMnemonic, passcodeHash] = res[0].values[0] as string[];
-    return { encryptedMnemonic, passcodeHash };
+    const [encryptedMnemonic, passwordHash] = res[0].values[0] as string[];
+    return { encryptedMnemonic, passwordHash };
   } catch (err) {
     console.error("Error fetching wallet record:", err);
     return null;

@@ -1,11 +1,10 @@
 export { default as LocalWalletSetup } from "./LocalWalletSetup";
 export { default as WelcomeScreen } from "./WelcomeScreen";
 export { default as CreateMnemonicScreen } from "./CreateMnemonicScreen";
-export { default as CreatePasscodeScreen } from "./CreatePasscodeScreen";
-export { default as EnterPasscodeScreen } from "./EnterPasscodeScreen";
+export { default as CreatePasswordScreen } from "./CreatePasswordScreen";
+export { default as EnterPasswordScreen } from "./EnterPasswordScreen";
 export { default as ImportWalletScreen } from "./ImportWalletScreen";
-export { default as PasscodeInput } from "./PasscodeInput";
+export { default as PasswordInput } from "./PasswordInput";
 export { default as LocalWalletSelector } from "./LocalWalletSelector";
 export { default as AddWalletDialog } from "./AddWalletDialog";
-export { default as WalletSettingsDialog } from "./WalletSettingsDialog";
-export { default as PasscodeConfirmDialog } from "./PasscodeConfirmDialog";
+export { default as PasswordConfirmDialog } from "./PasswordConfirmDialog";

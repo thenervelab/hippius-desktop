@@ -24,7 +24,7 @@ import {
 
 import { useRouter } from "next/navigation";
 
-import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
+import { hashPassword, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
 import { useTrayInit } from "./hooks/useTraySync";
@@ -48,8 +48,8 @@ interface WalletContextType {
     mnemonic: string,
     logoutTimeInMinutes?: number
   ) => Promise<boolean>;
-  unlockWithPasscode: (
-    passcode: string,
+  unlockWithPassword: (
+    password: string,
     logoutTimeInMinutes?: number
   ) => Promise<boolean>;
   logout: (redirectPath?: string) => Promise<void>;
@@ -368,8 +368,8 @@ export function WalletAuthProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logout, router]);
 
-  const unlockWithPasscode = async (
-    passcode: string,
+  const unlockWithPassword = async (
+    password: string,
     logoutTimeInMinutes?: number
   ): Promise<boolean> => {
     setIsLoading(true);
@@ -377,10 +377,10 @@ export function WalletAuthProvider({
       const record = await getWalletRecord();
       if (!record) throw new Error("No wallet record found");
 
-      if (hashPasscode(passcode) !== record.passcodeHash)
-        throw new Error("Incorrect passcode");
+      if (hashPassword(password) !== record.passwordHash)
+        throw new Error("Incorrect password");
       await cryptoWaitReady();
-      const mnemonic = decryptMnemonic(record.encryptedMnemonic, passcode);
+      const mnemonic = decryptMnemonic(record.encryptedMnemonic, password);
       if (!isMnemonicValid(mnemonic)) throw new Error("Decryption failed");
 
       // check that session actually initialized
@@ -389,8 +389,8 @@ export function WalletAuthProvider({
 
       return true;
     } catch (err) {
-      if (err instanceof Error && err.message !== "Incorrect passcode") {
-        console.error("[unlockWithPasscode] ", err);
+      if (err instanceof Error && err.message !== "Incorrect password") {
+        console.error("[unlockWithPassword] ", err);
       }
       return false;
     } finally {
@@ -634,7 +634,7 @@ export function WalletAuthProvider({
         login,
         setOAuthSession,
         setSession,
-        unlockWithPasscode,
+        unlockWithPassword,
         logout,
         resetHippiusDesktop,
         sessionTimeRemaining,

@@ -1,17 +1,17 @@
 import CryptoJS from "crypto-js";
 
-/** Hash passcode with SHA256 */
-export function hashPasscode(passcode: string): string {
-  return CryptoJS.SHA256(passcode).toString();
+/** Hash password with SHA256 */
+export function hashPassword(password: string): string {
+  return CryptoJS.SHA256(password).toString();
 }
 
-/** Encrypt mnemonic with passcode */
-export function encryptMnemonic(mnemonic: string, passcode: string): string {
-  return CryptoJS.AES.encrypt(mnemonic, passcode).toString();
+/** Encrypt mnemonic with password */
+export function encryptMnemonic(mnemonic: string, password: string): string {
+  return CryptoJS.AES.encrypt(mnemonic, password).toString();
 }
 
-/** Decrypt mnemonic with passcode */
-export function decryptMnemonic(encrypted: string, passcode: string): string {
-  const bytes = CryptoJS.AES.decrypt(encrypted, passcode);
+/** Decrypt mnemonic with password */
+export function decryptMnemonic(encrypted: string, password: string): string {
+  const bytes = CryptoJS.AES.decrypt(encrypted, password);
   return bytes.toString(CryptoJS.enc.Utf8);
 }

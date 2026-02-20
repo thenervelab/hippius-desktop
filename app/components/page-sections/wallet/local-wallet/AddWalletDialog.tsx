@@ -5,49 +5,48 @@ import * as Dialog from "@radix-ui/react-dialog";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { AbstractIconWrapper, CardButton, Icons, Graphsheet, Input } from "@/components/ui";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
-import PasscodeInput from "./PasscodeInput";
+import PasswordInput from "./PasswordInput";
 import { ArrowRight, AlertCircle, Copy, Check, AlertTriangle, X } from "lucide-react";
 import { toast } from "sonner";
 import { isMnemonicValid } from "@/app/lib/helpers/validateMnemonic";
-import { decryptMnemonic } from "@/app/lib/helpers/crypto";
 import BoxSimple from "@/components/ui/icons/BoxSimple";
 import { cn } from "@/lib/utils";
+import JSZip from "jszip";
 
 
 interface AddWalletDialogProps {
   open: boolean;
   onClose: () => void;
+  initialStep?: AddWalletStep;
 }
 
 // Steps:
 // create-mnemonic: Generate new mnemonic for new wallet
-// create-passcode: Set passcode for new wallet
+// create-password: Set password for new wallet
 // access-wallet: Enter existing mnemonic (like screenshot "Welcome to Hippius Wallet")
-// access-passcode: Set passcode for accessed wallet
+// access-password: Set password for accessed wallet
 // import: Import from backup file only (drag-drop)
-type AddWalletStep = "create-mnemonic" | "create-passcode" | "access-wallet" | "access-passcode" | "import";
+type AddWalletStep = "create-mnemonic" | "create-password" | "access-wallet" | "access-password" | "import";
 
-const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
+const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose, initialStep = "create-mnemonic" }) => {
   const { generateMnemonic, createWallet, importWallet, importEncryptedWallet } = useLocalWallet();
 
-  const [step, setStep] = useState<AddWalletStep>("create-mnemonic");
+  const [step, setStep] = useState<AddWalletStep>(initialStep);
   const [mnemonic, setMnemonic] = useState("");
   const [walletName, setWalletName] = useState("");
-  const [passcode, setPasscode] = useState("");
-  const [confirmPasscode, setConfirmPasscode] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [accessMnemonic, setAccessMnemonic] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Import file state - supports both v1 (needs passcode) and v2 (encrypted backup)
+  // Import file state - only V2 encrypted backups supported
   const [importedFile, setImportedFile] = useState<{
-    version: 1 | 2;
     name: string;
     encryptedMnemonic: string;
-    // V2 only fields
-    address?: string;
-    passcodeHash?: string;
+    address: string;
+    passwordHash: string;
   } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -60,12 +59,19 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     }
   }, [open, step, mnemonic, generateMnemonic]);
 
+  // Reset to initialStep when dialog opens
+  React.useEffect(() => {
+    if (open) {
+      setStep(initialStep);
+    }
+  }, [open, initialStep]);
+
   const resetState = () => {
-    setStep("create-mnemonic");
+    setStep(initialStep);
     setMnemonic("");
     setWalletName("");
-    setPasscode("");
-    setConfirmPasscode("");
+    setPassword("");
+    setConfirmPassword("");
     setAccessMnemonic("");
     setError(null);
     setIsLoading(false);
@@ -74,35 +80,44 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  // File handling functions
+  // File handling functions - only V2 encrypted backups in ZIP format supported
   const processFile = async (file: File) => {
     try {
-      const text = await file.text();
+      // Check if the file is a ZIP file
+      if (!file.name.endsWith(".zip") && file.type !== "application/zip") {
+        setError("Please upload a ZIP file exported from Hippius");
+        return;
+      }
+
+      // Read ZIP file and extract wallet-backup.json
+      const arrayBuffer = await file.arrayBuffer();
+      const zip = await JSZip.loadAsync(arrayBuffer);
+
+      // Look for wallet-backup.json in the ZIP
+      const jsonFile = zip.file("wallet-backup.json");
+      if (!jsonFile) {
+        setError("Invalid wallet backup ZIP - missing wallet-backup.json");
+        return;
+      }
+
+      const text = await jsonFile.async("string");
       const data = JSON.parse(text);
 
-      // Check for version 2 format (encrypted backup with address and passcodeHash)
-      if (data.version === 2 && data.encryptedMnemonic && data.passcodeHash && data.address) {
+      // Only accept version 2 format (encrypted backup with address and passwordHash)
+      if (data.version === 2 && data.encryptedMnemonic && data.passwordHash && data.address) {
         setImportedFile({
-          version: 2,
           name: data.name || "Imported Wallet",
           encryptedMnemonic: data.encryptedMnemonic,
           address: data.address,
-          passcodeHash: data.passcodeHash,
+          passwordHash: data.passwordHash,
         });
         setWalletName(data.name || "Imported Wallet");
         setError(null);
-      } else if (data.encryptedMnemonic) {
-        // Version 1 format - needs passcode to decrypt
-        setImportedFile({
-          version: 1,
-          name: data.name || "Imported Wallet",
-          encryptedMnemonic: data.encryptedMnemonic,
-        });
-        setWalletName(data.name || "Imported Wallet");
-        setError(null);
+      } else if (data.encryptedMnemonic && !data.address) {
+        // Older format without address - not supported
+        setError("This backup file format is outdated. Please export a new backup from your wallet.");
       } else if (data.mnemonic) {
-        // Plain mnemonic backup - treat as version 1 but with plain mnemonic
-        // We'll handle this by encrypting it with the new passcode
+        // Plain mnemonic backup - not supported
         setError("This backup contains an unencrypted mnemonic. Please use 'Add Existing Wallet' and enter the mnemonic manually.");
       } else {
         setError("Invalid wallet backup file");
@@ -156,13 +171,13 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     }
   };
 
-  const handleProceedToPasscode = () => {
+  const handleProceedToPassword = () => {
     if (!walletName.trim()) {
       setError("Please enter a wallet name");
       return;
     }
     setError(null);
-    setStep("create-passcode");
+    setStep("create-password");
   };
 
   // Handle access wallet mnemonic validation
@@ -179,31 +194,31 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     }
 
     setError(null);
-    setStep("access-passcode");
+    setStep("access-password");
   };
 
   const handleCreateWallet = async () => {
     setError(null);
 
-    if (!passcode) {
-      setError("Please enter a passcode");
+    if (!password) {
+      setError("Please enter a password");
       return;
     }
 
-    if (passcode.length < 6) {
-      setError("Passcode must be at least 6 characters");
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
       return;
     }
 
-    if (passcode !== confirmPasscode) {
-      setError("Passcodes do not match");
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
       return;
     }
 
     setIsLoading(true);
 
     try {
-      const success = await createWallet(walletName || "New Wallet", mnemonic, passcode);
+      const success = await createWallet(walletName || "New Wallet", mnemonic, password);
 
       if (success) {
         toast.success("Wallet created successfully!");
@@ -219,22 +234,22 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     }
   };
 
-  // Handle access wallet passcode creation
+  // Handle access wallet password creation
   const handleAccessWalletCreate = async () => {
     setError(null);
 
-    if (!passcode) {
-      setError("Please enter a passcode");
+    if (!password) {
+      setError("Please enter a password");
       return;
     }
 
-    if (passcode.length < 6) {
-      setError("Passcode must be at least 6 characters");
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
       return;
     }
 
-    if (passcode !== confirmPasscode) {
-      setError("Passcodes do not match");
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
       return;
     }
 
@@ -244,7 +259,7 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
       const success = await importWallet(
         walletName || "My Wallet",
         accessMnemonic.trim(),
-        passcode
+        password
       );
 
       if (success) {
@@ -261,7 +276,7 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     }
   };
 
-  // Handle import from file
+  // Handle import from file - V2 encrypted backup only
   const handleImportWallet = async () => {
     setError(null);
 
@@ -270,65 +285,14 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
       return;
     }
 
-    // Version 2: Import encrypted backup directly (no passcode needed)
-    if (importedFile.version === 2 && importedFile.address && importedFile.passcodeHash) {
-      setIsLoading(true);
-      try {
-        const success = await importEncryptedWallet({
-          name: importedFile.name,
-          address: importedFile.address,
-          encryptedMnemonic: importedFile.encryptedMnemonic,
-          passcodeHash: importedFile.passcodeHash,
-        });
-
-        if (success) {
-          toast.success("Wallet imported successfully!");
-          handleClose();
-        } else {
-          setError("Failed to import wallet. This wallet may already exist.");
-        }
-      } catch (err) {
-        console.error("Failed to import wallet:", err);
-        setError(err instanceof Error ? err.message : "Failed to import wallet");
-      } finally {
-        setIsLoading(false);
-      }
-      return;
-    }
-
-    // Version 1: Needs passcode to decrypt
-    if (!passcode) {
-      setError("Please enter a passcode");
-      return;
-    }
-
-    if (passcode.length < 6) {
-      setError("Passcode must be at least 6 characters");
-      return;
-    }
-
     setIsLoading(true);
-
     try {
-      let mnemonicToImport: string;
-
-      try {
-        mnemonicToImport = decryptMnemonic(
-          importedFile.encryptedMnemonic,
-          passcode
-        );
-        if (!isMnemonicValid(mnemonicToImport)) {
-          setError("Incorrect passcode for this wallet backup");
-          setIsLoading(false);
-          return;
-        }
-      } catch {
-        setError("Incorrect passcode for this wallet backup");
-        setIsLoading(false);
-        return;
-      }
-
-      const success = await importWallet(importedFile.name, mnemonicToImport, passcode);
+      const success = await importEncryptedWallet({
+        name: importedFile.name,
+        address: importedFile.address,
+        encryptedMnemonic: importedFile.encryptedMnemonic,
+        passwordHash: importedFile.passwordHash,
+      });
 
       if (success) {
         toast.success("Wallet imported successfully!");
@@ -367,7 +331,7 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
   );
 
   const renderCreateMnemonicStep = () => (
-    <div className="flex flex-col items-center px-6 py-8">
+    <div className="flex flex-col items-center p-4">
       {renderLogo()}
 
       <h2 className="text-2xl font-medium text-grey-10 mb-6">Create New Wallet</h2>
@@ -449,7 +413,7 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
         </div>
       )}
 
-      <CardButton className="w-full h-12 mb-6" onClick={handleProceedToPasscode}>
+      <CardButton className="w-full h-12 mb-6" onClick={handleProceedToPassword}>
         <div className="flex items-center justify-center gap-2 text-lg font-medium">
           Set Mnemonic
           <ArrowRight className="size-5" />
@@ -482,35 +446,35 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     </div>
   );
 
-  const renderCreatePasscodeStep = () => (
-    <div className="flex flex-col items-center px-6 py-8">
+  const renderCreatePasswordStep = () => (
+    <div className="flex flex-col items-center p-4">
       {renderLogo()}
 
-      <h2 className="text-2xl font-medium text-grey-10 mb-2">Set Passcode</h2>
+      <h2 className="text-2xl font-medium text-grey-10 mb-2">Set Password</h2>
       <p className="text-sm text-grey-60 text-center mb-6">
-        Set a passcode to secure your wallet
+        Set a password to secure your wallet
       </p>
 
       <div className="w-full space-y-4 mb-4">
-        <PasscodeInput
-          value={passcode}
+        <PasswordInput
+          value={password}
           onChange={(val) => {
-            setPasscode(val);
+            setPassword(val);
             setError(null);
           }}
-          label="Passcode"
-          placeholder="Enter your passcode"
+          label="Password"
+          placeholder="Enter your password"
           disabled={isLoading}
         />
 
-        <PasscodeInput
-          value={confirmPasscode}
+        <PasswordInput
+          value={confirmPassword}
           onChange={(val) => {
-            setConfirmPasscode(val);
+            setConfirmPassword(val);
             setError(null);
           }}
-          label="Confirm Passcode"
-          placeholder="Reenter passcode"
+          label="Confirm Password"
+          placeholder="Reenter password"
           disabled={isLoading}
           onSubmit={handleCreateWallet}
         />
@@ -521,8 +485,8 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
         <div className="flex items-start gap-2">
           <AlertTriangle className="size-4 text-warning-50 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-grey-30">
-            <p className="font-semibold text-grey-10 mb-1">Remember Your Passcode</p>
-            <p>Your passcode is <strong>not stored</strong> and cannot be recovered. It encrypts your mnemonic and is required to sign transactions.</p>
+            <p className="font-semibold text-grey-10 mb-1">Remember Your Password</p>
+            <p>Your password is <strong>not stored</strong> and cannot be recovered. It encrypts your mnemonic and is required to sign transactions.</p>
           </div>
         </div>
       </div>
@@ -551,7 +515,7 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
 
   // Access Wallet Step - Enter existing mnemonic
   const renderAccessWalletStep = () => (
-    <div className="flex flex-col items-center px-6 py-8">
+    <div className="flex flex-col items-center p-4">
       {renderLogo()}
 
       <h2 className="text-2xl font-medium text-grey-10 mb-2">Add Existing Wallet</h2>
@@ -628,14 +592,14 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     </div>
   );
 
-  // Access Passcode Step - Set passcode for accessed wallet
-  const renderAccessPasscodeStep = () => (
-    <div className="flex flex-col items-center px-6 py-8">
+  // Access Password Step - Set password for accessed wallet
+  const renderAccessPasswordStep = () => (
+    <div className="flex flex-col items-center p-4">
       {renderLogo()}
 
-      <h2 className="text-2xl font-medium text-grey-10 mb-2">Set Passcode</h2>
+      <h2 className="text-2xl font-medium text-grey-10 mb-2">Set Password</h2>
       <p className="text-sm text-grey-60 text-center mb-6">
-        Set a passcode to secure your wallet
+        Set a password to secure your wallet
       </p>
 
       {/* Wallet Name Input */}
@@ -662,25 +626,25 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
       </div>
 
       <div className="w-full space-y-4 mb-4">
-        <PasscodeInput
-          value={passcode}
+        <PasswordInput
+          value={password}
           onChange={(val) => {
-            setPasscode(val);
+            setPassword(val);
             setError(null);
           }}
-          label="Passcode"
-          placeholder="Enter your passcode"
+          label="Password"
+          placeholder="Enter your password"
           disabled={isLoading}
         />
 
-        <PasscodeInput
-          value={confirmPasscode}
+        <PasswordInput
+          value={confirmPassword}
           onChange={(val) => {
-            setConfirmPasscode(val);
+            setConfirmPassword(val);
             setError(null);
           }}
-          label="Confirm Passcode"
-          placeholder="Reenter passcode"
+          label="Confirm Password"
+          placeholder="Reenter password"
           disabled={isLoading}
           onSubmit={handleAccessWalletCreate}
         />
@@ -691,8 +655,8 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
         <div className="flex items-start gap-2">
           <AlertTriangle className="size-4 text-warning-50 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-grey-30">
-            <p className="font-semibold text-grey-10 mb-1">Remember Your Passcode</p>
-            <p>Your passcode is <strong>not stored</strong> and cannot be recovered. It encrypts your mnemonic and is required to sign transactions.</p>
+            <p className="font-semibold text-grey-10 mb-1">Remember Your Password</p>
+            <p>Your password is <strong>not stored</strong> and cannot be recovered. It encrypts your mnemonic and is required to sign transactions.</p>
           </div>
         </div>
       </div>
@@ -719,9 +683,9 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     </div>
   );
 
-  // Import Step - ONLY file drag-drop (no mnemonic tab)
+  // Import Step - V2 encrypted backup only (no password needed)
   const renderImportStep = () => (
-    <div className="flex flex-col items-center px-6 py-8">
+    <div className="flex flex-col items-center p-4">
       {renderLogo()}
 
       <h2 className="text-2xl font-medium text-grey-10 mb-6">Import Wallet</h2>
@@ -747,24 +711,27 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
             }}
             onDragLeave={(e) => {
               e.preventDefault();
-              setIsDragging(false);
+              // Only set isDragging to false if leaving the container completely
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setIsDragging(false);
+              }
             }}
           >
-            <div className="mb-2">
+            <div className="mb-2 pointer-events-none">
               <AbstractIconWrapper className="size-8">
                 <BoxSimple className="size-5 text-primary-50 absolute" />
               </AbstractIconWrapper>
             </div>
-            <div className="text-sm font-medium text-grey-10">
-              Upload a File Here
+            <div className="text-sm font-medium text-grey-10 pointer-events-none">
+              Upload Backup File
             </div>
-            <div className="text-grey-60 text-xs">
-              Drag & drop or click to add file
+            <div className="text-grey-60 text-xs pointer-events-none">
+              Drag & drop or click to select (.zip)
             </div>
             <input
               ref={fileInputRef}
               type="file"
-              accept=".json"
+              accept=".zip"
               className="hidden"
               onChange={handleFileSelect}
             />
@@ -780,9 +747,7 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
                   {importedFile.name}
                 </p>
                 <p className="text-xs text-grey-50">
-                  {importedFile.version === 2 && importedFile.address
-                    ? importedFile.address.slice(0, 8) + "..." + importedFile.address.slice(-8)
-                    : "Wallet backup file"}
+                  {importedFile.address.slice(0, 8) + "..." + importedFile.address.slice(-8)}
                 </p>
               </div>
             </div>
@@ -796,37 +761,18 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
         </div>
       )}
 
-      {/* Info box for V2 imports */}
-      {importedFile?.version === 2 && (
-        <div className="w-full bg-primary-50/5 border border-primary-50/20 rounded-lg p-4 mb-4">
-          <div className="flex items-start gap-3">
-            <Icons.InfoCircle className="size-5 text-primary-50 flex-shrink-0 mt-0.5" />
-            <div className="text-sm text-grey-40">
-              <p>
-                This wallet will be imported with its original encryption.
-                You&apos;ll need your original passcode when signing transactions.
-              </p>
-            </div>
+      {/* Info box */}
+      <div className="w-full bg-primary-50/5 border border-primary-50/20 rounded-lg p-4 mb-4">
+        <div className="flex items-start gap-3">
+          <Icons.InfoCircle className="size-5 text-primary-50 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-grey-40">
+            <p>
+              Your wallet will be imported with its original encryption.
+              You&apos;ll need your original password when signing transactions (sending balance, staking, etc.).
+            </p>
           </div>
         </div>
-      )}
-
-      {/* Passcode Input - only for V1 imports */}
-      {(!importedFile || importedFile.version === 1) && (
-        <div className="w-full mb-6">
-          <PasscodeInput
-            value={passcode}
-            onChange={(val) => {
-              setPasscode(val);
-              setError(null);
-            }}
-            label="Passcode"
-            placeholder="Enter the passcode used when exporting"
-            disabled={isLoading}
-            onSubmit={handleImportWallet}
-          />
-        </div>
-      )}
+      </div>
 
       {/* Error */}
       {error && (
@@ -839,7 +785,7 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
       <CardButton
         className="w-full h-12 mb-6"
         onClick={handleImportWallet}
-        disabled={isLoading || !importedFile || (importedFile.version === 1 && !passcode)}
+        disabled={isLoading || !importedFile}
         loading={isLoading}
       >
         <div className="flex items-center justify-center gap-2 text-lg font-medium">
@@ -848,39 +794,39 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
         </div>
       </CardButton>
 
-      {/* Bottom options */}
-      <div className="flex flex-col items-center gap-2">
-        <button
-          onClick={() => {
-            setStep("create-mnemonic");
-            setPasscode("");
-            setImportedFile(null);
-            setError(null);
-            if (!mnemonic) {
-              const newMnemonic = generateMnemonic();
-              setMnemonic(newMnemonic);
-            }
-          }}
-          className="text-sm text-grey-50 hover:text-grey-30 transition-colors"
-          disabled={isLoading}
-        >
-          Don&apos;t have a wallet?{" "}
-          <span className="font-semibold text-grey-10">Create New Wallet</span>
-        </button>
-        <button
-          onClick={() => {
-            setStep("access-wallet");
-            setPasscode("");
-            setImportedFile(null);
-            setError(null);
-          }}
-          className="text-sm text-grey-50 hover:text-grey-30 transition-colors"
-          disabled={isLoading}
-        >
-          Already have a mnemonic?{" "}
-          <span className="font-semibold text-grey-10">Add Mnemonic</span>
-        </button>
-      </div>
+      {/* Bottom options - only show when not opened directly as import */}
+      {initialStep !== "import" && (
+        <div className="flex flex-col items-center gap-2">
+          <button
+            onClick={() => {
+              setStep("create-mnemonic");
+              setImportedFile(null);
+              setError(null);
+              if (!mnemonic) {
+                const newMnemonic = generateMnemonic();
+                setMnemonic(newMnemonic);
+              }
+            }}
+            className="text-sm text-grey-50 hover:text-grey-30 transition-colors"
+            disabled={isLoading}
+          >
+            Don&apos;t have a wallet?{" "}
+            <span className="font-semibold text-grey-10">Create New Wallet</span>
+          </button>
+          <button
+            onClick={() => {
+              setStep("access-wallet");
+              setImportedFile(null);
+              setError(null);
+            }}
+            className="text-sm text-grey-50 hover:text-grey-30 transition-colors"
+            disabled={isLoading}
+          >
+            Already have a mnemonic?{" "}
+            <span className="font-semibold text-grey-10">Add Mnemonic</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 
@@ -888,12 +834,12 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
     switch (step) {
       case "create-mnemonic":
         return renderCreateMnemonicStep();
-      case "create-passcode":
-        return renderCreatePasscodeStep();
+      case "create-password":
+        return renderCreatePasswordStep();
       case "access-wallet":
         return renderAccessWalletStep();
-      case "access-passcode":
-        return renderAccessPasscodeStep();
+      case "access-password":
+        return renderAccessPasswordStep();
       case "import":
         return renderImportStep();
       default:
@@ -902,14 +848,14 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
   };
 
   const handleBack = () => {
-    if (step === "create-passcode") {
+    if (step === "create-password") {
       setStep("create-mnemonic");
-    } else if (step === "access-passcode") {
+    } else if (step === "access-password") {
       setStep("access-wallet");
     } else if (step === "import" || step === "access-wallet") {
       // Reset and go back to create mnemonic
       setAccessMnemonic("");
-      setPasscode("");
+      setPassword("");
       setWalletName("");
       setImportedFile(null);
       if (!mnemonic) {
@@ -926,8 +872,8 @@ const AddWalletDialog: React.FC<AddWalletDialogProps> = ({ open, onClose }) => {
       <DialogContainer className="md:inset-0 md:m-auto w-[430px] h-fit">
         <Dialog.Title className="sr-only">Add Wallet</Dialog.Title>
 
-        {/* Back Button */}
-        {step !== "create-mnemonic" && (
+        {/* Back Button - hide when opened directly at initialStep (not navigated to) */}
+        {step !== "create-mnemonic" && step !== initialStep && (
           <button
             onClick={handleBack}
             className="absolute left-4 top-4 text-grey-50 hover:text-grey-30 transition-colors z-10"

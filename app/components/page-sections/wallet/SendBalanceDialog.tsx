@@ -135,21 +135,21 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
         amount: planckAmount
       });
 
-      toast.success("Transfer successful!", { duration: 3000 });
-
-      refetchBalance?.();
-
-      onClose();
+      // Reset all state before closing to prevent state updates after unmount
+      setShowConfirmation(false);
       setAddress("");
       setAmount("");
       setErrors({});
-      setShowConfirmation(false);
+      setLoading(false);
+      onClose();
+
+      toast.success("Transfer successful!", { duration: 3000 });
+      refetchBalance?.();
     } catch (e: any) {
       toast.error("Transfer failed", {
         description: e.toString(),
         duration: 5000
       });
-    } finally {
       setLoading(false);
     }
   };

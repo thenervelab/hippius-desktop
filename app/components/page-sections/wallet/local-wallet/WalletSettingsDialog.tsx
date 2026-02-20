@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { AbstractIconWrapper, CardButton, Icons, Input } from "@/components/ui";
 import { useLocalWallet, LocalWallet } from "@/app/contexts/LocalWalletContext";
-import PasscodeInput from "./PasscodeInput";
+import PasswordInput from "./PasswordInput";
 import {
   X,
   Download,
@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { encryptMnemonic } from "@/app/lib/helpers/crypto";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
 
 interface WalletSettingsDialogProps {
   open: boolean;
@@ -41,7 +43,7 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
   const [view, setView] = useState<SettingsView>("main");
   const [selectedWalletId, setSelectedWalletId] = useState<number | null>(null);
   const [newName, setNewName] = useState("");
-  const [passcode, setPasscode] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -51,7 +53,7 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
     setView("main");
     setSelectedWalletId(null);
     setNewName("");
-    setPasscode("");
+    setPassword("");
     setError(null);
     setIsLoading(false);
   };
@@ -100,22 +102,35 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
   };
 
   const handleExport = async () => {
-    if (!selectedWalletId || !passcode) {
-      setError("Please enter your passcode");
+    if (!selectedWalletId || !password) {
+      setError("Please enter your password");
       return;
     }
 
     setIsLoading(true);
     try {
-      const mnemonic = getDecryptedMnemonic(passcode);
+      const mnemonic = getDecryptedMnemonic(password);
       if (!mnemonic) {
-        setError("Incorrect passcode");
+        setError("Incorrect password");
         setIsLoading(false);
         return;
       }
 
-      // Re-encrypt with the same passcode for export
-      const encryptedMnemonic = encryptMnemonic(mnemonic, passcode);
+      // Ask user where to save the file
+      const defaultFileName = `hippius-wallet-${selectedWallet?.name?.replace(/\s+/g, "-") || "backup"}.json`;
+      const filePath = await save({
+        filters: [{ name: "JSON File", extensions: ["json"] }],
+        defaultPath: defaultFileName,
+      });
+
+      if (!filePath) {
+        // User cancelled the dialog
+        setIsLoading(false);
+        return;
+      }
+
+      // Re-encrypt with the same password for export
+      const encryptedMnemonic = encryptMnemonic(mnemonic, password);
 
       const exportData = {
         name: selectedWallet?.name || "Wallet",
@@ -125,18 +140,8 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
         version: "1.0",
       };
 
-      // Create and download file
-      const blob = new Blob([JSON.stringify(exportData, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `hippius-wallet-${selectedWallet?.name?.replace(/\s+/g, "-") || "backup"}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      // Write the file to the selected location
+      await writeTextFile(filePath, JSON.stringify(exportData, null, 2));
 
       toast.success("Wallet exported successfully");
       resetState();
@@ -148,15 +153,15 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
   };
 
   const handleDelete = async () => {
-    if (!selectedWalletId || !passcode) {
-      setError("Please enter your passcode");
+    if (!selectedWalletId || !password) {
+      setError("Please enter your password");
       return;
     }
 
-    // Verify passcode
-    const mnemonic = getDecryptedMnemonic(passcode);
+    // Verify password
+    const mnemonic = getDecryptedMnemonic(password);
     if (!mnemonic) {
-      setError("Incorrect passcode");
+      setError("Incorrect password");
       return;
     }
 
@@ -312,18 +317,18 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
 
       <h2 className="text-xl font-semibold text-grey-10 mb-2">Export Wallet</h2>
       <p className="text-sm text-grey-60 text-center mb-6">
-        Enter your passcode to export {selectedWallet?.name}
+        Enter your password to export {selectedWallet?.name}
       </p>
 
       <div className="w-full mb-6">
-        <PasscodeInput
-          value={passcode}
+        <PasswordInput
+          value={password}
           onChange={(val) => {
-            setPasscode(val);
+            setPassword(val);
             setError(null);
           }}
-          label="Passcode"
-          placeholder="Enter your passcode"
+          label="Password"
+          placeholder="Enter your password"
           disabled={isLoading}
           autoFocus
           onSubmit={handleExport}
@@ -343,7 +348,7 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
           variant="secondary"
           onClick={() => {
             setView("main");
-            setPasscode("");
+            setPassword("");
             setError(null);
           }}
           disabled={isLoading}
@@ -353,7 +358,7 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
         <CardButton
           className="flex-1 h-12"
           onClick={handleExport}
-          disabled={isLoading || !passcode}
+          disabled={isLoading || !password}
           loading={isLoading}
         >
           <div className="flex items-center justify-center gap-2">
@@ -380,14 +385,14 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
       </p>
 
       <div className="w-full mb-6">
-        <PasscodeInput
-          value={passcode}
+        <PasswordInput
+          value={password}
           onChange={(val) => {
-            setPasscode(val);
+            setPassword(val);
             setError(null);
           }}
-          label="Enter passcode to confirm"
-          placeholder="Enter your passcode"
+          label="Enter password to confirm"
+          placeholder="Enter your password"
           disabled={isLoading}
           autoFocus
           onSubmit={handleDelete}
@@ -407,7 +412,7 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
           variant="secondary"
           onClick={() => {
             setView("main");
-            setPasscode("");
+            setPassword("");
             setError(null);
           }}
           disabled={isLoading}
@@ -417,7 +422,7 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
         <CardButton
           className="flex-1 h-12 bg-error-60 hover:bg-error-50"
           onClick={handleDelete}
-          disabled={isLoading || !passcode}
+          disabled={isLoading || !password}
           loading={isLoading}
         >
           <div className="flex items-center justify-center gap-2">
@@ -462,7 +467,7 @@ const WalletSettingsDialog: React.FC<WalletSettingsDialogProps> = ({
           <button
             onClick={() => {
               setView("main");
-              setPasscode("");
+              setPassword("");
               setError(null);
             }}
             className="absolute left-4 top-4 text-grey-50 hover:text-grey-30 transition-colors z-10"

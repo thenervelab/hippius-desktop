@@ -5,7 +5,7 @@ import React, { useState } from "react";
 import { Icons } from "@/components/ui";
 import { ShieldCheck, AlertCircle } from "lucide-react";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
-import { PasscodeInput } from "./local-wallet";
+import { PasswordInput } from "./local-wallet";
 
 interface WithdrawConfirmationDialogProps {
     open: boolean;
@@ -23,38 +23,38 @@ const WithdrawConfirmationDialog: React.FC<WithdrawConfirmationDialogProps> = ({
     amount,
 }) => {
     const { activeWallet, getDecryptedMnemonic, hasWallets } = useLocalWallet();
-    const [passcode, setPasscode] = useState("");
-    const [passcodeError, setPasscodeError] = useState<string | null>(null);
+    const [password, setPassword] = useState("");
+    const [passwordError, setPasswordError] = useState<string | null>(null);
 
-    const showPasscodeInput = hasWallets && activeWallet;
+    const showPasswordInput = hasWallets && activeWallet;
 
     const handleConfirm = () => {
-        if (!showPasscodeInput) {
-            // No local wallet, proceed without passcode (legacy flow)
+        if (!showPasswordInput) {
+            // No local wallet, proceed without password (legacy flow)
             onConfirm("");
             return;
         }
 
-        if (!passcode) {
-            setPasscodeError("Please enter your passcode");
+        if (!password) {
+            setPasswordError("Please enter your password");
             return;
         }
 
-        const mnemonic = getDecryptedMnemonic(passcode);
+        const mnemonic = getDecryptedMnemonic(password);
         if (!mnemonic) {
-            setPasscodeError("Incorrect passcode");
+            setPasswordError("Incorrect password");
             return;
         }
 
-        // Clear passcode after successful decryption
-        setPasscode("");
-        setPasscodeError(null);
+        // Clear password after successful decryption
+        setPassword("");
+        setPasswordError(null);
         onConfirm(mnemonic);
     };
 
     const handleClose = () => {
-        setPasscode("");
-        setPasscodeError(null);
+        setPassword("");
+        setPasswordError(null);
         onClose();
     };
 
@@ -97,7 +97,7 @@ const WithdrawConfirmationDialog: React.FC<WithdrawConfirmationDialogProps> = ({
                                 </span>
                             </div>
 
-                            {showPasscodeInput && activeWallet && (
+                            {showPasswordInput && activeWallet && (
                                 <div className="flex justify-between items-start mt-3 pt-3 border-t border-grey-80">
                                     <span className="text-grey-50 font-semibold">Wallet:</span>
                                     <span className="text-grey-10 text-right">
@@ -107,25 +107,25 @@ const WithdrawConfirmationDialog: React.FC<WithdrawConfirmationDialogProps> = ({
                             )}
                         </div>
 
-                        {/* Passcode Input for Local Wallet */}
-                        {showPasscodeInput && (
+                        {/* Password Input for Local Wallet */}
+                        {showPasswordInput && (
                             <div className="mb-4">
-                                <PasscodeInput
-                                    value={passcode}
+                                <PasswordInput
+                                    value={password}
                                     onChange={(val) => {
-                                        setPasscode(val);
-                                        setPasscodeError(null);
+                                        setPassword(val);
+                                        setPasswordError(null);
                                     }}
-                                    label="Enter passcode to sign transaction"
-                                    placeholder="Enter your passcode"
+                                    label="Enter password to sign transaction"
+                                    placeholder="Enter your password"
                                     disabled={loading}
                                     autoFocus
                                     onSubmit={handleConfirm}
                                 />
-                                {passcodeError && (
+                                {passwordError && (
                                     <div className="flex items-center gap-2 text-error-70 text-sm font-medium mt-2">
                                         <AlertCircle className="size-4" />
-                                        <span>{passcodeError}</span>
+                                        <span>{passwordError}</span>
                                     </div>
                                 )}
                             </div>
@@ -142,7 +142,7 @@ const WithdrawConfirmationDialog: React.FC<WithdrawConfirmationDialogProps> = ({
                         </button>
                         <button
                             onClick={handleConfirm}
-                            disabled={loading || (!!showPasscodeInput && !passcode)}
+                            disabled={loading || (!!showPasswordInput && !password)}
                             className="px-5 py-2.5 bg-primary-50 text-white rounded-lg hover:bg-primary-40 transition disabled:opacity-50 flex items-center gap-2 outline-none focus:outline-none focus-visible:outline-none ring-0 focus:ring-0"
                         >
                             {loading ? (

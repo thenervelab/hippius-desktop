@@ -9,18 +9,18 @@ type Warning = {
 
 interface ImportantWarningsProps {
   inView?: boolean;
-  usePasscode?: boolean;
+  usePassword?: boolean;
   className?: string;
   customWarnings?: Warning[];
 }
 
 const ImportantWarnings: React.FC<ImportantWarningsProps> = ({
   inView = true,
-  usePasscode = false,
+  usePassword = false,
   className = "",
   customWarnings
 }) => {
-  const keyWord = usePasscode ? "passcode" : "key";
+  const keyWord = usePassword ? "password" : "key";
 
   const defaultWarnings = [
     {

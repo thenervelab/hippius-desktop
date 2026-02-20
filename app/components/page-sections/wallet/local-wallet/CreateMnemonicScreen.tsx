@@ -34,7 +34,7 @@ const CreateMnemonicScreen: React.FC = () => {
     // Store mnemonic and wallet name temporarily
     sessionStorage.setItem("temp_mnemonic", mnemonic);
     sessionStorage.setItem("temp_wallet_name", walletName || "My Wallet");
-    setSetupStep("create-passcode");
+    setSetupStep("create-password");
   };
 
   const handleAccessExisting = () => {

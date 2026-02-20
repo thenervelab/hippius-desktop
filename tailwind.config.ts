@@ -50,6 +50,7 @@ export default {
         digital: "digitalFonts",
       },
       colors: {
+        "table-header": "rgb(250 250 252 / <alpha-value>)",
         success: {
           100: "rgb(var(--success-100) / <alpha-value>)",
           90: "rgb(var(--success-90) / <alpha-value>)",

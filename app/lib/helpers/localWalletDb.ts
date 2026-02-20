@@ -14,7 +14,7 @@ export interface LocalWallet {
   name: string;
   address: string;
   encryptedMnemonic: string;
-  passcodeHash: string;
+  passwordHash: string;
   isActive: boolean;
   createdAt: number;
   updatedAt: number;
@@ -24,7 +24,7 @@ export interface CreateWalletParams {
   name: string;
   mnemonic: string;
   encryptedMnemonic: string;
-  passcodeHash: string;
+  passwordHash: string;
 }
 
 /* ── Schema ─────────────────────────────── */
@@ -91,7 +91,7 @@ export async function createLocalWallet(params: CreateWalletParams): Promise<Loc
     db.run(
       `INSERT INTO local_wallets (name, address, encrypted_mnemonic, passcode_hash, is_active, created_at, updated_at) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [params.name, address, params.encryptedMnemonic, params.passcodeHash, isFirst ? 1 : 0, now, now]
+      [params.name, address, params.encryptedMnemonic, params.passwordHash, isFirst ? 1 : 0, now, now]
     );
 
     await saveBytes(db.export());
@@ -111,7 +111,7 @@ export async function createLocalWallet(params: CreateWalletParams): Promise<Loc
       name: row[1] as string,
       address: row[2] as string,
       encryptedMnemonic: row[3] as string,
-      passcodeHash: row[4] as string,
+      passwordHash: row[4] as string,
       isActive: (row[5] as number) === 1,
       createdAt: row[6] as number,
       updatedAt: row[7] as number,
@@ -141,7 +141,7 @@ export async function getAllLocalWallets(): Promise<LocalWallet[]> {
       name: row[1] as string,
       address: row[2] as string,
       encryptedMnemonic: row[3] as string,
-      passcodeHash: row[4] as string,
+      passwordHash: row[4] as string,
       isActive: (row[5] as number) === 1,
       createdAt: row[6] as number,
       updatedAt: row[7] as number,
@@ -173,7 +173,7 @@ export async function getActiveLocalWallet(): Promise<LocalWallet | null> {
       name: row[1] as string,
       address: row[2] as string,
       encryptedMnemonic: row[3] as string,
-      passcodeHash: row[4] as string,
+      passwordHash: row[4] as string,
       isActive: (row[5] as number) === 1,
       createdAt: row[6] as number,
       updatedAt: row[7] as number,
@@ -205,7 +205,7 @@ export async function getLocalWalletById(id: number): Promise<LocalWallet | null
       name: row[1] as string,
       address: row[2] as string,
       encryptedMnemonic: row[3] as string,
-      passcodeHash: row[4] as string,
+      passwordHash: row[4] as string,
       isActive: (row[5] as number) === 1,
       createdAt: row[6] as number,
       updatedAt: row[7] as number,
@@ -237,7 +237,7 @@ export async function getLocalWalletByAddress(address: string): Promise<LocalWal
       name: row[1] as string,
       address: row[2] as string,
       encryptedMnemonic: row[3] as string,
-      passcodeHash: row[4] as string,
+      passwordHash: row[4] as string,
       isActive: (row[5] as number) === 1,
       createdAt: row[6] as number,
       updatedAt: row[7] as number,
@@ -382,7 +382,7 @@ export async function exportWalletData(walletId: number): Promise<{
 export async function importWalletFromBackup(
   data: { name: string; encryptedMnemonic: string },
   mnemonic: string,
-  passcodeHash: string
+  passwordHash: string
 ): Promise<LocalWallet | null> {
   try {
     // The mnemonic is needed to verify and derive the address
@@ -400,15 +400,15 @@ export async function importWalletFromBackup(
       throw new Error("A wallet with this address already exists");
     }
 
-    // Re-encrypt with the new passcode
+    // Re-encrypt with the new password
     const { encryptMnemonic } = await import("./crypto");
-    const newEncryptedMnemonic = encryptMnemonic(mnemonic, passcodeHash);
+    const newEncryptedMnemonic = encryptMnemonic(mnemonic, passwordHash);
 
     const now = Date.now();
     db.run(
       `INSERT INTO local_wallets (name, address, encrypted_mnemonic, passcode_hash, is_active, created_at, updated_at) 
        VALUES (?, ?, ?, ?, 0, ?, ?)`,
-      [data.name, address, newEncryptedMnemonic, passcodeHash, now, now]
+      [data.name, address, newEncryptedMnemonic, passwordHash, now, now]
     );
 
     await saveBytes(db.export());
@@ -422,14 +422,14 @@ export async function importWalletFromBackup(
 
 /**
  * Import wallet from encrypted backup (preserves original encryption)
- * No passcode needed - wallet is imported with its original encryption
+ * No password needed - wallet is imported with its original encryption
  */
 export async function importWalletFromEncryptedBackup(
   data: {
     name: string;
     address: string;
     encryptedMnemonic: string;
-    passcodeHash: string;
+    passwordHash: string;
   }
 ): Promise<LocalWallet | null> {
   try {
@@ -459,7 +459,7 @@ export async function importWalletFromEncryptedBackup(
         data.name,
         data.address,
         data.encryptedMnemonic,
-        data.passcodeHash,
+        data.passwordHash,
         isFirst ? 1 : 0,
         now,
         now,

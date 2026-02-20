@@ -75,29 +75,31 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
           </div>
 
           {/* Message */}
-          <div className="font-medium text-base text-grey-20 max-w-[320px] flex mx-auto w-full text-center mb-4 ">
+          <div className="font-medium text-base text-grey-20 max-w-[320px] flex mx-auto w-full text-center mb-6 ">
             {text}
           </div>
 
-          {/* Buttons */}
-          <CardButton
-            className="bg-error-50 py-4 hover:bg-error-40 transition text-white w-full font-medium"
-            size={"lg"}
-            variant={"error"}
-            onClick={onDelete}
-            appendToStart
-            disabled={disableButton}
-          >
-            {button}
-          </CardButton>
-          <CardButton
-            variant="secondary"
-            className="bg-grey-100 border border-grey-80 text-grey-10 w-full my-4 text-lg font-medium h-12 hover:bg-grey-80 transition"
-            disabled={disableButton}
-            onClick={onBack}
-          >
-            Go Back
-          </CardButton>
+          {/* Buttons - Side by side */}
+          <div className="flex gap-3 w-full pb-4">
+            <CardButton
+              variant="secondary"
+              className="flex-1 h-12"
+              disabled={disableButton}
+              onClick={onBack}
+            >
+              Go Back
+            </CardButton>
+            <CardButton
+              className="flex-1 h-12"
+              size={"lg"}
+              variant={"error"}
+              onClick={onDelete}
+              appendToStart
+              disabled={disableButton}
+            >
+              {button}
+            </CardButton>
+          </div>
         </div>
       </DialogContainer>
     </Dialog.Root>

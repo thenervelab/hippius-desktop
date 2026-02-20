@@ -526,8 +526,10 @@ export function ActiveWalletSelector({ className }: ActiveWalletSelectorProps) {
                         <span className="font-geist text-base font-medium text-grey-60">Active Wallet</span>
                     </div>
                     {activeWallet ? (
-                        <div className="flex items-center gap-2 pl-2 border border-grey-80 rounded p-1.5">
-                            <div className="w-2 h-2 rounded-full bg-success-50 flex-shrink-0" />
+                        <div className="flex items-center gap-2.5 border border-grey-80 rounded-md px-3 py-2 min-w-[160px]">
+                            <div className="flex items-center justify-center w-4 h-4 rounded-full bg-success-70">
+                                <div className="w-3 h-3 rounded-full bg-success-50" />
+                            </div>
                             <div className="flex flex-col items-start">
                                 {/* Wallet Name on top */}
                                 <span className="font-geist text-sm font-medium text-grey-10 leading-tight">

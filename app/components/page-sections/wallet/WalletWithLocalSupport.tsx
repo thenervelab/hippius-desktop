@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
-import { LocalWalletSetup, LocalWalletSelector, AddWalletDialog, WalletSettingsDialog } from "./local-wallet";
+import { LocalWalletSetup, LocalWalletSelector, AddWalletDialog } from "./local-wallet";
 import WalletBalanceWidget from "./WalletBalanceWidget";
 import StakeWidget from "./StakeWidget";
 import BridgeWidget from "./BridgeWidget";
@@ -17,8 +17,9 @@ import AddressBookTable from "./AddressBookTable";
 import useBalanceTransactions from "@/app/lib/hooks/api/useBalanceTransactions";
 import useSystemBalance from "@/app/lib/hooks/api/useSystemBalance";
 import BalanceTrends from "./balance-trends";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { settingsDialogOpenAtom, activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { cn } from "@/app/lib/utils";
 import { useMemo, useEffect } from "react";
 
@@ -35,10 +36,11 @@ export default function WalletWithLocalSupport() {
     refetch: refetchSystemBalance,
   } = useSystemBalance();
   const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
+  const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
+  const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   const [activeTab, setActiveTab] = useState("Transaction History");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showAddWalletDialog, setShowAddWalletDialog] = useState(false);
-  const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [contacts, setContacts] = useState<
     Array<{
       id: number;
@@ -82,7 +84,8 @@ export default function WalletWithLocalSupport() {
   };
 
   const handleOpenSettings = () => {
-    setShowSettingsDialog(true);
+    setActiveSettingsTab("Wallet Settings");
+    setSettingsDialogOpen(true);
   };
 
   const tabs: TabOption[] = [
@@ -206,11 +209,6 @@ export default function WalletWithLocalSupport() {
       <AddWalletDialog
         open={showAddWalletDialog}
         onClose={() => setShowAddWalletDialog(false)}
-      />
-
-      <WalletSettingsDialog
-        open={showSettingsDialog}
-        onClose={() => setShowSettingsDialog(false)}
       />
     </>
   );
