@@ -18,6 +18,7 @@ import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import { MigrationPreview } from "./migration";
 
 
 interface FilesHeaderProps {
@@ -183,6 +184,9 @@ const FilesHeader: FC<FilesHeaderProps> = ({
         )}
 
         <div className="flex items-center gap-3 flex-wrap">
+          {/* Migration Preview Button (for development/testing) */}
+          <MigrationPreview />
+          
           <RefreshButton
             refetching={isRefetching || isFetching}
             onClick={() => refetchUserFiles()}
