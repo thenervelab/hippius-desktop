@@ -12,6 +12,7 @@
 use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, StagedChanges, HCFS_DRIVE, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE};
 use crate::sync_shared::{add_pending_activity, clear_cancel, discard_pending_activity, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
 use crate::utils::account_key::account_key;
+use crate::utils::objectstore_tokens::get_temp_auth_key;
 use crate::DB_POOL;
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
@@ -553,11 +554,38 @@ pub async fn initialize_sync(
         }
     }
 
+    // Get the OAuth bearer token for HCFS authentication
+    // The server verifies this token via its auth API and checks that the
+    // returned substrate_address matches the manifest's user_id.
+    let bearer_token = match get_temp_auth_key(&account_id).await {
+        Ok(Some(token)) if !token.is_empty() => {
+            println!("[Setup] Using OAuth token for HCFS authentication");
+            token
+        }
+        _ => {
+            // Fallback to user_id if no OAuth token available
+            // This maintains backwards compatibility during migration
+            println!("[Setup] No OAuth token found, using user_id as bearer token");
+            user_id.clone()
+        }
+    };
+
+    // Log bearer token for debugging (masked for security)
+    let token_preview = if bearer_token.len() > 20 {
+        format!("{}...{} (len={})", &bearer_token[..8], &bearer_token[bearer_token.len()-4..], bearer_token.len())
+    } else if bearer_token.len() > 8 {
+        format!("{}... (len={})", &bearer_token[..8], bearer_token.len())
+    } else {
+        format!("{} (len={})", bearer_token, bearer_token.len())
+    };
+    println!("[Setup] Bearer token: {}", token_preview);
+    println!("[Setup] User ID: {}", user_id);
+
     // Set HCFS client config (server URL + auth)
     manager.set_config(HcfsClientConfig {
         base_url: server_url,
         api_key: "Arion".to_string(),
-        bearer_token: user_id.clone(),
+        bearer_token,
         accept_invalid_certs: true,
     })?;
 
