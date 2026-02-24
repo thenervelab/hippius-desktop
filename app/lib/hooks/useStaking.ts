@@ -19,6 +19,7 @@ interface StakingInfo {
         amount: string;
         era: number;
         remainingEras: number;
+        remainingBlocks: number;
     }>;
 }
 
@@ -48,143 +49,140 @@ export const useStaking = () => {
     // Fetch staking information
     const fetchStakingInfo = useCallback(async () => {
         if (!api || !isConnected || !polkadotAddress) {
+            console.log('[useStaking] Missing dependencies:', { api: !!api, isConnected, polkadotAddress });
             return;
         }
 
         setStakingInfo(prev => ({ ...prev, isLoading: true, error: null }));
 
+        console.log('[useStaking] ====== FETCHING STAKING INFO ======');
+        console.log('[useStaking] Address being queried:', polkadotAddress);
+
         try {
-            // Get bonded amount - try different approaches
             let bondedAmount = '0';
-
-            // Method 1: Try to get bonded amount directly from staking.bonded
-            try {
-                const bondedQuery = await api.query.staking.bonded(polkadotAddress);
-                if (bondedQuery && !(bondedQuery as any).isEmpty) {
-                    // If bonded, get the ledger for the controller
-                    const controllerAddress = (bondedQuery as any).unwrapOr(null);
-                    if (controllerAddress) {
-                        const ledger = await api.query.staking.ledger(controllerAddress);
-                        if (ledger && (ledger as any).isSome) {
-                            const stakingLedger = (ledger as any).unwrap();
-                            bondedAmount = stakingLedger.active.toString();
-                        }
-                    }
-                }
-            } catch (error) {
-                console.warn('Method 1 failed:', error);
-            }
-
-            // Method 2: If Method 1 failed, try direct ledger query
-            if (bondedAmount === '0') {
-                try {
-                    const ledger = await api.query.staking.ledger(polkadotAddress);
-                    if (ledger && (ledger as any).isSome) {
-                        const stakingLedger = (ledger as any).unwrap();
-                        bondedAmount = stakingLedger.active.toString();
-                    }
-                } catch (error) {
-                    console.warn('Method 2 failed:', error);
-                }
-            }
-
-            // Method 3: Try using derive API
-            if (bondedAmount === '0') {
-                try {
-                    const stakingAccount = await api.derive.staking.account(polkadotAddress);
-                    if (stakingAccount && stakingAccount.stakingLedger) {
-                        bondedAmount = stakingAccount.stakingLedger.active.toString();
-                    }
-                } catch (error) {
-                    console.warn('Method 3 failed:', error);
-                }
-            }
-
-            // Get pending rewards
-            let rewardsAmount = '0';
-            try {
-                const stakingAccount = await api.derive.staking.account(polkadotAddress);
-                if (stakingAccount && stakingAccount.redeemable) {
-                    rewardsAmount = stakingAccount.redeemable.toString();
-                }
-            } catch (error) {
-                console.warn('Could not fetch rewards:', error);
-            }
-
-            // Get unbonding and withdrawable amounts
             let unbondingAmount = '0';
             let withdrawableAmount = '0';
-            const unbondingPeriods: Array<{ amount: string; era: number; remainingEras: number }> = [];
+            const unbondingPeriods: Array<{ amount: string; era: number; remainingEras: number; remainingBlocks: number }> = [];
 
+            // Fetch session progress for era length info
+            let eraLength = 0;
+            let eraProgress = 0;
             try {
-                // Get current era
-                const currentEra = await api.query.staking.currentEra();
-                const currentEraNumber = currentEra && !(currentEra as any).isNone
-                    ? (currentEra as any).unwrap().toNumber()
-                    : 0;
+                const sessionProgress = await api.derive.session.progress();
+                eraLength = sessionProgress?.eraLength?.toNumber?.() ?? 0;
+                eraProgress = sessionProgress?.eraProgress?.toNumber?.() ?? 0;
+            } catch (e) {
+                console.warn('[useStaking] Could not fetch session progress:', e);
+            }
 
-                // Method 1: Try derive API first
-                try {
-                    const stakingAccount = await api.derive.staking.account(polkadotAddress);
-                    if (stakingAccount && stakingAccount.unlocking) {
-                        let totalUnbonding = new BN(0);
-                        let totalWithdrawable = new BN(0);
+            // Primary method: Use derive API (single call for all data)
+            try {
+                const stakingAccount = await api.derive.staking.account(polkadotAddress);
+                console.log('[useStaking] Derive API result:', {
+                    hasStakingLedger: !!stakingAccount?.stakingLedger,
+                    activeStake: stakingAccount?.stakingLedger?.active?.toString(),
+                    redeemable: stakingAccount?.redeemable?.toString(),
+                    unlockingCount: stakingAccount?.unlocking?.length,
+                });
 
-                        stakingAccount.unlocking.forEach((unlock: any) => {
-                            const unlockEra = unlock.era.toNumber();
-                            const amount = unlock.value.toString();
-                            const remainingEras = Math.max(0, unlockEra - currentEraNumber);
+                // Bonded (active stake)
+                if (stakingAccount?.stakingLedger) {
+                    bondedAmount = stakingAccount.stakingLedger.active.toString();
+                }
 
-                            if (remainingEras === 0) {
-                                totalWithdrawable = totalWithdrawable.add(new BN(amount));
-                            } else {
-                                totalUnbonding = totalUnbonding.add(new BN(amount));
-                                unbondingPeriods.push({
-                                    amount,
-                                    era: unlockEra,
-                                    remainingEras
-                                });
-                            }
-                        });
+                // Redeemable = withdrawable (funds that finished unbonding)
+                if (stakingAccount?.redeemable) {
+                    withdrawableAmount = stakingAccount.redeemable.toString();
+                }
 
-                        unbondingAmount = totalUnbonding.toString();
-                        withdrawableAmount = totalWithdrawable.toString();
-                    }
-                } catch (error) {
-                    console.warn('Derive API method failed, trying direct ledger:', error);
+                // Process unlocking entries for unbonding info
+                if (stakingAccount?.unlocking) {
+                    let totalUnbonding = new BN(0);
 
-                    // Method 2: Direct ledger query
-                    const ledger = await api.query.staking.ledger(polkadotAddress);
-                    if (ledger && (ledger as any).isSome) {
-                        const stakingLedger = (ledger as any).unwrap();
-                        if (stakingLedger.unlocking) {
-                            let totalUnbonding = new BN(0);
-                            let totalWithdrawable = new BN(0);
+                    stakingAccount.unlocking.forEach((unlock: any) => {
+                        const amount = unlock.value.toString();
+                        const remainingEras = unlock.remainingEras?.toNumber?.() ?? 0;
+                        const unlockEra = unlock.era?.toNumber?.() ?? 0;
 
-                            stakingLedger.unlocking.forEach((unlock: any) => {
-                                const unlockEra = unlock.era.toNumber();
-                                const amount = unlock.value.toString();
-                                const remainingEras = Math.max(0, unlockEra - currentEraNumber);
-
-                                if (remainingEras === 0) {
-                                    totalWithdrawable = totalWithdrawable.add(new BN(amount));
-                                } else {
-                                    totalUnbonding = totalUnbonding.add(new BN(amount));
-                                    unbondingPeriods.push({
-                                        amount,
-                                        era: unlockEra,
-                                        remainingEras
-                                    });
-                                }
+                        // Only count as unbonding if there are remaining eras
+                        // Items with remainingEras === 0 are already in redeemable
+                        if (remainingEras > 0) {
+                            totalUnbonding = totalUnbonding.add(new BN(amount));
+                            const remainingBlocks = eraLength > 0
+                                ? (remainingEras - 1) * eraLength + (eraLength - eraProgress)
+                                : 0;
+                            unbondingPeriods.push({
+                                amount,
+                                era: unlockEra,
+                                remainingEras,
+                                remainingBlocks: Math.max(0, remainingBlocks),
                             });
+                        }
+                    });
 
-                            unbondingAmount = totalUnbonding.toString();
-                            withdrawableAmount = totalWithdrawable.toString();
+                    unbondingAmount = totalUnbonding.toString();
+                }
+
+                console.log('[useStaking] Parsed values:', {
+                    bondedAmount,
+                    withdrawableAmount,
+                    unbondingAmount,
+                    unbondingPeriods,
+                });
+            } catch (deriveError) {
+                console.warn('[useStaking] Derive API failed, falling back to direct queries:', deriveError);
+
+                // Fallback: Direct ledger queries
+                try {
+                    const bondedQuery = await api.query.staking.bonded(polkadotAddress);
+                    if (bondedQuery && !(bondedQuery as any).isEmpty) {
+                        const controllerAddress = (bondedQuery as any).unwrapOr(null);
+                        if (controllerAddress) {
+                            const ledger = await api.query.staking.ledger(controllerAddress);
+                            if (ledger && (ledger as any).isSome) {
+                                const stakingLedger = (ledger as any).unwrap();
+                                bondedAmount = stakingLedger.active.toString();
+
+                                // Get current era for unbonding calculation
+                                const currentEra = await api.query.staking.currentEra();
+                                const currentEraNumber = currentEra && !(currentEra as any).isNone
+                                    ? (currentEra as any).unwrap().toNumber()
+                                    : 0;
+
+                                if (stakingLedger.unlocking) {
+                                    let totalUnbonding = new BN(0);
+                                    let totalWithdrawable = new BN(0);
+
+                                    stakingLedger.unlocking.forEach((unlock: any) => {
+                                        const unlockEra = unlock.era.toNumber();
+                                        const amount = unlock.value.toString();
+                                        const remainingEras = Math.max(0, unlockEra - currentEraNumber);
+
+                                        if (remainingEras === 0) {
+                                            totalWithdrawable = totalWithdrawable.add(new BN(amount));
+                                        } else {
+                                            totalUnbonding = totalUnbonding.add(new BN(amount));
+                                            const remainingBlocks = eraLength > 0
+                                                ? (remainingEras - 1) * eraLength + (eraLength - eraProgress)
+                                                : 0;
+                                            unbondingPeriods.push({
+                                                amount,
+                                                era: unlockEra,
+                                                remainingEras,
+                                                remainingBlocks: Math.max(0, remainingBlocks),
+                                            });
+                                        }
+                                    });
+
+                                    unbondingAmount = totalUnbonding.toString();
+                                    withdrawableAmount = totalWithdrawable.toString();
+                                }
+                            }
                         }
                     }
+                } catch (error) {
+                    console.warn('[useStaking] Direct ledger query also failed:', error);
                 }
-            } catch (error) {
-                console.warn('Could not fetch unbonding info:', error);
             }
 
             // Get free balance for staking
@@ -195,12 +193,11 @@ export const useStaking = () => {
                     freeBalance = (account as any).data.free.toString();
                 }
             } catch (error) {
-                console.warn('Could not fetch free balance:', error);
+                console.warn('[useStaking] Could not fetch free balance:', error);
             }
 
-            console.log('Staking info fetched:', {
+            console.log('[useStaking] Final staking info:', {
                 bondedAmount,
-                rewardsAmount,
                 unbondingAmount,
                 withdrawableAmount,
                 freeBalance,
@@ -209,7 +206,7 @@ export const useStaking = () => {
 
             setStakingInfo({
                 bonded: bondedAmount,
-                rewards: rewardsAmount,
+                rewards: '0', // Rewards are tracked separately if needed
                 unbonding: unbondingAmount,
                 withdrawable: withdrawableAmount,
                 balance: freeBalance,
@@ -218,7 +215,7 @@ export const useStaking = () => {
                 unbondingPeriods,
             });
         } catch (error) {
-            console.error('Error fetching staking info:', error);
+            console.error('[useStaking] Error fetching staking info:', error);
             setStakingInfo(prev => ({
                 ...prev,
                 isLoading: false,
@@ -246,17 +243,31 @@ export const useStaking = () => {
         const signingPair = await getSigningPair(mnemonic);
         const amountBN = new BN(amount);
 
-        // Check if user already has staked tokens
-        const currentBonded = parseFloat(stakingInfo.bonded);
+        // Check if user has ANY existing staking ledger
+        // A ledger exists if there are bonded, unbonding, OR withdrawable funds
+        // Using bond() when a ledger exists will fail - must use bondExtra()
+        const currentBonded = parseFloat(stakingInfo.bonded) || 0;
+        const currentUnbonding = parseFloat(stakingInfo.unbonding) || 0;
+        const currentWithdrawable = parseFloat(stakingInfo.withdrawable) || 0;
+        const hasExistingLedger = currentBonded > 0 || currentUnbonding > 0 || currentWithdrawable > 0;
+
+        console.log('[useStaking] Bond decision:', {
+            bonded: currentBonded,
+            unbonding: currentUnbonding,
+            withdrawable: currentWithdrawable,
+            hasExistingLedger,
+            willUseBondExtra: hasExistingLedger,
+        });
 
         let tx;
-        if (currentBonded > 0) {
-            // User already has staked tokens, use bondExtra
-            console.log('Using bondExtra for existing staker');
+        if (hasExistingLedger) {
+            // User has a staking ledger (active stake, unbonding, or withdrawable funds)
+            // Must use bondExtra to add more to existing ledger
+            console.log('Using bondExtra for existing staker (ledger exists)');
             tx = api.tx.staking.bondExtra(amountBN);
         } else {
-            // First time staking, use bond
-            console.log('Using bond for new staker');
+            // First time staking, no existing ledger - use bond
+            console.log('Using bond for new staker (no ledger)');
             tx = api.tx.staking.bond(amountBN, 'Staked');
         }
 
@@ -273,7 +284,7 @@ export const useStaking = () => {
                 }
             }).catch(reject);
         });
-    }, [api, polkadotAddress, getSigningPair, fetchStakingInfo, stakingInfo.bonded]);
+    }, [api, polkadotAddress, getSigningPair, fetchStakingInfo, stakingInfo.bonded, stakingInfo.unbonding, stakingInfo.withdrawable]);
 
     // Add more tokens to existing bond
     const bondExtra = useCallback(async (amount: string, mnemonic?: string): Promise<void> => {
@@ -284,9 +295,13 @@ export const useStaking = () => {
         const signingPair = await getSigningPair(mnemonic);
         const amountBN = new BN(amount);
 
-        // Check if user has any bonded tokens
-        const currentBonded = parseFloat(stakingInfo.bonded);
-        if (currentBonded === 0) {
+        // Check if user has any existing staking ledger (bonded, unbonding, or withdrawable)
+        const currentBonded = parseFloat(stakingInfo.bonded) || 0;
+        const currentUnbonding = parseFloat(stakingInfo.unbonding) || 0;
+        const currentWithdrawable = parseFloat(stakingInfo.withdrawable) || 0;
+        const hasExistingLedger = currentBonded > 0 || currentUnbonding > 0 || currentWithdrawable > 0;
+
+        if (!hasExistingLedger) {
             throw new Error('No existing stake found. Use bond instead of bondExtra.');
         }
 
@@ -303,7 +318,7 @@ export const useStaking = () => {
                 }
             }).catch(reject);
         });
-    }, [api, polkadotAddress, getSigningPair, fetchStakingInfo, stakingInfo.bonded]);
+    }, [api, polkadotAddress, getSigningPair, fetchStakingInfo, stakingInfo.bonded, stakingInfo.unbonding, stakingInfo.withdrawable]);
 
     // Unbond tokens (schedule for withdrawal)
     const unbond = useCallback(async (amount: string, mnemonic?: string): Promise<void> => {

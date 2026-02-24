@@ -25,11 +25,11 @@ const TabList: React.FC<TabListProps> = ({
   className,
   width = "min-w-[148px]",
   height = "h-[36px]",
-  gap = "gap-4",
+  gap = "gap-1",
   isJustifyStart = false,
 }) => {
   return (
-    <div className={cn("flex ", gap, className)}>
+    <div className={cn("flex p-1 border border-grey-80 rounded", gap, className)}>
       {tabs.map((tab) => (
         <TabItem
           key={tab.tabName}

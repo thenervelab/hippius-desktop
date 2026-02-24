@@ -12,7 +12,7 @@ const BridgeWidget: FC = () => {
     };
 
     return (
-        <div className="w-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between h-[310px]">
+        <div className="w-full h-full p-4 flex flex-col border border-grey-80 rounded-lg justify-between min-h-[310px]">
             <div className="flex flex-col w-full items-start">
                 <div className="flex gap-4 items-center">
                     <AbstractIconWrapper className="size-8 sm:size-10 text-primary-40">

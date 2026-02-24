@@ -1,0 +1,21 @@
+{
+  "version": 0,
+  "descriptorPath": ".papi/descriptors",
+  "entries": {
+    "bittensor": {
+      "wsUrl": "wss://test.finney.opentensor.ai:443",
+      "metadata": ".papi/metadata/bittensor.scale",
+      "genesis": "0x8f9cf856bf558a14440e75569c9e58594757048d7b3a84b5d25f6bd978263105",
+      "codeHash": "0x9fcbd9415b17acf8a8a1652a4468b2ce842ee3de122b30b50bc4a6e86f9a04e6"
+    },
+    "hippius": {
+      "wsUrl": "wss://hippius-testnet.starkleytech.com",
+      "metadata": ".papi/metadata/hippius.scale",
+      "genesis": "0x35eadc576f10dac447f3f0a41443fa75b545c0b85473e118a30b0fe2d41832c1",
+      "codeHash": "0xaf66fff2567850b7b144d2b3e4fb710dc89797d63a6ec494ca85e26477ea117e"
+    }
+  },
+  "ink": {
+    "bridge": ".papi/contracts/bridge.json"
+  }
+}

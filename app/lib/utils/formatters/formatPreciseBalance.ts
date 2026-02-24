@@ -3,25 +3,8 @@ export const formatPreciseBalance = (amount: number, precision: number = 6): str
         return "0.000000";
     }
 
-    // For amounts less than 1, always show exactly 6 decimals for consistency
-    if (amount < 1) {
-        return amount.toFixed(6);
-    }
-
-    // For amounts between 1 and 1000, show 6 decimals for consistency
-    if (amount < 1000) {
-        return amount.toFixed(6);
-    }
-
-    // For very large amounts, use compact notation
-    if (amount >= 1000000) {
-        return (amount / 1000000).toFixed(2) + "M";
-    }
-
-    if (amount >= 1000) {
-        return (amount / 1000).toFixed(2) + "K";
-    }
-
+    // Always show full precision without abbreviations
+    // This ensures users see the exact available balance
     return amount.toFixed(precision);
 };
 

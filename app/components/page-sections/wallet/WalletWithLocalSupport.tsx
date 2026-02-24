@@ -128,7 +128,7 @@ export default function WalletWithLocalSupport() {
           />
         </div>
 
-        <div className="w-full mt-4 grid grid-cols-3 gap-4">
+        <div className="w-full mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 auto-rows-fr">
           <WalletBalanceWidget
             refetchTransactions={refetch}
             refetchSystemBalance={refetchSystemBalance}

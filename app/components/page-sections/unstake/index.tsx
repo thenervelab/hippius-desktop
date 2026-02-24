@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useCallback } from "react";
 import { BackButton } from "@/components/ui";
 import TokenForm from "../wallet/shared/TokenForm";
 import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
@@ -13,13 +12,13 @@ import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { LocalWalletSelector, AddWalletDialog, LocalWalletSetup } from "../wallet/local-wallet";
 
 const Unstake = () => {
-    const router = useRouter();
-    const { stakingInfo, operations } = useStaking();
-    const { setupStep, activeWallet } = useLocalWallet();
+    const { stakingInfo, operations, refetch } = useStaking();
+    const { setupStep } = useLocalWallet();
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [pendingAmount, setPendingAmount] = useState("");
     const [showAddWalletDialog, setShowAddWalletDialog] = useState(false);
+    const [resetFormTrigger, setResetFormTrigger] = useState(false);
 
     const handleUnstakeSubmit = async (amount?: string) => {
         if (!amount || parseFloat(amount) <= 0) {
@@ -56,8 +55,14 @@ const Unstake = () => {
             toast.dismiss(loadingToast);
             toast.success(`Successfully initiated unstaking of ${pendingAmount} hALPHA! Tokens will be available after the unbonding period.`);
 
-            // Navigate back to wallet
-            router.push("/wallet");
+            // Refetch stake info after unbonding
+            if (typeof refetch === 'function') {
+                await refetch();
+            }
+
+            // Clear form and reset
+            setPendingAmount("");
+            setResetFormTrigger(true);
         } catch (error) {
             console.error("Unstaking failed:", error);
             toast.dismiss(loadingToast);
@@ -72,6 +77,10 @@ const Unstake = () => {
         setShowConfirmation(false);
         setPendingAmount("");
     };
+
+    const handleFormReset = useCallback(() => {
+        setResetFormTrigger(false);
+    }, []);
 
     // Show wallet setup if no wallet is ready
     if (setupStep !== "ready") {
@@ -101,19 +110,24 @@ const Unstake = () => {
                         onAddWallet={() => setShowAddWalletDialog(true)}
                     />
                 </div>
-                <TokenForm
-                    title="Unstake hAlpha"
-                    description="Redeem your staked hAlpha tokens on Hippius"
-                    balanceLabel="Staked Balance"
-                    balanceAmount={stakingInfo.bonded || "0"} // Pass raw planck value
-                    inputPlaceholder="Enter Amount to Withdraw"
-                    buttonText={isLoading ? "Unstaking..." : "Unstake hAlpha"}
-                    onSubmit={handleUnstakeSubmit}
-                    showStakedAmount
-                    stakedAmount={`${stakingInfo.bonded || "0.00"} hAlpha`}
-                    isUnstaking={true}
-                    loading={isLoading}
-                />
+                <div className="flex flex-col items-center">
+                    <TokenForm
+                        title="Unstake hAlpha"
+                        description="Redeem your staked hAlpha tokens on Hippius"
+                        balanceLabel="Staked Balance"
+                        balanceAmount={stakingInfo.bonded || "0"}
+                        inputPlaceholder="Enter Amount to Withdraw"
+                        buttonText={isLoading ? "Unstaking..." : "Unstake hAlpha"}
+                        onSubmit={handleUnstakeSubmit}
+                        showStakedAmount
+                        isUnstaking={true}
+                        loading={isLoading}
+                        isLoadingBalance={stakingInfo.isLoading}
+                        resetForm={resetFormTrigger}
+                        onFormReset={handleFormReset}
+                        refetchOnSuccess={true}
+                    />
+                </div>
             </DashboardTitleWrapper>
 
             {/* Unstake Confirmation Dialog */}
