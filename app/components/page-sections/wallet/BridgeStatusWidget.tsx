@@ -16,6 +16,7 @@ import {
     ArrowUpFromLine,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { useSonner } from "sonner";
 
 import { cn } from "@/app/lib/utils";
 import {
@@ -66,26 +67,26 @@ const statusConfig: Record<
 > = {
     pending: {
         icon: <Clock className="w-3.5 h-3.5" />,
-        color: "text-yellow-400",
-        bg: "bg-yellow-500/20",
+        color: "text-amber-700",
+        bg: "bg-amber-100 border border-amber-200",
         label: "Pending",
     },
     processing: {
         icon: <Loader2 className="w-3.5 h-3.5 animate-spin" />,
-        color: "text-blue-400",
-        bg: "bg-blue-500/20",
+        color: "text-blue-700",
+        bg: "bg-blue-100 border border-blue-200",
         label: "Processing",
     },
     completed: {
         icon: <CheckCircle2 className="w-3.5 h-3.5" />,
-        color: "text-green-400",
-        bg: "bg-green-500/20",
+        color: "text-green-700",
+        bg: "bg-green-100 border border-green-200",
         label: "Completed",
     },
     failed: {
         icon: <XCircle className="w-3.5 h-3.5" />,
-        color: "text-red-400",
-        bg: "bg-red-500/20",
+        color: "text-red-700",
+        bg: "bg-red-100 border border-red-200",
         label: "Failed",
     },
 };
@@ -95,12 +96,12 @@ function ChainStatusBadge({ status }: { status: string }) {
     const lower = status.toLowerCase();
     const color =
         lower === "completed" || lower === "locked" || lower === "burned"
-            ? "text-green-400 bg-green-500/20"
+            ? "text-green-700 bg-green-100 border border-green-200"
             : lower === "failed" || lower === "denied" || lower === "expired"
-                ? "text-red-400 bg-red-500/20"
+                ? "text-red-700 bg-red-100 border border-red-200"
                 : lower === "pending" || lower === "requested"
-                    ? "text-yellow-400 bg-yellow-500/20"
-                    : "text-gray-400 bg-gray-500/20";
+                    ? "text-amber-700 bg-amber-100 border border-amber-200"
+                    : "text-grey-60 bg-grey-90 border border-grey-80";
 
     return (
         <span
@@ -125,8 +126,8 @@ function VoteProgress({
     return (
         <span
             className={cn(
-                "text-[10px] font-mono",
-                voteCount >= threshold ? "text-green-400" : "text-gray-400",
+                "text-[10px] font-mono font-semibold",
+                voteCount >= threshold ? "text-green-700" : "text-grey-50",
             )}
         >
             {voteCount}/{threshold}
@@ -213,12 +214,12 @@ function DepositCard({
             className={cn(
                 "rounded-lg border transition-colors",
                 overallStatus === "completed"
-                    ? "border-green-500/30 bg-green-500/5"
+                    ? "border-green-500/30 bg-green-50"
                     : overallStatus === "failed"
-                        ? "border-red-500/30 bg-red-500/5"
+                        ? "border-red-500/30 bg-red-50"
                         : overallStatus === "processing"
-                            ? "border-blue-500/30 bg-blue-500/5"
-                            : "border-gray-700 bg-white/[0.02]",
+                            ? "border-blue-500/30 bg-blue-50"
+                            : "border-grey-80 bg-grey-95",
             )}
         >
             <button
@@ -229,21 +230,21 @@ function DepositCard({
                     <div className={cn("flex-shrink-0", cfg.color)}>{cfg.icon}</div>
                     <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                            <ArrowDownToLine className="w-3 h-3 text-blue-400 flex-shrink-0" />
-                            <span className="text-sm font-semibold text-white">
+                            <ArrowDownToLine className="w-3 h-3 text-blue-500 flex-shrink-0" />
+                            <span className="text-sm font-semibold text-grey-10">
                                 {deposit.amountDisplay}
                             </span>
-                            <span className="text-xs text-gray-500">{BRIDGE_CONFIG.tokens.alpha.symbol}</span>
-                            <ArrowRight className="w-3 h-3 text-gray-600 flex-shrink-0" />
-                            <span className="text-xs text-gray-400">{BRIDGE_CONFIG.tokens.hAlpha.symbol}</span>
+                            <span className="text-xs text-grey-50">{BRIDGE_CONFIG.tokens.alpha.symbol}</span>
+                            <ArrowRight className="w-3 h-3 text-grey-60 flex-shrink-0" />
+                            <span className="text-xs text-grey-40">{BRIDGE_CONFIG.tokens.hAlpha.symbol}</span>
                         </div>
                         <div className="flex items-center gap-2 mt-0.5">
-                            <span className={cn("px-1.5 py-0.5 text-[10px] font-medium rounded", cfg.bg, cfg.color)}>
+                            <span className={cn("px-1.5 py-0.5 text-[10px] font-semibold rounded", cfg.bg, cfg.color)}>
                                 {displayLabel}
                             </span>
                             <VoteProgress voteCount={deposit.voteCount} threshold={threshold} />
                             {deposit.bittensorSide && (
-                                <span className="text-[10px] text-gray-500">
+                                <span className="text-[10px] text-grey-50">
                                     Bittensor: <ChainStatusBadge status={deposit.bittensorSide.status === 'Requested' ? 'Locked' : deposit.bittensorSide.status} />
                                 </span>
                             )}
@@ -252,11 +253,11 @@ function DepositCard({
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                     {estimatedTime > 0 && (
-                        <span className="text-[10px] text-gray-500 whitespace-nowrap">
+                        <span className="text-[10px] text-grey-50 whitespace-nowrap">
                             <RelativeTime date={estimatedTime} />
                         </span>
                     )}
-                    {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
+                    {isExpanded ? <ChevronUp className="w-4 h-4 text-grey-50" /> : <ChevronDown className="w-4 h-4 text-grey-50" />}
                 </div>
             </button>
 
@@ -268,34 +269,38 @@ function DepositCard({
                         exit={{ height: 0, opacity: 0 }}
                         className="overflow-hidden"
                     >
-                        <div className="px-3 pb-3 pt-0 space-y-2 border-t border-gray-800/50">
+                        <div className="px-3 pb-3 pt-0 space-y-2 border-t border-grey-80">
                             <div className="flex items-center justify-between pt-2">
-                                <span className="text-[10px] text-gray-500 uppercase tracking-wider">Request ID</span>
-                                <span className="text-[10px] text-gray-300 font-mono">{truncId(deposit.requestId)}</span>
+                                <span className="text-[10px] text-grey-50 uppercase tracking-wider">Request ID</span>
+                                <span className="text-[10px] text-grey-30 font-mono">{truncId(deposit.requestId)}</span>
                             </div>
-                            <div className="rounded bg-white/[0.03] p-2 space-y-1">
+                            <div className="rounded bg-grey-90 p-2 space-y-1">
                                 <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-gray-500 font-medium">{BRIDGE_CONFIG.hippius.name}</span>
+                                    <span className="text-[10px] text-grey-50 font-medium">{BRIDGE_CONFIG.hippius.name}</span>
                                     <ChainStatusBadge status={deposit.status} />
                                 </div>
                                 <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-gray-500">Recipient</span>
-                                    <span className="text-[10px] text-gray-300 font-mono">{truncId(deposit.recipient)}</span>
+                                    <span className="text-[10px] text-grey-50">Recipient</span>
+                                    <span className="text-[10px] text-grey-30 font-mono">{truncId(deposit.recipient)}</span>
                                 </div>
                                 <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-gray-500">Block</span>
-                                    <span className="text-[10px] text-gray-300 font-mono">{deposit.createdAtBlock}</span>
+                                    <span className="text-[10px] text-grey-50">Block</span>
+                                    <span className="text-[10px] text-grey-30 font-mono">{deposit.createdAtBlock}</span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] text-grey-50">Votes</span>
+                                    <VoteProgress voteCount={deposit.voteCount} threshold={threshold} />
                                 </div>
                             </div>
                             {deposit.bittensorSide && (
-                                <div className="rounded bg-white/[0.03] p-2 space-y-1">
+                                <div className="rounded bg-grey-90 p-2 space-y-1">
                                     <div className="flex items-center justify-between">
-                                        <span className="text-[10px] text-gray-500 font-medium">{BRIDGE_CONFIG.bittensor.name}</span>
+                                        <span className="text-[10px] text-grey-50 font-medium">{BRIDGE_CONFIG.bittensor.name}</span>
                                         <ChainStatusBadge status={deposit.bittensorSide.status === 'Requested' ? 'Locked' : deposit.bittensorSide.status} />
                                     </div>
                                     <div className="flex items-center justify-between">
-                                        <span className="text-[10px] text-gray-500">Sender</span>
-                                        <span className="text-[10px] text-gray-300 font-mono">{truncId(deposit.bittensorSide.sender)}</span>
+                                        <span className="text-[10px] text-grey-50">Sender</span>
+                                        <span className="text-[10px] text-grey-30 font-mono">{truncId(deposit.bittensorSide.sender)}</span>
                                     </div>
                                 </div>
                             )}
@@ -338,12 +343,12 @@ function WithdrawalCard({
             className={cn(
                 "rounded-lg border transition-colors",
                 overallStatus === "completed"
-                    ? "border-green-500/30 bg-green-500/5"
+                    ? "border-green-500/30 bg-green-50"
                     : overallStatus === "failed"
-                        ? "border-red-500/30 bg-red-500/5"
+                        ? "border-red-500/30 bg-red-50"
                         : overallStatus === "processing"
-                            ? "border-blue-500/30 bg-blue-500/5"
-                            : "border-gray-700 bg-white/[0.02]",
+                            ? "border-blue-500/30 bg-blue-50"
+                            : "border-grey-80 bg-grey-95",
             )}
         >
             <button
@@ -354,18 +359,18 @@ function WithdrawalCard({
                     <div className={cn("flex-shrink-0", cfg.color)}>{cfg.icon}</div>
                     <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                            <ArrowUpFromLine className="w-3 h-3 text-orange-400 flex-shrink-0" />
-                            <span className="text-sm font-semibold text-white">{withdrawal.amountDisplay}</span>
-                            <span className="text-xs text-gray-500">{BRIDGE_CONFIG.tokens.hAlpha.symbol}</span>
-                            <ArrowRight className="w-3 h-3 text-gray-600 flex-shrink-0" />
-                            <span className="text-xs text-gray-400">{BRIDGE_CONFIG.tokens.alpha.symbol}</span>
+                            <ArrowUpFromLine className="w-3 h-3 text-orange-500 flex-shrink-0" />
+                            <span className="text-sm font-semibold text-grey-10">{withdrawal.amountDisplay}</span>
+                            <span className="text-xs text-grey-50">{BRIDGE_CONFIG.tokens.hAlpha.symbol}</span>
+                            <ArrowRight className="w-3 h-3 text-grey-60 flex-shrink-0" />
+                            <span className="text-xs text-grey-40">{BRIDGE_CONFIG.tokens.alpha.symbol}</span>
                         </div>
                         <div className="flex items-center gap-2 mt-0.5">
-                            <span className={cn("px-1.5 py-0.5 text-[10px] font-medium rounded", cfg.bg, cfg.color)}>
+                            <span className={cn("px-1.5 py-0.5 text-[10px] font-semibold rounded", cfg.bg, cfg.color)}>
                                 {displayLabel}
                             </span>
                             <VoteProgress voteCount={btVotes} threshold={threshold} />
-                            <span className="text-[10px] text-gray-500">
+                            <span className="text-[10px] text-grey-50">
                                 Hippius: <ChainStatusBadge status={
                                     withdrawal.status.toLowerCase() === 'requested' && withdrawal.bittensorSide?.status?.toLowerCase() === 'completed'
                                         ? 'Burned'
@@ -377,11 +382,11 @@ function WithdrawalCard({
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                     {estimatedTime > 0 && (
-                        <span className="text-[10px] text-gray-500 whitespace-nowrap">
+                        <span className="text-[10px] text-grey-50 whitespace-nowrap">
                             <RelativeTime date={estimatedTime} />
                         </span>
                     )}
-                    {isExpanded ? <ChevronUp className="w-4 h-4 text-gray-500" /> : <ChevronDown className="w-4 h-4 text-gray-500" />}
+                    {isExpanded ? <ChevronUp className="w-4 h-4 text-grey-50" /> : <ChevronDown className="w-4 h-4 text-grey-50" />}
                 </div>
             </button>
 
@@ -393,14 +398,14 @@ function WithdrawalCard({
                         exit={{ height: 0, opacity: 0 }}
                         className="overflow-hidden"
                     >
-                        <div className="px-3 pb-3 pt-0 space-y-2 border-t border-gray-800/50">
+                        <div className="px-3 pb-3 pt-0 space-y-2 border-t border-grey-80">
                             <div className="flex items-center justify-between pt-2">
-                                <span className="text-[10px] text-gray-500 uppercase tracking-wider">Request ID</span>
-                                <span className="text-[10px] text-gray-300 font-mono">{truncId(withdrawal.requestId)}</span>
+                                <span className="text-[10px] text-grey-50 uppercase tracking-wider">Request ID</span>
+                                <span className="text-[10px] text-grey-30 font-mono">{truncId(withdrawal.requestId)}</span>
                             </div>
-                            <div className="rounded bg-white/[0.03] p-2 space-y-1">
+                            <div className="rounded bg-grey-90 p-2 space-y-1">
                                 <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-gray-500 font-medium">Hippius Chain</span>
+                                    <span className="text-[10px] text-grey-50 font-medium">Hippius Chain</span>
                                     <ChainStatusBadge status={
                                         withdrawal.status.toLowerCase() === 'requested' && withdrawal.bittensorSide?.status?.toLowerCase() === 'completed'
                                             ? 'Burned'
@@ -408,26 +413,26 @@ function WithdrawalCard({
                                     } />
                                 </div>
                                 <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-gray-500">Sender</span>
-                                    <span className="text-[10px] text-gray-300 font-mono">{truncId(withdrawal.sender)}</span>
+                                    <span className="text-[10px] text-grey-50">Sender</span>
+                                    <span className="text-[10px] text-grey-30 font-mono">{truncId(withdrawal.sender)}</span>
                                 </div>
                                 <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-gray-500">Block</span>
-                                    <span className="text-[10px] text-gray-300 font-mono">{withdrawal.createdAtBlock}</span>
+                                    <span className="text-[10px] text-grey-50">Block</span>
+                                    <span className="text-[10px] text-grey-30 font-mono">{withdrawal.createdAtBlock}</span>
                                 </div>
                             </div>
                             {withdrawal.bittensorSide && (
-                                <div className="rounded bg-white/[0.03] p-2 space-y-1">
+                                <div className="rounded bg-grey-90 p-2 space-y-1">
                                     <div className="flex items-center justify-between">
-                                        <span className="text-[10px] text-gray-500 font-medium">Bittensor Chain</span>
+                                        <span className="text-[10px] text-grey-50 font-medium">Bittensor Chain</span>
                                         <ChainStatusBadge status={withdrawal.bittensorSide.status} />
                                     </div>
                                     <div className="flex items-center justify-between">
-                                        <span className="text-[10px] text-gray-500">Amount</span>
-                                        <span className="text-[10px] text-gray-300">{withdrawal.bittensorSide.amountDisplay} {BRIDGE_CONFIG.tokens.alpha.symbol}</span>
+                                        <span className="text-[10px] text-grey-50">Amount</span>
+                                        <span className="text-[10px] text-grey-30">{withdrawal.bittensorSide.amountDisplay} {BRIDGE_CONFIG.tokens.alpha.symbol}</span>
                                     </div>
                                     <div className="flex items-center justify-between">
-                                        <span className="text-[10px] text-gray-500">Votes</span>
+                                        <span className="text-[10px] text-grey-50">Votes</span>
                                         <VoteProgress voteCount={withdrawal.bittensorSide.voteCount} threshold={threshold} />
                                     </div>
                                 </div>
@@ -449,24 +454,24 @@ const wizardStepStateConfig: Record<
     { icon: React.ReactNode; color: string; bg: string }
 > = {
     pending: {
-        icon: <Clock className="w-3.5 h-3.5 text-gray-500" />,
-        color: "text-gray-500",
-        bg: "bg-gray-500/10",
+        icon: <Clock className="w-3.5 h-3.5 text-grey-50" />,
+        color: "text-grey-50",
+        bg: "bg-grey-90",
     },
     active: {
-        icon: <Loader2 className="w-3.5 h-3.5 text-[#9333EA] animate-spin" />,
-        color: "text-[#9333EA]",
-        bg: "bg-[#9333EA]/10",
+        icon: <Loader2 className="w-3.5 h-3.5 text-primary-50 animate-spin" />,
+        color: "text-primary-50",
+        bg: "bg-primary-50/10",
     },
     done: {
-        icon: <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />,
-        color: "text-green-400",
-        bg: "bg-green-500/10",
+        icon: <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />,
+        color: "text-green-500",
+        bg: "bg-green-50",
     },
     error: {
-        icon: <XCircle className="w-3.5 h-3.5 text-red-400" />,
-        color: "text-red-400",
-        bg: "bg-red-500/10",
+        icon: <XCircle className="w-3.5 h-3.5 text-red-500" />,
+        color: "text-red-500",
+        bg: "bg-red-50",
     },
 };
 
@@ -482,26 +487,46 @@ function WizardSteps({
     const allDone = steps.every((s) => s.state === "done" || s.state === "error");
     const hasError = steps.some((s) => s.state === "error");
 
+    // Parse error details to show user-friendly messages
+    const parseErrorDetail = (detail: string): string => {
+        if (!detail) return detail;
+
+        // Check for Payment/Insufficient balance errors
+        if (detail.includes('"type":"Payment"') || detail.includes('"type": "Payment"') || detail.toLowerCase().includes('payment')) {
+            return 'Insufficient TAO balance to pay transaction fees. Please add TAO to your Bittensor wallet.';
+        }
+
+        // Check for proxy-related errors
+        if (detail.toLowerCase().includes('proxy') && detail.toLowerCase().includes('invalid')) {
+            return 'Failed to add escrow proxy. Please ensure you have enough TAO for gas fees.';
+        }
+
+        // Return original if no specific parsing needed
+        return detail;
+    };
+
     return (
         <div
             className={cn(
                 "rounded-lg border p-3 mb-1",
                 hasError
-                    ? "border-red-500/30 bg-red-500/5"
+                    ? "border-red-500/30 bg-red-50"
                     : allDone
-                        ? "border-green-500/30 bg-green-500/5"
-                        : "border-[#9333EA]/30 bg-[#9333EA]/5",
+                        ? "border-green-500/30 bg-green-50"
+                        : "border-primary-50/30 bg-primary-50/5",
             )}
         >
             <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
+                <span className="text-xs font-semibold text-grey-30 uppercase tracking-wider">
                     Bridge Progress
                 </span>
-                {allDone && onDismiss && (
+                {/* Show dismiss button when finished OR when there's an error */}
+                {(allDone || hasError) && onDismiss && (
                     <button
                         onClick={onDismiss}
-                        className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+                        className="flex items-center gap-1 text-[10px] text-grey-50 hover:text-grey-10 transition-colors px-2 py-1 rounded hover:bg-grey-90"
                     >
+                        <XCircle className="w-3 h-3" />
                         Dismiss
                     </button>
                 )}
@@ -509,21 +534,34 @@ function WizardSteps({
             <div className="space-y-1.5">
                 {steps.map((step) => {
                     const wcfg = wizardStepStateConfig[step.state];
+                    const displayDetail = step.state === "error" ? parseErrorDetail(step.detail || '') : step.detail;
+                    const hasDetail = Boolean(displayDetail);
                     return (
-                        <div key={step.step} className="flex items-start gap-2">
-                            <div className={cn("w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5", wcfg.bg)}>
+                        <div key={step.step} className={cn(
+                            "flex gap-2",
+                            hasDetail ? "items-start" : "items-center"
+                        )}>
+                            <div className={cn(
+                                "w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0",
+                                hasDetail && "mt-0.5",
+                                wcfg.bg
+                            )}>
                                 {wcfg.icon}
                             </div>
                             <div className="flex-1 min-w-0">
-                                <p className={cn("text-xs font-medium", wcfg.color)}>
+                                <p className={cn("text-xs font-medium leading-6", wcfg.color)}>
                                     {step.step}. {step.label}
                                 </p>
-                                {step.detail && (
+                                {displayDetail && (
                                     <p
-                                        className={cn("text-[10px] mt-0.5 leading-snug truncate", step.state === "error" ? "text-red-400" : "text-gray-500")}
+                                        className={cn(
+                                            "text-[10px] mt-0.5 leading-snug",
+                                            step.state === "error" ? "text-red-600" : "text-grey-50",
+                                            step.state !== "error" && "truncate"
+                                        )}
                                         title={step.detail}
                                     >
-                                        {step.detail}
+                                        {displayDetail}
                                     </p>
                                 )}
                             </div>
@@ -532,8 +570,13 @@ function WizardSteps({
                 })}
             </div>
             {allDone && !hasError && (
-                <p className="text-[10px] text-gray-500 mt-2 leading-snug">
+                <p className="text-[10px] text-grey-50 mt-2 leading-snug">
                     Transaction submitted. Guardians will process and bridge your tokens — this may take a few minutes.
+                </p>
+            )}
+            {hasError && (
+                <p className="text-[10px] text-red-600 mt-2 leading-snug">
+                    Bridge operation failed. Please check the error above and try again.
                 </p>
             )}
         </div>
@@ -565,14 +608,14 @@ function FilterButton({
             className={cn(
                 "px-2.5 py-1.5 text-xs rounded-lg transition-colors flex items-center gap-1.5",
                 active
-                    ? "bg-blue-500/20 text-blue-400"
-                    : "text-gray-400 hover:text-white hover:bg-white/5",
+                    ? "bg-primary-50/10 text-primary-50"
+                    : "text-grey-50 hover:text-grey-10 hover:bg-grey-90",
             )}
         >
             {icon}
             {label}
             {count > 0 && (
-                <span className={cn("text-[10px] tabular-nums", active ? "text-blue-400" : "text-gray-500")}>
+                <span className={cn("text-[10px] tabular-nums", active ? "text-primary-50" : "text-grey-60")}>
                     {count}
                 </span>
             )}
@@ -597,6 +640,12 @@ export function BridgeStatusWidget({
     const [activeFilter, setActiveFilter] = React.useState<FilterTab>("all");
     const [isRefreshing, setIsRefreshing] = React.useState(false);
 
+    // Track active toasts to offset widget position
+    const { toasts } = useSonner();
+    const activeToastCount = toasts.length;
+    // Each toast is approximately 60px tall + 8px gap
+    const toastOffset = activeToastCount > 0 ? activeToastCount * 68 + 16 : 0;
+
     const cachedData = React.useMemo(
         () => (walletAddress ? getCachedTransactions(walletAddress) : null),
         [walletAddress],
@@ -609,15 +658,18 @@ export function BridgeStatusWidget({
         isError: isExplorerError,
         error: explorerError,
     } = useQuery({
-        queryKey: ["bridge-on-chain-data"],
+        queryKey: ["bridge-on-chain-data", walletAddress],
         queryFn: fetchExplorerData,
-        staleTime: 5000,
-        refetchInterval: 10000,
+        staleTime: 0, // Always consider data stale to ensure fresh fetch on mount
+        gcTime: 0, // Don't cache query results to prevent stale status display
+        refetchInterval: 10000, // Auto-refresh every 10s
         refetchOnWindowFocus: true,
+        refetchOnMount: 'always', // Force refetch when navigating back to page
         retry: 2,
-        placeholderData: cachedData
-            ? { deposits: cachedData.deposits, withdrawals: cachedData.withdrawals, stats: cachedData.stats! }
-            : undefined,
+        // Don't use placeholderData - it causes stale status to show when navigating back
+        // placeholderData: cachedData
+        //     ? { deposits: cachedData.deposits, withdrawals: cachedData.withdrawals, stats: cachedData.stats! }
+        //     : undefined,
     });
 
     const merged = React.useMemo(() => {
@@ -737,29 +789,30 @@ export function BridgeStatusWidget({
                 initial={{ opacity: 0, y: 50, scale: 0.9 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 50, scale: 0.9 }}
-                className={cn("fixed bottom-4 left-4 z-50", className)}
+                className={cn("fixed left-4 z-[100001]", className)}
+                style={{ bottom: `${16 + toastOffset}px`, transition: 'bottom 0.3s ease-in-out' }}
             >
-                <div className="bg-[#0d0d1a] border border-gray-800 rounded-xl shadow-2xl overflow-hidden w-[420px]">
+                <div className="bg-white border border-grey-80 rounded-xl shadow-lg overflow-hidden w-[420px]">
                     {/* Header */}
                     <div
-                        className="flex items-center justify-between px-4 py-3 bg-[#12122a] cursor-pointer"
+                        className="flex items-center justify-between px-4 py-3 bg-grey-95 border-b border-grey-80 cursor-pointer"
                         onClick={() => setIsExpanded(!isExpanded)}
                     >
                         <div className="flex items-center gap-2">
-                            {(totalPending > 0 || (hasActiveWizard && !wizardIsFinished)) ? (
-                                <Loader2 className="w-4 h-4 text-[#9333EA] animate-spin" />
-                            ) : wizardHasError ? (
-                                <XCircle className="w-4 h-4 text-red-400" />
+                            {wizardHasError ? (
+                                <XCircle className="w-4 h-4 text-red-500" />
+                            ) : (totalPending > 0 || (hasActiveWizard && !wizardIsFinished)) ? (
+                                <Loader2 className="w-4 h-4 text-primary-50 animate-spin" />
                             ) : isExplorerError ? (
-                                <AlertTriangle className="w-4 h-4 text-yellow-400" />
+                                <AlertTriangle className="w-4 h-4 text-amber-500" />
                             ) : (
                                 <CheckCircle2 className="w-4 h-4 text-green-500" />
                             )}
-                            <span className="text-sm font-medium text-white">
+                            <span className="text-sm font-medium text-grey-10">
                                 Bridge Transactions
                             </span>
                             {totalPending > 0 && (
-                                <span className="px-2 py-0.5 text-xs bg-[#9333EA]/20 text-[#9333EA] rounded-full">
+                                <span className="px-2 py-0.5 text-xs bg-primary-50/10 text-primary-50 rounded-full">
                                     {totalPending} pending
                                 </span>
                             )}
@@ -771,15 +824,15 @@ export function BridgeStatusWidget({
                                     handleRefresh();
                                 }}
                                 disabled={isRefreshing}
-                                className="p-1 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+                                className="p-1 hover:bg-grey-80 rounded-full transition-colors disabled:opacity-50"
                                 title="Refresh status"
                             >
-                                <RefreshCw className={cn("w-4 h-4 text-gray-400", isRefreshing && "animate-spin")} />
+                                <RefreshCw className={cn("w-4 h-4 text-grey-50", isRefreshing && "animate-spin")} />
                             </button>
                             {isExpanded ? (
-                                <ChevronUp className="w-4 h-4 text-gray-400" />
+                                <ChevronUp className="w-4 h-4 text-grey-50" />
                             ) : (
-                                <ChevronDown className="w-4 h-4 text-gray-400" />
+                                <ChevronDown className="w-4 h-4 text-grey-50" />
                             )}
                         </div>
                     </div>
@@ -824,29 +877,29 @@ export function BridgeStatusWidget({
                                         (activeFilter === 'all' || activeFilter === wizardFilterTab) && (
                                             <WizardSteps
                                                 steps={bridgeSteps}
-                                                onDismiss={wizardIsFinished ? clearBridgeSteps : undefined}
+                                                onDismiss={(wizardIsFinished || wizardHasError) ? clearBridgeSteps : undefined}
                                             />
                                         )}
 
                                     {/* Loading state */}
                                     {isLoadingExplorer && totalCount === 0 && !hasActiveWizard && (
                                         <div className="text-center py-6">
-                                            <Loader2 className="w-5 h-5 text-[#9333EA] animate-spin mx-auto mb-2" />
-                                            <p className="text-xs text-gray-500">Loading bridge data from chain...</p>
+                                            <Loader2 className="w-5 h-5 text-primary-50 animate-spin mx-auto mb-2" />
+                                            <p className="text-xs text-grey-50">Loading bridge data from chain...</p>
                                         </div>
                                     )}
 
                                     {/* Error state */}
                                     {isExplorerError && !isLoadingExplorer && totalCount === 0 && !hasActiveWizard && (
                                         <div className="text-center py-6">
-                                            <AlertTriangle className="w-5 h-5 text-yellow-400 mx-auto mb-2" />
-                                            <p className="text-xs text-gray-400">Could not load bridge data</p>
-                                            <p className="text-[10px] text-gray-600 mt-1">
+                                            <AlertTriangle className="w-5 h-5 text-amber-500 mx-auto mb-2" />
+                                            <p className="text-xs text-grey-40">Could not load bridge data</p>
+                                            <p className="text-[10px] text-grey-60 mt-1">
                                                 {explorerError instanceof Error ? explorerError.message : 'Chain query failed'}
                                             </p>
                                             <button
                                                 onClick={() => refetch()}
-                                                className="mt-2 text-[10px] text-[#9333EA] hover:text-[#a855f7] transition-colors"
+                                                className="mt-2 text-[10px] text-primary-50 hover:text-primary-40 transition-colors"
                                             >
                                                 Retry
                                             </button>
@@ -950,27 +1003,12 @@ export function BridgeStatusWidget({
                                                         : 'No bridge transactions for this wallet';
 
                                             return (
-                                                <div className="text-center py-4 text-gray-500 text-sm">
+                                                <div className="text-center py-4 text-grey-50 text-sm">
                                                     {message}
                                                 </div>
                                             );
                                         })()}
                                 </div>
-
-                                {/* Footer */}
-                                {stats && (
-                                    <div className="px-4 py-2 bg-[#12122a] border-t border-gray-800 flex items-center justify-between">
-                                        <div className="flex items-center gap-3 text-[10px] text-gray-500">
-                                            <span>{BRIDGE_CONFIG.hippius.name}: {stats.hippiusHeight.toLocaleString()}</span>
-                                            <span>{BRIDGE_CONFIG.bittensor.name}: {stats.bittensorHeight.toLocaleString()}</span>
-                                        </div>
-                                        {stats.lastPollAt && (
-                                            <span className="text-[10px] text-gray-600">
-                                                {new Date(stats.lastPollAt).toLocaleTimeString()}
-                                            </span>
-                                        )}
-                                    </div>
-                                )}
                             </motion.div>
                         )}
                     </AnimatePresence>

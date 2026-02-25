@@ -20,6 +20,43 @@ import { BridgeStatusWidget } from "../wallet/BridgeStatusWidget";
 import { BRIDGE_CONFIG } from "@/app/lib/bridge/config";
 import type { BridgeDirection } from "@/app/lib/bridge/types";
 
+// Helper function to parse bridge error messages into user-friendly text
+const parseBridgeError = (error: string | Error | unknown): string => {
+    const errorStr = error instanceof Error ? error.message : String(error || '');
+    
+    // Check for Payment/Insufficient balance errors
+    if (errorStr.includes('"type":"Payment"') || errorStr.includes('"type": "Payment"') || errorStr.toLowerCase().includes('payment')) {
+        return 'Insufficient TAO balance to pay transaction fees. Please add TAO to your Bittensor wallet.';
+    }
+    
+    // Check for proxy-related errors
+    if (errorStr.toLowerCase().includes('proxy') && errorStr.toLowerCase().includes('invalid')) {
+        return 'Failed to add escrow proxy. Please ensure you have enough TAO for gas fees.';
+    }
+    
+    // Check for Invalid transaction errors
+    if (errorStr.includes('"type":"Invalid"') || errorStr.includes('"type": "Invalid"')) {
+        return 'Transaction failed. Please ensure you have enough TAO for gas fees and try again.';
+    }
+    
+    // Check for timeout errors
+    if (errorStr.toLowerCase().includes('timeout')) {
+        return 'Transaction timed out. Please try again.';
+    }
+    
+    // Check for user rejection
+    if (errorStr.toLowerCase().includes('rejected') || errorStr.toLowerCase().includes('cancelled') || errorStr.toLowerCase().includes('canceled')) {
+        return 'Transaction was cancelled by user.';
+    }
+    
+    // Return original if no specific parsing needed, but clean up JSON formatting
+    if (errorStr.startsWith('{') || errorStr.startsWith('[')) {
+        return 'Transaction failed. Please try again or check your wallet balance.';
+    }
+    
+    return errorStr || 'An unknown error occurred';
+};
+
 const StakeBridge = () => {
     const searchParams = useSearchParams();
     const router = useRouter();
@@ -316,11 +353,11 @@ const StakeBridge = () => {
                 // Reset the form after successful submission
                 setResetBridgeFormTrigger(true);
             } else {
-                toast.error(result.error || "Bridge failed");
+                toast.error(parseBridgeError(result.error || "Bridge failed"));
             }
         } catch (error) {
             console.error("Bridge failed:", error);
-            toast.error(error instanceof Error ? error.message : "Bridge failed");
+            toast.error(parseBridgeError(error));
         } finally {
             setIsBridgeLoading(false);
             setPendingBridgeAmount("");

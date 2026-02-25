@@ -4,11 +4,16 @@
  * React hook for bridge operations between Alpha and hAlpha.
  * Provides state management, transaction tracking, and bridge operations.
  *
- * ARCHITECTURE:
- * - API-based polling for transaction history (indexer)
- * - Minimal local tracking for in-flight transactions (until API picks them up)
- * - Balance queries via direct polkadot-api
- * - Uses local wallet keypair for signing (no extension required)
+ * ARCHITECTURE (v3):
+ * - Direct chain data fetching for transaction history (via BridgeStatusWidget)
+ * - Minimal local tracking for in-flight transactions (wizard steps)
+ * - Balance queries via direct polkadot-api (same approach as Explorer)
+ * 
+ * NOTE: Transaction history display is handled by BridgeStatusWidget using
+ * direct chain queries (fetchExplorerData). This hook only provides:
+ * - Bridge operation mutations (bridgeAlphaToHAlpha, bridgeHAlphaToAlpha)
+ * - Balance queries
+ * - Wizard step progress for in-flight operations
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -31,7 +36,6 @@ import {
     getAllTransactions as getLocalAllTransactions,
 } from '@/app/lib/bridge/service';
 import type { BridgeStep, StakedHotkey } from '@/app/lib/bridge/service';
-import { fetchTransactions } from '@/app/lib/bridge/api';
 import type { BridgeDirection, UseBridgeReturn, BridgeResult } from '@/app/lib/bridge/types';
 
 // Utility function to add timeout to async operations
@@ -47,12 +51,8 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 const QUERY_KEYS = {
     balances: 'bridge-balances',
     connectionStatus: 'bridge-connection',
-    transactions: 'bridge-transactions',
     minimumAlpha: 'bridge-minimum-alpha',
 };
-
-// Polling intervals
-const ACTIVE_POLLING_INTERVAL = 15000; // 15 seconds when transactions are in progress
 
 export function useBridge(): UseBridgeReturn {
     const { isAuthenticated } = useWalletAuth();
@@ -92,55 +92,22 @@ export function useBridge(): UseBridgeReturn {
         };
     }, [isAuthenticated]);
 
-    // Fetch transactions from the indexer API with polling
-    const {
-        data: apiTransactions = [],
-        refetch: refetchTransactions,
-    } = useQuery({
-        queryKey: [QUERY_KEYS.transactions, polkadotAddress],
-        queryFn: async () => {
-            if (!polkadotAddress) return [];
-            return fetchTransactions(polkadotAddress);
-        },
-        enabled: !!polkadotAddress && isAuthenticated,
-        staleTime: 10000, // 10 seconds
-        refetchOnWindowFocus: true,
-    });
-
-    // Poll every 15 seconds when there are pending transactions (API or local)
-    const hasPendingTransactions = useMemo(() => {
-        const apiPending = apiTransactions.some(tx =>
-            tx.status === 'pending' || tx.status === 'confirmed' || tx.status === 'processing'
-        );
-        const localPending = getLocalPendingTransactions().length > 0;
-        return apiPending || localPending;
-    }, [apiTransactions]);
-
-    useEffect(() => {
-        if (!hasPendingTransactions || !polkadotAddress || !isAuthenticated) return;
-
-        console.log('[useBridge] Starting 15-second polling for pending transactions');
-        const interval = setInterval(() => {
-            console.log('[useBridge] Polling API for transaction updates...');
-            refetchTransactions();
-        }, ACTIVE_POLLING_INTERVAL);
-
-        return () => {
-            console.log('[useBridge] Stopping polling - no pending transactions');
-            clearInterval(interval);
-        };
-    }, [hasPendingTransactions, polkadotAddress, isAuthenticated, refetchTransactions]);
-
-    // Merge API transactions with local transactions (in-flight + persisted).
+    // Local transactions only - for immediate feedback during bridge operations.
+    // Transaction history display is handled by BridgeStatusWidget via direct chain queries.
     const allTransactions = useMemo(() => {
         const localAll = getLocalAllTransactions();
         const localPending = getLocalPendingTransactions();
-        const apiIds = new Set(apiTransactions.map(tx => tx.id));
-        // Only include local txs not yet in the API
-        const uniqueLocal = localAll.filter(tx => !apiIds.has(tx.id));
-        const uniquePending = localPending.filter(tx => !apiIds.has(tx.id) && !uniqueLocal.some(l => l.id === tx.id));
-        return [...uniquePending, ...uniqueLocal, ...apiTransactions];
-    }, [apiTransactions]);
+        // Deduplicate local transactions
+        const seen = new Set<string>();
+        const result = [];
+        for (const tx of [...localPending, ...localAll]) {
+            if (!seen.has(tx.id)) {
+                seen.add(tx.id);
+                result.push(tx);
+            }
+        }
+        return result;
+    }, []);
 
     // Get pending (in-progress) transactions only
     const pendingTransactions = useMemo(() =>
@@ -250,8 +217,7 @@ export function useBridge(): UseBridgeReturn {
         onSuccess: (result) => {
             console.log('[useBridge] onSuccess: result', result.success, 'bridgeTransactionId:', result.bridgeTransactionId, 'txHash:', result.txHash);
 
-            // Trigger immediate refetch to get the transaction from API
-            refetchTransactions();
+            // Invalidate balances to refresh after successful bridge
             queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.balances] });
         },
         onError: (error) => {
@@ -288,8 +254,7 @@ export function useBridge(): UseBridgeReturn {
         onSuccess: (result) => {
             console.log('[useBridge] onSuccess (hAlpha): result', result.success, 'bridgeTransactionId:', result.bridgeTransactionId);
 
-            // Trigger immediate refetch to get the transaction from API
-            refetchTransactions();
+            // Invalidate balances to refresh after successful bridge
             queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.balances] });
         },
         onError: (error) => {
@@ -311,11 +276,8 @@ export function useBridge(): UseBridgeReturn {
 
     // Refetch all data
     const refetch = useCallback(async () => {
-        await Promise.all([
-            refetchBalances(),
-            refetchTransactions(),
-        ]);
-    }, [refetchBalances, refetchTransactions]);
+        await refetchBalances();
+    }, [refetchBalances]);
 
     // Refetch minimum amount
     const refetchMinimum = useCallback(async () => {
@@ -356,7 +318,7 @@ export function useBridge(): UseBridgeReturn {
         // Active transactions
         pendingTransactions,
 
-        // All transactions (for history display - from API + localStorage)
+        // All transactions (local only - for immediate UI feedback during bridge operations)
         allTransactions,
 
         // Wizard step progress for in-flight bridge operation
@@ -375,22 +337,6 @@ export function useBridge(): UseBridgeReturn {
         refetch,
         refetchMinimum,
     };
-}
-
-/**
- * Hook for tracking a specific bridge transaction using API data
- */
-export function useBridgeTransaction(txId: string | null) {
-    const { allTransactions, pendingTransactions } = useBridge();
-
-    const transaction = useMemo(() => {
-        if (!txId) return null;
-        return allTransactions.find(tx => tx.id === txId) ||
-            pendingTransactions.find(tx => tx.id === txId) ||
-            null;
-    }, [txId, allTransactions, pendingTransactions]);
-
-    return transaction;
 }
 
 export default useBridge;

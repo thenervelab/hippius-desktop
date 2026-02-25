@@ -16,20 +16,14 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
   onClose,
   polkadotAddress,
 }) => {
-  // Format the address for display (truncate in the middle)
-  const formatAddress = (address: string) => {
-    if (!address || address.length < 10) return address;
-    return `${address.substring(0, 20)}...${address.substring(address.length - 3)}`;
-  };
 
-  const displayAddress = polkadotAddress ? formatAddress(polkadotAddress) : "";
   const fullAddress = polkadotAddress || "";
 
   return (
     <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
       <DialogContainer
         className="md:inset-0 md:m-auto
-          md:w-[90vw] md:max-w-[428px] h-fit"
+          md:w-[90vw] md:max-w-[515px] h-fit"
       >
         <Dialog.Title className="sr-only">Receive Balance</Dialog.Title>
         {/* Top accent bar (only mobile) */}
@@ -75,19 +69,19 @@ const ReceiveBalanceDialog: React.FC<ReceiveBalanceDialogProps> = ({
                 />
               </div>
               {/* Address with Copy Button */}
-              <div className="   w-full">
+              <div className="w-full">
                 <CopyText
                   text={fullAddress}
                   title="Copy address"
                   isJustifyCenter
-                  buttonClass="px-1.5 py-1 border border-grey-80 rounded bg-grey-90 "
+                  buttonClass="px-1.5 py-1 rounded"
                   toastMessage="Address copied to clipboard"
-                  className="flex items-center justify-between"
-                  copyIconClassName="size-5 text-grey-10"
-                  checkIconClassName="size-5"
+                  className="flex items-center"
+                  copyIconClassName="size-4 text-grey-10"
+                  checkIconClassName="size-4"
                 >
-                  <div className=" text-grey-10 font-semibold text-base">
-                    {displayAddress}
+                  <div className="text-grey-10 font-semibold text-[13px] break-all text-center">
+                    {fullAddress}
                   </div>
                 </CopyText>
               </div>
