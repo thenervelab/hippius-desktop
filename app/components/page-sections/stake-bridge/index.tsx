@@ -13,7 +13,7 @@ import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
 import BridgeConfirmationDialog from "../wallet/BridgeConfirmationDialog";
 import { BN } from "@polkadot/util";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
-import { LocalWalletSelector, AddWalletDialog, LocalWalletSetup } from "../wallet/local-wallet";
+import { LocalWalletSelector, AddWalletDialog, InitialWalletSetup } from "../wallet/local-wallet";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import { useBridge } from "@/app/lib/hooks/useBridge";
 import { BridgeStatusWidget } from "../wallet/BridgeStatusWidget";
@@ -442,9 +442,9 @@ const StakeBridge = () => {
                 <div className="mb-6">
                     <BackButton text="Go Back" href="/wallet" />
                 </div>
-                <div className="flex items-center justify-center min-h-[400px]">
+                <div className="flex items-center justify-center min-h-[calc(100vh-250px)]">
                     <div className="bg-white rounded-lg shadow-menu border border-grey-80 overflow-hidden">
-                        <LocalWalletSetup />
+                        <InitialWalletSetup />
                     </div>
                 </div>
             </DashboardTitleWrapper>

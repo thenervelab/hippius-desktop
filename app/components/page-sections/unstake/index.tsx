@@ -9,7 +9,7 @@ import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { toPlancks } from "@/app/lib/utils/staking";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
-import { LocalWalletSelector, AddWalletDialog, LocalWalletSetup } from "../wallet/local-wallet";
+import { LocalWalletSelector, AddWalletDialog, InitialWalletSetup } from "../wallet/local-wallet";
 
 const Unstake = () => {
     const { stakingInfo, operations, refetch } = useStaking();
@@ -89,9 +89,9 @@ const Unstake = () => {
                 <div className="mb-6">
                     <BackButton text="Go Back" href="/wallet" />
                 </div>
-                <div className="flex items-center justify-center min-h-[400px]">
+                <div className="flex items-center justify-center min-h-[calc(100vh-250px)]">
                     <div className="bg-white rounded-lg shadow-menu border border-grey-80 overflow-hidden">
-                        <LocalWalletSetup />
+                        <InitialWalletSetup />
                     </div>
                 </div>
             </DashboardTitleWrapper>

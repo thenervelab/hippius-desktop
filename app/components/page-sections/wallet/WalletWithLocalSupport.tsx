@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
-import { LocalWalletSetup, LocalWalletSelector, AddWalletDialog } from "./local-wallet";
+import { InitialWalletSetup, LocalWalletSelector, AddWalletDialog } from "./local-wallet";
 import WalletBalanceWidget from "./WalletBalanceWidget";
 import StakeWidget from "./StakeWidget";
 import BridgeWidget from "./BridgeWidget";
@@ -103,9 +103,9 @@ export default function WalletWithLocalSupport() {
   if (setupStep !== "ready") {
     return (
       <DashboardTitleWrapper mainText="Wallet">
-        <div className="flex items-center justify-center min-h-[500px]">
+        <div className="flex items-center justify-center min-h-[calc(100vh-200px)]">
           <div className="bg-white rounded-lg shadow-menu border border-grey-80 overflow-hidden">
-            <LocalWalletSetup />
+            <InitialWalletSetup />
           </div>
         </div>
       </DashboardTitleWrapper>

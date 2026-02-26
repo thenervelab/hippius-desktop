@@ -1,4 +1,5 @@
 export { default as LocalWalletSetup } from "./LocalWalletSetup";
+export { default as InitialWalletSetup } from "./InitialWalletSetup";
 export { default as WelcomeScreen } from "./WelcomeScreen";
 export { default as CreateMnemonicScreen } from "./CreateMnemonicScreen";
 export { default as CreatePasswordScreen } from "./CreatePasswordScreen";
