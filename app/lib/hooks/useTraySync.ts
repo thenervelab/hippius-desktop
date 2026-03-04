@@ -20,12 +20,9 @@ import {
 } from "@/components/updater/checkForUpdates";
 import { SyncActivityItem } from "./useSyncActivity";
 import {
-  syncPercentAtom,
   lastUpdatedPercentAtom,
   serverSyncStatusAtom,
   isSyncingAtom,
-  completedFilesCountAtom,
-  totalFilesToSyncAtom,
   uploadProgressAtom,
   downloadProgressAtom,
 } from "@/app/lib/store/syncAtoms";
@@ -36,10 +33,6 @@ import {
   overallProgressAtom,
   hasSyncActivityAtom,
 } from "./useSyncProgress";
-import {
-  type SyncFile,
-  type RecentFile,
-} from "../services/syncProgressService";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
@@ -299,7 +292,6 @@ let syncLabelClearTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function useTrayInit() {
   // Use atom to watch for sync percentage changes
-  const currentPercent = useAtomValue(syncPercentAtom);
   const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
     lastUpdatedPercentAtom,
   );
@@ -313,9 +305,6 @@ export function useTrayInit() {
   const uploadProgress = useAtomValue(uploadProgressAtom);
   const downloadProgress = useAtomValue(downloadProgressAtom);
   
-  // Watch completed files count and total for tray display
-  const completedFilesCount = useAtomValue(completedFilesCountAtom);
-  const totalFilesToSync = useAtomValue(totalFilesToSyncAtom);
   
   // Watch new localStorage-based tracking for overall progress
   const overallProgress = useAtomValue(overallProgressAtom);
@@ -963,52 +952,6 @@ async function updateTraySyncLabel(label: string | null) {
 const FILE_ENTRY_PREFIX = "file-entry:";
 const fileEntryItems = new Map<string, MenuItem>();
 
-/* ─ Format file entry text with status indicator ─────────────── */
-function formatFileEntryText(file: SyncFile | RecentFile): string {
-  const name = shortenName(file.fileName);
-  const isDelete = file.action === 'local_delete' || file.action === 'remote_delete';
-  
-  // Check if it's a completed/recent file
-  if ('completedAt' in file) {
-    // RecentFile - show checkmark or X for deletes
-    return isDelete ? `✗ ${name}` : `✓ ${name}`;
-  }
-  
-  // SyncFile - check status
-  const syncFile = file as SyncFile;
-  
-  // Handle error status - show warning icon
-  if (syncFile.status === 'error') {
-    return `⚠ ${name} (failed)`;
-  }
-  
-  // Handle pending status - show clock icon
-  if (syncFile.status === 'pending') {
-    const actionIcon = syncFile.action === 'download' ? '↓' : syncFile.action === 'upload' ? '↑' : '⏸';
-    return `${actionIcon} ${name} (pending)`;
-  }
-  
-  if (syncFile.status === 'completed') {
-    return isDelete ? `✗ ${name}` : `✓ ${name}`;
-  }
-  
-  // Show progress for uploading/downloading/deleting
-  const progress = Math.round(syncFile.progress);
-  let actionIcon = '↑';
-  if (syncFile.action === 'download') {
-    actionIcon = '↓';
-  } else if (isDelete) {
-    actionIcon = '✗';
-  }
-  
-  // For deletes, don't show percentage (they happen instantly)
-  if (isDelete) {
-    return `${actionIcon} ${name}`;
-  }
-  
-  return `${actionIcon} ${name} (${progress}%)`;
-}
-
 /* ─ Update tray menu with file entries ───────────────────────── */
 // NOTE: File entries are no longer shown in tray menu.
 // This function now only clears any stale entries and returns.
@@ -1039,12 +982,6 @@ async function clearTrayFileEntries() {
   }
 }
 
-// Deprecated - kept for reference, no longer used
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function updateTrayFileEntries(_files: (SyncFile | RecentFile)[]) {
-  // File entries are no longer shown in tray menu - just clear any stale entries
-  await clearTrayFileEntries();
-}
 
 // Deprecated: Keep for backwards compatibility but don't use internally
 export async function setTraySyncPercent(percent: number | null) {

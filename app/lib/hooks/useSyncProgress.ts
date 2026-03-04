@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef } from "react";
 import { atom, useAtom, useAtomValue, useSetAtom } from "jotai";
 import {
   startSession,

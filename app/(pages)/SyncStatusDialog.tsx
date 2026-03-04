@@ -71,7 +71,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
     ? Math.round((activeTransfer.bytes / activeTransfer.total) * 100)
     : 0;
   const isUploading = !!uploadProgress;
-  const isDownloading = !!downloadProgress;
 
   // Calculate metrics from syncFiles if not provided
   // Use explicit checks to avoid JS falsy issues (0 is falsy but valid)
