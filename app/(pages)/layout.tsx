@@ -3,7 +3,7 @@ import ResponsiveContent from "./ResponsiveContent";
 import OnBoardingGuard from "./OnBoardingGuard";
 import SyncEventLogger from "./SyncEventLogger";
 import ConflictEventListener from "./ConflictEventListener";
-import UnpinnedFilesHandler from "./UnpinnedFilesHandler";
+import SyncFilesHandler from "./SyncFilesHandler";
 
 export default function ProtectedLayout({
   children,
@@ -15,7 +15,7 @@ export default function ProtectedLayout({
       <SyncEventLogger />
       <ConflictEventListener />
       <div className="flex min-h-screen w-full">
-        <UnpinnedFilesHandler />
+        <SyncFilesHandler />
         <Sidebar />
         <ResponsiveContent>{children}</ResponsiveContent>
       </div>

@@ -8,7 +8,7 @@ import { createPortal } from "react-dom";
  * Renders the sync status dialog in a portal at the bottom-right of the screen.
  * The pinning queue has been removed — only the sync status widget is shown.
  */
-const UnpinnedFilesHandler: React.FC = () => {
+const SyncFilesHandler: React.FC = () => {
   return (
     <>
       {createPortal(
@@ -23,4 +23,4 @@ const UnpinnedFilesHandler: React.FC = () => {
   );
 };
 
-export default UnpinnedFilesHandler;
+export default SyncFilesHandler;
