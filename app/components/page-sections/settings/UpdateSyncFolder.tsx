@@ -51,6 +51,8 @@ const UpdateSyncFolder: React.FC = () => {
     isInitializing,
     mnemonicToBackup,
     clearMnemonicBackup,
+    needsSetup,
+    error,
   } = useHcfsSync();
 
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
@@ -229,11 +231,20 @@ const UpdateSyncFolder: React.FC = () => {
         setSyncEngineStatus("active");
         triggerSyncPathRefresh((prev) => prev + 1);
       } else {
-        toast.error("Failed to start syncing. Please check your setup.");
+        // If needsSetup is true, the user needs to complete setup first
+        if (needsSetup) {
+          toast.error("Please complete sync setup first by selecting a folder.");
+        } else if (error) {
+          // Show the actual error message
+          toast.error(`Failed to start syncing: ${error}`);
+        } else {
+          toast.error("Failed to start syncing. Please check your setup.");
+        }
       }
     } catch (err) {
       console.error("Failed to start sync:", err);
-      toast.error("Failed to start syncing");
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      toast.error(`Failed to start syncing: ${errorMsg}`);
     } finally {
       setIsStarting(false);
     }

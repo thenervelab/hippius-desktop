@@ -16,6 +16,7 @@ dependencies = [
  "flate2",
  "futures",
  "hcfs-client",
+ "hcfs-shared",
  "hex",
  "hostname",
  "lazy_static",
@@ -50,6 +51,8 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
  "walkdir",
  "which",
@@ -4662,8 +4665,8 @@ dependencies = [
 
 [[package]]
 name = "hcfs-client"
-version = "0.1.1"
-source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=4325551#4325551ea055bd16af10318a258d7fe8582c4039"
+version = "0.1.8"
+source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=b7f7146c28eced016cc39a1a631fee29369e77a7#b7f7146c28eced016cc39a1a631fee29369e77a7"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -4689,8 +4692,8 @@ dependencies = [
 
 [[package]]
 name = "hcfs-shared"
-version = "0.1.1"
-source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=4325551#4325551ea055bd16af10318a258d7fe8582c4039"
+version = "0.1.8"
+source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=b7f7146c28eced016cc39a1a631fee29369e77a7#b7f7146c28eced016cc39a1a631fee29369e77a7"
 dependencies = [
  "ed25519-dalek",
  "hex",

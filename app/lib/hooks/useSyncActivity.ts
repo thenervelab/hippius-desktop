@@ -18,12 +18,13 @@ export type SyncActivityRow = {
   fileName: string;
   rawName: string;
   scope: string;
-  status: "uploading" | "uploaded" | "deleted";
+  status: "uploading" | "uploaded" | "deleted" | "failed";
   fileType: string;
   timestamp?: number;
   rawPath?: string;
   size: number;
   deleted: boolean;
+  error?: string; // Error message for failed files
 };
 
 function hashId(item: SyncActivityItem): string {

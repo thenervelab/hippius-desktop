@@ -12,7 +12,6 @@ import {
   getFileTypeFromExtension,
 } from "@/lib/utils";
 import InfoTooltip from "@/components/ui/info-tooltip";
-import FileSyncTypeBadge from "../components/page-sections/files/files-table/FileSyncTypeBadge";
 import { SyncActivityRow } from "@/lib/hooks/useSyncActivity";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
@@ -21,6 +20,12 @@ const COLLAPSED_HEIGHT = 64;
 const EXPANDED_HEIGHT = 460;
 const BODY_MAX_HEIGHT = EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
 
+interface ProgressPayload {
+  bytes: number;
+  total: number;
+  path?: string;
+}
+
 interface SyncStatusDialogProps {
   open: boolean;
   syncFiles: SyncActivityRow[];
@@ -28,7 +33,17 @@ interface SyncStatusDialogProps {
   syncPercent?: number | null;
   totalFiles?: number;
   syncedFiles?: number;
+  filesFailed?: number;
   isInProgress?: boolean;
+  uploadProgress?: ProgressPayload | null;
+  downloadProgress?: ProgressPayload | null;
+  // Sync action counts to determine what type of sync is happening
+  actionCounts?: {
+    uploads: number;
+    downloads: number;
+    localDeletes: number;
+    remoteDeletes: number;
+  };
 }
 
 const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
@@ -38,25 +53,49 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   syncPercent: propSyncPercent = null,
   totalFiles: propTotalFiles = 0,
   syncedFiles: propSyncedFiles = 0,
+  filesFailed: propFilesFailed = 0,
   isInProgress = false,
+  uploadProgress = null,
+  downloadProgress = null,
+  actionCounts,
 }) => {
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // Extract current file being transferred from progress
+  const activeTransfer = uploadProgress || downloadProgress;
+  const activeFileName = activeTransfer?.path 
+    ? activeTransfer.path.split('/').pop() 
+    : null;
+  const transferPercent = activeTransfer && activeTransfer.total > 0
+    ? Math.round((activeTransfer.bytes / activeTransfer.total) * 100)
+    : 0;
+  const isUploading = !!uploadProgress;
+  const isDownloading = !!downloadProgress;
+
   // Calculate metrics from syncFiles if not provided
+  // Use explicit checks to avoid JS falsy issues (0 is falsy but valid)
+  const showIndeterminateProgress = isInProgress && (propSyncPercent === null || propSyncPercent === undefined);
+  
   const calculatedMetrics = {
-    totalFiles: propTotalFiles || syncFiles?.length || 0,
-    syncedFiles:
-      propSyncedFiles ||
-      syncFiles?.filter((f) => f.status === "uploaded").length ||
-      0,
-    percentage: propSyncPercent !== null ? Math.round(propSyncPercent) : 0,
+    totalFiles: propTotalFiles !== undefined && propTotalFiles > 0 
+      ? propTotalFiles 
+      : syncFiles?.length || 0,
+    syncedFiles: propSyncedFiles !== undefined && propSyncedFiles >= 0 && propTotalFiles !== undefined && propTotalFiles > 0
+      ? propSyncedFiles
+      : syncFiles?.filter((f) => f.status === "uploaded").length || 0,
+    // For percentage: when in progress but no percent provided, use null to show indeterminate state
+    percentage: showIndeterminateProgress 
+      ? null 
+      : (propSyncPercent !== null && propSyncPercent !== undefined 
+        ? Math.round(propSyncPercent) 
+        : transferPercent),
     isCompleted:
-      (propSyncPercent !== null && propSyncPercent >= 100) ||
+      (propSyncPercent !== null && propSyncPercent !== undefined && propSyncPercent >= 100) ||
       (!syncFiles?.some((f) => f.status === "uploading") &&
-        syncFiles?.length > 0),
+        syncFiles?.length > 0 && !activeTransfer),
     hasActiveSync:
-      isInProgress || syncFiles?.some((f) => f.status === "uploading") || false,
+      isInProgress || syncFiles?.some((f) => f.status === "uploading") || !!activeTransfer,
   };
 
   useEffect(() => {
@@ -181,7 +220,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     isCompleted ? "stroke-[#4ade80]" : "stroke-[#4171e0]"
                   )}
                   strokeLinecap="round"
-                  strokeDasharray={`${percentage * 1.38} 138`}
+                  strokeDasharray={percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
                 />
               </svg>
 
@@ -224,7 +263,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             )}
           >
             <span className="text-sm text-grey-40 mr-2">
-              {isCompleted ? "Complete" : `${percentage}%`}
+              {isCompleted 
+                ? "Complete" 
+                : percentage !== null 
+                  ? `${percentage}%`
+                  : "Syncing..."
+              }
             </span>
 
             <div className="transition-transform duration-300 ease-in-out">
@@ -272,31 +316,132 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       >
         <div className="bg-grey-100 border border-grey-80 rounded-b-[8px] w-[378px] overflow-hidden">
           {/* Status banner */}
-          <div className="flex w-full mt-4 ml-4">
+          <div className="flex w-full mt-4 ml-4 gap-2">
             <div
               className={cn(
                 "w-fit px-2 py-0.5 border rounded",
-                isCompleted
-                  ? "bg-success-100/40 border-success-80"
-                  : "bg-primary-100/40 border-primary-80"
+                propFilesFailed > 0
+                  ? "bg-error-100/40 border-error-80"
+                  : isCompleted
+                    ? "bg-success-100/40 border-success-80"
+                    : "bg-primary-100/40 border-primary-80"
               )}
             >
               <div
                 className={cn(
                   "text-sm",
-                  isCompleted ? "text-success-40" : "text-primary-40"
+                  propFilesFailed > 0 
+                    ? "text-error-40"
+                    : isCompleted 
+                      ? "text-success-40" 
+                      : "text-primary-40"
                 )}
               >
-                {syncedFiles} of {totalFiles} files synced
+                {(() => {
+                  // Calculate actual total including failed files
+                  const actualTotal = propFilesFailed > 0 
+                    ? Math.max(totalFiles, syncedFiles + propFilesFailed) 
+                    : totalFiles;
+                  
+                  // Determine what type of sync is happening based on action counts
+                  const hasUploads = actionCounts?.uploads && actionCounts.uploads > 0;
+                  const hasDownloads = actionCounts?.downloads && actionCounts.downloads > 0;
+                  const hasLocalDeletes = actionCounts?.localDeletes && actionCounts.localDeletes > 0;
+                  const hasRemoteDeletes = actionCounts?.remoteDeletes && actionCounts.remoteDeletes > 0;
+                  
+                  // If there are failed files, show appropriate failure message
+                  if (propFilesFailed > 0 && !isInProgress) {
+                    if (hasDownloads && !hasUploads) {
+                      return `${propFilesFailed} of ${actualTotal} files failed to download`;
+                    }
+                    if (hasUploads && !hasDownloads) {
+                      return `${propFilesFailed} of ${actualTotal} files failed to upload`;
+                    }
+                    return `${propFilesFailed} of ${actualTotal} files failed to sync`;
+                  }
+                  
+                  // When completed successfully, show "synced" regardless of action type
+                  if (isCompleted) {
+                    if (actualTotal > 0) {
+                      if (hasDownloads && !hasUploads) {
+                        return `${syncedFiles} of ${actualTotal} files downloaded`;
+                      }
+                      return `${syncedFiles} of ${actualTotal} files synced`;
+                    } else if (syncedFiles > 0) {
+                      return `${syncedFiles} files synced`;
+                    }
+                    return "Sync complete";
+                  }
+                  
+                  // During sync, show appropriate message based on action type
+                  if (isInProgress || actualTotal > 0) {
+                    // Only downloads (no uploads) - show download message
+                    if (hasDownloads && !hasUploads) {
+                      return `${syncedFiles} of ${actualTotal} files downloaded`;
+                    }
+                    // Only uploads (no downloads) - show upload/sync message
+                    if (hasUploads && !hasDownloads) {
+                      return `${syncedFiles} of ${actualTotal} files synced`;
+                    }
+                    // Both uploads and downloads - show generic sync message
+                    if (hasUploads && hasDownloads) {
+                      return `${syncedFiles} of ${actualTotal} files synced`;
+                    }
+                    // Only deletes - show delete message
+                    if ((hasLocalDeletes || hasRemoteDeletes) && !hasUploads && !hasDownloads) {
+                      const deleteCount = (actionCounts?.localDeletes || 0) + (actionCounts?.remoteDeletes || 0);
+                      return `Deleting ${deleteCount} files`;
+                    }
+                    // Fallback to generic sync message
+                    return `${syncedFiles} of ${actualTotal} files synced`;
+                  }
+                  
+                  if (syncedFiles > 0) {
+                    return `${syncedFiles} files synced`;
+                  }
+                  return "Starting sync...";
+                })()}
               </div>
             </div>
           </div>
 
+          {/* Active transfer progress */}
+          {activeTransfer && (
+            <div className="px-4 pt-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Icons.Refresh className="w-4 h-4 text-primary-50 animate-spin" />
+                  <span className="text-sm text-grey-30">
+                    {isUploading ? "Uploading" : "Downloading"}
+                    {activeFileName && `: ${activeFileName.length > 20 ? activeFileName.slice(0, 10) + "..." + activeFileName.slice(-7) : activeFileName}`}
+                  </span>
+                </div>
+                <span className="text-sm text-grey-40">{transferPercent}%</span>
+              </div>
+              <div className="w-full h-2 bg-grey-80 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-primary-50 rounded-full transition-all duration-300"
+                  style={{ width: `${transferPercent}%` }}
+                />
+              </div>
+              <div className="text-xs text-grey-50 mt-1">
+                {formatBytes(activeTransfer.bytes)} / {formatBytes(activeTransfer.total)}
+              </div>
+            </div>
+          )}
+
           {/* File list */}
-          <div ref={fileListRef} className="max-h-[320px] overflow-y-auto p-4">
+          <div 
+            ref={fileListRef} 
+            className={cn(
+              "overflow-y-auto p-4",
+              activeTransfer ? "max-h-[220px]" : "max-h-[320px]"
+            )}
+          >
             {syncFiles.map((file, index) => {
               const isFileCompleted = file.status === "uploaded";
               const isUploading = file.status === "uploading";
+              const isFailed = file.status === "failed";
               const { fileFormat } = getFilePartsFromFileName(file.fileName);
               const fileType = getFileTypeFromExtension(fileFormat || null);
               const { icon: Icon, color } = getFileIcon(
@@ -317,19 +462,14 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       <div className="flex items-center gap-1 justify-center">
                         <div className="text-sm font-medium text-grey-10 truncate flex items-center gap-2">
                           <span>
-                            {file.fileName.length > 14
+                            {file.fileName.length > 25
                               ? `${file.fileName.slice(
                                 0,
-                                5
-                              )}...${file.fileName.slice(-7)}`
+                                18
+                              )}...${file.fileName.slice(-5)}`
                               : file.fileName}
                           </span>
                         </div>
-                        {file.fileType && (
-                          <FileSyncTypeBadge
-                            type={file.fileType as "public" | "private"}
-                          />
-                        )}
                       </div>
                       {file.size > 0 && (
                         <div className="text-xs text-grey-70 mt-1">
@@ -355,6 +495,13 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                           )}
                         >
                           {file.deleted ? "Deleted" : "Synced"}
+                        </span>
+                      </>
+                    ) : isFailed ? (
+                      <>
+                        <Icons.InfoCircle className="w-5 h-5 text-error-50" />
+                        <span className="text-sm ml-1 text-error-50">
+                          Failed
                         </span>
                       </>
                     ) : isUploading ? (

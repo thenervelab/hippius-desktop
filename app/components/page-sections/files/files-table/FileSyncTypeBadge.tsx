@@ -18,7 +18,7 @@ interface Props extends VariantProps<typeof badgeVatiants> {
 }
 const FileSyncTypeBadge: React.FC<Props> = ({ type, className }) => {
     return (
-        <div className={cn(badgeVatiants({ type }), className)}>
+        <div className={cn("bg-primary-90", className)}>
             <span className="text-xs">{type ? type.charAt(0).toUpperCase() + type.slice(1) : ''}</span>
         </div>
     );

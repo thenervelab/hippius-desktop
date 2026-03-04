@@ -102,9 +102,13 @@ pub fn commit_pending_activity() {
         pending.drain(..).collect()
     };
     if !items.is_empty() {
+        println!("[Sync] Committing {} activity items to recent files", items.len());
         let mut state = HCFS_SYNC_STATE
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for item in &items {
+            println!("[Sync] -> {} ({})", item.file_name, item.action);
+        }
         for item in items {
             state.add_activity(item);
         }
@@ -117,6 +121,9 @@ pub fn discard_pending_activity() {
     let mut pending = PENDING_ACTIVITY
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !pending.is_empty() {
+        println!("[Sync] Discarding {} pending activity items (sync failed or no real transfers)", pending.len());
+    }
     pending.clear();
 }
 
@@ -140,6 +147,15 @@ pub fn get_sync_activity(limit: Option<usize>) -> Vec<SyncActivityItem> {
         .take(limit.unwrap_or(50))
         .cloned()
         .collect()
+}
+
+/// Poll the server for real-time sync progress.
+/// Returns the server-side sync status with file counts and progress percentage.
+#[tauri::command]
+pub async fn get_server_sync_status() -> Result<crate::hcfs_drive::ServerSyncStatus, String> {
+    let guard = crate::hcfs_drive::HCFS_DRIVE.lock().await;
+    let manager = guard.as_ref().ok_or("Sync not initialized")?;
+    manager.get_server_sync_status().await
 }
 
 #[tauri::command]

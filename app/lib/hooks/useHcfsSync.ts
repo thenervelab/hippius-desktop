@@ -9,6 +9,8 @@ import {
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
 import { getPrivateSyncPath } from "../utils/syncPathUtils";
+import { getDefaultStore } from "jotai";
+import { isSyncConfiguredAtom } from "../global-atoms/unpinAtoms";
 
 export interface UseHcfsSyncResult {
   tryInitializeSync: (accountId: string, mnemonic?: string) => Promise<boolean>;
@@ -161,15 +163,6 @@ export async function tryAutoInitSync(
   mnemonic?: string
 ): Promise<boolean> {
   try {
-    // If the user explicitly stopped sync, don't auto-start on login / session restore
-    if (
-      typeof window !== "undefined" &&
-      localStorage.getItem("hippius_sync_stopped") === "true"
-    ) {
-      console.log("[AutoSync] Sync was explicitly stopped by user, skipping auto-init");
-      return false;
-    }
-
     // Check if sync path has been configured by the user
     let syncPath = "";
     try {
@@ -187,6 +180,19 @@ export async function tryAutoInitSync(
     const config = await getHcfsConfig(accountId);
     if (!config.has_password) {
       console.log("[AutoSync] No HCFS config, skipping auto-init (user will be prompted when setting sync folder)");
+      return false;
+    }
+    
+    // HCFS config exists - mark sync as configured so SyncStoppedAlert can show when needed
+    const store = getDefaultStore();
+    store.set(isSyncConfiguredAtom, true);
+
+    // If the user explicitly stopped sync, don't auto-start on login / session restore
+    if (
+      typeof window !== "undefined" &&
+      localStorage.getItem("hippius_sync_stopped") === "true"
+    ) {
+      console.log("[AutoSync] Sync was explicitly stopped by user, skipping auto-init (but sync is configured)");
       return false;
     }
 

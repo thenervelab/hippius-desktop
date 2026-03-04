@@ -21,6 +21,7 @@ import {
   clearApiAuth,
   getApiAuth,
 } from "./helpers/sessionStore";
+import { clearAllData as clearSyncProgressData } from "./services/syncProgressService";
 
 import { useRouter } from "next/navigation";
 
@@ -155,6 +156,10 @@ export function WalletAuthProvider({
           localStorage.removeItem("hippius_token");
           localStorage.removeItem("hippius_token_expiry");
         }
+
+        // Clear sync progress state to prevent stale data on next login
+        console.log("[WalletAuth] Clearing sync progress state...");
+        clearSyncProgressData();
       } catch (error) {
         console.error("Failed to cleanup sync on logout:", error);
       }

@@ -12,6 +12,7 @@
 use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, StagedChanges, HCFS_DRIVE, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE};
 use crate::sync_shared::{add_pending_activity, clear_cancel, discard_pending_activity, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
 use crate::utils::account_key::account_key;
+use crate::utils::objectstore_tokens::get_temp_auth_key;
 use crate::DB_POOL;
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
@@ -451,15 +452,124 @@ pub async fn initialize_sync(
     run_migration(&sync_path, &acct_dir, &folder_dir, &master_path)?;
 
     // 5. Create HcfsDriveManager with per-folder config directory
-    let mut manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir);
+    let mut manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
 
-    // 6. Init or unlock the drive
+    // 6. Retrieve the auth token BEFORE unlock so we can set account_ss58 first
+    // This is critical: unlock() uses account_ss58 to determine the user_id.
+    // If account_ss58 is not set before unlock(), the user_id will be the
+    // hex-encoded ed25519 public key instead of the SS58 substrate address,
+    // causing 403 errors on the server (token's substrate_address won't match).
+    let bearer_token = get_temp_auth_key(&account_id)
+        .await
+        .map_err(|e| format!("Failed to get auth token: {e}"))?
+        .ok_or_else(|| {
+            "No authentication token found. Please log in again.".to_string()
+        })?;
+    
+    // Debug: Log account and token info for troubleshooting 403 errors
+    println!("[Setup] Retrieved auth token for account_id (SS58): {}", account_id);
+    println!("[Setup] account_id length: {} chars", account_id.len());
+    println!("[Setup] This account_id will be used as user_id for sync requests.");
+
+    // Set HCFS client config BEFORE unlock so account_ss58 is available
+    manager.set_config(HcfsClientConfig {
+        base_url: server_url.clone(),
+        api_key: "Arion".to_string(),
+        bearer_token: bearer_token.clone(),
+        accept_invalid_certs: true,
+        billing_bypass_token: None,
+        account_ss58: account_id.clone(),
+    })?;
+    println!("[Setup] HCFS config set with account_ss58: {} (before unlock)", account_id);
+
+    // 7. Init or unlock the drive (now account_ss58 is set, so user_id will be correct)
     let (user_id, mnemonic, is_new_setup) = if manager.is_initialized() {
         // Existing folder — just unlock
         println!("[Setup] Drive already initialized, unlocking...");
-        let uid = manager.unlock(&drive_password)?;
-        println!("[Setup] Drive unlocked, user_id: {}", uid);
-        (uid, None, false)
+        // Debug: Log the config directory and enc_mnemonic path
+        println!("[Setup] Config dir: {:?}", folder_dir);
+        println!("[Setup] Password length: {} chars", drive_password.len());
+        
+        match manager.unlock(&drive_password) {
+            Ok(uid) => {
+                println!("[Setup] Drive unlocked, user_id: {}", uid);
+                (uid, None, false)
+            }
+            Err(e) => {
+                // Detailed error logging for unlock failure
+                println!("[Setup] ERROR: unlock failed: {}", e);
+                // If unlock fails, the enc_mnemonic.json might be corrupted or encrypted with
+                // a different password. Clean up ALL encrypted files and start fresh.
+                println!("[Setup] Attempting recovery: cleaning up encrypted files...");
+                
+                // Remove the corrupted/mismatched enc_mnemonic.json
+                let enc_path = folder_dir.join("enc_mnemonic.json");
+                if enc_path.exists() {
+                    if let Err(rm_err) = std::fs::remove_file(&enc_path) {
+                        println!("[Setup] WARNING: Failed to remove enc_mnemonic.json: {}", rm_err);
+                    } else {
+                        println!("[Setup] Removed enc_mnemonic.json");
+                    }
+                }
+                
+                // Also remove the master mnemonic - it might be encrypted with wrong password too
+                if master_path.exists() {
+                    if let Err(rm_err) = std::fs::remove_file(&master_path) {
+                        println!("[Setup] WARNING: Failed to remove master_enc_mnemonic.json: {}", rm_err);
+                    } else {
+                        println!("[Setup] Removed master_enc_mnemonic.json (will regenerate)");
+                    }
+                }
+                
+                // Also remove sync_state.json to start fresh
+                let state_path = folder_dir.join("sync_state.json");
+                let state_bak_path = folder_dir.join("sync_state.json.bak");
+                let _ = std::fs::remove_file(&state_path);
+                let _ = std::fs::remove_file(&state_bak_path);
+                
+                println!("[Setup] Recovery cleanup complete. Retrying initialization...");
+                
+                // Instead of returning an error, let's retry the initialization
+                // by falling through to the "not initialized" branch
+                // We need to recreate the manager since the old one might have stale state
+                drop(manager);
+                manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
+                manager.set_config(HcfsClientConfig {
+                    base_url: server_url.clone(),
+                    api_key: "Arion".to_string(),
+                    bearer_token: bearer_token.clone(),
+                    accept_invalid_certs: true,
+                    billing_bypass_token: None,
+                    account_ss58: account_id.clone(),
+                })?;
+                
+                // Now continue with fresh initialization
+                println!("[Setup] Creating fresh drive after recovery...");
+                
+                // Generate new master and folder mnemonic
+                let master = bip39::Mnemonic::generate(24)
+                    .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
+                let master_str = master.to_string();
+                hcfs_client::auth::save_encrypted_mnemonic(
+                    &master_path,
+                    &master_str,
+                    &drive_password,
+                )
+                .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
+                println!("[Setup] Generated and saved new master mnemonic");
+                let derived = derive_folder_mnemonic(&master_str, &sync_path)?;
+                
+                // Initialize drive with the folder-specific derived mnemonic
+                let mut init_mnemonic = manager.init(&drive_password, Some(&derived))?;
+                zeroize::Zeroize::zeroize(&mut init_mnemonic);
+                
+                let uid = manager.unlock(&drive_password)?;
+                println!("[Setup] Drive re-initialized and unlocked, derived user_id: {}", uid);
+                
+                // Return the new master mnemonic for backup
+                (uid, Some(master_str), true)
+            }
+        }
     } else {
         // New folder — need to derive or generate mnemonic
         println!("[Setup] Drive not initialized, creating...");
@@ -522,12 +632,18 @@ pub async fn initialize_sync(
         zeroize::Zeroize::zeroize(&mut folder_mnemonic);
 
         let uid = manager.unlock(&drive_password)?;
-        println!("[Setup] Drive initialized and unlocked, user_id: {}", uid);
+        println!("[Setup] Drive initialized and unlocked, derived user_id: {}", uid);
 
         (uid, master_for_backup, generated_new_master)
     };
 
-    // 7. Test server connectivity before configuring the drive
+    // Log the final user_id that will be used (should match account_id/account_ss58)
+    println!("[Setup] Drive user_id after unlock: {} (should match account_id)", user_id);
+    if user_id != account_id {
+        println!("[Setup] WARNING: user_id ({}) != account_id ({}). This may cause 403 errors!", user_id, account_id);
+    }
+
+    // 8. Test server connectivity
     {
         let test_url = format!("{}/health", &server_url);
         println!("[Setup] Testing connectivity to: {}", test_url);
@@ -553,27 +669,19 @@ pub async fn initialize_sync(
         }
     }
 
-    // Set HCFS client config (server URL + auth)
-    manager.set_config(HcfsClientConfig {
-        base_url: server_url,
-        api_key: "Arion".to_string(),
-        bearer_token: user_id.clone(),
-        accept_invalid_certs: true,
-    })?;
-
-    // 8. Setup progress event handlers
+    // 9. Setup progress event handlers
     setup_progress_handlers(&app, &mut manager);
 
-    // 9. Clear any previous cancellation flag
+    // 10. Clear any previous cancellation flag
     clear_cancel();
 
-    // 10. Store the manager globally
+    // 11. Store the manager globally
     {
         let mut guard = HCFS_DRIVE.lock().await;
         *guard = Some(manager);
     }
 
-    // 11. Start the background sync loop
+    // 12. Start the background sync loop
     start_sync_loop(app.clone()).await;
 
     println!(
@@ -589,7 +697,7 @@ pub async fn initialize_sync(
 }
 
 #[tauri::command]
-pub async fn stop_sync() -> Result<(), String> {
+pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
     request_cancel();
 
     // Abort the background sync loop task to prevent spurious error events
@@ -604,6 +712,57 @@ pub async fn stop_sync() -> Result<(), String> {
     *guard = None;
     SYNC_REVIEW_MODE.store(false, Ordering::Release);
     HCFS_SYNC_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).reset();
+
+    // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
+    let _ = app.emit("hcfs_sync_stopped", ());
+
+    Ok(())
+}
+
+/// Reset sync data for an account, clearing all local sync state.
+/// This allows starting fresh without corrupted or stale sync data.
+/// 
+/// IMPORTANT: This does NOT delete files in the sync folder - only HCFS metadata.
+/// Files on the server remain intact.
+#[tauri::command]
+pub async fn reset_sync_data(app: AppHandle, account_id: String) -> Result<(), String> {
+    println!("[Sync] Resetting sync data for account: {}", account_id);
+    
+    // First stop any active sync
+    stop_sync(app.clone()).await?;
+    
+    // Get the account directory
+    let acct_dir = account_dir(&account_id)?;
+    
+    println!("[Sync] Reset: Deleting account directory: {:?}", acct_dir);
+    
+    // Delete the entire account directory (contains sync state, encrypted mnemonic, etc.)
+    if acct_dir.exists() {
+        std::fs::remove_dir_all(&acct_dir)
+            .map_err(|e| format!("Failed to delete account directory: {}", e))?;
+        println!("[Sync] Reset: Deleted account directory");
+    }
+    
+    // Also clear the hcfs_config from database so user goes through setup again
+    let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let owner = account_key(&account_id);
+    
+    sqlx::query("DELETE FROM hcfs_config WHERE owner = ?")
+        .bind(&owner)
+        .execute(db)
+        .await
+        .map_err(|e| format!("Failed to clear config: {}", e))?;
+    
+    println!("[Sync] Reset: Cleared database config");
+    
+    // Emit event so frontend knows to show setup UI
+    let _ = app.emit("hcfs_sync_reset", serde_json::json!({
+        "account_id": account_id,
+        "message": "Sync data has been reset. Please set up sync again."
+    }));
+    
+    println!("[Sync] ✅ Reset complete for account: {}", account_id);
+    
     Ok(())
 }
 
@@ -635,6 +794,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
 
     manager.set_progress(SyncProgress {
         on_upload_progress: Some(Arc::new(move |b, t, p| {
+            println!("[Progress] Upload: {}/{} bytes, path: {:?}", b, t, p);
             let _ = a1.emit(
                 "hcfs_upload_progress",
                 serde_json::json!({"bytes": b, "total": t, "path": p}),
@@ -658,6 +818,7 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
             }
         })),
         on_download_progress: Some(Arc::new(move |b, t, p| {
+            println!("[Progress] Download: {}/{} bytes, path: {:?}", b, t, p);
             let _ = a2.emit(
                 "hcfs_download_progress",
                 serde_json::json!({"bytes": b, "total": t, "path": p}),

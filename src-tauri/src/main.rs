@@ -22,9 +22,9 @@ mod sync_shared;
 mod user_profile_sync;
 mod utils;
 
-use crate::commands::syncing::{get_drive_mnemonic, initialize_sync, is_drive_active, stop_sync, trigger_sync_now};
+use crate::commands::syncing::{get_drive_mnemonic, initialize_sync, is_drive_active, reset_sync_data, stop_sync, trigger_sync_now};
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
-use crate::sync_shared::{app_close, get_sync_activity, get_sync_status};
+use crate::sync_shared::{app_close, get_sync_activity, get_sync_status, get_server_sync_status};
 use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size, list_folder_contents};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::accounts::{
@@ -57,7 +57,22 @@ fn load_env() {
 
 fn main() {
     load_env();
+    
+    // Initialize tracing subscriber to capture hcfs-client library logs.
+    // Filter to show WARN and ERROR from hcfs-client, INFO and above from our code.
+    // Set RUST_LOG env var to customize (e.g., RUST_LOG=hcfs_client=debug).
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| {
+            EnvFilter::new("warn,hcfs_client=warn,Hippius=info")
+        });
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_target(true).with_file(false).with_line_number(false))
+        .with(filter)
+        .init();
+    
     println!("[Main] Application starting...");
+    println!("[Main] Tracing subscriber initialized - hcfs-client logs now visible");
 
     let builder = Builder::default()
         .plugin(tauri_plugin_process::init())
@@ -82,11 +97,13 @@ fn main() {
             // Sync control (hcfs-client)
             initialize_sync,
             stop_sync,
+            reset_sync_data,
             trigger_sync_now,
             is_drive_active,
             // Sync status
             get_sync_status,
             get_sync_activity,
+            get_server_sync_status,
             // File operations
             add_file,
             add_folder,

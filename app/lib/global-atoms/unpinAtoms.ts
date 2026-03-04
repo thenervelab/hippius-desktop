@@ -7,6 +7,11 @@ export const isUnpinnedDialogOpenAtom = atom<boolean>(false);
 // Atom to trigger sync path updates refresh
 export const triggerSyncPathRefreshAtom = atom<number>(0);
 
+// Atom to track whether HCFS sync has been configured (has password).
+// This is set when sync is initialised successfully, or when we confirm config exists.
+// Used to differentiate "stopped by user" vs "never set up".
+export const isSyncConfiguredAtom = atom<boolean>(false);
+
 // Atom to track sync engine status.
 // "active"   = drive is loaded and syncing
 // "stopping" = user pressed stop, waiting for engine to finish

@@ -4,7 +4,7 @@ import React from "react";
 import { Loader2, PauseCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAtomValue } from "jotai";
-import { syncEngineStatusAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 interface SyncStoppedAlertProps {
   className?: string;
@@ -14,15 +14,20 @@ interface SyncStoppedAlertProps {
 /**
  * Alert banner shown when the user has explicitly stopped syncing
  * or when syncing is in the process of stopping.
+ * 
+ * Only shows if sync has been configured - new users without a sync folder
+ * configured won't see this alert.
  */
 export const SyncStoppedAlert: React.FC<SyncStoppedAlertProps> = ({
   className,
   variant = "banner",
 }) => {
   const syncStatus = useAtomValue(syncEngineStatusAtom);
+  const isSyncConfigured = useAtomValue(isSyncConfiguredAtom);
 
-  // Only show when sync is stopped or stopping
-  if (syncStatus === "active") return null;
+  // Only show when sync is stopped/stopping AND sync has been configured
+  // This prevents new users from seeing "stopped" before they've set up sync
+  if (syncStatus === "active" || !isSyncConfigured) return null;
 
   const isStopping = syncStatus === "stopping";
 

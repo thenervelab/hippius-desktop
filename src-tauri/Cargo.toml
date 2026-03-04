@@ -70,7 +70,11 @@ log = "0.4"
 hostname = "0.4"
 zeroize = "1"
 bip39 = { version = "2.2", features = ["rand"] }
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "4325551" }
+# Use main branch from GitHub
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "b7f7146c28eced016cc39a1a631fee29369e77a7" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "b7f7146c28eced016cc39a1a631fee29369e77a7" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"

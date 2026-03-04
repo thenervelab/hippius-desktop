@@ -1,10 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
   FormattedUserFile,
 } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { useRef } from "react";
+import { useRef, useEffect } from "react";
 import { SyncActivityItem } from "../useSyncActivity";
 
 // Re-export types for backward compatibility
@@ -43,9 +43,24 @@ function makeFilesSignature(files: Array<FormattedUserFile>): string {
 const useRecentFiles = () => {
   const { polkadotAddress } = useWalletAuth();
   const queryKey = ["recent-files", polkadotAddress];
+  const queryClient = useQueryClient();
 
   const lastSignatureRef = useRef<string>("");
   const lastDataRef = useRef<Array<FormattedUserFile>>([]);
+
+  // Listen for sync file completion events to trigger refetch
+  useEffect(() => {
+    const handleFilesCompleted = () => {
+      console.log("[useRecentFiles] Files completed, invalidating and refetching query");
+      // Use refetch instead of invalidate for immediate data refresh
+      queryClient.refetchQueries({ queryKey: ["recent-files"] });
+    };
+
+    window.addEventListener("sync_files_completed_changed", handleFilesCompleted);
+    return () => {
+      window.removeEventListener("sync_files_completed_changed", handleFilesCompleted);
+    };
+  }, [queryClient]);
 
   return useQuery({
     queryKey,
@@ -120,7 +135,7 @@ const useRecentFiles = () => {
       return newData;
     },
     refetchOnWindowFocus: false,
-    staleTime: Infinity,
+    staleTime: 30000, // 30 seconds - allow periodic refresh
     enabled: !!polkadotAddress,
     notifyOnChangeProps: ["data", "dataUpdatedAt"],
     structuralSharing: false,

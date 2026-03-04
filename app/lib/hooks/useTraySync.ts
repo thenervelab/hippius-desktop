@@ -22,10 +22,24 @@ import { SyncActivityItem } from "./useSyncActivity";
 import {
   syncPercentAtom,
   lastUpdatedPercentAtom,
+  serverSyncStatusAtom,
+  isSyncingAtom,
+  completedFilesCountAtom,
+  totalFilesToSyncAtom,
+  uploadProgressAtom,
+  downloadProgressAtom,
 } from "@/app/lib/store/syncAtoms";
 import { useAtomValue, useAtom, useSetAtom } from "jotai";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
 import { API_CONFIG } from "@/app/lib/config";
+import {
+  overallProgressAtom,
+  hasSyncActivityAtom,
+} from "./useSyncProgress";
+import {
+  type SyncFile,
+  type RecentFile,
+} from "../services/syncProgressService";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
@@ -86,13 +100,14 @@ type SyncActivityRow = {
   fileName: string;
   rawName: string;
   scope: string;
-  status: "uploading" | "uploaded" | "deleted";
+  status: "uploading" | "uploaded" | "deleted" | "failed";
   fileType: string;
   timestamp?: number;
   progress?: number;
   path?: string; // thumbnail/icon path for menu item
   rawPath?: string; // actual file path
   deleted: boolean;
+  error?: string; // Error message for failed files
 };
 
 interface VpnStatus {
@@ -279,6 +294,9 @@ async function checkUserCredits(): Promise<{
 }
 
 /* ─ Public: create tray once ──────────────────────────────────── */
+// Track timer for clearing sync label after completion
+let syncLabelClearTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function useTrayInit() {
   // Use atom to watch for sync percentage changes
   const currentPercent = useAtomValue(syncPercentAtom);
@@ -286,15 +304,110 @@ export function useTrayInit() {
     lastUpdatedPercentAtom,
   );
   const setVpnConnected = useSetAtom(vpnConnectedAtom);
+  
+  // Watch server sync status for real-time progress
+  const serverSyncStatus = useAtomValue(serverSyncStatusAtom);
+  
+  // Watch local sync events for immediate feedback
+  const isSyncingFromEvents = useAtomValue(isSyncingAtom);
+  const uploadProgress = useAtomValue(uploadProgressAtom);
+  const downloadProgress = useAtomValue(downloadProgressAtom);
+  
+  // Watch completed files count and total for tray display
+  const completedFilesCount = useAtomValue(completedFilesCountAtom);
+  const totalFilesToSync = useAtomValue(totalFilesToSyncAtom);
+  
+  // Watch new localStorage-based tracking for overall progress
+  const overallProgress = useAtomValue(overallProgressAtom);
+  const hasSyncActivity = useAtomValue(hasSyncActivityAtom);
 
-  // Effect to update tray when sync percent changes
+  // Effect to update tray when sync state changes
   useEffect(() => {
-    // Only update if the percentage has actually changed
-    if (currentPercent !== lastUpdatedPercent) {
-      setLastUpdatedPercent(currentPercent);
-      void updateTraySyncPercent(currentPercent);
+    // Check if there's active upload or download progress
+    const hasActiveUpload = uploadProgress !== null && uploadProgress.bytes < uploadProgress.total;
+    const hasActiveDownload = downloadProgress !== null && downloadProgress.bytes < downloadProgress.total;
+    
+    // Use server sync status for sync detection
+    const serverActive = serverSyncStatus?.active ?? false;
+    
+    console.log("[TraySync] Effect triggered - isSyncingFromEvents:", isSyncingFromEvents, 
+      "hasActiveUpload:", hasActiveUpload, "hasActiveDownload:", hasActiveDownload,
+      "serverActive:", serverActive,
+      "overallProgress:", overallProgress,
+      "hasSyncActivity:", hasSyncActivity);
+    
+    // Clear any pending clear timer when state changes
+    if (syncLabelClearTimer) {
+      clearTimeout(syncLabelClearTimer);
+      syncLabelClearTimer = null;
     }
-  }, [currentPercent, lastUpdatedPercent, setLastUpdatedPercent]);
+    
+    // Determine sync state - use BOTH localStorage tracking AND event-based atoms
+    // isSyncingFromEvents is set immediately when hcfs_sync_started fires
+    // hasActiveUpload/hasActiveDownload catch cases where files are still transferring
+    // serverActive catches server-side sync that may not have emitted events yet
+    const isCurrentlySyncing = isSyncingFromEvents || 
+      hasActiveUpload ||
+      hasActiveDownload ||
+      serverActive ||
+      overallProgress.isActive || 
+      (overallProgress.inProgressFiles > 0) || 
+      (overallProgress.totalFiles > 0 && overallProgress.completedFiles < overallProgress.totalFiles && overallProgress.failedFiles === 0);
+    
+    // Only consider sync complete if NOT currently syncing
+    const isSyncComplete = !isCurrentlySyncing && 
+      (overallProgress.completedFiles > 0 || overallProgress.failedFiles > 0);
+    
+    // Build the tray menu label
+    let labelText: string | null = null;
+    if (isCurrentlySyncing) {
+      // Use localStorage-based progress percentage - same source as the widget
+      // This ensures tray and widget always show consistent percentages
+      const percent = overallProgress.overallPercent;
+      labelText = `⟳ Syncing: ${percent}%`;
+    } else if (isSyncComplete) {
+      // Show completed files and/or failed files
+      // When there are failures, only show the failure count (don't mix with success count)
+      if (overallProgress.failedFiles > 0) {
+        labelText = `⚠ ${overallProgress.failedFiles} file${overallProgress.failedFiles > 1 ? 's' : ''} failed`;
+      } else {
+        labelText = `✓ Sync complete: ${overallProgress.completedFiles} files`;
+      }
+    } else if (hasSyncActivity && !isSyncingFromEvents && !hasActiveUpload && !hasActiveDownload) {
+      // Show recent activity status ONLY if not currently syncing or transferring
+      labelText = `✓ Files synced`;
+    }
+    
+    console.log("[TraySync] State: isCurrentlySyncing=", isCurrentlySyncing, "isSyncComplete=", isSyncComplete, "label=", labelText);
+    
+    // Update tray menu text
+    void updateTraySyncLabel(labelText);
+    
+    // Update icon state
+    if (isCurrentlySyncing) {
+      void setTrayIconSyncing(true, false);
+    } else if (isSyncComplete || hasSyncActivity) {
+      // Show green "completed" icon when sync done or when there are recent files
+      void setTrayIconSyncing(false, true);
+    } else {
+      // Not syncing and no recent files - default icon
+      if (lastUpdatedPercent !== null) {
+        // Only reset if we had a previous sync state
+        void setTrayIconSyncing(false, false);
+        setLastUpdatedPercent(null);
+      }
+    }
+    
+    // Track state for comparison
+    if (isCurrentlySyncing && overallProgress.totalFiles > 0) {
+      setLastUpdatedPercent(0);
+    } else if (isSyncComplete || hasSyncActivity) {
+      setLastUpdatedPercent(100);
+      // NO auto-clear - the icon stays green while there are recent files (1 hour)
+      // The cleanup happens automatically when files expire from localStorage
+    }
+    
+  }, [overallProgress, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent, isSyncingFromEvents, uploadProgress, downloadProgress, serverSyncStatus]);
 
   useEffect(() => {
     if (menuPromise) return;
@@ -433,6 +546,9 @@ export function useTrayInit() {
 
       // Start watcher for sync activity after menu exists
       startSyncActivityWatcher();
+      
+      // Clear any stale file entries from previous sessions
+      void clearTrayFileEntries();
 
       // Start VPN status watcher with state setter
       startVpnStatusWatcher(setVpnState);
@@ -695,48 +811,239 @@ async function setTrayIconSyncing(
 }
 
 /* ─ Public: keep your existing percent label behavior ─────────── */
-async function updateTraySyncPercent(percent: number | null) {
+async function updateTraySyncPercent(percent: number | null, serverStatus?: { files_completed: number; files_active: number; files_pending: number; files_failed: number } | null) {
+  // Use the same mutex as updateTraySyncLabel
+  if (isUpdatingTrayLabel) {
+    console.log("[TraySync] Skipping percent update - already in progress");
+    return;
+  }
+  isUpdatingTrayLabel = true;
+  
+  try {
+    const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
+    if (!menu) {
+      isUpdatingTrayLabel = false;
+      return;
+    }
+
+    const items = await menu.items();
+
+    // ALWAYS search for existing sync items in the menu
+    const existingItems = items.filter((i) => i.id === SYNC_ID);
+    if (existingItems.length > 1) {
+      for (let i = 1; i < existingItems.length; i++) {
+        await menu.remove(existingItems[i]);
+      }
+    }
+    syncItem = existingItems[0] as MenuItem | null;
+
+    // If percent is null, we want to remove the sync item
+    if (percent === null) {
+      if (syncItem) {
+        await menu.remove(syncItem);
+        syncItem = null;
+      }
+      await setTrayIconSyncing(false, false);
+      return;
+    }
+
+    const isCompleted = percent >= 100;
+    
+    // Build label with file counts if available from server status
+    let label: string;
+    if (isCompleted) {
+      label = "✓ Sync: Completed";
+    } else if (serverStatus && (serverStatus.files_completed > 0 || serverStatus.files_active > 0 || serverStatus.files_pending > 0)) {
+      const total = serverStatus.files_completed + serverStatus.files_active + serverStatus.files_pending;
+      label = `⟳ Syncing: ${serverStatus.files_completed}/${total} files • ${Math.round(percent)}%`;
+      // Add failed count if any
+      if (serverStatus.files_failed > 0) {
+        label += ` (${serverStatus.files_failed} failed)`;
+      }
+    } else {
+      label = `⟳ Sync: ${Math.round(percent)}%`;
+    }
+
+    // If sync item doesn't exist yet, create it and add it to the menu
+    if (!syncItem) {
+      syncItem = await MenuItem.new({
+        id: SYNC_ID,
+        text: label,
+        enabled: false,
+      });
+
+      // Insert at position 0 — sync info goes at the very top of the menu
+      await menu.insert(syncItem, 0);
+    } else {
+      await syncItem.setText(label);
+    }
+
+    // Updated to pass both syncing and completed status
+    await setTrayIconSyncing(percent < 100, percent >= 100);
+  } finally {
+    isUpdatingTrayLabel = false;
+  }
+}
+
+/* ─ Update tray sync label (simpler version without percentage) ─── */
+// Mutex to prevent concurrent updates causing duplicates
+let isUpdatingTrayLabel = false;
+let pendingTrayLabel: string | null | undefined = undefined; // undefined = no pending, null = clear label
+
+async function updateTraySyncLabel(label: string | null) {
+  // If already updating, queue this label for when current update finishes
+  if (isUpdatingTrayLabel) {
+    pendingTrayLabel = label;
+    return;
+  }
+  isUpdatingTrayLabel = true;
+  
+  try {
+    const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
+    if (!menu) {
+      isUpdatingTrayLabel = false;
+      // Process pending if any
+      if (pendingTrayLabel !== undefined) {
+        const nextLabel = pendingTrayLabel;
+        pendingTrayLabel = undefined;
+        void updateTraySyncLabel(nextLabel);
+      }
+      return;
+    }
+
+    const items = await menu.items();
+
+    // ALWAYS search for existing sync items in the menu (don't rely on stale syncItem reference)
+    const existingItems = items.filter((i) => i.id === SYNC_ID);
+    
+    // If there are multiple, remove all but keep track of first one
+    if (existingItems.length > 1) {
+      console.log(`[TraySync] Found ${existingItems.length} sync items, removing duplicates`);
+      for (let i = 1; i < existingItems.length; i++) {
+        await menu.remove(existingItems[i]);
+      }
+    }
+    
+    syncItem = existingItems[0] as MenuItem | null;
+
+    // If label is null, we want to remove the sync item
+    if (label === null) {
+      if (syncItem) {
+        await menu.remove(syncItem);
+        syncItem = null;
+      }
+      return;
+    }
+
+    // If sync item doesn't exist yet, create it and add it to the menu
+    if (!syncItem) {
+      syncItem = await MenuItem.new({
+        id: SYNC_ID,
+        text: label,
+        enabled: false,
+      });
+
+      // Insert at position 0 — sync info goes at the very top of the menu
+      await menu.insert(syncItem, 0);
+    } else {
+      await syncItem.setText(label);
+    }
+  } finally {
+    isUpdatingTrayLabel = false;
+    // Process pending label if any
+    if (pendingTrayLabel !== undefined) {
+      const nextLabel = pendingTrayLabel;
+      pendingTrayLabel = undefined;
+      void updateTraySyncLabel(nextLabel);
+    }
+  }
+}
+
+/* ─ ID prefix for file entry rows ────────────────────────────── */
+const FILE_ENTRY_PREFIX = "file-entry:";
+const fileEntryItems = new Map<string, MenuItem>();
+
+/* ─ Format file entry text with status indicator ─────────────── */
+function formatFileEntryText(file: SyncFile | RecentFile): string {
+  const name = shortenName(file.fileName);
+  const isDelete = file.action === 'local_delete' || file.action === 'remote_delete';
+  
+  // Check if it's a completed/recent file
+  if ('completedAt' in file) {
+    // RecentFile - show checkmark or X for deletes
+    return isDelete ? `✗ ${name}` : `✓ ${name}`;
+  }
+  
+  // SyncFile - check status
+  const syncFile = file as SyncFile;
+  
+  // Handle error status - show warning icon
+  if (syncFile.status === 'error') {
+    return `⚠ ${name} (failed)`;
+  }
+  
+  // Handle pending status - show clock icon
+  if (syncFile.status === 'pending') {
+    const actionIcon = syncFile.action === 'download' ? '↓' : syncFile.action === 'upload' ? '↑' : '⏸';
+    return `${actionIcon} ${name} (pending)`;
+  }
+  
+  if (syncFile.status === 'completed') {
+    return isDelete ? `✗ ${name}` : `✓ ${name}`;
+  }
+  
+  // Show progress for uploading/downloading/deleting
+  const progress = Math.round(syncFile.progress);
+  let actionIcon = '↑';
+  if (syncFile.action === 'download') {
+    actionIcon = '↓';
+  } else if (isDelete) {
+    actionIcon = '✗';
+  }
+  
+  // For deletes, don't show percentage (they happen instantly)
+  if (isDelete) {
+    return `${actionIcon} ${name}`;
+  }
+  
+  return `${actionIcon} ${name} (${progress}%)`;
+}
+
+/* ─ Update tray menu with file entries ───────────────────────── */
+// NOTE: File entries are no longer shown in tray menu.
+// This function now only clears any stale entries and returns.
+async function clearTrayFileEntries() {
   const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
   if (!menu) return;
 
-  const items = await menu.items();
-
-  // Find any existing sync items by ID
-  if (!syncItem) {
-    syncItem = items.find((i) => i.id === SYNC_ID) as MenuItem | null;
-  }
-
-  // If percent is null, we want to remove the sync item
-  if (percent === null) {
-    if (syncItem) {
-      await menu.remove(syncItem);
-      syncItem = null;
+  try {
+    // Remove existing file entry items
+    for (const [, item] of fileEntryItems.entries()) {
+      try {
+        await menu.remove(item);
+      } catch { }
     }
-    await setTrayIconSyncing(false, false);
-    return;
+    fileEntryItems.clear();
+
+    // Also remove any orphaned items
+    const items = await menu.items();
+    for (const item of items) {
+      if (typeof item.id === 'string' && item.id.startsWith(FILE_ENTRY_PREFIX)) {
+        try {
+          await menu.remove(item);
+        } catch { }
+      }
+    }
+  } catch (error) {
+    console.error("Error clearing tray file entries:", error);
   }
+}
 
-  const isCompleted = percent >= 100;
-  const label = isCompleted
-    ? "✓ Sync: Completed"
-    : `⟳ Sync: ${Math.round(percent)} %`;
-
-  // If sync item doesn't exist yet, create it and add it to the menu
-  if (!syncItem) {
-    syncItem = await MenuItem.new({
-      id: SYNC_ID,
-      text: label,
-      enabled: false,
-    });
-
-    // Insert at position 0 — sync info goes at the very top of the menu
-    await menu.insert(syncItem, 0);
-  } else {
-    await syncItem.setText(label);
-  }
-
-  // Updated to pass both syncing and completed status
-  await setTrayIconSyncing(percent < 100, percent >= 100);
+// Deprecated - kept for reference, no longer used
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+async function updateTrayFileEntries(_files: (SyncFile | RecentFile)[]) {
+  // File entries are no longer shown in tray menu - just clear any stale entries
+  await clearTrayFileEntries();
 }
 
 // Deprecated: Keep for backwards compatibility but don't use internally
@@ -894,6 +1201,7 @@ function startSyncActivityWatcher() {
 async function handleSyncIconState(isSyncing: boolean) {
   if (isSyncing) {
     // Currently syncing — show syncing icon
+    // NOTE: Menu item is managed by updateTraySyncLabel from local events, not here
     if (lastBackendSyncing !== true) {
       logTrayAction("Backend reports syncing, updating tray icon");
       if (completedIconTimeout) {
@@ -910,14 +1218,7 @@ async function handleSyncIconState(isSyncing: boolean) {
       logTrayAction("Backend reports sync completed, showing completed icon");
       await setTrayIconSyncing(false, true);
       lastBackendSyncing = false;
-
-      // Revert to default icon after 5 seconds
-      if (completedIconTimeout) clearTimeout(completedIconTimeout);
-      completedIconTimeout = setTimeout(async () => {
-        logTrayAction("Reverting tray icon to default after sync completed");
-        await setTrayIconSyncing(false, false);
-        completedIconTimeout = null;
-      }, 5000);
+      // Keep showing completed icon (green) - only reset when sync is stopped
     }
   }
 }

@@ -22,9 +22,10 @@ use hcfs_client::drive::Drive;
 use hcfs_client::sync::{
     SyncConflict, SyncConflictResolution, SyncConflictType, SyncMode, SyncOutcome, SyncProgress,
 };
+use hcfs_shared::network::SyncStatusResult;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use once_cell::sync::Lazy;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -70,6 +71,39 @@ pub struct StagedChanges {
     pub unchanged_count: usize,
 }
 
+/// Server-side sync progress status.
+/// This mirrors `SyncStatusResult` from hcfs-shared but is Tauri-serializable.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ServerSyncStatus {
+    pub active: bool,
+    pub progress_percent: f64,
+    pub bytes_completed: u64,
+    pub bytes_total: u64,
+    pub files_completed: u64,
+    pub files_active: u64,
+    pub files_pending: u64,
+    pub files_failed: u64,
+    pub started_at: i64,
+    pub last_activity_at: i64,
+}
+
+impl From<SyncStatusResult> for ServerSyncStatus {
+    fn from(r: SyncStatusResult) -> Self {
+        Self {
+            active: r.active,
+            progress_percent: r.progress_percent,
+            bytes_completed: r.bytes_completed,
+            bytes_total: r.bytes_total,
+            files_completed: r.files_completed,
+            files_active: r.files_active,
+            files_pending: r.files_pending,
+            files_failed: r.files_failed,
+            started_at: r.started_at,
+            last_activity_at: r.last_activity_at,
+        }
+    }
+}
+
 /// Thin wrapper around `hcfs_client::Drive` that adds error mapping to `String`
 /// (required for Tauri IPC) and tracks the sync folder path and config directory.
 pub struct HcfsDriveManager {
@@ -110,6 +144,13 @@ impl HcfsDriveManager {
     #[allow(dead_code)]
     pub fn user_id(&self) -> Option<&str> {
         self.drive.user_id()
+    }
+    /// Override the user_id to use substrate address instead of derived ed25519 hex.
+    /// This is now done via the HcfsClientConfig.account_ss58 field.
+    /// Deprecated: set account_ss58 in the config instead.
+    pub fn set_user_id(&mut self, _user_id: String) {
+        // No-op: user_id is now set via config.account_ss58
+        // The Drive will use account_ss58 if set, otherwise derives from mnemonic
     }
     pub fn sync_path(&self) -> &Path {
         &self.sync_path
@@ -252,6 +293,40 @@ impl HcfsDriveManager {
     pub fn cleanup_temp(&self) {
         self.drive.cleanup_stale_temp_files();
     }
+
+    /// Get the current server-side sync progress.
+    /// Returns the user_id and the sync status from the server.
+    pub async fn get_server_sync_status(&self) -> Result<ServerSyncStatus, String> {
+        let user_id = self
+            .drive
+            .user_id()
+            .ok_or("Drive not unlocked")?;
+        
+        let client = self
+            .drive
+            .client()
+            .ok_or("HCFS client not configured")?;
+
+        let status = client
+            .get_sync_status(user_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let result: ServerSyncStatus = status.into();
+        
+        // Log server sync status for debugging
+        println!(
+            "[ServerSync] active={}, progress={}%, files: completed={}, active={}, pending={}, failed={}",
+            result.active,
+            result.progress_percent,
+            result.files_completed,
+            result.files_active,
+            result.files_pending,
+            result.files_failed
+        );
+
+        Ok(result)
+    }
 }
 
 /// Global Drive instance
@@ -375,9 +450,14 @@ pub async fn start_sync_loop(app: AppHandle) {
                 _ = debounce.tick() => {
                     let heartbeat_due = last_sync.elapsed() >= Duration::from_secs(HEARTBEAT_SECS);
                     if has_changes || heartbeat_due {
-                        has_changes = false;
-                        trigger_sync(&app).await;
-                        last_sync = Instant::now();
+                        // Only clear has_changes if sync actually ran (not skipped)
+                        let sync_ran = trigger_sync(&app).await;
+                        if sync_ran {
+                            has_changes = false;
+                            last_sync = Instant::now();
+                        }
+                        // If sync was skipped (already in progress), keep has_changes = true
+                        // so we retry on next debounce tick
                     }
                 }
             }
@@ -392,8 +472,9 @@ pub async fn start_sync_loop(app: AppHandle) {
     }
 }
 
-/// Execute one sync cycle
-pub async fn trigger_sync(app: &AppHandle) {
+/// Execute one sync cycle.
+/// Returns true if sync was executed, false if skipped (e.g., already in progress).
+pub async fn trigger_sync(app: &AppHandle) -> bool {
     // Atomically check review mode and is_syncing under the same lock
     // to prevent a race where two calls both pass review check then compete on is_syncing.
     {
@@ -402,11 +483,11 @@ pub async fn trigger_sync(app: &AppHandle) {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if SYNC_REVIEW_MODE.load(Ordering::Acquire) {
             println!("[Sync] Review mode active, skipping auto-sync");
-            return;
+            return false;
         }
         if s.is_syncing {
-            println!("[Sync] Sync already in progress, skipping");
-            return;
+            println!("[Sync] Sync already in progress, will retry on next cycle");
+            return false;
         }
         s.is_syncing = true;
     }
@@ -416,10 +497,14 @@ pub async fn trigger_sync(app: &AppHandle) {
 
     println!("[Sync] Starting sync cycle...");
 
+    // Track whether we emitted sync_started - only emit sync_completed if we did
+    let mut emitted_sync_started = false;
+
     // Tri-state result: synced, conflicts pending (user must resolve), or not available
     enum SyncResult {
         Synced(Result<SyncOutcome, String>),
         ConflictsPending,
+        NoChanges,
         NotAvailable,
     }
 
@@ -430,74 +515,105 @@ pub async fn trigger_sync(app: &AppHandle) {
                 println!("[Sync] Drive is unlocked, staging changes...");
                 match m.stage_with_paths().await {
                     Ok(staged) if staged.conflicts.is_empty() => {
-                        println!(
-                            "[Sync] No conflicts — auto-syncing (uploads={}, downloads={}, local_deletes={}, remote_deletes={})",
-                            staged.uploads.len(),
-                            staged.downloads.len(),
-                            staged.local_deletes.len(),
-                            staged.remote_deletes.len(),
-                        );
-                        // Emit sync_started only when we're actually about to sync.
-                        // Staging alone should not trigger the frontend sync spinner.
-                        let _ = app.emit("hcfs_sync_started", ());
+                        // Check if there are any actual changes to sync
+                        let has_changes = !staged.uploads.is_empty()
+                            || !staged.downloads.is_empty()
+                            || !staged.local_deletes.is_empty()
+                            || !staged.remote_deletes.is_empty();
 
-                        // Use sync_with_resolutions so unexpected conflicts default
-                        // to Skip (not AcceptRemote which re-downloads deleted files).
-                        let outcome = m.sync_with_resolutions(HashMap::new()).await;
+                        if !has_changes {
+                            println!("[Sync] No changes to sync, skipping");
+                            SyncResult::NoChanges
+                        } else {
+                            println!(
+                                "[Sync] Changes detected — syncing (uploads={}, downloads={}, local_deletes={}, remote_deletes={})",
+                                staged.uploads.len(),
+                                staged.downloads.len(),
+                                staged.local_deletes.len(),
+                                staged.remote_deletes.len(),
+                            );
+                            // Emit sync_started with file details so frontend can show accurate progress
+                            // Include full file list for all operations
+                            let _ = app.emit("hcfs_sync_started", serde_json::json!({
+                                "uploads": staged.uploads.len(),
+                                "downloads": staged.downloads.len(),
+                                "local_deletes": staged.local_deletes.len(),
+                                "remote_deletes": staged.remote_deletes.len(),
+                                "upload_files": staged.uploads.iter().map(|f| &f.path).collect::<Vec<_>>(),
+                                "download_files": staged.downloads.iter().map(|f| &f.path).collect::<Vec<_>>(),
+                                "local_delete_files": staged.local_deletes.iter().map(|f| &f.path).collect::<Vec<_>>(),
+                                "remote_delete_files": staged.remote_deletes.iter().map(|f| &f.path).collect::<Vec<_>>(),
+                            }));
+                            emitted_sync_started = true;
 
-                        // The sync fetches fresh remote state and may discover conflicts
-                        // that our stale-cached stage() missed (TOCTOU gap). If any
-                        // were skipped, emit sync_completed for the auto-sync part first,
-                        // then re-stage (state is now updated from save_sync_state) and
-                        // enter review mode. This ordering ensures:
-                        //   sync_started → sync_completed → conflicts_pending
-                        // so useSyncEvents clears isSyncing before the banner appears.
-                        match &outcome {
-                            Ok(o) if o.conflicts_skipped > 0 => {
-                                println!(
-                                    "[Sync] {} conflict(s) skipped during auto-sync, re-staging for review",
-                                    o.conflicts_skipped
-                                );
+                            // Use sync_with_resolutions so unexpected conflicts default
+                            // to Skip (not AcceptRemote which re-downloads deleted files).
+                            let outcome = m.sync_with_resolutions(HashMap::new()).await;
 
-                                // Emit sync_completed for the auto-sync that just finished
-                                let _ = app.emit(
-                                    "hcfs_sync_completed",
-                                    serde_json::json!({
-                                        "files_uploaded": o.files_uploaded,
-                                        "files_downloaded": o.files_downloaded,
-                                        "files_deleted_locally": o.files_deleted_locally,
-                                        "files_deleted_remotely": o.files_deleted_remotely,
-                                        "conflicts_resolved": o.conflicts_resolved,
-                                        "conflicts_skipped": o.conflicts_skipped,
-                                    }),
-                                );
+                            // The sync fetches fresh remote state and may discover conflicts
+                            // that our stale-cached stage() missed (TOCTOU gap). If any
+                            // were skipped, emit sync_completed for the auto-sync part first,
+                            // then re-stage (state is now updated from save_sync_state) and
+                            // enter review mode. This ordering ensures:
+                            //   sync_started → sync_completed → conflicts_pending
+                            // so useSyncEvents clears isSyncing before the banner appears.
+                            match &outcome {
+                                Ok(o) if o.conflicts_skipped > 0 => {
+                                    println!(
+                                        "[Sync] {} conflict(s) skipped during auto-sync, re-staging for review",
+                                        o.conflicts_skipped
+                                    );
 
-                                match m.stage_with_paths().await {
-                                    Ok(restaged) if !restaged.conflicts.is_empty() => {
-                                        SYNC_REVIEW_MODE.store(true, Ordering::Release);
-                                        let _ = app.emit("hcfs_conflicts_pending", &restaged);
-                                        SyncResult::ConflictsPending
+                                    // Emit sync_completed for the auto-sync that just finished
+                                    let _ = app.emit(
+                                        "hcfs_sync_completed",
+                                        serde_json::json!({
+                                            "files_uploaded": o.files_uploaded,
+                                            "files_downloaded": o.files_downloaded,
+                                            "files_deleted_locally": o.files_deleted_locally,
+                                            "files_deleted_remotely": o.files_deleted_remotely,
+                                            "conflicts_resolved": o.conflicts_resolved,
+                                            "conflicts_skipped": o.conflicts_skipped,
+                                        }),
+                                    );
+
+                                    match m.stage_with_paths().await {
+                                        Ok(restaged) if !restaged.conflicts.is_empty() => {
+                                            SYNC_REVIEW_MODE.store(true, Ordering::Release);
+                                            let _ = app.emit("hcfs_conflicts_pending", &restaged);
+                                            SyncResult::ConflictsPending
+                                        }
+                                        _ => SyncResult::ConflictsPending, // sync_completed already emitted
                                     }
-                                    _ => SyncResult::ConflictsPending, // sync_completed already emitted
                                 }
+                                _ => SyncResult::Synced(outcome),
                             }
-                            _ => SyncResult::Synced(outcome),
                         }
                     }
                     Ok(staged) => {
-                        // Conflicts detected from staging — no sync happened, so no
-                        // sync_started/sync_completed events. Enter review mode directly.
+                        // Conflicts detected from staging — emit sync_started since user needs to resolve
                         println!(
                             "[Sync] {} conflict(s) detected, entering review mode",
                             staged.conflicts.len()
                         );
+                        let _ = app.emit("hcfs_sync_started", serde_json::json!({
+                            "uploads": staged.uploads.len(),
+                            "downloads": staged.downloads.len(),
+                            "local_deletes": staged.local_deletes.len(),
+                            "remote_deletes": staged.remote_deletes.len(),
+                            "upload_files": staged.uploads.iter().map(|f| &f.path).collect::<Vec<_>>(),
+                            "download_files": staged.downloads.iter().map(|f| &f.path).collect::<Vec<_>>(),
+                            "local_delete_files": staged.local_deletes.iter().map(|f| &f.path).collect::<Vec<_>>(),
+                            "remote_delete_files": staged.remote_deletes.iter().map(|f| &f.path).collect::<Vec<_>>(),
+                        }));
+                        emitted_sync_started = true;
                         SYNC_REVIEW_MODE.store(true, Ordering::Release);
                         let _ = app.emit("hcfs_conflicts_pending", &staged);
                         SyncResult::ConflictsPending
                     }
                     Err(e) => {
                         println!("[Sync] Staging failed: {}", e);
-                        let _ = app.emit("hcfs_sync_started", ());
+                        // Don't emit sync_started for staging errors - nothing to show
                         SyncResult::Synced(Err(e))
                     }
                 }
@@ -544,40 +660,66 @@ pub async fn trigger_sync(app: &AppHandle) {
             // Progress callbacks buffer items when bytes are sent/received, but the
             // server may reject them (e.g. 502). The outcome counts reflect reality.
             if outcome.files_uploaded > 0 || outcome.files_downloaded > 0 {
+                println!("[Sync] Committing pending activity (files transferred)");
                 commit_pending_activity();
             } else {
+                println!("[Sync] Discarding pending activity (no files transferred)");
                 discard_pending_activity();
             }
 
-            let _ = app.emit(
-                "hcfs_sync_completed",
-                serde_json::json!({
-                    "files_uploaded": outcome.files_uploaded,
-                    "files_downloaded": outcome.files_downloaded,
-                    "files_deleted_locally": outcome.files_deleted_locally,
-                    "files_deleted_remotely": outcome.files_deleted_remotely,
-                    "conflicts_resolved": outcome.conflicts_resolved,
-                    "conflicts_skipped": outcome.conflicts_skipped,
-                }),
-            );
+            // Only emit sync_completed if we emitted sync_started
+            if emitted_sync_started {
+                let _ = app.emit(
+                    "hcfs_sync_completed",
+                    serde_json::json!({
+                        "files_uploaded": outcome.files_uploaded,
+                        "files_downloaded": outcome.files_downloaded,
+                        "files_deleted_locally": outcome.files_deleted_locally,
+                        "files_deleted_remotely": outcome.files_deleted_remotely,
+                        "conflicts_resolved": outcome.conflicts_resolved,
+                        "conflicts_skipped": outcome.conflicts_skipped,
+                    }),
+                );
+            }
         }
         SyncResult::Synced(Err(e)) => {
             discard_pending_activity();
             println!("[Sync] Sync failed with error: {}", e);
-            let _ = app.emit("hcfs_sync_error", serde_json::json!({"error": e}));
+            // Only emit error if we emitted sync_started
+            if emitted_sync_started {
+                let _ = app.emit("hcfs_sync_error", serde_json::json!({"error": e}));
+            }
+        }
+        SyncResult::NoChanges => {
+            // No changes detected - don't emit any events, UI stays unchanged
+            discard_pending_activity();
         }
         SyncResult::ConflictsPending => {
-            // Conflicts event already emitted above — nothing more to do.
+            // Conflicts event already emitted above.
+            // Emit sync_completed with zeros so frontend knows the sync phase finished
+            // and is now waiting for user to resolve conflicts.
             // SYNC_REVIEW_MODE is set, so subsequent heartbeats will skip.
             discard_pending_activity();
+            if emitted_sync_started {
+                let _ = app.emit(
+                    "hcfs_sync_completed",
+                    serde_json::json!({
+                        "files_uploaded": 0,
+                        "files_downloaded": 0,
+                        "files_deleted_locally": 0,
+                        "files_deleted_remotely": 0,
+                        "conflicts_resolved": 0,
+                        "conflicts_skipped": 0,
+                    }),
+                );
+            }
         }
         SyncResult::NotAvailable => {
             discard_pending_activity();
             println!("[Sync] Drive not available or not unlocked, skipping sync");
-            let _ = app.emit(
-                "hcfs_sync_error",
-                serde_json::json!({"error": "Drive not initialized or not unlocked"}),
-            );
+            // Don't emit error for unavailable drive - it's expected during startup
         }
     }
-}
+    
+    // Sync was executed (even if there were no changes)
+    true}

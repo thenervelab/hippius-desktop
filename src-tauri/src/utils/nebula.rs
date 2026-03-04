@@ -675,33 +675,64 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
     
     println!("[Nebula] Renewing certificate from: {}", url);
     
-    // Extract the token from the auth header (removing 'Token ' prefix)
-    let token = auth_header.trim_start_matches("Token ");
-    
     // First, make a GET request to get the CSRF token
     let csrf_response = client.get(&url)
         .header(AUTHORIZATION, auth_header)
         .send()
         .await?;
+    
+    // Log the GET response status - if this is 503, the CA is down
+    let csrf_status = csrf_response.status();
+    println!("[Nebula] CSRF GET response status: {}", csrf_status);
+    
+    // If the GET already fails, the CA is unavailable
+    if !csrf_status.is_success() {
+        let error_body = csrf_response.text().await.unwrap_or_else(|_| "Could not read body".to_string());
+        let error_msg = format!("Failed to renew certificate (status {}): {}", csrf_status, error_body);
+        println!("[Nebula] ❌ {}", error_msg);
+        return Err(anyhow!(error_msg));
+    }
+    
+    // Debug: log all set-cookie headers
+    println!("[Nebula] Response headers for CSRF:");
+    for (name, value) in csrf_response.headers().iter() {
+        if name.as_str().to_lowercase() == "set-cookie" {
+            println!("[Nebula]   {}: {:?}", name, value.to_str().unwrap_or("<non-utf8>"));
+        }
+    }
         
-    // Extract CSRF token from cookies or headers (adjust this based on your API)
-    let csrf_token = csrf_response.headers()
-        .get("set-cookie")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|c| {
-            c.split(';')
-             .find(|part| part.trim().starts_with("csrftoken="))
-             .map(|part| part.trim().trim_start_matches("csrftoken=").to_string())
+    // Extract CSRF token from ALL set-cookie headers (not just the first one)
+    let csrf_token: String = csrf_response.headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .find_map(|cookie| {
+            // Parse "csrftoken=VALUE; ..." format
+            if cookie.starts_with("csrftoken=") {
+                cookie.split(';')
+                    .next()
+                    .map(|part| part.trim_start_matches("csrftoken=").to_string())
+            } else {
+                None
+            }
         })
         .unwrap_or_default();
         
-    println!("[Nebula] Got CSRF token: {}", csrf_token);
+    println!("[Nebula] Got CSRF token: {}", if csrf_token.is_empty() { "<empty>" } else { &csrf_token });
     
-    // Now make the POST request with both auth and CSRF token
-    let response = client.post(&url)
+    // Now make the POST request with both auth and CSRF token header
+    // Also send the csrftoken as a Cookie header since we don't have cookie_store
+    let mut post_request = client.post(&url)
         .header(AUTHORIZATION, auth_header)
-        .header("X-CSRFTOKEN", csrf_token)
-        .header("Content-Type", "application/json")
+        .header("X-CSRFTOKEN", &csrf_token)
+        .header("Content-Type", "application/json");
+    
+    // If we have a CSRF token, also send it as a cookie
+    if !csrf_token.is_empty() {
+        post_request = post_request.header("Cookie", format!("csrftoken={}", csrf_token));
+    }
+    
+    let response = post_request
         .body("{}")  // Empty JSON body as in curl example
         .send()
         .await?;
