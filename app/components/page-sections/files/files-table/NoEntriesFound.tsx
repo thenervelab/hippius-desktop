@@ -209,7 +209,7 @@ const NoEntriesFound: React.FC<NoEntriesFoundProps> = ({
                 ? "Checking sync path..."
                 : !isSyncPathConfigured
                   ? "Start Syncing"
-                  : "Upload a Filed"}
+                  : "Upload a File"}
             </CardButton>
           </div>
 
