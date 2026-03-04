@@ -1,23 +1,6 @@
 import { atom } from "jotai";
 import type { StagedChanges } from "@/lib/types/syncTypes";
 
-// Server-side sync status from polling GET /sync_status/{user_id}
-export interface ServerSyncStatus {
-  active: boolean;
-  progress_percent: number;
-  bytes_completed: number;
-  bytes_total: number;
-  files_completed: number;
-  files_active: number;
-  files_pending: number;
-  files_failed: number;
-  started_at: string | null;
-  last_activity: string | null;
-}
-
-// Stores the server-side sync status (from GET /sync_status/{user_id})
-export const serverSyncStatusAtom = atom<ServerSyncStatus | null>(null);
-
 // Stores the current sync percentage (null when not syncing)
 // This is the AGGREGATE percentage, not per-file
 export const syncPercentAtom = atom<number | null>(null);

@@ -149,15 +149,6 @@ pub fn get_sync_activity(limit: Option<usize>) -> Vec<SyncActivityItem> {
         .collect()
 }
 
-/// Poll the server for real-time sync progress.
-/// Returns the server-side sync status with file counts and progress percentage.
-#[tauri::command]
-pub async fn get_server_sync_status() -> Result<crate::hcfs_drive::ServerSyncStatus, String> {
-    let guard = crate::hcfs_drive::HCFS_DRIVE.lock().await;
-    let manager = guard.as_ref().ok_or("Sync not initialized")?;
-    manager.get_server_sync_status().await
-}
-
 #[tauri::command]
 pub fn app_close(app: AppHandle<Wry>) {
     app.exit(0);

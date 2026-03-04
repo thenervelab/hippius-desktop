@@ -6,10 +6,8 @@ import { listen } from "@tauri-apps/api/event";
 
 import SyncStatusDialog from "./SyncStatusDialog";
 import useSyncActivity, { SyncActivityRow } from "../lib/hooks/useSyncActivity";
-import { useServerSyncStatus } from "../lib/hooks/useServerSyncStatus";
-import { 
-  serverSyncStatusAtom, 
-  isSyncingAtom, 
+import {
+  isSyncingAtom,
   uploadProgressAtom,
   downloadProgressAtom,
   completedFilesCountAtom,
@@ -105,10 +103,6 @@ const SyncStatusHandler: React.FC = () => {
   const { data: syncFiles, isLoading, refetch } = useSyncActivity();
   const [isSyncOpen, setIsSyncOpen] = useState(false);
   const [isPermanentlyClosed, setIsPermanentlyClosed] = useState(false);
-  
-  // Start polling server sync status
-  useServerSyncStatus();
-  const serverStatus = useAtomValue(serverSyncStatusAtom);
   
   // Local sync event state (from Tauri events)
   const isSyncingFromEvents = useAtomValue(isSyncingAtom);
@@ -234,21 +228,7 @@ const SyncStatusHandler: React.FC = () => {
       };
     }
 
-    // Priority 5: Server status (as fallback for file counts)
-    if (serverStatus && serverStatus.files_completed > 0) {
-      return {
-        syncPercent: serverStatus.active ? null : 100,
-        totalFiles: serverStatus.files_completed + serverStatus.files_active + serverStatus.files_pending + serverStatus.files_failed,
-        syncedFiles: serverStatus.files_completed,
-        uploadingFiles: serverStatus.files_active,
-        filesFailed: serverStatus.files_failed,
-        isInProgress: serverStatus.active,
-        isCompleted: !serverStatus.active && serverStatus.files_completed > 0,
-        currentFile: null,
-      };
-    }
-
-    // Priority 6: Use local file list from synced activity (historical)
+    // Priority 5: Use local file list from synced activity (historical)
     if (!syncFiles || syncFiles.length === 0) {
       return {
         syncPercent: null,
@@ -295,8 +275,7 @@ const SyncStatusHandler: React.FC = () => {
     `inProgress=${isInProgress}, completed=${isCompleted}`
   );
   console.log(
-    `[SyncStatusHandler] Input state: serverStatus.active=${serverStatus?.active}, ` +
-    `isSyncingFromEvents=${isSyncingFromEvents}, ` +
+    `[SyncStatusHandler] Input state: isSyncingFromEvents=${isSyncingFromEvents}, ` +
     `uploadProgress=${uploadProgress ? JSON.stringify(uploadProgress) : null}, ` +
     `syncFiles.length=${syncFiles?.length ?? 0}`
   );
@@ -304,13 +283,12 @@ const SyncStatusHandler: React.FC = () => {
   useEffect(() => {
     const hasSyncFiles = (syncFiles && syncFiles.length > 0) || displayFiles.length > 0;
     const hasUploadingFiles = uploadingFiles > 0;
-    const hasServerActivity = serverStatus?.active === true;
     // Consider local sync activity including new localStorage-based tracking
-    const hasLocalSyncActivity = (isSyncingFromEvents && totalFilesToSync > 0) || 
-      hasSyncActivity || 
-      uploadProgress !== null || 
+    const hasLocalSyncActivity = (isSyncingFromEvents && totalFilesToSync > 0) ||
+      hasSyncActivity ||
+      uploadProgress !== null ||
       downloadProgress !== null;
-    const hasAnyActivity = isInProgress || hasUploadingFiles || hasServerActivity || hasLocalSyncActivity;
+    const hasAnyActivity = isInProgress || hasUploadingFiles || hasLocalSyncActivity;
     // Only consider sync completed if files were actually synced
     const hasSyncCompleted = isCompleted && syncMetrics.syncPercent === 100 && 
       (completedFilesCount > 0 || overallProgress.completedFiles > 0);
@@ -343,7 +321,6 @@ const SyncStatusHandler: React.FC = () => {
     isCompleted,
     uploadingFiles,
     filesFailed,
-    serverStatus?.active,
     isSyncingFromEvents,
     totalFilesToSync,
     completedFilesCount,
@@ -421,7 +398,6 @@ const SyncStatusHandler: React.FC = () => {
     !syncMetrics.isInProgress &&
     !hasSyncCompleted &&
     !hasSyncActivity &&
-    !serverStatus?.active &&
     !isSyncingFromEvents &&
     !uploadProgress &&
     !downloadProgress &&

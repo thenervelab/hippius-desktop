@@ -22,7 +22,6 @@ use hcfs_client::drive::Drive;
 use hcfs_client::sync::{
     SyncConflict, SyncConflictResolution, SyncConflictType, SyncMode, SyncOutcome, SyncProgress,
 };
-use hcfs_shared::network::SyncStatusResult;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -69,39 +68,6 @@ pub struct StagedChanges {
     pub remote_deletes: Vec<StagedFile>,
     pub conflicts: Vec<StagedConflict>,
     pub unchanged_count: usize,
-}
-
-/// Server-side sync progress status.
-/// This mirrors `SyncStatusResult` from hcfs-shared but is Tauri-serializable.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ServerSyncStatus {
-    pub active: bool,
-    pub progress_percent: f64,
-    pub bytes_completed: u64,
-    pub bytes_total: u64,
-    pub files_completed: u64,
-    pub files_active: u64,
-    pub files_pending: u64,
-    pub files_failed: u64,
-    pub started_at: i64,
-    pub last_activity_at: i64,
-}
-
-impl From<SyncStatusResult> for ServerSyncStatus {
-    fn from(r: SyncStatusResult) -> Self {
-        Self {
-            active: r.active,
-            progress_percent: r.progress_percent,
-            bytes_completed: r.bytes_completed,
-            bytes_total: r.bytes_total,
-            files_completed: r.files_completed,
-            files_active: r.files_active,
-            files_pending: r.files_pending,
-            files_failed: r.files_failed,
-            started_at: r.started_at,
-            last_activity_at: r.last_activity_at,
-        }
-    }
 }
 
 /// Thin wrapper around `hcfs_client::Drive` that adds error mapping to `String`
@@ -294,39 +260,6 @@ impl HcfsDriveManager {
         self.drive.cleanup_stale_temp_files();
     }
 
-    /// Get the current server-side sync progress.
-    /// Returns the user_id and the sync status from the server.
-    pub async fn get_server_sync_status(&self) -> Result<ServerSyncStatus, String> {
-        let user_id = self
-            .drive
-            .user_id()
-            .ok_or("Drive not unlocked")?;
-        
-        let client = self
-            .drive
-            .client()
-            .ok_or("HCFS client not configured")?;
-
-        let status = client
-            .get_sync_status(user_id)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let result: ServerSyncStatus = status.into();
-        
-        // Log server sync status for debugging
-        println!(
-            "[ServerSync] active={}, progress={}%, files: completed={}, active={}, pending={}, failed={}",
-            result.active,
-            result.progress_percent,
-            result.files_completed,
-            result.files_active,
-            result.files_pending,
-            result.files_failed
-        );
-
-        Ok(result)
-    }
 }
 
 /// Global Drive instance

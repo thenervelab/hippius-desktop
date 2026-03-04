@@ -21,7 +21,6 @@ import {
 import { SyncActivityItem } from "./useSyncActivity";
 import {
   lastUpdatedPercentAtom,
-  serverSyncStatusAtom,
   isSyncingAtom,
   uploadProgressAtom,
   downloadProgressAtom,
@@ -297,9 +296,6 @@ export function useTrayInit() {
   );
   const setVpnConnected = useSetAtom(vpnConnectedAtom);
   
-  // Watch server sync status for real-time progress
-  const serverSyncStatus = useAtomValue(serverSyncStatusAtom);
-  
   // Watch local sync events for immediate feedback
   const isSyncingFromEvents = useAtomValue(isSyncingAtom);
   const uploadProgress = useAtomValue(uploadProgressAtom);
@@ -316,12 +312,8 @@ export function useTrayInit() {
     const hasActiveUpload = uploadProgress !== null && uploadProgress.bytes < uploadProgress.total;
     const hasActiveDownload = downloadProgress !== null && downloadProgress.bytes < downloadProgress.total;
     
-    // Use server sync status for sync detection
-    const serverActive = serverSyncStatus?.active ?? false;
-    
-    console.log("[TraySync] Effect triggered - isSyncingFromEvents:", isSyncingFromEvents, 
+    console.log("[TraySync] Effect triggered - isSyncingFromEvents:", isSyncingFromEvents,
       "hasActiveUpload:", hasActiveUpload, "hasActiveDownload:", hasActiveDownload,
-      "serverActive:", serverActive,
       "overallProgress:", overallProgress,
       "hasSyncActivity:", hasSyncActivity);
     
@@ -334,12 +326,10 @@ export function useTrayInit() {
     // Determine sync state - use BOTH localStorage tracking AND event-based atoms
     // isSyncingFromEvents is set immediately when hcfs_sync_started fires
     // hasActiveUpload/hasActiveDownload catch cases where files are still transferring
-    // serverActive catches server-side sync that may not have emitted events yet
-    const isCurrentlySyncing = isSyncingFromEvents || 
+    const isCurrentlySyncing = isSyncingFromEvents ||
       hasActiveUpload ||
       hasActiveDownload ||
-      serverActive ||
-      overallProgress.isActive || 
+      overallProgress.isActive ||
       (overallProgress.inProgressFiles > 0) || 
       (overallProgress.totalFiles > 0 && overallProgress.completedFiles < overallProgress.totalFiles && overallProgress.failedFiles === 0);
     
@@ -396,7 +386,7 @@ export function useTrayInit() {
       // The cleanup happens automatically when files expire from localStorage
     }
     
-  }, [overallProgress, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent, isSyncingFromEvents, uploadProgress, downloadProgress, serverSyncStatus]);
+  }, [overallProgress, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent, isSyncingFromEvents, uploadProgress, downloadProgress]);
 
   useEffect(() => {
     if (menuPromise) return;
@@ -800,7 +790,7 @@ async function setTrayIconSyncing(
 }
 
 /* ─ Public: keep your existing percent label behavior ─────────── */
-async function updateTraySyncPercent(percent: number | null, serverStatus?: { files_completed: number; files_active: number; files_pending: number; files_failed: number } | null) {
+async function updateTraySyncPercent(percent: number | null) {
   // Use the same mutex as updateTraySyncLabel
   if (isUpdatingTrayLabel) {
     console.log("[TraySync] Skipping percent update - already in progress");
@@ -838,17 +828,9 @@ async function updateTraySyncPercent(percent: number | null, serverStatus?: { fi
 
     const isCompleted = percent >= 100;
     
-    // Build label with file counts if available from server status
     let label: string;
     if (isCompleted) {
       label = "✓ Sync: Completed";
-    } else if (serverStatus && (serverStatus.files_completed > 0 || serverStatus.files_active > 0 || serverStatus.files_pending > 0)) {
-      const total = serverStatus.files_completed + serverStatus.files_active + serverStatus.files_pending;
-      label = `⟳ Syncing: ${serverStatus.files_completed}/${total} files • ${Math.round(percent)}%`;
-      // Add failed count if any
-      if (serverStatus.files_failed > 0) {
-        label += ` (${serverStatus.files_failed} failed)`;
-      }
     } else {
       label = `⟳ Sync: ${Math.round(percent)}%`;
     }

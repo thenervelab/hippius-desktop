@@ -478,9 +478,9 @@ pub async fn initialize_sync(
         bearer_token: bearer_token.clone(),
         accept_invalid_certs: true,
         billing_bypass_token: None,
-        account_ss58: account_id.clone(),
+        account_ss58: format!("{}_{}", account_id, folder_hash(&sync_path)),
     })?;
-    println!("[Setup] HCFS config set with account_ss58: {} (before unlock)", account_id);
+    println!("[Setup] HCFS config set with account_ss58: {}_{} (before unlock)", account_id, folder_hash(&sync_path));
 
     // 7. Init or unlock the drive (now account_ss58 is set, so user_id will be correct)
     let (user_id, mnemonic, is_new_setup) = if manager.is_initialized() {

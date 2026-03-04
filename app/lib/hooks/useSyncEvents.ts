@@ -10,7 +10,6 @@ import {
   lastSyncErrorAtom,
   hasSyncErrorAtom,
   syncPercentAtom,
-  serverSyncStatusAtom,
   completedFilesCountAtom,
   totalFilesToSyncAtom,
   syncActionCountsAtom,
@@ -98,7 +97,6 @@ export function useSyncEvents() {
   const setLastSyncErrorAtom = useSetAtom(lastSyncErrorAtom);
   const setHasSyncErrorAtom = useSetAtom(hasSyncErrorAtom);
   const setSyncPercentAtom = useSetAtom(syncPercentAtom);
-  const setServerSyncStatusAtom = useSetAtom(serverSyncStatusAtom);
   const setCompletedFilesCountAtom = useSetAtom(completedFilesCountAtom);
   const setTotalFilesToSyncAtom = useSetAtom(totalFilesToSyncAtom);
   const setSyncActionCountsAtom = useSetAtom(syncActionCountsAtom);
@@ -242,20 +240,6 @@ export function useSyncEvents() {
             setUploadProgressAtom(null);
             setDownloadProgress(null);
             setDownloadProgressAtom(null);
-            // Important: Set server sync status to inactive so tray shows completion
-            // The server will be polled again shortly, but this ensures immediate UI update
-            setServerSyncStatusAtom({
-              active: false,
-              progress_percent: 100,
-              bytes_completed: 0,
-              bytes_total: 0,
-              files_completed: totalCompleted,
-              files_active: 0,
-              files_pending: 0,
-              files_failed: 0,
-              started_at: null,
-              last_activity: new Date().toISOString(),
-            });
             // Keep showing 100% completed state - only reset when sync is stopped or new sync starts
           }),
           listen<SyncError>("hcfs_sync_error", (e) => {
@@ -367,7 +351,6 @@ export function useSyncEvents() {
             setDownloadProgressAtom(null);
             setLastSyncErrorAtom(null);
             setSyncPercentAtom(null);
-            setServerSyncStatusAtom(null);
           }),
         ]);
         if (cancelled) {
@@ -389,7 +372,7 @@ export function useSyncEvents() {
         cleanupIntervalRef.current = null;
       }
     };
-  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setSyncPercentAtom, setServerSyncStatusAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, refreshProgressState]);
+  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setSyncPercentAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, refreshProgressState]);
 
   return {
     isSyncing,
