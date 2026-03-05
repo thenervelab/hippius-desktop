@@ -72,10 +72,8 @@ export async function setApiAuth(
     );
   } else {
     db.run(
-      "INSERT INTO session (mnemonic,oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO session (logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?)",
       [
-        "",
-        "",
         0,
         1440,
         token,
@@ -152,7 +150,6 @@ export async function getAuthHeaders(): Promise<HeadersInit | null> {
 }
 
 export async function saveSession(
-  mnemonic: string,
   logoutTimeInMinutes?: number
 ): Promise<number> {
   try {
@@ -171,8 +168,8 @@ export async function saveSession(
 
     db.run("DELETE FROM session");
     db.run(
-      "INSERT INTO session (oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes) VALUES (?, ?, ?)",
-      [mnemonic, logoutTimeStamp, effectiveMinutes]
+      "INSERT INTO session (logoutTimeStamp, logoutTimeInMinutes) VALUES (?, ?)",
+      [logoutTimeStamp, effectiveMinutes]
     );
 
     await saveBytes(db.export());
@@ -184,7 +181,6 @@ export async function saveSession(
 }
 
 export async function getSession(): Promise<{
-  mnemonic: string;
   logoutTimeStamp: number;
   logoutTimeInMinutes: number;
 } | null> {
@@ -193,17 +189,16 @@ export async function getSession(): Promise<{
     const db = await initHippiusDesktopDB();
 
     const res = db.exec(
-      "SELECT oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes FROM session LIMIT 1"
+      "SELECT logoutTimeStamp, logoutTimeInMinutes FROM session LIMIT 1"
     );
 
     if (!res.length || !res[0]?.values.length) {
       return null;
     }
 
-    const [oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes] = res[0]
-      .values[0] as [string, number, number];
+    const [logoutTimeStamp, logoutTimeInMinutes] = res[0]
+      .values[0] as [number, number];
     return {
-      mnemonic: oauthMnemonic,
       logoutTimeStamp,
       logoutTimeInMinutes: logoutTimeInMinutes || 1440,
     };
@@ -215,10 +210,22 @@ export async function getSession(): Promise<{
 
 export async function updateSessionTimeout(logoutTimeInMinutes: number) {
   try {
-    const session = await getSession();
-    if (!session) return false;
+    await ensureWalletTable();
+    const db = await initHippiusDesktopDB();
 
-    await saveSession(session.mnemonic, logoutTimeInMinutes);
+    const logoutTimeStamp =
+      logoutTimeInMinutes === -1
+        ? Date.now() + FOREVER_MS
+        : Date.now() + logoutTimeInMinutes * 60_000;
+
+    const res = db.exec("SELECT id FROM session LIMIT 1");
+    if (!res.length || !res[0]?.values.length) return false;
+
+    db.run(
+      "UPDATE session SET logoutTimeStamp = ?, logoutTimeInMinutes = ? WHERE id = ?",
+      [logoutTimeStamp, logoutTimeInMinutes, res[0].values[0][0]]
+    );
+    await saveBytes(db.export());
     return true;
   } catch (err) {
     console.error("Error updating session timeout:", err);
@@ -241,14 +248,14 @@ export async function clearSession() {
     if (hasRow && id != null) {
       // Clear active session data + API auth
       db.run(
-        "UPDATE session SET mnemonic = ?,oauthMnemonic = ?, logoutTimeStamp = ?, logoutTimeInMinutes = ?, authToken = ?, tokenExpiry = ?, userId = ?, username = ? WHERE id = ?",
-        ["", "", 0, minutes, null, null, null, null, id]
+        "UPDATE session SET logoutTimeStamp = ?, logoutTimeInMinutes = ?, authToken = ?, tokenExpiry = ?, userId = ?, username = ? WHERE id = ?",
+        [0, minutes, null, null, null, null, id]
       );
     } else {
       // No row yet: create placeholder carrying the minutes
       db.run(
-        "INSERT INTO session (mnemonic,oauthMnemonic, logoutTimeStamp, logoutTimeInMinutes, authToken, tokenExpiry, userId, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        ["", "", 0, minutes, null, null, null, null]
+        "INSERT INTO session (logoutTimeStamp, logoutTimeInMinutes) VALUES (?, ?)",
+        [0, minutes]
       );
     }
 

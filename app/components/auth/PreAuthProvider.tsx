@@ -9,21 +9,20 @@ interface PreAuthProviderProps {
 }
 
 export default function PreAuthProvider({ children }: PreAuthProviderProps) {
-    const { isAuthenticated } = useWalletAuth();
+    const { isAuthenticated, polkadotAddress } = useWalletAuth();
     const [authInitialized, setAuthInitialized] = useState(false);
 
     useEffect(() => {
-        if (isAuthenticated && !authInitialized) {
-            // Initialize billing auth token once user is logged in
+        if (isAuthenticated && polkadotAddress && !authInitialized) {
             (async () => {
                 try {
-                    await ensureBillingAuth();
+                    await ensureBillingAuth(polkadotAddress);
                 } finally {
                     setAuthInitialized(true);
                 }
             })();
         }
-    }, [isAuthenticated, authInitialized]);
+    }, [isAuthenticated, polkadotAddress, authInitialized]);
 
     return <>{children}</>;
 }

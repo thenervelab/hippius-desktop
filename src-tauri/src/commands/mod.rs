@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod billing_auth;
 pub mod file_commands;
 pub mod indexer;
 pub mod objectstore_auth;

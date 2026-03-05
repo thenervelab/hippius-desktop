@@ -921,9 +921,24 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                 "hcfs_download_progress",
                 serde_json::json!({"label": l2, "bytes": b, "total": t, "path": p}),
             );
-            // Download activity is recorded from the staged plan (which has real
-            // file names) in trigger_sync_for_drive, not here. The progress
-            // callback only receives encrypted names like "file_09977d01...".
+            // Record download completion with the encrypted name. The real
+            // file name is resolved later in trigger_sync_for_drive using
+            // the path_index (the callback only sees names like "file_09977d01...").
+            if b == t && t > 0 {
+                if let Some(path_str) = p {
+                    let file_name = Path::new(path_str)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path_str.to_string());
+                    add_pending_activity(SyncActivityItem {
+                        file_name,
+                        action: "downloaded".to_string(),
+                        timestamp: chrono::Utc::now().timestamp(),
+                        size_bytes: t,
+                        label: l2.clone(),
+                    });
+                }
+            }
         })),
         on_encrypt_progress: Some(Arc::new(move |b, t, p| {
             let _ = a3.emit(
@@ -952,17 +967,14 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
     });
 }
 
-/// Return the master BIP-39 mnemonic by decrypting it from disk.
-///
-/// Returns the **master** mnemonic (the one the user should back up), not the
-/// per-folder derived mnemonic. This is the recovery seed that can reconstruct
-/// any folder's derived mnemonic.
-#[tauri::command]
-pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
-    let drive_password = get_drive_password(&account_id).await?;
+/// Retrieve the master BIP-39 mnemonic for an account by decrypting it from
+/// disk. Shared implementation used by both the Tauri command and the billing
+/// auth module.
+pub async fn get_mnemonic_for_account(account_id: &str) -> Result<String, String> {
+    let drive_password = get_drive_password(account_id).await?;
 
     // Prefer the master mnemonic at account level
-    let master_path = master_mnemonic_path(&account_id)?;
+    let master_path = master_mnemonic_path(account_id)?;
     if master_path.exists() {
         let mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)
             .map_err(|e| e.to_string())?;
@@ -982,7 +994,7 @@ pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
         None => {
             // No active drive — try reading DB for any sync path
             let db = DB_POOL.get().ok_or("Database not initialized")?;
-            let owner = account_key(&account_id);
+            let owner = account_key(account_id);
             let result: Option<(String, String)> =
                 sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ? LIMIT 1")
                     .bind(&owner)
@@ -991,7 +1003,7 @@ pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
                     .map_err(|e| format!("DB error: {e}"))?;
 
             if let Some((path, lbl)) = result {
-                let folder_dir = config_dir_for_folder(&account_id, &lbl)?;
+                let folder_dir = config_dir_for_folder(account_id, &lbl)?;
                 let manager = HcfsDriveManager::new(PathBuf::from(&path), folder_dir);
                 if manager.is_initialized() {
                     manager.export_mnemonic(&drive_password)
@@ -1003,6 +1015,13 @@ pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
             }
         }
     }
+}
+
+/// Tauri command wrapper: return the master BIP-39 mnemonic by decrypting it
+/// from disk.
+#[tauri::command]
+pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
+    get_mnemonic_for_account(&account_id).await
 }
 
 /// Stage changes and return a preview of what will sync.

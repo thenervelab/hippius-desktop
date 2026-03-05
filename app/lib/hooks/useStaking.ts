@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect, useCallback } from 'react';
 import { usePolkadotApi } from '@/app/lib/polkadot-api-context';
 import { useWalletAuth } from '@/app/lib/wallet-auth-context';
@@ -385,9 +385,15 @@ export const useStaking = () => {
         claimRewards,
     };
 
+    // True when the user is authenticated but the keypair isn't in memory
+    // (boot restore without plaintext mnemonic). The consuming component
+    // should show a PasscodePromptDialog so the user can unlock their wallet.
+    const needsUnlock = Boolean(polkadotAddress && !walletManager?.polkadotPair);
+
     return {
         stakingInfo,
         operations,
         refetch: fetchStakingInfo,
+        needsUnlock,
     };
 };

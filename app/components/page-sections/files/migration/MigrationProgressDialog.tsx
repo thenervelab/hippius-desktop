@@ -125,7 +125,7 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
                         <div className="space-y-1">
                             {files.map((file, index) => (
                                 <div
-                                    key={file.cid}
+                                    key={`${file.cid || "file"}-${index}`}
                                     className={`flex items-center gap-2 px-2 py-1.5 rounded ${index === currentFileIndex ? "bg-primary-50/10" : ""
                                         }`}
                                 >

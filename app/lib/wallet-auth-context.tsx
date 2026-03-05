@@ -64,12 +64,10 @@ const MAX_DELAY = 2_147_483_647; // ~24.8 days
 
 // Helper function to validate token
 const isTokenValid = (token: string | null | undefined, expiresAt?: string): boolean => {
-  // Check if token exists and is not empty
   if (!token || token.trim() === "") {
     return false;
   }
 
-  // Check if expiration date is provided and has passed
   if (expiresAt) {
     try {
       const expirationTime = new Date(expiresAt).getTime();
@@ -132,12 +130,13 @@ export function WalletAuthProvider({
 
   const getMnemonic = useCallback(async (): Promise<string | null> => {
     try {
-      const session = await getSession();
-      return session?.mnemonic || null;
+      // Retrieve mnemonic from encrypted Drive via Rust — never from session DB
+      if (!polkadotAddress) return null;
+      return await invoke<string>("get_drive_mnemonic", { accountId: polkadotAddress });
     } catch {
       return null;
     }
-  }, []);
+  }, [polkadotAddress]);
 
   const logout = useCallback(
     async (redirectPath?: string) => {
@@ -258,44 +257,32 @@ export function WalletAuthProvider({
                 oauthSessionData.token
               );
 
-              // For mnemonic-based auth, restore mnemonic from database and pass to sync
+              // For mnemonic-based auth on boot restore: don't derive keypair
+              // from plaintext. walletManager stays null until user performs a
+              // staking action (passcode prompt). Sync init doesn't need the
+              // mnemonic — Rust fetches it from the encrypted Drive.
               if (oauthSessionData.provider === "mnemonic") {
-                const mnemonicSession = await getSession();
-                if (mnemonicSession && mnemonicSession.mnemonic) {
-                  console.log(
-                    "[WalletAuth] Restoring mnemonic session for sync"
-                  );
-                  await cryptoWaitReady();
-                  const keyring = new Keyring({ type: "sr25519" });
-                  const pair = keyring.addFromMnemonic(
-                    mnemonicSession.mnemonic
-                  );
-
-                  setWalletManager({ polkadotPair: pair });
-
-                  if (
-                    oauthSessionData.substrateAddress &&
-                    !syncInitialized.current
-                  ) {
-                    try {
-                      syncInitialized.current = true;
-                      await invoke("stop_sync").catch(() => { });
-                      tryAutoInitSync(
-                        oauthSessionData.substrateAddress,
-                        mnemonicSession.mnemonic
-                      ).catch((err) =>
-                        console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err)
-                      );
-                    } catch (err) {
-                      console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err);
-                    }
+                if (
+                  oauthSessionData.substrateAddress &&
+                  !syncInitialized.current
+                ) {
+                  try {
+                    syncInitialized.current = true;
+                    await invoke("stop_sync").catch(() => { });
+                    tryAutoInitSync(
+                      oauthSessionData.substrateAddress
+                    ).catch((err) =>
+                      console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err)
+                    );
+                  } catch (err) {
+                    console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err);
                   }
-                  console.log(
-                    "[WalletAuth] ✅ Mnemonic session restored with sync"
-                  );
                 }
+                console.log(
+                  "[WalletAuth] Mnemonic session restored (keypair deferred)"
+                );
               } else if (
-                // For pure OAuth sessions (no mnemonic login), generate/retrieve mnemonic and initialize sync
+                // For pure OAuth sessions, generate/retrieve mnemonic and initialize sync
                 oauthSessionData.substrateAddress &&
                 !syncInitialized.current
               ) {
@@ -311,7 +298,7 @@ export function WalletAuthProvider({
                 }
               }
 
-              console.log("[WalletAuth] ✅ OAuth session restored");
+              console.log("[WalletAuth] OAuth session restored");
               return; // Skip mnemonic-only session check
             } catch (error) {
               console.error(
@@ -334,9 +321,9 @@ export function WalletAuthProvider({
         }
       }
 
-      // Check for mnemonic session (legacy or fallback)
+      // Check for session timeout data (no mnemonic stored)
       const session = await getSession();
-      if (!session || !session.mnemonic) {
+      if (!session) {
         setSessionTimeRemaining(null);
         return;
       }
@@ -344,18 +331,14 @@ export function WalletAuthProvider({
       // Validate token from API auth if it exists
       const apiAuth = await getApiAuth();
 
-      // If there's a mnemonic session, we must have a valid token
       if (!apiAuth?.token || (apiAuth.tokenExpiry && apiAuth.tokenExpiry < Date.now())) {
-        console.log("[WalletAuth] No token or token expired for mnemonic session, redirecting to login");
+        console.log("[WalletAuth] No token or token expired for session, redirecting to login");
         await clearApiAuth();
         localStorage.removeItem("hippius_token");
         localStorage.removeItem("hippius_token_expiry");
         await logout("/login");
         return;
       }
-
-      // Don't leak mnemonic in logs/toasts
-      // toast.success("Session restored");  // optional
 
       const timeRemaining = session.logoutTimeStamp - Date.now();
       setSessionTimeRemaining(Math.max(timeRemaining, 0));
@@ -365,12 +348,16 @@ export function WalletAuthProvider({
         return;
       }
 
-      // Re-adopt the session minutes to avoid -1 bug
-      const ok = await setSession(
-        session.mnemonic,
-        session.logoutTimeInMinutes
-      );
-      if (ok) router.push("/");
+      // Session exists with valid token — this is a legacy mnemonic session
+      // that still has timeout data. We can't derive the keypair without
+      // plaintext, so just mark authenticated and schedule logout.
+      // The user will get a passcode prompt if they try to stake.
+      setIsAuthenticated(true);
+
+      const effMinutes = session.logoutTimeInMinutes;
+      scheduleLogout(effMinutes === -1 ? Infinity : timeRemaining);
+
+      router.push("/");
     };
 
     setupSessionTimeout();
@@ -396,7 +383,7 @@ export function WalletAuthProvider({
       const mnemonic = decryptMnemonic(record.encryptedMnemonic, passcode);
       if (!isMnemonicValid(mnemonic)) throw new Error("Decryption failed");
 
-      // check that session actually initialized
+      // Derive keypair in memory, persist session timeout (not mnemonic)
       const sessionOk = await setSession(mnemonic, logoutTimeInMinutes);
       if (!sessionOk) throw new Error("Session setup failed");
 
@@ -433,11 +420,8 @@ export function WalletAuthProvider({
         logoutTimerRef.current = null;
       }
 
-      // Persist session and get timestamp
-      const logoutTimeStamp = await saveSession(
-        inputMnemonic,
-        logoutTimeInMinutes
-      );
+      // Persist session timeout only — no mnemonic
+      const logoutTimeStamp = await saveSession(logoutTimeInMinutes);
 
       // Validate API token if it exists
       const apiAuth = await getApiAuth();
@@ -467,7 +451,6 @@ export function WalletAuthProvider({
         syncInitialized.current = true;
         await invoke("stop_sync").catch(() => { });
         // Fire-and-forget: sync init runs in background so login isn't blocked.
-        // Only starts if both sync path and HCFS config are already configured.
         tryAutoInitSync(pair.address, inputMnemonic).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from setSession:", err)
         );
@@ -548,7 +531,7 @@ export function WalletAuthProvider({
       setOAuthSessionState(session);
       setAuthType("mnemonic");
       setIsAuthenticated(true);
-      await saveSession(inputMnemonic, -1);
+      await saveSession(-1);
 
       // Initialize sync with the mnemonic (only if sync path & HCFS config exist)
       if (!syncInitialized.current) {
@@ -591,7 +574,7 @@ export function WalletAuthProvider({
     setAuthType("oauth");
     setIsAuthenticated(true);
 
-    console.log("[WalletAuth] ✅ OAuth session persisted and state updated");
+    console.log("[WalletAuth] OAuth session persisted and state updated");
 
     // Ensure temp auth key is stored for S3 access if no master token yet
     await ensureTempAuthKey(session.substrateAddress, session.token);

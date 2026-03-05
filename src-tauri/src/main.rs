@@ -166,6 +166,8 @@ fn main() {
             request_master_token_command,
             // HCFS mnemonic export
             get_drive_mnemonic,
+            // Billing auth (Ethereum challenge-response)
+            commands::billing_auth::billing_auth,
             // HCFS config commands
             commands::syncing::save_hcfs_config,
             commands::syncing::get_hcfs_config,

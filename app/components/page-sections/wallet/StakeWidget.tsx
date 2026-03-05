@@ -5,14 +5,16 @@ import { useRouter } from "next/navigation";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { formatStakingAmount } from "@/app/lib/utils/staking";
-// import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
+import PasscodePromptDialog from "../stake-bridge/PasscodePromptDialog";
 
 const StakeWidget: FC = () => {
     const router = useRouter();
-    const { stakingInfo, operations } = useStaking();
-    // const { polkadotAddress } = useWalletAuth();
+    const { stakingInfo, operations, needsUnlock } = useStaking();
+    const { unlockWithPasscode } = useWalletAuth();
     const [isWithdrawing, setIsWithdrawing] = useState(false);
+    const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
 
     const handleStakeNow = () => {
         router.push("/stake?tab=stake");
@@ -29,6 +31,10 @@ const StakeWidget: FC = () => {
     // };
 
     const handleWithdrawUnbonded = async () => {
+        if (needsUnlock) {
+            setShowPasscodePrompt(true);
+            return;
+        }
         if (!operations.withdrawUnbonded) return;
 
         setIsWithdrawing(true);
@@ -184,6 +190,12 @@ const StakeWidget: FC = () => {
                 </CardButton>
 
             </div>
+
+            <PasscodePromptDialog
+                open={showPasscodePrompt}
+                onOpenChange={setShowPasscodePrompt}
+                onSubmit={unlockWithPasscode}
+            />
         </div>
     );
 };

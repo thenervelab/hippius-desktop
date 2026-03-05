@@ -261,6 +261,33 @@ impl HcfsDriveManager {
     pub fn cleanup_temp(&self) {
         self.drive.cleanup_stale_temp_files();
     }
+
+    /// Build a path_index from the current sync state + local scan,
+    /// then return all `(file_id_hex_prefix, real_path)` pairs.
+    /// The file_id prefix is the first 8 bytes hex-encoded (16 chars),
+    /// matching the encrypted on-disk name format `file_<16hex>`.
+    pub fn build_path_index(
+        &self,
+    ) -> Result<HashMap<String, String>, String> {
+        let mut state = self
+            .drive
+            .load_sync_state()
+            .map_err(|e| e.to_string())?;
+        self.drive
+            .scan_local_files(&mut state)
+            .map_err(|e| e.to_string())?;
+
+        let mut index = HashMap::new();
+        for (file_id, path) in &state.path_index {
+            let prefix = hex::encode(&file_id[..8]);
+            let real_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+            index.insert(prefix, real_name);
+        }
+        Ok(index)
+    }
 }
 
 /// Drive registry: maps label → HcfsDriveManager
@@ -664,36 +691,69 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             );
 
             if outcome.files_uploaded > 0 || outcome.files_downloaded > 0 {
-                // Discard progress-callback activity for downloads — those
-                // have encrypted names (file_<hash>). Replace with real
-                // names from the staged plan, then commit.
+                // Download progress callbacks record entries with encrypted
+                // names (e.g. "file_a7339456c25845c2"). Replace them with
+                // real file names before committing.
                 {
                     let now = chrono::Utc::now().timestamp();
 
-                    // Remove download entries added by progress callbacks
-                    // (they contain encrypted names like "file_09977d01...")
-                    {
-                        let mut pending = crate::sync_shared::PENDING_ACTIVITY
-                            .lock()
-                            .unwrap_or_else(|p| p.into_inner());
-                        pending.retain(|item| {
-                            !(item.label == label_owned && item.action == "downloaded")
-                        });
-                    }
+                    if !staged_downloads.is_empty() {
+                        // Staged plan had the downloads — use those names
+                        // (they are already human-readable).
+                        {
+                            let mut pending = crate::sync_shared::PENDING_ACTIVITY
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner());
+                            pending.retain(|item| {
+                                !(item.label == label_owned
+                                    && item.action == "downloaded")
+                            });
+                        }
+                        for f in &staged_downloads {
+                            let file_name = std::path::Path::new(&f.path)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| f.path.clone());
+                            add_pending_activity(SyncActivityItem {
+                                file_name,
+                                action: "downloaded".to_string(),
+                                timestamp: now,
+                                size_bytes: 0,
+                                label: label_owned.clone(),
+                            });
+                        }
+                    } else if outcome.files_downloaded > 0 {
+                        // Staging missed these downloads (stale remote cache).
+                        // Resolve encrypted names via the path_index.
+                        let path_index = {
+                            let guard = HCFS_DRIVES.lock().await;
+                            guard
+                                .get(&label_owned)
+                                .and_then(|m| m.build_path_index().ok())
+                        };
 
-                    // Add download entries with real paths from the staged plan
-                    for f in &staged_downloads {
-                        let file_name = std::path::Path::new(&f.path)
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| f.path.clone());
-                        add_pending_activity(SyncActivityItem {
-                            file_name,
-                            action: "downloaded".to_string(),
-                            timestamp: now,
-                            size_bytes: 0,
-                            label: label_owned.clone(),
-                        });
+                        if let Some(idx) = path_index {
+                            let mut pending = crate::sync_shared::PENDING_ACTIVITY
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner());
+                            for item in pending.iter_mut() {
+                                if item.label == label_owned
+                                    && item.action == "downloaded"
+                                    && item.file_name.starts_with("file_")
+                                {
+                                    let hash_prefix =
+                                        item.file_name.trim_start_matches("file_");
+                                    if let Some(real_name) = idx.get(hash_prefix)
+                                    {
+                                        println!(
+                                            "[Sync] Resolved download name: {} -> {}",
+                                            item.file_name, real_name
+                                        );
+                                        item.file_name = real_name.clone();
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 

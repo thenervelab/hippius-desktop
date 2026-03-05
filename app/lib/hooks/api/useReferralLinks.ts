@@ -68,9 +68,9 @@ async function fetchReferralLinks(
 export function useReferralLinks() {
   const { api, isConnected } = usePolkadotApi();
 
-  const { walletManager } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
-  const main = walletManager?.polkadotPair.address;
+  const main = polkadotAddress;
 
   const query = useQuery<ReferralLink[], Error>({
     queryKey: ["referralLinks", main],

@@ -9,6 +9,7 @@ import { Graphsheet } from "../../ui";
 import { getAuthHeaders } from "@/app/lib/services/authService";
 import { ensureBillingAuth } from "@/app/lib/hooks/api/useBillingAuth";
 import { API_CONFIG } from "@/app/lib/helpers/sessionStore";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface Plan {
     name: string;
@@ -34,6 +35,7 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
     const [internalOpen, setInternalOpen] = useState(false);
     const [isCancelling, setIsCancelling] = useState(false);
     const { activeSubscription, subscriptionPlans } = useSubscriptionData();
+    const { polkadotAddress } = useWalletAuth();
 
     // Use either the external open state or internal state
     const dialogOpen = open !== undefined ? open : internalOpen;
@@ -60,8 +62,13 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
         try {
             setIsCancelling(true);
 
+            if (!polkadotAddress) {
+                toast.error("Wallet address not available");
+                return;
+            }
+
             // Ensure authentication is valid
-            const authOk = await ensureBillingAuth();
+            const authOk = await ensureBillingAuth(polkadotAddress);
             if (!authOk.ok) {
                 toast.error(authOk.error || "Authentication failed");
                 return;

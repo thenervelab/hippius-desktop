@@ -9,15 +9,24 @@ import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { toPlancks } from "@/app/lib/utils/staking";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import PasscodePromptDialog from "../stake-bridge/PasscodePromptDialog";
 
 const Unstake = () => {
     const router = useRouter();
-    const { stakingInfo, operations } = useStaking();
+    const { stakingInfo, operations, needsUnlock } = useStaking();
+    const { unlockWithPasscode } = useWalletAuth();
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [pendingAmount, setPendingAmount] = useState("");
+    const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
 
     const handleUnstakeSubmit = async (amount?: string) => {
+        if (needsUnlock) {
+            setShowPasscodePrompt(true);
+            return;
+        }
+
         if (!amount || parseFloat(amount) <= 0) {
             toast.error("Please enter a valid amount");
             return;
@@ -98,6 +107,13 @@ const Unstake = () => {
                 loading={isLoading}
                 amount={pendingAmount}
                 isUnstaking={true}
+            />
+
+            {/* Passcode prompt when wallet keypair is not in memory */}
+            <PasscodePromptDialog
+                open={showPasscodePrompt}
+                onOpenChange={setShowPasscodePrompt}
+                onSubmit={unlockWithPasscode}
             />
         </>
     );

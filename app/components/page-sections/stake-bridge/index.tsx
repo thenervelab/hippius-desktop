@@ -11,12 +11,16 @@ import { useStaking } from "@/app/lib/hooks/useStaking";
 import { toPlancks } from "@/app/lib/utils/staking";
 import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
 import { BN } from "@polkadot/util";
+import { useWalletAuth } from "@/lib/wallet-auth-context";
+import PasscodePromptDialog from "./PasscodePromptDialog";
 
 const StakeBridge = () => {
     const searchParams = useSearchParams();
     const router = useRouter();
     const tabParam = searchParams.get("tab");
-    const { stakingInfo, operations } = useStaking();
+    const { stakingInfo, operations, needsUnlock } = useStaking();
+    const { unlockWithPasscode } = useWalletAuth();
+    const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
 
     // Set initial tab based on URL parameter, default to "Stake hAlpha"
     const [activeTab, setActiveTab] = useState(() => {
@@ -47,6 +51,11 @@ const StakeBridge = () => {
     ];
 
     const handleStakeSubmit = async (amount?: string) => {
+        if (needsUnlock) {
+            setShowPasscodePrompt(true);
+            return;
+        }
+
         if (!amount || parseFloat(amount) <= 0) {
             toast.error("Please enter a valid amount");
             return;
@@ -189,6 +198,13 @@ const StakeBridge = () => {
                 loading={isLoading}
                 amount={pendingAmount}
                 isUnstaking={false}
+            />
+
+            {/* Passcode prompt when wallet keypair is not in memory */}
+            <PasscodePromptDialog
+                open={showPasscodePrompt}
+                onOpenChange={setShowPasscodePrompt}
+                onSubmit={unlockWithPasscode}
             />
         </>
     );

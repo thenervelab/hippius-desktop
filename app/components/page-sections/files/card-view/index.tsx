@@ -168,7 +168,7 @@ const CardView: FC<CardViewProps> = ({
                   onContextMenu={(e) => localHandleContextMenu(e, file)}
                 >
                   <FileCard
-                    key={file.actualFileName || file.name}
+                    key={`${file.actualFileName || file.name || "file"}-${index}`}
                     file={file}
                     state={cardState}
                     onClick={() => {
