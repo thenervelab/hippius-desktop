@@ -609,7 +609,7 @@ function AreaLineChart<T extends object>({
 
                   {/* X Axis */}
                   <AnimatedAxis
-                    key={xAxisProps?.label}
+                    key="x-axis"
                     labelProps={{
                       className: "fill-grey-10 animate-fade-in-0.3",
                       fontSize: 12,
@@ -635,7 +635,7 @@ function AreaLineChart<T extends object>({
 
                   {/* Y Axis */}
                   <AnimatedAxis
-                    key={yAxisProps?.label}
+                    key="y-axis"
                     labelProps={{
                       className: "fill-grey-10 animate-fade-in-0.3",
                       fontSize: 12,

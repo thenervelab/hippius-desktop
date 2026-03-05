@@ -8,7 +8,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { X, Folder } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { setPrivateSyncPath } from "@/app/lib/utils/syncPathUtils";
-import { initializeSync } from "@/app/lib/utils/hcfsConfigUtils";
+import { getHcfsConfig, saveHcfsConfig, initializeSync } from "@/app/lib/utils/hcfsConfigUtils";
+import { HcfsSetupDialog } from "./HcfsSetupDialog";
 
 interface AddLocalFolderDialogProps {
   open: boolean;
@@ -25,6 +26,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [folderName, setFolderName] = useState<string>("");
   const [isAdding, setIsAdding] = useState(false);
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
 
   const handleSelectFolder = async () => {
     try {
@@ -46,16 +48,8 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
     }
   };
 
-  const handleAddFolder = async () => {
-    if (!polkadotAddress) {
-      toast.error("Wallet authentication is required");
-      return;
-    }
-
-    if (!selectedPath) {
-      toast.error("Please select a folder first");
-      return;
-    }
+  const doAdd = async () => {
+    if (!polkadotAddress || !selectedPath) return;
 
     setIsAdding(true);
     try {
@@ -80,6 +74,48 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
     }
   };
 
+  const handleAddFolder = async () => {
+    if (!polkadotAddress) {
+      toast.error("Wallet authentication is required");
+      return;
+    }
+
+    if (!selectedPath) {
+      toast.error("Please select a folder first");
+      return;
+    }
+
+    // Check if HCFS config (encryption password) exists
+    try {
+      const config = await getHcfsConfig(polkadotAddress);
+      if (!config.has_password) {
+        setShowHcfsSetup(true);
+        return;
+      }
+    } catch {
+      setShowHcfsSetup(true);
+      return;
+    }
+
+    await doAdd();
+  };
+
+  const handleHcfsSetupComplete = async (result: {
+    serverUrl: string;
+    password: string;
+  }) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await saveHcfsConfig(polkadotAddress, result.serverUrl, result.password);
+      setShowHcfsSetup(false);
+      await doAdd();
+    } catch (err) {
+      console.error("Failed to save HCFS config:", err);
+      toast.error("Sync setup failed. Please try again.");
+    }
+  };
+
   const handleClose = () => {
     if (!isAdding) {
       setSelectedPath("");
@@ -89,6 +125,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   };
 
   return (
+    <>
     <Dialog.Root open={open} onOpenChange={handleClose}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
@@ -194,5 +231,13 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+
+      <HcfsSetupDialog
+        open={showHcfsSetup}
+        onClose={() => setShowHcfsSetup(false)}
+        onComplete={handleHcfsSetupComplete}
+        loading={isAdding}
+      />
+    </>
   );
 };

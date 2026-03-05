@@ -10,6 +10,8 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { restoreRemoteFolders } from "@/app/lib/utils/restoreUtils";
+import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
+import { HcfsSetupDialog } from "./HcfsSetupDialog";
 
 interface RemoteFolderSelectorProps {
   open: boolean;
@@ -28,6 +30,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
   const [selectedFolder, setSelectedFolder] = useState<RemoteFolder | null>(null);
   const [localPath, setLocalPath] = useState<string>("");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [showHcfsSetup, setShowHcfsSetup] = useState(false);
 
   const handleSelectFolder = (folder: RemoteFolder) => {
     if (selectedFolder?.folderName === folder.folderName) {
@@ -56,21 +59,8 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
     }
   };
 
-  const handleSyncFolder = async () => {
-    if (!polkadotAddress) {
-      toast.error("Wallet authentication is required");
-      return;
-    }
-
-    if (!selectedFolder) {
-      toast.error("Please select a folder to sync");
-      return;
-    }
-
-    if (!localPath) {
-      toast.error("Please select a local destination");
-      return;
-    }
+  const doRestore = async () => {
+    if (!polkadotAddress || !selectedFolder || !localPath) return;
 
     setIsSyncing(true);
     try {
@@ -106,6 +96,53 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
     }
   };
 
+  const handleSyncFolder = async () => {
+    if (!polkadotAddress) {
+      toast.error("Wallet authentication is required");
+      return;
+    }
+
+    if (!selectedFolder) {
+      toast.error("Please select a folder to sync");
+      return;
+    }
+
+    if (!localPath) {
+      toast.error("Please select a local destination");
+      return;
+    }
+
+    // Check if HCFS config (encryption password) exists
+    try {
+      const config = await getHcfsConfig(polkadotAddress);
+      if (!config.has_password) {
+        setShowHcfsSetup(true);
+        return;
+      }
+    } catch {
+      setShowHcfsSetup(true);
+      return;
+    }
+
+    await doRestore();
+  };
+
+  const handleHcfsSetupComplete = async (result: {
+    serverUrl: string;
+    password: string;
+  }) => {
+    if (!polkadotAddress) return;
+
+    try {
+      await saveHcfsConfig(polkadotAddress, result.serverUrl, result.password);
+      setShowHcfsSetup(false);
+      await doRestore();
+    } catch (err) {
+      console.error("Failed to save HCFS config:", err);
+      toast.error("Sync setup failed. Please try again.");
+    }
+  };
+
   const handleClose = () => {
     if (!isSyncing) {
       setSelectedFolder(null);
@@ -125,6 +162,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
   };
 
   return (
+    <>
     <Dialog.Root open={open} onOpenChange={handleClose}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
@@ -301,5 +339,13 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+
+      <HcfsSetupDialog
+        open={showHcfsSetup}
+        onClose={() => setShowHcfsSetup(false)}
+        onComplete={handleHcfsSetupComplete}
+        loading={isSyncing}
+      />
+    </>
   );
 };
