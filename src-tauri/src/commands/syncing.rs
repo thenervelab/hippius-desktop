@@ -219,16 +219,15 @@ fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String, 
     Ok(folder_mnemonic.to_string())
 }
 
-/// Ensure the folder uses a derived mnemonic, not the raw master.
+/// Ensure the folder uses the correct derived mnemonic for the current master.
 ///
-/// After migration, the folder's `enc_mnemonic.json` may contain the master
-/// mnemonic verbatim (legacy). This function detects that by comparing the
-/// decrypted folder mnemonic against the master. If they match, it:
-///   1. Derives the correct folder-specific mnemonic
-///   2. Re-saves `enc_mnemonic.json` with the derived mnemonic
-///   3. Wipes `sync_state.json` so files are re-uploaded with the new key
+/// Detects two legacy states:
+///   1. Folder mnemonic == master verbatim (copied during migration without derivation)
+///   2. Folder mnemonic != derive(master, label) (derived from a different/old master)
 ///
-/// This is idempotent — if the folder already has a derived mnemonic, it's a no-op.
+/// In either case it re-derives from the current master, writes a `.needs_rekey`
+/// marker (so `initialize_sync_inner` purges stale remote files), and wipes local
+/// sync state to force re-upload with the correct key.
 fn ensure_derived_mnemonic(
     folder_dir: &Path,
     master_path: &Path,
@@ -250,36 +249,45 @@ fn ensure_derived_mnemonic(
         .map_err(|e| format!("Failed to recover folder mnemonic: {e}"))?;
     let mut folder_str = folder.to_string();
 
-    if folder_str != master_str {
+    let mut expected = derive_folder_mnemonic(&master_str, label)?;
+
+    if folder_str == expected {
+        // Already correct — nothing to do.
         master_str.zeroize();
         folder_str.zeroize();
+        expected.zeroize();
         return Ok(());
     }
+
+    // Folder mnemonic is wrong — either raw master or derived from an old master.
+    if folder_str == master_str {
+        println!(
+            "[Migration] Folder '{}' uses raw master mnemonic — re-deriving",
+            label
+        );
+    } else {
+        println!(
+            "[Migration] Folder '{}' uses wrong derived mnemonic (old master?) — re-deriving",
+            label
+        );
+    }
     folder_str.zeroize();
-
-    println!(
-        "[Migration] Folder '{}' uses un-derived master mnemonic — re-deriving",
-        label
-    );
-
-    let mut derived = derive_folder_mnemonic(&master_str, label)?;
     master_str.zeroize();
 
     // Create the rekey marker BEFORE saving the new mnemonic. If the
     // process crashes after the mnemonic is saved but before the marker
-    // is written, `ensure_derived_mnemonic` would see folder != master
-    // on next startup and skip re-derivation — leaving stale remote
-    // files encrypted with the old key and no purge scheduled.
+    // is written, the next startup would see folder == expected and
+    // skip — leaving stale remote files encrypted with the old key.
     let marker = folder_dir.join(".needs_rekey");
     std::fs::File::create(&marker).map_err(|e| {
         format!("Failed to create rekey marker: {e}")
     })?;
 
     hcfs_client::auth::save_encrypted_mnemonic(
-        &folder_enc, &derived, password,
+        &folder_enc, &expected, password,
     )
     .map_err(|e| format!("Failed to save derived mnemonic: {e}"))?;
-    derived.zeroize();
+    expected.zeroize();
 
     // Wipe sync state so files get re-uploaded with the new key
     let state_path = folder_dir.join("sync_state.json");
@@ -673,20 +681,37 @@ async fn initialize_sync_inner(
         let (folder_mnemonic, master_for_backup, generated_new_master) = if let Some(ref imported) =
             existing_mnemonic
         {
-            // User importing a mnemonic (first setup or recovery)
-            if !master_path.exists() {
-                hcfs_client::auth::save_encrypted_mnemonic(&master_path, imported, &drive_password)
+            // Always derive from the imported (login) mnemonic — this is the
+            // cross-device portable secret. If the stored master differs
+            // (e.g. legacy hcfs-client-generated mnemonic), replace it so
+            // all devices agree on the derivation root.
+            {
+                use zeroize::Zeroize;
+
+                if !master_path.exists() {
+                    hcfs_client::auth::save_encrypted_mnemonic(
+                        &master_path, imported, &drive_password,
+                    )
                     .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-                println!("[Setup] Saved imported mnemonic as master");
-                let derived = derive_folder_mnemonic(imported, &label)?;
-                (derived, None, false)
-            } else {
-                println!("[Setup] Master already exists, deriving from it (ignoring import)");
-                let master = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)
+                    println!("[Setup] Saved imported mnemonic as master");
+                } else {
+                    let stored = hcfs_client::auth::recover_mnemonic(
+                        &master_path, &drive_password,
+                    )
                     .map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
-                let mut master_str = master.to_string();
-                let derived = derive_folder_mnemonic(&master_str, &label)?;
-                zeroize::Zeroize::zeroize(&mut master_str);
+                    let mut stored_str = stored.to_string();
+                    if stored_str != *imported {
+                        println!(
+                            "[Setup] Stored master differs from login mnemonic — updating master"
+                        );
+                        hcfs_client::auth::save_encrypted_mnemonic(
+                            &master_path, imported, &drive_password,
+                        )
+                        .map_err(|e| format!("Failed to update master mnemonic: {e}"))?;
+                    }
+                    stored_str.zeroize();
+                }
+                let derived = derive_folder_mnemonic(imported, &label)?;
                 (derived, None, false)
             }
         } else if master_path.exists() {
