@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { Icons, RevealTextLine } from "@/components/ui";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
 import { InView } from "react-intersection-observer";
-import UpdateSyncFolder from "./UpdateSyncFolder";
+import MultiFolderSyncManager from "./MultiFolderSyncManager";
 import NotificationSettings from "./NotificationSettings";
 import { useAtom } from "jotai";
 import { activeSettingsTabAtom } from "@/app/components/sidebar/sideBarAtoms";
@@ -118,7 +118,7 @@ const SettingsDialogContent: React.FC = () => {
                     className="delay-300 w-full"
                     parentClassName="w-full"
                   >
-                    <UpdateSyncFolder />
+                    <MultiFolderSyncManager />
                   </RevealTextLine>
                 </div>
 
