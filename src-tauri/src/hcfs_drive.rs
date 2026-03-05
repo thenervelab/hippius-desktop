@@ -78,6 +78,7 @@ pub struct HcfsDriveManager {
     drive: Drive,
     sync_path: PathBuf,
     config_dir: PathBuf,
+    client_config: Option<HcfsClientConfig>,
 }
 
 impl HcfsDriveManager {
@@ -86,6 +87,7 @@ impl HcfsDriveManager {
             drive: Drive::with_config_dir(&sync_path, &config_dir),
             sync_path,
             config_dir,
+            client_config: None,
         }
     }
 
@@ -125,6 +127,7 @@ impl HcfsDriveManager {
     }
 
     pub fn set_config(&mut self, config: HcfsClientConfig) -> Result<(), String> {
+        self.client_config = Some(config.clone());
         self.drive.set_config(config).map_err(|e| e.to_string())
     }
 
@@ -294,16 +297,19 @@ impl HcfsDriveManager {
         }
     }
 
-    /// Remove files left behind by failed downloads.
+    /// Remove files left behind by failed downloads and return their
+    /// hex-encoded file IDs (the full `path_hash`).
     ///
     /// When hcfs-client cannot decrypt a downloaded file it leaves a
     /// partial or empty file on disk named `downloaded_<hex>`. These
     /// are not real user files — they are artifacts of the fallback
-    /// naming in `resolve_download_path`. Scan the sync folder and
-    /// delete any that match.
-    pub fn cleanup_failed_downloads(&self) {
+    /// naming in `resolve_download_path`. Scan the sync folder,
+    /// delete any that match, and return the file IDs so the caller
+    /// can also purge them from the server.
+    pub fn cleanup_failed_downloads(&self) -> Vec<String> {
+        let mut failed_ids = Vec::new();
         let Ok(entries) = std::fs::read_dir(&self.sync_path) else {
-            return;
+            return failed_ids;
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
@@ -317,8 +323,12 @@ impl HcfsDriveManager {
                     name_str
                 );
                 let _ = std::fs::remove_file(entry.path());
+                failed_ids.push(
+                    name_str["downloaded_".len()..].to_string(),
+                );
             }
         }
+        failed_ids
     }
 
     /// Build a path_index from the current sync state + local scan,
@@ -754,12 +764,44 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         s.last_sync_time = Some(chrono::Utc::now().timestamp());
     });
 
-    // Log post-sync diagnostics and remove any files left behind by failed downloads.
-    {
+    // Log post-sync diagnostics and remove any files left behind by
+    // failed downloads. If any are found, also delete them from the
+    // server so they stop being retried every sync cycle.
+    let (failed_ids, user_id_for_purge) = {
         let guard = HCFS_DRIVES.lock().await;
         if let Some(m) = guard.get(label) {
             m.log_sync_diagnostics(label);
-            m.cleanup_failed_downloads();
+            let ids = m.cleanup_failed_downloads();
+            let uid = m.user_id().map(String::from);
+            (ids, uid)
+        } else {
+            (Vec::new(), None)
+        }
+    };
+    if !failed_ids.is_empty() {
+        if let Some(uid) = user_id_for_purge {
+            // Build a temporary client outside the lock to delete
+            // undecryptable remote files without blocking other drives.
+            let cfg = {
+                let guard = HCFS_DRIVES.lock().await;
+                guard.get(label).and_then(|m| m.client_config.clone())
+            };
+            if let Some(cfg) = cfg {
+                if let Ok(client) = hcfs_client::client::HcfsClient::new(cfg) {
+                    for fid in &failed_ids {
+                        match client.delete(&uid, fid).await {
+                            Ok(_) => println!(
+                                "[Sync] Deleted undecryptable remote file {} for '{}'",
+                                fid, label
+                            ),
+                            Err(e) => println!(
+                                "[Sync] Warning: failed to delete remote file {}: {}",
+                                fid, e
+                            ),
+                        }
+                    }
+                }
+            }
         }
     }
 
