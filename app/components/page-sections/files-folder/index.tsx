@@ -135,7 +135,7 @@ export default function FolderView({
           setIsRefreshing(true);
         }
 
-        const syncPath = await getPrivateSyncPath(polkadotAddress || "");
+        const syncPath = (await getPrivateSyncPath(polkadotAddress || "")).path;
 
         // Build the subfolder path relative to the sync root
         const subfolder = getFullPath(mainFolderActualName, subFolderPath) || null;
@@ -200,7 +200,7 @@ export default function FolderView({
     (async () => {
       try {
         setIsLoadingSyncPath(true);
-        const path = await getPrivateSyncPath(polkadotAddress ?? undefined);
+        const path = (await getPrivateSyncPath(polkadotAddress ?? undefined)).path;
         setSyncFolderPath(path || "");
       } catch (error) {
         console.error("Failed to load sync path:", error);
@@ -217,7 +217,7 @@ export default function FolderView({
       (async () => {
         try {
           setIsLoadingSyncPath(true);
-          const path = await getPrivateSyncPath(polkadotAddress ?? undefined);
+          const path = (await getPrivateSyncPath(polkadotAddress ?? undefined)).path;
           setSyncFolderPath(path || "");
         } catch (error) {
           console.error("Failed to reload sync path:", error);

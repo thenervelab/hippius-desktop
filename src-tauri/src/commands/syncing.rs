@@ -2,15 +2,16 @@
 //!
 //! This module contains the Tauri commands for managing the sync lifecycle:
 //! - `initialize_sync` — reads config from DB, creates Drive, starts sync loop
-//! - `stop_sync` — cancels the sync loop, drops the Drive
+//! - `stop_sync` — cancels the sync loop, drops all drives
+//! - `stop_drive` — stops a single drive by label
 //! - `trigger_sync_now` — runs one immediate sync cycle
 //! - `save_hcfs_config` / `get_hcfs_config` / `update_hcfs_server_url` — config CRUD
 //!
 //! It also contains `setup_progress_handlers()` which registers callbacks on the
 //! Drive that emit Tauri events for upload/download/encrypt/decrypt progress.
 
-use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, StagedChanges, HCFS_DRIVE, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE};
-use crate::sync_shared::{add_pending_activity, clear_cancel, discard_pending_activity, request_cancel, SyncActivityItem, HCFS_SYNC_STATE};
+use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, StagedChanges, HCFS_DRIVES, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE};
+use crate::sync_shared::{add_pending_activity, clear_cancel, discard_all_pending_activity, discard_pending_activity_for_label, request_cancel, reset_all_states, remove_state, update_state, SyncActivityItem};
 use crate::utils::account_key::account_key;
 use crate::utils::objectstore_tokens::get_temp_auth_key;
 use crate::DB_POOL;
@@ -136,23 +137,23 @@ pub(crate) async fn get_drive_password(account_id: &str) -> Result<String, Strin
         .ok_or_else(|| "HCFS config not found".to_string())
 }
 
-async fn get_sync_path(account_id: &str) -> Result<String, String> {
+/// Read the sync path for a specific label from the database.
+async fn get_sync_path_for_label(account_id: &str, label: &str) -> Result<String, String> {
     let db = DB_POOL.get().ok_or("Database not initialized")?;
     let owner = account_key(account_id);
 
     let result: Option<(String,)> = sqlx::query_as(
-        r#"
-        SELECT path FROM sync_paths WHERE owner = ? AND type = 'private'
-        "#,
+        "SELECT path FROM sync_paths WHERE owner = ? AND label = ?",
     )
     .bind(&owner)
+    .bind(label)
     .fetch_optional(db)
     .await
     .map_err(|e| format!("Failed to get sync path: {}", e))?;
 
     result
         .map(|(path,)| path)
-        .ok_or_else(|| "Sync path not configured".to_string())
+        .ok_or_else(|| format!("Sync path not configured for label '{}'", label))
 }
 
 /// Compute the account-level directory: `~/.hippius/drives/<account_key>/`
@@ -162,32 +163,17 @@ fn account_dir(account_id: &str) -> Result<PathBuf, String> {
     Ok(home.join(".hippius").join("drives").join(key))
 }
 
-/// Normalize a sync path for deterministic hashing.
-///
-/// Strips trailing path separators so `/Users/alice/Sync` and `/Users/alice/Sync/`
-/// produce the same hash. Does NOT resolve symlinks (canonicalize) because that
-/// would make the hash depend on whether a target volume is mounted, breaking
-/// folder identity for paths on external or network drives.
-fn normalize_sync_path(sync_path: &str) -> String {
-    let trimmed = sync_path.trim_end_matches(std::path::is_separator);
-    if trimmed.is_empty() {
-        sync_path.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Deterministic 16-char hex hash of a sync folder path, used as subdirectory name.
-fn folder_hash(sync_path: &str) -> String {
-    let normalized = normalize_sync_path(sync_path);
-    let digest = Sha256::digest(normalized.as_bytes());
+/// Deterministic 16-char hex hash of a folder label, used as subdirectory name
+/// and server namespace suffix.
+fn folder_hash(label: &str) -> String {
+    let digest = Sha256::digest(label.as_bytes());
     hex::encode(&digest)[..16].to_string()
 }
 
 /// Compute the per-folder config directory:
 /// `~/.hippius/drives/<account_key>/<folder_hash>/`
-fn config_dir_for_folder(account_id: &str, sync_path: &str) -> Result<PathBuf, String> {
-    Ok(account_dir(account_id)?.join(folder_hash(sync_path)))
+fn config_dir_for_folder(account_id: &str, label: &str) -> Result<PathBuf, String> {
+    Ok(account_dir(account_id)?.join(folder_hash(label)))
 }
 
 /// Path to the master encrypted mnemonic at the account level:
@@ -196,14 +182,15 @@ fn master_mnemonic_path(account_id: &str) -> Result<PathBuf, String> {
     Ok(account_dir(account_id)?.join("master_enc_mnemonic.json"))
 }
 
-/// Derive a folder-specific mnemonic from the master mnemonic + sync folder path.
+/// Derive a folder-specific mnemonic from the master mnemonic + folder label.
 ///
-/// `folder_entropy = SHA256(master_seed[..32] || sync_path_bytes)`
+/// `folder_entropy = SHA256(master_seed[..32] || label_bytes)`
 /// `folder_mnemonic = Mnemonic::from_entropy(folder_entropy)` → 24 words
 ///
-/// Same master + same folder path always produces the same derived mnemonic,
-/// giving a deterministic but unique `user_id` per folder on the server.
-fn derive_folder_mnemonic(master_mnemonic: &str, sync_path: &str) -> Result<String, String> {
+/// Same master + same label always produces the same derived mnemonic,
+/// giving a deterministic but unique `user_id` per folder on the server,
+/// regardless of the local filesystem path.
+fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String, String> {
     use bip39::Mnemonic;
     use std::str::FromStr;
     use zeroize::Zeroize;
@@ -212,10 +199,9 @@ fn derive_folder_mnemonic(master_mnemonic: &str, sync_path: &str) -> Result<Stri
         .map_err(|e| format!("Invalid master mnemonic: {e}"))?;
     let mut seed = master.to_seed("");
 
-    let normalized = normalize_sync_path(sync_path);
     let mut hasher = Sha256::new();
     hasher.update(&seed[..32]);
-    hasher.update(normalized.as_bytes());
+    hasher.update(label.as_bytes());
     seed.zeroize();
     let mut folder_entropy: [u8; 32] = hasher.finalize().into();
 
@@ -390,8 +376,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Initialize sync by reading config from database, creating the HCFS Drive,
-/// and starting the background sync loop.
+/// Initialize sync for a specific drive label by reading config from database,
+/// creating the HCFS Drive, and starting/updating the background sync loop.
 ///
 /// Each sync folder gets its own derived mnemonic from the master, producing
 /// a unique `user_id` on the server. This keeps folder namespaces isolated:
@@ -400,35 +386,26 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 pub async fn initialize_sync(
     app: tauri::AppHandle,
     account_id: String,
+    label: String,
     existing_mnemonic: Option<String>,
 ) -> Result<InitSyncResult, String> {
-    println!("[Setup] initialize_sync called for account: {}", account_id);
+    println!("[Setup] initialize_sync called for account: {}, label: '{}'", account_id, label);
 
-    // 0. Stop any previously running sync to ensure clean account switches
+    // 0. Stop only the drive with the matching label if it exists
     {
-        request_cancel();
-        let mut handle_guard = SYNC_LOOP_HANDLE.lock().await;
-        if let Some(prev) = handle_guard.take() {
-            prev.abort();
-            println!("[Setup] Aborted previous sync loop");
+        let mut drives_guard = HCFS_DRIVES.lock().await;
+        if drives_guard.remove(&label).is_some() {
+            println!("[Setup] Dropped previous drive instance for label '{}'", label);
         }
-        let mut drive_guard = HCFS_DRIVE.lock().await;
-        if drive_guard.is_some() {
-            *drive_guard = None;
-            println!("[Setup] Dropped previous drive instance");
-        }
-        SYNC_IN_PROGRESS.store(false, Ordering::Release);
-        SYNC_REVIEW_MODE.store(false, Ordering::Release);
-        discard_pending_activity();
-        HCFS_SYNC_STATE
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .reset();
+        discard_pending_activity_for_label(&label);
+        remove_state(&label);
     }
+    SYNC_IN_PROGRESS.store(false, Ordering::Release);
+    SYNC_REVIEW_MODE.store(false, Ordering::Release);
 
-    // 1. Read sync path from database
-    let sync_path = get_sync_path(&account_id).await?;
-    println!("[Setup] Sync path: {}", sync_path);
+    // 1. Read sync path for the given label from database
+    let sync_path = get_sync_path_for_label(&account_id, &label).await?;
+    println!("[Setup] Sync path: {}, label: {}", sync_path, label);
 
     // 2. Read HCFS config from database
     let drive_password = get_drive_password(&account_id).await?;
@@ -447,7 +424,7 @@ pub async fn initialize_sync(
 
     // 4. Compute per-folder config directory and run migration
     let acct_dir = account_dir(&account_id)?;
-    let folder_dir = config_dir_for_folder(&account_id, &sync_path)?;
+    let folder_dir = config_dir_for_folder(&account_id, &label)?;
     let master_path = master_mnemonic_path(&account_id)?;
     run_migration(&sync_path, &acct_dir, &folder_dir, &master_path)?;
 
@@ -455,20 +432,14 @@ pub async fn initialize_sync(
     let mut manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
 
     // 6. Retrieve the auth token BEFORE unlock so we can set account_ss58 first
-    // This is critical: unlock() uses account_ss58 to determine the user_id.
-    // If account_ss58 is not set before unlock(), the user_id will be the
-    // hex-encoded ed25519 public key instead of the SS58 substrate address,
-    // causing 403 errors on the server (token's substrate_address won't match).
     let bearer_token = get_temp_auth_key(&account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| {
             "No authentication token found. Please log in again.".to_string()
         })?;
-    
-    // Debug: Log account and token info for troubleshooting 403 errors
+
     println!("[Setup] Retrieved auth token for account_id (SS58): {}", account_id);
-    println!("[Setup] account_id length: {} chars", account_id.len());
     println!("[Setup] This account_id will be used as user_id for sync requests.");
 
     // Set HCFS client config BEFORE unlock so account_ss58 is available
@@ -478,30 +449,26 @@ pub async fn initialize_sync(
         bearer_token: bearer_token.clone(),
         accept_invalid_certs: true,
         billing_bypass_token: None,
-        account_ss58: format!("{}_{}", account_id, folder_hash(&sync_path)),
+        account_ss58: format!("{}_{}", account_id, folder_hash(&label)),
     })?;
-    println!("[Setup] HCFS config set with account_ss58: {}_{} (before unlock)", account_id, folder_hash(&sync_path));
+    println!("[Setup] HCFS config set with account_ss58: {}_{} (before unlock)", account_id, folder_hash(&label));
 
     // 7. Init or unlock the drive (now account_ss58 is set, so user_id will be correct)
     let (user_id, mnemonic, is_new_setup) = if manager.is_initialized() {
         // Existing folder — just unlock
-        println!("[Setup] Drive already initialized, unlocking...");
-        // Debug: Log the config directory and enc_mnemonic path
+        println!("[Setup] Drive already initialized for '{}', unlocking...", label);
         println!("[Setup] Config dir: {:?}", folder_dir);
         println!("[Setup] Password length: {} chars", drive_password.len());
-        
+
         match manager.unlock(&drive_password) {
             Ok(uid) => {
                 println!("[Setup] Drive unlocked, user_id: {}", uid);
                 (uid, None, false)
             }
             Err(e) => {
-                // Detailed error logging for unlock failure
-                println!("[Setup] ERROR: unlock failed: {}", e);
-                // If unlock fails, the enc_mnemonic.json might be corrupted or encrypted with
-                // a different password. Clean up ALL encrypted files and start fresh.
+                println!("[Setup] ERROR: unlock failed for '{}': {}", label, e);
                 println!("[Setup] Attempting recovery: cleaning up encrypted files...");
-                
+
                 // Remove the corrupted/mismatched enc_mnemonic.json
                 let enc_path = folder_dir.join("enc_mnemonic.json");
                 if enc_path.exists() {
@@ -511,7 +478,7 @@ pub async fn initialize_sync(
                         println!("[Setup] Removed enc_mnemonic.json");
                     }
                 }
-                
+
                 // Also remove the master mnemonic - it might be encrypted with wrong password too
                 if master_path.exists() {
                     if let Err(rm_err) = std::fs::remove_file(&master_path) {
@@ -520,18 +487,15 @@ pub async fn initialize_sync(
                         println!("[Setup] Removed master_enc_mnemonic.json (will regenerate)");
                     }
                 }
-                
+
                 // Also remove sync_state.json to start fresh
                 let state_path = folder_dir.join("sync_state.json");
                 let state_bak_path = folder_dir.join("sync_state.json.bak");
                 let _ = std::fs::remove_file(&state_path);
                 let _ = std::fs::remove_file(&state_bak_path);
-                
+
                 println!("[Setup] Recovery cleanup complete. Retrying initialization...");
-                
-                // Instead of returning an error, let's retry the initialization
-                // by falling through to the "not initialized" branch
-                // We need to recreate the manager since the old one might have stale state
+
                 drop(manager);
                 manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
                 manager.set_config(HcfsClientConfig {
@@ -540,13 +504,11 @@ pub async fn initialize_sync(
                     bearer_token: bearer_token.clone(),
                     accept_invalid_certs: true,
                     billing_bypass_token: None,
-                    account_ss58: account_id.clone(),
+                    account_ss58: format!("{}_{}", account_id, folder_hash(&label)),
                 })?;
-                
-                // Now continue with fresh initialization
+
                 println!("[Setup] Creating fresh drive after recovery...");
-                
-                // Generate new master and folder mnemonic
+
                 let master = bip39::Mnemonic::generate(24)
                     .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
                 let master_str = master.to_string();
@@ -557,22 +519,20 @@ pub async fn initialize_sync(
                 )
                 .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
                 println!("[Setup] Generated and saved new master mnemonic");
-                let derived = derive_folder_mnemonic(&master_str, &sync_path)?;
-                
-                // Initialize drive with the folder-specific derived mnemonic
+                let derived = derive_folder_mnemonic(&master_str, &label)?;
+
                 let mut init_mnemonic = manager.init(&drive_password, Some(&derived))?;
                 zeroize::Zeroize::zeroize(&mut init_mnemonic);
-                
+
                 let uid = manager.unlock(&drive_password)?;
                 println!("[Setup] Drive re-initialized and unlocked, derived user_id: {}", uid);
-                
-                // Return the new master mnemonic for backup
+
                 (uid, Some(master_str), true)
             }
         }
     } else {
         // New folder — need to derive or generate mnemonic
-        println!("[Setup] Drive not initialized, creating...");
+        println!("[Setup] Drive not initialized for '{}', creating...", label);
 
         let (folder_mnemonic, master_for_backup, generated_new_master) =
             if let Some(ref imported) = existing_mnemonic {
@@ -585,16 +545,14 @@ pub async fn initialize_sync(
                     )
                     .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
                     println!("[Setup] Saved imported mnemonic as master");
-                    let derived = derive_folder_mnemonic(imported, &sync_path)?;
+                    let derived = derive_folder_mnemonic(imported, &label)?;
                     (derived, None, false)
                 } else {
-                    // Master already exists — derive from the existing master so
-                    // get_drive_mnemonic() stays consistent with the derivation.
                     println!("[Setup] Master already exists, deriving from it (ignoring import)");
                     let master = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)
                         .map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
                     let mut master_str = master.to_string();
-                    let derived = derive_folder_mnemonic(&master_str, &sync_path)?;
+                    let derived = derive_folder_mnemonic(&master_str, &label)?;
                     zeroize::Zeroize::zeroize(&mut master_str);
                     (derived, None, false)
                 }
@@ -603,7 +561,7 @@ pub async fn initialize_sync(
                 let master = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)
                     .map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
                 let mut master_str = master.to_string();
-                let derived = derive_folder_mnemonic(&master_str, &sync_path)?;
+                let derived = derive_folder_mnemonic(&master_str, &label)?;
                 zeroize::Zeroize::zeroize(&mut master_str);
                 println!("[Setup] Derived folder mnemonic from existing master");
                 (derived, None, false)
@@ -619,8 +577,7 @@ pub async fn initialize_sync(
                 )
                 .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
                 println!("[Setup] Generated and saved new master mnemonic");
-                let derived = derive_folder_mnemonic(&master_str, &sync_path)?;
-                // master_str returned for backup display — frontend is responsible for clearing
+                let derived = derive_folder_mnemonic(&master_str, &label)?;
                 (derived, Some(master_str), true)
             };
 
@@ -632,12 +589,11 @@ pub async fn initialize_sync(
         zeroize::Zeroize::zeroize(&mut folder_mnemonic);
 
         let uid = manager.unlock(&drive_password)?;
-        println!("[Setup] Drive initialized and unlocked, derived user_id: {}", uid);
+        println!("[Setup] Drive initialized and unlocked for '{}', derived user_id: {}", label, uid);
 
         (uid, master_for_backup, generated_new_master)
     };
 
-    // Log the final user_id that will be used (should match account_id/account_ss58)
     println!("[Setup] Drive user_id after unlock: {} (should match account_id)", user_id);
     if user_id != account_id {
         println!("[Setup] WARNING: user_id ({}) != account_id ({}). This may cause 403 errors!", user_id, account_id);
@@ -669,24 +625,24 @@ pub async fn initialize_sync(
         }
     }
 
-    // 9. Setup progress event handlers
-    setup_progress_handlers(&app, &mut manager);
+    // 9. Setup progress event handlers with label
+    setup_progress_handlers(&app, &mut manager, &label);
 
     // 10. Clear any previous cancellation flag
     clear_cancel();
 
-    // 11. Store the manager globally
+    // 11. Store the manager in the drives registry
     {
-        let mut guard = HCFS_DRIVE.lock().await;
-        *guard = Some(manager);
+        let mut guard = HCFS_DRIVES.lock().await;
+        guard.insert(label.clone(), manager);
     }
 
-    // 12. Start the background sync loop
+    // 12. Start (or restart) the background sync loop to pick up the new drive
     start_sync_loop(app.clone()).await;
 
     println!(
-        "[Setup] Sync initialized successfully. User ID: {}, New setup: {}",
-        user_id, is_new_setup
+        "[Setup] Sync initialized successfully for '{}'. User ID: {}, New setup: {}",
+        label, user_id, is_new_setup
     );
 
     Ok(InitSyncResult {
@@ -696,6 +652,7 @@ pub async fn initialize_sync(
     })
 }
 
+/// Stop ALL drives (used on logout).
 #[tauri::command]
 pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
     request_cancel();
@@ -708,10 +665,11 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
         }
     }
 
-    let mut guard = HCFS_DRIVE.lock().await;
-    *guard = None;
+    let mut guard = HCFS_DRIVES.lock().await;
+    guard.clear();
     SYNC_REVIEW_MODE.store(false, Ordering::Release);
-    HCFS_SYNC_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).reset();
+    reset_all_states();
+    discard_all_pending_activity();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
     let _ = app.emit("hcfs_sync_stopped", ());
@@ -719,60 +677,97 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Stop a single drive by label. If no drives remain, also stops the sync loop.
+#[tauri::command]
+pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
+    let remaining = {
+        let mut guard = HCFS_DRIVES.lock().await;
+        guard.remove(&label);
+        guard.len()
+    };
+
+    remove_state(&label);
+    discard_pending_activity_for_label(&label);
+
+    if remaining == 0 {
+        // No more drives — stop the sync loop entirely
+        request_cancel();
+        let mut handle_guard = SYNC_LOOP_HANDLE.lock().await;
+        if let Some(prev) = handle_guard.take() {
+            prev.abort();
+        }
+        SYNC_REVIEW_MODE.store(false, Ordering::Release);
+        let _ = app.emit("hcfs_sync_stopped", ());
+    } else {
+        // Restart sync loop to update watchers (removed drive's path)
+        clear_cancel();
+        start_sync_loop(app.clone()).await;
+    }
+
+    println!("[Sync] Stopped drive '{}', {} drives remaining", label, remaining);
+    Ok(())
+}
+
 /// Reset sync data for an account, clearing all local sync state.
 /// This allows starting fresh without corrupted or stale sync data.
-/// 
+///
 /// IMPORTANT: This does NOT delete files in the sync folder - only HCFS metadata.
 /// Files on the server remain intact.
 #[tauri::command]
 pub async fn reset_sync_data(app: AppHandle, account_id: String) -> Result<(), String> {
     println!("[Sync] Resetting sync data for account: {}", account_id);
-    
-    // First stop any active sync
+
+    // First stop all active syncs
     stop_sync(app.clone()).await?;
-    
+
     // Get the account directory
     let acct_dir = account_dir(&account_id)?;
-    
+
     println!("[Sync] Reset: Deleting account directory: {:?}", acct_dir);
-    
+
     // Delete the entire account directory (contains sync state, encrypted mnemonic, etc.)
     if acct_dir.exists() {
         std::fs::remove_dir_all(&acct_dir)
             .map_err(|e| format!("Failed to delete account directory: {}", e))?;
         println!("[Sync] Reset: Deleted account directory");
     }
-    
+
     // Also clear the hcfs_config from database so user goes through setup again
     let db = DB_POOL.get().ok_or("Database not initialized")?;
     let owner = account_key(&account_id);
-    
+
     sqlx::query("DELETE FROM hcfs_config WHERE owner = ?")
         .bind(&owner)
         .execute(db)
         .await
         .map_err(|e| format!("Failed to clear config: {}", e))?;
-    
+
     println!("[Sync] Reset: Cleared database config");
-    
+
     // Emit event so frontend knows to show setup UI
     let _ = app.emit("hcfs_sync_reset", serde_json::json!({
         "account_id": account_id,
         "message": "Sync data has been reset. Please set up sync again."
     }));
-    
-    println!("[Sync] ✅ Reset complete for account: {}", account_id);
-    
+
+    println!("[Sync] Reset complete for account: {}", account_id);
+
     Ok(())
 }
 
-/// Check whether the HCFS drive is loaded (sync engine is active).
-/// Unlike `get_sync_status().is_syncing` (which indicates an active sync *operation*),
-/// this indicates whether the sync *engine* is running.
+/// Check whether the HCFS sync engine is active.
+/// With optional label: checks if that specific drive is active.
+/// Without label: checks if any drive is active.
 #[tauri::command]
-pub fn is_drive_active() -> bool {
-    match HCFS_DRIVE.try_lock() {
-        Ok(guard) => guard.is_some(),
+pub fn is_drive_active(label: Option<String>) -> bool {
+    match HCFS_DRIVES.try_lock() {
+        Ok(guard) => {
+            if let Some(lbl) = label {
+                guard.contains_key(&lbl)
+            } else {
+                !guard.is_empty()
+            }
+        }
         // If the lock is held, the drive is in use (sync in progress) → active
         Err(_) => true,
     }
@@ -784,7 +779,7 @@ pub async fn trigger_sync_now(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
+fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, label: &str) {
     let a1 = app.clone();
     let a2 = app.clone();
     let a3 = app.clone();
@@ -792,79 +787,82 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager) {
     let a5 = app.clone();
     let a6 = app.clone();
 
+    let l1 = label.to_string();
+    let l2 = label.to_string();
+    let l3 = label.to_string();
+    let l4 = label.to_string();
+    let l5 = label.to_string();
+    let l6 = label.to_string();
+
     manager.set_progress(SyncProgress {
         on_upload_progress: Some(Arc::new(move |b, t, p| {
-            println!("[Progress] Upload: {}/{} bytes, path: {:?}", b, t, p);
+            println!("[Progress] Upload [{}]: {}/{} bytes, path: {:?}", l1, b, t, p);
             let _ = a1.emit(
                 "hcfs_upload_progress",
-                serde_json::json!({"bytes": b, "total": t, "path": p}),
+                serde_json::json!({"label": l1, "bytes": b, "total": t, "path": p}),
             );
-            // Buffer file activity when all bytes are sent. The item is only committed
-            // to the real activity log after trigger_sync confirms the sync succeeded.
             if b == t && t > 0 {
                 if let Some(path_str) = p {
                     let file_name = Path::new(path_str)
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
-                    println!("[Sync] Upload sent: {}", file_name);
+                    println!("[Sync] Upload sent [{}]: {}", l1, file_name);
                     add_pending_activity(SyncActivityItem {
                         file_name,
                         action: "uploaded".to_string(),
                         timestamp: chrono::Utc::now().timestamp(),
                         size_bytes: t,
+                        label: l1.clone(),
                     });
                 }
             }
         })),
         on_download_progress: Some(Arc::new(move |b, t, p| {
-            println!("[Progress] Download: {}/{} bytes, path: {:?}", b, t, p);
+            println!("[Progress] Download [{}]: {}/{} bytes, path: {:?}", l2, b, t, p);
             let _ = a2.emit(
                 "hcfs_download_progress",
-                serde_json::json!({"bytes": b, "total": t, "path": p}),
+                serde_json::json!({"label": l2, "bytes": b, "total": t, "path": p}),
             );
-            // Buffer file activity when all bytes are received. Only committed after
-            // trigger_sync confirms the sync succeeded.
             if b == t && t > 0 {
                 if let Some(path_str) = p {
                     let file_name = Path::new(path_str)
                         .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_else(|| path_str.to_string());
-                    println!("[Sync] Download received: {}", file_name);
+                    println!("[Sync] Download received [{}]: {}", l2, file_name);
                     add_pending_activity(SyncActivityItem {
                         file_name,
                         action: "downloaded".to_string(),
                         timestamp: chrono::Utc::now().timestamp(),
                         size_bytes: t,
+                        label: l2.clone(),
                     });
                 }
             }
         })),
-        // Note: encrypt/decrypt/scan/fetch progress events are emitted but not yet
-        // consumed by the frontend. They're available for future UI enhancements.
         on_encrypt_progress: Some(Arc::new(move |b, t, p| {
             let _ = a3.emit(
                 "hcfs_encrypt_progress",
-                serde_json::json!({"bytes": b, "total": t, "path": p}),
+                serde_json::json!({"label": l3, "bytes": b, "total": t, "path": p}),
             );
         })),
         on_decrypt_progress: Some(Arc::new(move |b, t, p| {
             let _ = a4.emit(
                 "hcfs_decrypt_progress",
-                serde_json::json!({"bytes": b, "total": t, "path": p}),
+                serde_json::json!({"label": l4, "bytes": b, "total": t, "path": p}),
             );
         })),
         on_scan_progress: Some(Arc::new(move |n, p| {
             let _ = a5.emit(
                 "hcfs_scan_progress",
-                serde_json::json!({"scanned": n, "path": p}),
+                serde_json::json!({"label": l5, "scanned": n, "path": p}),
             );
         })),
         on_fetch_state_progress: Some(Arc::new(move |f, t| {
             let _ = a6.emit(
                 "hcfs_fetch_progress",
-                serde_json::json!({"fetched": f, "total": t}),
+                serde_json::json!({"label": l6, "fetched": f, "total": t}),
             );
         })),
     });
@@ -887,26 +885,38 @@ pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
         return Ok(mnemonic.to_string());
     }
 
-    // Fallback: try the active drive's folder mnemonic (pre-migration state).
-    // WARNING: this returns a per-folder derived mnemonic, not the master.
-    // This path should only be reached for users who haven't been migrated yet.
+    // Fallback: try the first active drive's folder mnemonic (pre-migration state).
     println!(
         "[Warning] Master mnemonic not found at {:?}, falling back to per-folder mnemonic",
         master_path
     );
-    let guard = HCFS_DRIVE.lock().await;
-    match guard.as_ref() {
+    let guard = HCFS_DRIVES.lock().await;
+    let first_drive = guard.values().next();
+    match first_drive {
         Some(m) if m.is_initialized() => m.export_mnemonic(&drive_password),
         Some(_) => Err("Drive is not initialized".to_string()),
         None => {
-            // Drive not loaded — try per-folder config
-            let sync_path = get_sync_path(&account_id).await?;
-            let folder_dir = config_dir_for_folder(&account_id, &sync_path)?;
-            let manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir);
-            if manager.is_initialized() {
-                manager.export_mnemonic(&drive_password)
+            // No active drive — try reading DB for any sync path
+            let db = DB_POOL.get().ok_or("Database not initialized")?;
+            let owner = account_key(&account_id);
+            let result: Option<(String, String)> = sqlx::query_as(
+                "SELECT path, label FROM sync_paths WHERE owner = ? LIMIT 1",
+            )
+            .bind(&owner)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| format!("DB error: {e}"))?;
+
+            if let Some((path, lbl)) = result {
+                let folder_dir = config_dir_for_folder(&account_id, &lbl)?;
+                let manager = HcfsDriveManager::new(PathBuf::from(&path), folder_dir);
+                if manager.is_initialized() {
+                    manager.export_mnemonic(&drive_password)
+                } else {
+                    Err("Drive is not initialized".to_string())
+                }
             } else {
-                Err("Drive is not initialized".to_string())
+                Err("No sync paths configured".to_string())
             }
         }
     }
@@ -919,8 +929,10 @@ pub async fn stage_changes() -> Result<StagedChanges, String> {
     // Pause auto-sync so the review is stable
     SYNC_REVIEW_MODE.store(true, Ordering::Release);
 
-    let guard = HCFS_DRIVE.lock().await;
-    match guard.as_ref() {
+    let guard = HCFS_DRIVES.lock().await;
+    // For V1, stage the first available drive
+    let first_drive = guard.values().next();
+    match first_drive {
         Some(m) if m.is_unlocked() => match m.stage_with_paths().await {
             Ok(changes) => Ok(changes),
             Err(e) => {
@@ -960,22 +972,25 @@ pub async fn sync_with_conflict_resolutions(
         }
     }
 
-    // Mark syncing in shared state
-    {
-        let mut s = HCFS_SYNC_STATE
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        s.is_syncing = true;
-    }
+    // For V1, use the first drive's label
+    let label = {
+        let guard = HCFS_DRIVES.lock().await;
+        guard.keys().next().cloned().unwrap_or_else(|| "default".to_string())
+    };
 
-    let _ = app.emit("hcfs_sync_started", ());
+    // Mark syncing in shared state
+    update_state(&label, |s| {
+        s.is_syncing = true;
+    });
+
+    let _ = app.emit("hcfs_sync_started", serde_json::json!({"label": label}));
 
     // Suppress file watcher during sync to prevent feedback loops
     SYNC_IN_PROGRESS.store(true, Ordering::Release);
 
     let result = {
-        let mut guard = HCFS_DRIVE.lock().await;
-        match guard.as_mut() {
+        let mut guard = HCFS_DRIVES.lock().await;
+        match guard.get_mut(&label) {
             Some(m) if m.is_unlocked() => Some(m.sync_with_resolutions(resolutions).await),
             _ => None,
         }
@@ -994,13 +1009,10 @@ pub async fn sync_with_conflict_resolutions(
     SYNC_REVIEW_MODE.store(false, Ordering::Release);
 
     // Update shared state
-    {
-        let mut s = HCFS_SYNC_STATE
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    update_state(&label, |s| {
         s.is_syncing = false;
         s.last_sync_time = Some(chrono::Utc::now().timestamp());
-    }
+    });
 
     match result {
         Some(Ok(outcome)) => {
@@ -1016,6 +1028,7 @@ pub async fn sync_with_conflict_resolutions(
             let _ = app.emit(
                 "hcfs_sync_completed",
                 serde_json::json!({
+                    "label": label,
                     "files_uploaded": outcome.files_uploaded,
                     "files_downloaded": outcome.files_downloaded,
                     "files_deleted_locally": outcome.files_deleted_locally,
@@ -1027,12 +1040,12 @@ pub async fn sync_with_conflict_resolutions(
             Ok(())
         }
         Some(Err(e)) => {
-            let _ = app.emit("hcfs_sync_error", serde_json::json!({"error": e}));
+            let _ = app.emit("hcfs_sync_error", serde_json::json!({"label": label, "error": e}));
             Err(e)
         }
         None => {
             let msg = "Drive not initialized or not unlocked";
-            let _ = app.emit("hcfs_sync_error", serde_json::json!({"error": msg}));
+            let _ = app.emit("hcfs_sync_error", serde_json::json!({"label": label, "error": msg}));
             Err(msg.to_string())
         }
     }
@@ -1075,7 +1088,6 @@ pub async fn create_encrypted_backup(
     })();
 
     // Clear sensitive data from memory before dropping.
-    // zeroize prevents the optimizer from eliding these writes.
     zeroize::Zeroize::zeroize(&mut mnemonic);
     zeroize::Zeroize::zeroize(&mut password);
 

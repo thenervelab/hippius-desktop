@@ -55,6 +55,7 @@ pub struct SetSyncPathParams {
     pub path: String,
     pub is_public: bool,
     pub account_id: String,
+    pub label: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -68,6 +69,7 @@ pub struct GetSyncPathParams {
 pub struct SyncPathResult {
     pub path: String,
     pub is_public: bool,
+    pub label: String,
 }
 
 #[tauri::command]
@@ -82,6 +84,7 @@ pub async fn set_sync_path(
     } else {
         "private"
     };
+    let label = params.label.unwrap_or_else(|| "default".to_string());
     let timestamp = Utc::now().timestamp();
 
     if let Some(pool) = DB_POOL.get() {
@@ -96,24 +99,26 @@ pub async fn set_sync_path(
         .await
         {
             let _ = sqlx::query(
-                "REPLACE INTO sync_paths (id, owner, path, type, timestamp) VALUES (?, ?, ?, ?, ?)",
+                "REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(legacy_id)
             .bind(&owner)
             .bind(&params.path)
             .bind(path_type)
+            .bind(&label)
             .bind(timestamp)
             .execute(pool)
             .await;
         }
 
         let res = sqlx::query(
-            "INSERT INTO sync_paths (owner, path, type, timestamp) VALUES (?, ?, ?, ?)
-             ON CONFLICT(owner, type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
+            "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
         )
         .bind(&owner)
         .bind(&params.path)
         .bind(path_type)
+        .bind(&label)
         .bind(timestamp)
         .execute(pool)
         .await;
@@ -205,7 +210,7 @@ pub async fn get_sync_path_internal(
     let path_type = if is_public { "public" } else { "private" };
     if let Some(pool) = DB_POOL.get() {
         // Try scoped entry first
-        let rec_row = sqlx::query("SELECT path FROM sync_paths WHERE owner = ? AND type = ?")
+        let rec_row = sqlx::query("SELECT path, label FROM sync_paths WHERE owner = ? AND type = ?")
             .bind(owner)
             .bind(path_type)
             .fetch_optional(pool)
@@ -213,8 +218,9 @@ pub async fn get_sync_path_internal(
             .map_err(|e| format!("DB error: {}", e))?;
 
         // If not found, migrate a legacy (owner='') row only when no scoped rows exist yet.
-        let path_opt: Option<String> = if let Some(row) = rec_row {
-            Some(row.get::<String, _>("path"))
+        let path_label_opt: Option<(String, String)> = if let Some(row) = rec_row {
+            let label: String = row.try_get("label").unwrap_or_else(|_| "default".to_string());
+            Some((row.get::<String, _>("path"), label))
         } else {
             let scoped_count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(1) FROM sync_paths WHERE owner != '' AND owner IS NOT NULL",
@@ -256,7 +262,7 @@ pub async fn get_sync_path_internal(
                     tx.commit()
                         .await
                         .map_err(|e| format!("DB error (commit): {}", e))?;
-                    Some(legacy_path)
+                    Some((legacy_path, "default".to_string()))
                 } else {
                     tx.commit()
                         .await
@@ -268,8 +274,8 @@ pub async fn get_sync_path_internal(
             }
         };
 
-        if let Some(path) = path_opt {
-            Ok(SyncPathResult { path, is_public })
+        if let Some((path, label)) = path_label_opt {
+            Ok(SyncPathResult { path, is_public, label })
         } else {
             Err(format!(
                 "Sync path for {} not set yet. Please configure it first.",
@@ -292,11 +298,67 @@ pub async fn get_sync_path(params: GetSyncPathParams) -> Result<SyncPathResult, 
             return Ok(SyncPathResult {
                 path: "".to_string(),
                 is_public: params.is_public,
+                label: "default".to_string(),
             })
         }
     };
     let owner = account_key(&account_id);
     get_sync_path_internal(params.is_public, &owner).await
+}
+
+#[tauri::command]
+pub async fn get_all_sync_paths(params: GetSyncPathParams) -> Result<Vec<SyncPathResult>, String> {
+    let account_id = match params
+        .account_id
+        .or_else(|| crate::utils::sync::current_account_id().ok())
+    {
+        Some(id) => id,
+        None => return Ok(Vec::new()),
+    };
+    let owner = account_key(&account_id);
+
+    let pool = DB_POOL.get().ok_or("DB_POOL not initialized")?;
+    let rows = sqlx::query("SELECT path, type, label FROM sync_paths WHERE owner = ?")
+        .bind(&owner)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("DB error: {}", e))?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let path_type: String = row.get("type");
+            SyncPathResult {
+                path: row.get("path"),
+                is_public: path_type == "public",
+                label: row
+                    .try_get("label")
+                    .unwrap_or_else(|_| "default".to_string()),
+            }
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn remove_sync_path(
+    app: tauri::AppHandle,
+    account_id: String,
+    label: String,
+) -> Result<(), String> {
+    let pool = DB_POOL.get().ok_or("DB_POOL not initialized")?;
+    let owner = account_key(&account_id);
+
+    sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND label = ?")
+        .bind(&owner)
+        .bind(&label)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to remove sync path: {}", e))?;
+
+    // Stop the corresponding drive
+    crate::commands::syncing::stop_drive(app, label).await?;
+
+    Ok(())
 }
 
 #[tauri::command]

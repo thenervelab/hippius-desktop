@@ -74,7 +74,7 @@ export default function FolderToFolderUploadDialog({
 
         try {
             // Get sync path and build target directory (current subfolder)
-            const baseSyncPath = await getPrivateSyncPath(polkadotAddress ?? undefined);
+            const baseSyncPath = (await getPrivateSyncPath(polkadotAddress ?? undefined)).path;
             const subfolder = getFullPath(mainFolderActualName, subFolderPath);
             let targetPath = baseSyncPath;
             if (subfolder) {

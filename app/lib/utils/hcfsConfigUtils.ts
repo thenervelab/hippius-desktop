@@ -34,10 +34,12 @@ export async function getHcfsConfig(
 
 export async function initializeSync(
   accountId: string,
+  label: string,
   existingMnemonic?: string
 ): Promise<InitSyncResult> {
   return invoke<InitSyncResult>("initialize_sync", {
     accountId,
+    label,
     existingMnemonic: existingMnemonic ?? null,
   });
 }

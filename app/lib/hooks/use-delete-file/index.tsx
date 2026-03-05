@@ -79,7 +79,7 @@ export const useDeleteFile = ({
             if (files.length === 0) throw new Error("No files to delete");
             if (!polkadotAddress) throw new Error("Wallet not connected");
 
-            const syncPath = await getPrivateSyncPath(polkadotAddress);
+            const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
             const results = [];
 
             for (const file of files) {

@@ -22,7 +22,7 @@ mod sync_shared;
 mod user_profile_sync;
 mod utils;
 
-use crate::commands::syncing::{get_drive_mnemonic, initialize_sync, is_drive_active, reset_sync_data, stop_sync, trigger_sync_now};
+use crate::commands::syncing::{get_drive_mnemonic, initialize_sync, is_drive_active, reset_sync_data, stop_drive, stop_sync, trigger_sync_now};
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::sync_shared::{app_close, get_sync_activity, get_sync_status};
 use crate::user_profile_sync::{get_user_synced_files, get_user_total_file_size, list_folder_contents};
@@ -35,8 +35,8 @@ use commands::objectstore_auth::{
     has_master_token_command, request_master_token_command, save_temp_auth_key_command,
 };
 use commands::substrate_tx::{
-    get_sync_path, get_wss_endpoint, set_sync_path, transfer_balance_tauri,
-    update_wss_endpoint_command,
+    get_all_sync_paths, get_sync_path, get_wss_endpoint, remove_sync_path, set_sync_path,
+    transfer_balance_tauri, update_wss_endpoint_command,
 };
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
@@ -97,6 +97,7 @@ fn main() {
             // Sync control (hcfs-client)
             initialize_sync,
             stop_sync,
+            stop_drive,
             reset_sync_data,
             trigger_sync_now,
             is_drive_active,
@@ -113,7 +114,9 @@ fn main() {
             app_close,
             // Substrate / blockchain
             get_sync_path,
+            get_all_sync_paths,
             set_sync_path,
+            remove_sync_path,
             transfer_balance_tauri,
             get_wss_endpoint,
             update_wss_endpoint_command,

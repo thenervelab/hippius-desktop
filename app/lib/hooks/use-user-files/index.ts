@@ -77,7 +77,7 @@ export const useUserFiles = () => {
       }
 
       try {
-        const syncPath = await getPrivateSyncPath(polkadotAddress);
+        const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
 
         const entries = await invoke<FileEntry[]>("list_sync_folder", {
           syncPath,

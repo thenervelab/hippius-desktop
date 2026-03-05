@@ -71,8 +71,8 @@ hostname = "0.4"
 zeroize = "1"
 bip39 = { version = "2.2", features = ["rand"] }
 # Use main branch from GitHub
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "d28b816" }
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "d28b816" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "07cf5b9" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "07cf5b9" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

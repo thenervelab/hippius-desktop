@@ -67,7 +67,7 @@ export default function FolderUploadDialog({
 
         try {
             // Get sync path and copy folder into it
-            const syncPath = await getPrivateSyncPath(polkadotAddress || "");
+            const syncPath = (await getPrivateSyncPath(polkadotAddress || "")).path;
 
             const name = await invoke<string>("add_folder", {
                 syncPath,

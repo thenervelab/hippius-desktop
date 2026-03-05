@@ -37,7 +37,7 @@ const downloadFileExport = async (
   const toastId = toast.loading(`Preparing download: ${name}`);
 
   try {
-    const syncPath = await getPrivateSyncPath(polkadotAddress);
+    const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
 
     const filePath = await getFileSavePath(name);
     if (!filePath) {
@@ -83,7 +83,7 @@ const downloadFolderExport = async (
       return { success: false, error: "Download cancelled" };
     }
 
-    const syncPath = await getPrivateSyncPath(polkadotAddress);
+    const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
 
     toast.loading(`Exporting folder: ${name}`, { id: toastId });
 

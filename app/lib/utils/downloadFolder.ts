@@ -31,7 +31,7 @@ export const downloadFolder = async ({
     const toastId = toast.info("Downloading folder...", { duration: Infinity });
 
     try {
-        const syncPath = await getPrivateSyncPath(polkadotAddress);
+        const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
         const fileName = file?.actualFileName || folderName;
 
         await invoke("export_file", {

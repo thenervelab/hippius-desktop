@@ -8,14 +8,15 @@ import {
   type InitSyncResult,
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
-import { getPrivateSyncPath } from "../utils/syncPathUtils";
+import { getPrivateSyncPath, getAllSyncPaths } from "../utils/syncPathUtils";
 import { getDefaultStore } from "jotai";
 import { isSyncConfiguredAtom } from "../global-atoms/unpinAtoms";
 
 export interface UseHcfsSyncResult {
-  tryInitializeSync: (accountId: string, mnemonic?: string) => Promise<boolean>;
+  tryInitializeSync: (accountId: string, label: string, mnemonic?: string) => Promise<boolean>;
   setupAndInitialize: (
     accountId: string,
+    label: string,
     serverUrl: string,
     password: string,
     mnemonic?: string
@@ -49,7 +50,7 @@ export function useHcfsSync(): UseHcfsSyncResult {
    *  The Rust `initialize_sync` command handles cleanup of any previous sync loop internally,
    *  so callers do not need to call `stop_sync` first. */
   const tryInitializeSync = useCallback(
-    async (accountId: string, mnemonic?: string): Promise<boolean> => {
+    async (accountId: string, label: string, mnemonic?: string): Promise<boolean> => {
       setError(null);
 
       try {
@@ -64,7 +65,7 @@ export function useHcfsSync(): UseHcfsSyncResult {
         setIsInitializing(true);
 
         // Call initialize_sync
-        const result = await initializeSync(accountId, mnemonic);
+        const result = await initializeSync(accountId, label, mnemonic);
 
         // If a new mnemonic was generated, show backup dialog
         if (result.mnemonic) {
@@ -91,6 +92,7 @@ export function useHcfsSync(): UseHcfsSyncResult {
   const setupAndInitialize = useCallback(
     async (
       accountId: string,
+      label: string,
       serverUrl: string,
       password: string,
       mnemonic?: string
@@ -104,7 +106,7 @@ export function useHcfsSync(): UseHcfsSyncResult {
         console.log("[useHcfsSync] HCFS config saved");
 
         // Then initialize sync
-        const result = await initializeSync(accountId, mnemonic);
+        const result = await initializeSync(accountId, label, mnemonic);
 
         // If a new mnemonic was generated, show backup dialog
         if (result.mnemonic) {
@@ -163,16 +165,24 @@ export async function tryAutoInitSync(
   mnemonic?: string
 ): Promise<boolean> {
   try {
-    // Check if sync path has been configured by the user
-    let syncPath = "";
+    // Get all configured sync paths
+    let syncPaths: { path: string; label: string }[] = [];
     try {
-      syncPath = await getPrivateSyncPath(accountId);
+      syncPaths = await getAllSyncPaths(accountId);
     } catch {
-      // No sync path configured yet — that's fine, user hasn't set one
+      // No sync paths configured yet — try legacy single path
+      try {
+        const legacy = await getPrivateSyncPath(accountId);
+        if (legacy.path) {
+          syncPaths = [{ path: legacy.path, label: legacy.label || "default" }];
+        }
+      } catch {
+        // No sync path configured at all
+      }
     }
 
-    if (!syncPath || syncPath.length === 0) {
-      console.log("[AutoSync] No sync path configured, skipping auto-init");
+    if (syncPaths.length === 0) {
+      console.log("[AutoSync] No sync paths configured, skipping auto-init");
       return false;
     }
 
@@ -182,7 +192,7 @@ export async function tryAutoInitSync(
       console.log("[AutoSync] No HCFS config, skipping auto-init (user will be prompted when setting sync folder)");
       return false;
     }
-    
+
     // HCFS config exists - mark sync as configured so SyncStoppedAlert can show when needed
     const store = getDefaultStore();
     store.set(isSyncConfiguredAtom, true);
@@ -196,11 +206,19 @@ export async function tryAutoInitSync(
       return false;
     }
 
-    // Both sync path and config exist — initialize sync
-    console.log("[AutoSync] Auto-initializing sync...");
-    const result = await initializeSync(accountId, mnemonic);
-    console.log("[AutoSync] Sync initialized:", result.user_id);
-    return true;
+    // Initialize sync for each configured path
+    console.log(`[AutoSync] Auto-initializing ${syncPaths.length} sync path(s)...`);
+    let anyInitialized = false;
+    for (const sp of syncPaths) {
+      try {
+        const result = await initializeSync(accountId, sp.label, mnemonic);
+        console.log(`[AutoSync] Sync initialized for '${sp.label}':`, result.user_id);
+        anyInitialized = true;
+      } catch (err) {
+        console.error(`[AutoSync] Failed to init sync for label '${sp.label}':`, err);
+      }
+    }
+    return anyInitialized;
   } catch (err) {
     console.error("[AutoSync] Auto-sync init failed:", err);
     return false;

@@ -175,7 +175,7 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
                 }
 
                 // Get sync path and build target directory (current subfolder)
-                const baseSyncPath = await getPrivateSyncPath(polkadotAddress ?? undefined);
+                const baseSyncPath = (await getPrivateSyncPath(polkadotAddress ?? undefined)).path;
                 let targetPath = baseSyncPath;
                 if (subfolder) {
                     const { join } = await import("@tauri-apps/api/path");

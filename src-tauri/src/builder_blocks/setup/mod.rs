@@ -103,12 +103,102 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             owner TEXT NOT NULL DEFAULT '',
             path TEXT NOT NULL,
             type TEXT NOT NULL,
+            label TEXT NOT NULL DEFAULT 'default',
             timestamp INTEGER NOT NULL,
-            UNIQUE(owner, type)
+            UNIQUE(owner, label)
         )",
     )
     .execute(pool)
     .await?;
+
+    // Migration: add label column if missing (existing dev databases)
+    {
+        let columns_info = sqlx::query("PRAGMA table_info(sync_paths)")
+            .fetch_all(pool)
+            .await?;
+        let has_label = columns_info
+            .iter()
+            .any(|row| row.get::<String, _>("name") == "label");
+        if !has_label {
+            println!("[Setup] Adding label column to sync_paths");
+            sqlx::query(
+                "ALTER TABLE sync_paths ADD COLUMN label TEXT NOT NULL DEFAULT 'default'",
+            )
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    // Migration: change UNIQUE constraint from (owner, type) to (owner, label)
+    // SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate the table.
+    // Wrapped in a transaction so the table is never left in a broken state.
+    {
+        let table_sql = sqlx::query(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'",
+        )
+        .fetch_optional(pool)
+        .await?;
+        let needs_migration = table_sql
+            .as_ref()
+            .and_then(|row| row.try_get::<String, _>("sql").ok())
+            .map(|sql| {
+                sql.contains("UNIQUE(owner, type)")
+                    || sql.contains("UNIQUE (owner, type)")
+            })
+            .unwrap_or(false);
+
+        if needs_migration {
+            println!(
+                "[Setup] Migrating sync_paths: UNIQUE(owner, type) -> UNIQUE(owner, label)"
+            );
+            // Clean up any leftover temp table from a previous failed attempt
+            sqlx::query("DROP TABLE IF EXISTS sync_paths_new")
+                .execute(pool)
+                .await?;
+
+            // Run the entire swap inside a transaction
+            let mut tx = pool.begin().await?;
+
+            sqlx::query(
+                "CREATE TABLE sync_paths_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    owner TEXT NOT NULL DEFAULT '',
+                    path TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    label TEXT NOT NULL DEFAULT 'default',
+                    timestamp INTEGER NOT NULL,
+                    UNIQUE(owner, label)
+                )",
+            )
+            .execute(&mut *tx)
+            .await?;
+
+            // Copy data, skipping duplicates on (owner, label).
+            // If a user has both public and private rows with the same
+            // owner and label='default', keep only the private one
+            // (higher priority). OR IGNORE drops any remaining dupes.
+            sqlx::query(
+                "INSERT OR IGNORE INTO sync_paths_new
+                     (id, owner, path, type, label, timestamp)
+                 SELECT id, owner, path, type, label, timestamp
+                 FROM sync_paths
+                 ORDER BY CASE type WHEN 'private' THEN 0 ELSE 1 END",
+            )
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query("DROP TABLE sync_paths")
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query("ALTER TABLE sync_paths_new RENAME TO sync_paths")
+                .execute(&mut *tx)
+                .await?;
+
+            tx.commit().await?;
+            println!("[Setup] sync_paths constraint migration completed");
+        }
+    }
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS wss_endpoint (

@@ -104,7 +104,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       const cids: string[] = [];
 
-      const syncPath = await getPrivateSyncPath(polkadotAddress);
+      const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
       if (!syncPath) {
         throw new Error("Sync path not configured. Please set a sync folder first.");
       }

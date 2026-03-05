@@ -5,15 +5,21 @@ use sp_core::crypto::Ss58Codec;
 use sp_core::sr25519;
 use sqlx::Row;
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct SyncPathExport {
+    pub path: String,
+    pub label: String,
+}
+
 #[derive(serde::Serialize)]
 pub struct ExportDataResult {
-    pub sync_path: Option<String>,
+    pub sync_paths: Vec<SyncPathExport>,
     pub sub_accounts: Vec<SubAccountExport>,
 }
 
 #[derive(serde::Deserialize)]
 pub struct ImportDataParams {
-    pub sync_path: Option<String>,
+    pub sync_paths: Option<Vec<SyncPathExport>>,
     pub sub_accounts: Option<Vec<SubAccountExport>>,
 }
 
@@ -42,32 +48,41 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
         .await
         .map_err(|e| format!("Failed to start transaction: {}", e))?;
 
-    // Import sync path
-    if let Some(path) = params.sync_path {
-        if !path.trim().is_empty() {
-            println!("[Import] Importing sync path: {}", path);
-            let existing_path: Option<(String,)> =
-                sqlx::query_as("SELECT path FROM sync_paths WHERE type = ?")
-                    .bind("sync")
+    // Import sync paths
+    if let Some(sync_paths) = params.sync_paths {
+        let mut imported_count = 0;
+        for sp in sync_paths {
+            if sp.path.trim().is_empty() {
+                continue;
+            }
+            println!("[Import] Importing sync path: {}, label: {}", sp.path, sp.label);
+            let existing: Option<(String,)> =
+                sqlx::query_as("SELECT path FROM sync_paths WHERE owner = '' AND label = ?")
+                    .bind(&sp.label)
                     .fetch_optional(&mut *tx)
                     .await
                     .map_err(|e| format!("Failed to check existing sync path: {}", e))?;
 
-            if existing_path.map(|p| p.0) != Some(path.clone()) {
-                let _result = sqlx::query(
-                    "INSERT INTO sync_paths (owner, path, type, timestamp) VALUES ('', ?, 'sync', ?)
-                     ON CONFLICT(owner, type) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
-                )
-                .bind(&path)
-                .bind(timestamp)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| format!("Failed to import sync path: {}", e))?;
-
-                imported_items.push("sync path".to_string());
-            } else {
-                skipped_items.push("sync path (duplicate)".to_string());
+            if existing.as_ref().map(|p| &p.0) == Some(&sp.path) {
+                skipped_items.push(format!("sync path '{}' (duplicate)", sp.label));
+                continue;
             }
+
+            sqlx::query(
+                "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES ('', ?, 'private', ?, ?)
+                 ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, timestamp=excluded.timestamp",
+            )
+            .bind(&sp.path)
+            .bind(&sp.label)
+            .bind(timestamp)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("Failed to import sync path: {}", e))?;
+
+            imported_count += 1;
+        }
+        if imported_count > 0 {
+            imported_items.push(format!("{} sync path(s)", imported_count));
         }
     }
 
@@ -150,12 +165,18 @@ pub async fn export_app_data() -> Result<ExportDataResult, String> {
         None => return Err("Database pool not initialized".to_string()),
     };
 
-    // Get sync path
-    let sync_path = sqlx::query("SELECT path FROM sync_paths LIMIT 1")
-        .fetch_optional(pool)
+    // Get all sync paths
+    let sync_rows = sqlx::query("SELECT path, label FROM sync_paths")
+        .fetch_all(pool)
         .await
-        .map_err(|e| format!("Failed to fetch sync path: {}", e))?
-        .map(|row| row.get::<String, _>("path"));
+        .map_err(|e| format!("Failed to fetch sync paths: {}", e))?;
+    let sync_paths: Vec<SyncPathExport> = sync_rows
+        .iter()
+        .map(|row| SyncPathExport {
+            path: row.get("path"),
+            label: row.try_get("label").unwrap_or_else(|_| "default".to_string()),
+        })
+        .collect();
 
     // Get sub-accounts
     let sub_accounts_rows =
@@ -180,13 +201,13 @@ pub async fn export_app_data() -> Result<ExportDataResult, String> {
         .collect::<Vec<_>>();
 
     println!(
-        "[Export] Exported {} sub-accounts, sync path: {:?}",
+        "[Export] Exported {} sub-accounts, {} sync paths",
         sub_accounts.len(),
-        sync_path
+        sync_paths.len(),
     );
 
     Ok(ExportDataResult {
-        sync_path,
+        sync_paths,
         sub_accounts,
     })
 }

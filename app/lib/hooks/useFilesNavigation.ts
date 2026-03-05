@@ -18,7 +18,7 @@ export function useFilesNavigation() {
     async function checkSyncPaths() {
       try {
         setIsLoading(true);
-        const privatePath = await getPrivateSyncPath(polkadotAddress ?? undefined);
+        const privatePath = (await getPrivateSyncPath(polkadotAddress ?? undefined)).path;
         setPrivateSyncPathConfigured(!!privatePath);
       } catch (error) {
         console.error("Failed to check sync paths:", error);

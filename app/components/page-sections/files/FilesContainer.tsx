@@ -362,9 +362,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     (async () => {
       try {
         setIsLoadingPrivatePath(true);
-        const privatefolderPath = await getPrivateSyncPath(
+        const privatefolderPath = (await getPrivateSyncPath(
           polkadotAddress || undefined
-        );
+        )).path;
         setSelectedPrivateFolderPath(privatefolderPath);
       } catch {
         console.error("Failed to load private sync folder");
@@ -453,7 +453,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           // Fire off stop + re-init in background (don't block UI)
           const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
           invoke("stop_sync").catch(() => { }).then(() =>
-            tryInitializeSync(polkadotAddress!, mnemonic ?? undefined).catch((err) =>
+            tryInitializeSync(polkadotAddress!, "default", mnemonic ?? undefined).catch((err) =>
               console.error("[FilesContainer] Background sync init failed:", err)
             )
           );
@@ -483,6 +483,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
       const initResult = await setupAndInitialize(
         polkadotAddress,
+        "default",
         result.serverUrl,
         result.password,
         mnemonic ?? undefined
@@ -618,9 +619,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       (async () => {
         try {
           setIsLoadingPrivatePath(true);
-          const privatefolderPath = await getPrivateSyncPath(
+          const privatefolderPath = (await getPrivateSyncPath(
             polkadotAddress || undefined
-          );
+          )).path;
           setSelectedPrivateFolderPath(privatefolderPath);
           // Refetch file list so it reads from the new sync folder
           refetchUserFiles();

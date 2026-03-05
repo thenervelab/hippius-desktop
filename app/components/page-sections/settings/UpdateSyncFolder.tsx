@@ -62,7 +62,7 @@ const UpdateSyncFolder: React.FC = () => {
   useEffect(() => {
     (async () => {
       try {
-        const privatefolderPath = await getPrivateSyncPath(polkadotAddress ?? undefined);
+        const privatefolderPath = (await getPrivateSyncPath(polkadotAddress ?? undefined)).path;
         setSelectedPrivateFolderPath(privatefolderPath);
         setSelectedPrivateFolderName(
           privatefolderPath.split(/[\\\/]/).pop() || ""
@@ -143,7 +143,7 @@ const UpdateSyncFolder: React.FC = () => {
         // Fire off stop + re-init in background (don't block UI)
         const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
         invoke("stop_sync").catch(() => { }).then(() =>
-          tryInitializeSync(polkadotAddress!, mnemonic ?? undefined).catch((err) =>
+          tryInitializeSync(polkadotAddress!, "default", mnemonic ?? undefined).catch((err) =>
             console.error("[UpdateSyncFolder] Background sync init failed:", err)
           )
         );
@@ -161,6 +161,7 @@ const UpdateSyncFolder: React.FC = () => {
       const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
       const initResult = await setupAndInitialize(
         polkadotAddress,
+        "default",
         result.serverUrl,
         result.password,
         mnemonic ?? undefined
@@ -202,7 +203,7 @@ const UpdateSyncFolder: React.FC = () => {
     setSyncEngineStatus("stopping");
     setStopSyncTarget(null); // close dialog immediately
     try {
-      await invoke("stop_sync");
+      await invoke("stop_drive", { label: "default" });
       // Persist the stopped state so auto-init is skipped on next app launch
       localStorage.setItem("hippius_sync_stopped", "true");
       // The "stopping" → "stopped" transition is handled by the polling useEffect.
@@ -225,7 +226,7 @@ const UpdateSyncFolder: React.FC = () => {
       // Clear the stopped flag — user explicitly wants sync running
       localStorage.removeItem("hippius_sync_stopped");
       const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
-      const success = await tryInitializeSync(polkadotAddress, mnemonic ?? undefined);
+      const success = await tryInitializeSync(polkadotAddress, "default", mnemonic ?? undefined);
       if (success) {
         toast.success("Syncing started!");
         setSyncEngineStatus("active");
