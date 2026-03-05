@@ -511,18 +511,6 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                 "[Sync] No staged changes for '{}', running sync to check remote",
                                 label
                             );
-                            let empty: Vec<String> = Vec::new();
-                            let _ = app.emit("hcfs_sync_started", serde_json::json!({
-                                "label": label,
-                                "uploads": 0, "downloads": 0,
-                                "local_deletes": 0, "remote_deletes": 0,
-                                "upload_files": empty,
-                                "download_files": empty,
-                                "local_delete_files": empty,
-                                "remote_delete_files": empty,
-                            }));
-                            emitted_sync_started = true;
-
                             let outcome = m.sync_with_resolutions(HashMap::new()).await;
                             SyncResult::Synced {
                                 outcome,
@@ -717,6 +705,33 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     label_owned
                 );
                 discard_pending_activity_for_label(&label_owned);
+            }
+
+            // If staging missed remote changes (stale cache), emit
+            // hcfs_sync_started now so the frontend session starts with
+            // the real counts before we send hcfs_sync_completed.
+            let had_transfers = outcome.files_uploaded > 0
+                || outcome.files_downloaded > 0
+                || outcome.files_deleted_locally > 0
+                || outcome.files_deleted_remotely > 0;
+
+            if !emitted_sync_started && had_transfers {
+                let empty: Vec<String> = Vec::new();
+                let _ = app.emit(
+                    "hcfs_sync_started",
+                    serde_json::json!({
+                        "label": label_owned,
+                        "uploads": outcome.files_uploaded,
+                        "downloads": outcome.files_downloaded,
+                        "local_deletes": outcome.files_deleted_locally,
+                        "remote_deletes": outcome.files_deleted_remotely,
+                        "upload_files": empty,
+                        "download_files": empty,
+                        "local_delete_files": empty,
+                        "remote_delete_files": empty,
+                    }),
+                );
+                emitted_sync_started = true;
             }
 
             if emitted_sync_started {

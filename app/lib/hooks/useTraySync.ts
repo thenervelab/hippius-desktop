@@ -66,9 +66,6 @@ const syncRowItems = new Map<string, MenuItem>(); // rows under header
 // Cache last rendered "rows signature" to avoid flicker
 let lastRowsSignature = "";
 
-// Track last sync state for tray icon updates
-let lastBackendSyncing: boolean | null = null;
-let completedIconTimeout: ReturnType<typeof setTimeout> | null = null;
 
 // Runtime check for icon rows
 const hasIconMenuItems =
@@ -312,11 +309,6 @@ export function useTrayInit() {
     const hasActiveUpload = uploadProgress !== null && uploadProgress.bytes < uploadProgress.total;
     const hasActiveDownload = downloadProgress !== null && downloadProgress.bytes < downloadProgress.total;
     
-    console.log("[TraySync] Effect triggered - isSyncingFromEvents:", isSyncingFromEvents,
-      "hasActiveUpload:", hasActiveUpload, "hasActiveDownload:", hasActiveDownload,
-      "overallProgress:", overallProgress,
-      "hasSyncActivity:", hasSyncActivity);
-    
     // Clear any pending clear timer when state changes
     if (syncLabelClearTimer) {
       clearTimeout(syncLabelClearTimer);
@@ -356,8 +348,6 @@ export function useTrayInit() {
       // Show recent activity status ONLY if not currently syncing or transferring
       labelText = `✓ Files synced`;
     }
-    
-    console.log("[TraySync] State: isCurrentlySyncing=", isCurrentlySyncing, "isSyncComplete=", isSyncComplete, "label=", labelText);
     
     // Update tray menu text
     void updateTraySyncLabel(labelText);
@@ -1032,13 +1022,6 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
   }
 }
 
-/* ─ Backend sync status type ───────────────────────────────────── */
-type HcfsSyncState = {
-  is_syncing: boolean;
-  last_sync_time: number | null;
-  recent_activity: SyncActivityItem[];
-};
-
 /* ─ Sync Activity watcher (debounced & diffed) ────────────────── */
 function startSyncActivityWatcher() {
   const INTERVAL_MS = 3000;
@@ -1048,22 +1031,10 @@ function startSyncActivityWatcher() {
       const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
       if (!menu) return;
 
-      // Also check backend sync status to update tray icon
-      try {
-        const syncState = await invoke<HcfsSyncState>("get_sync_status");
-        console.log("sync state", syncState);
-        await handleSyncIconState(syncState.is_syncing);
-      } catch (e) {
-        console.error("[Tray] Error checking sync status:", e);
-      }
-
       // New API returns SyncActivityItem[] directly
       const items = await invoke<SyncActivityItem[]>("get_sync_activity", {
         limit: 50,
       });
-
-      console.log("get_sync_activity items", items)
-
 
       if (!items || items.length === 0) {
         await updateSyncRowsDirectly(menu, []);
@@ -1113,32 +1084,6 @@ function startSyncActivityWatcher() {
     if (window.__hippiusSyncWatcher) clearInterval(window.__hippiusSyncWatcher);
     // @ts-expect-error custom watcher handle
     window.__hippiusSyncWatcher = h;
-  }
-}
-
-/* ─ Handle tray icon transitions based on backend sync state ──── */
-async function handleSyncIconState(isSyncing: boolean) {
-  if (isSyncing) {
-    // Currently syncing — show syncing icon
-    // NOTE: Menu item is managed by updateTraySyncLabel from local events, not here
-    if (lastBackendSyncing !== true) {
-      logTrayAction("Backend reports syncing, updating tray icon");
-      if (completedIconTimeout) {
-        clearTimeout(completedIconTimeout);
-        completedIconTimeout = null;
-      }
-      await setTrayIconSyncing(true, false);
-      lastBackendSyncing = true;
-    }
-  } else {
-    // Not syncing
-    if (lastBackendSyncing === true) {
-      // Transition: was syncing → now done
-      logTrayAction("Backend reports sync completed, showing completed icon");
-      await setTrayIconSyncing(false, true);
-      lastBackendSyncing = false;
-      // Keep showing completed icon (green) - only reset when sync is stopped
-    }
   }
 }
 
