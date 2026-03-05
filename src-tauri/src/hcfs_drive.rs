@@ -16,8 +16,8 @@
 //! - `SYNC_IN_PROGRESS` — suppresses file watcher during active sync
 
 use crate::sync_shared::{
-    commit_pending_activity_for_label, discard_pending_activity_for_label, is_cancelled,
-    update_state,
+    SyncActivityItem, add_pending_activity, commit_pending_activity_for_label,
+    discard_pending_activity_for_label, is_cancelled, update_state,
 };
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::drive::Drive;
@@ -249,8 +249,8 @@ impl HcfsDriveManager {
     /// Decrypt and return the Drive's actual BIP-39 mnemonic.
     pub fn export_mnemonic(&self, password: &str) -> Result<String, String> {
         let enc_path = self.config_dir.join("enc_mnemonic.json");
-        let mnemonic = hcfs_client::auth::recover_mnemonic(&enc_path, password)
-            .map_err(|e| e.to_string())?;
+        let mnemonic =
+            hcfs_client::auth::recover_mnemonic(&enc_path, password).map_err(|e| e.to_string())?;
         Ok(mnemonic.to_string())
     }
 
@@ -445,7 +445,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if SYNC_REVIEW_MODE.load(Ordering::Acquire) {
-            println!("[Sync] Review mode active, skipping auto-sync for '{}'", label);
+            println!(
+                "[Sync] Review mode active, skipping auto-sync for '{}'",
+                label
+            );
             return false;
         }
         if let Some(state) = states.get(label) {
@@ -472,9 +475,15 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
     // Track whether we emitted sync_started - only emit sync_completed if we did
     let mut emitted_sync_started = false;
 
-    // Tri-state result: synced, conflicts pending (user must resolve), or not available
+    // Tri-state result: synced, conflicts pending (user must resolve), or not available.
+    // Carries staged file lists so we can record activity with real file names
+    // (the download progress callback only sees encrypted names).
     enum SyncResult {
-        Synced(Result<SyncOutcome, String>),
+        Synced {
+            outcome: Result<SyncOutcome, String>,
+            staged_downloads: Vec<StagedFile>,
+            staged_uploads: Vec<StagedFile>,
+        },
         ConflictsPending,
         NoChanges,
         NotAvailable,
@@ -543,23 +552,31 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                     match m.stage_with_paths().await {
                                         Ok(restaged) if !restaged.conflicts.is_empty() => {
                                             SYNC_REVIEW_MODE.store(true, Ordering::Release);
-                                            let _ = app.emit("hcfs_conflicts_pending", serde_json::json!({
-                                                "label": label,
-                                                "staged": restaged,
-                                            }));
+                                            let _ = app.emit(
+                                                "hcfs_conflicts_pending",
+                                                serde_json::json!({
+                                                    "label": label,
+                                                    "staged": restaged,
+                                                }),
+                                            );
                                             SyncResult::ConflictsPending
                                         }
                                         _ => SyncResult::ConflictsPending,
                                     }
                                 }
-                                _ => SyncResult::Synced(outcome),
+                                _ => SyncResult::Synced {
+                                    outcome,
+                                    staged_downloads: staged.downloads,
+                                    staged_uploads: staged.uploads,
+                                },
                             }
                         }
                     }
                     Ok(staged) => {
                         println!(
                             "[Sync] {} conflict(s) detected for '{}', entering review mode",
-                            staged.conflicts.len(), label
+                            staged.conflicts.len(),
+                            label
                         );
                         let _ = app.emit("hcfs_sync_started", serde_json::json!({
                             "label": label,
@@ -574,15 +591,22 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         }));
                         emitted_sync_started = true;
                         SYNC_REVIEW_MODE.store(true, Ordering::Release);
-                        let _ = app.emit("hcfs_conflicts_pending", serde_json::json!({
-                            "label": label,
-                            "staged": staged,
-                        }));
+                        let _ = app.emit(
+                            "hcfs_conflicts_pending",
+                            serde_json::json!({
+                                "label": label,
+                                "staged": staged,
+                            }),
+                        );
                         SyncResult::ConflictsPending
                     }
                     Err(e) => {
                         println!("[Sync] Staging failed for '{}': {}", label, e);
-                        SyncResult::Synced(Err(e))
+                        SyncResult::Synced {
+                            outcome: Err(e),
+                            staged_downloads: Vec::new(),
+                            staged_uploads: Vec::new(),
+                        }
                     }
                 }
             }
@@ -611,7 +635,11 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
 
     let label_owned = label.to_string();
     match result {
-        SyncResult::Synced(Ok(outcome)) => {
+        SyncResult::Synced {
+            outcome: Ok(outcome),
+            staged_downloads,
+            staged_uploads,
+        } => {
             println!(
                 "[Sync] Sync completed for '{}': uploaded={}, downloaded={}, deleted_local={}, deleted_remote={}, conflicts_resolved={}, conflicts_skipped={}",
                 label_owned,
@@ -624,10 +652,46 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             );
 
             if outcome.files_uploaded > 0 || outcome.files_downloaded > 0 {
+                // Discard progress-callback activity for downloads — those
+                // have encrypted names (file_<hash>). Replace with real
+                // names from the staged plan, then commit.
+                {
+                    let now = chrono::Utc::now().timestamp();
+
+                    // Remove download entries added by progress callbacks
+                    // (they contain encrypted names like "file_09977d01...")
+                    {
+                        let mut pending = crate::sync_shared::PENDING_ACTIVITY
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner());
+                        pending.retain(|item| {
+                            !(item.label == label_owned && item.action == "downloaded")
+                        });
+                    }
+
+                    // Add download entries with real paths from the staged plan
+                    for f in &staged_downloads {
+                        let file_name = std::path::Path::new(&f.path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| f.path.clone());
+                        add_pending_activity(SyncActivityItem {
+                            file_name,
+                            action: "downloaded".to_string(),
+                            timestamp: now,
+                            size_bytes: 0,
+                            label: label_owned.clone(),
+                        });
+                    }
+                }
+
                 println!("[Sync] Committing pending activity for '{}'", label_owned);
                 commit_pending_activity_for_label(&label_owned);
             } else {
-                println!("[Sync] Discarding pending activity for '{}' (no files transferred)", label_owned);
+                println!(
+                    "[Sync] Discarding pending activity for '{}' (no files transferred)",
+                    label_owned
+                );
                 discard_pending_activity_for_label(&label_owned);
             }
 
@@ -646,11 +710,16 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 );
             }
         }
-        SyncResult::Synced(Err(e)) => {
+        SyncResult::Synced {
+            outcome: Err(e), ..
+        } => {
             discard_pending_activity_for_label(&label_owned);
             println!("[Sync] Sync failed for '{}' with error: {}", label_owned, e);
             if emitted_sync_started {
-                let _ = app.emit("hcfs_sync_error", serde_json::json!({"label": label_owned, "error": e}));
+                let _ = app.emit(
+                    "hcfs_sync_error",
+                    serde_json::json!({"label": label_owned, "error": e}),
+                );
             }
         }
         SyncResult::NoChanges => {
@@ -675,7 +744,10 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         }
         SyncResult::NotAvailable => {
             discard_pending_activity_for_label(&label_owned);
-            println!("[Sync] Drive '{}' not available or not unlocked, skipping sync", label_owned);
+            println!(
+                "[Sync] Drive '{}' not available or not unlocked, skipping sync",
+                label_owned
+            );
             return false;
         }
     }

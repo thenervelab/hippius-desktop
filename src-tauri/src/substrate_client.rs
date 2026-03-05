@@ -4,8 +4,8 @@
 //! On first use (or after `clear_substrate_client()`), connects to the WSS
 //! endpoint from the database with up to 10 retries at 5-second intervals.
 
-use crate::constants::substrate::WSS_ENDPOINT;
 use crate::DB_POOL;
+use crate::constants::substrate::WSS_ENDPOINT;
 use once_cell::sync::Lazy;
 use sqlx::Row;
 use std::sync::Arc;

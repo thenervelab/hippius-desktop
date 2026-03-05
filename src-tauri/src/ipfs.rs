@@ -20,8 +20,10 @@ pub async fn get_ipfs_node_info() -> Result<IpfsInfo, String> {
     Ok(IpfsInfo {
         id: Some("QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN".to_string()),
         addresses: Some(vec![
-            "/ip4/127.0.0.1/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN".to_string(),
-            "/ip4/192.168.1.100/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN".to_string(),
+            "/ip4/127.0.0.1/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+                .to_string(),
+            "/ip4/192.168.1.100/tcp/4001/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+                .to_string(),
         ]),
         agent_version: Some("kubo/0.35.0/8d00929".to_string()),
         protocol_version: Some("ipfs/0.1.0".to_string()),

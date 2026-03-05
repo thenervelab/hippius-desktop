@@ -12,7 +12,7 @@ pub struct VpnStatus {
 #[tauri::command]
 pub async fn get_vpn_status() -> Result<VpnStatus, String> {
     let pool = DB_POOL.get().ok_or("Database pool not available")?;
-    
+
     match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM vpn_status WHERE id = 1")
         .fetch_optional(pool)
         .await
@@ -34,13 +34,13 @@ pub async fn get_vpn_status() -> Result<VpnStatus, String> {
 #[tauri::command]
 pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
     let pool = DB_POOL.get().ok_or("Database pool not available")?;
-    
+
     // First get the current status
     let current = get_vpn_status().await?;
-    
+
     // Toggle the status
     let new_status = !current.is_enabled;
-    
+
     // If enabling, check and update certificate first
     if new_status {
         println!("[VPN] Checking certificate status before enabling...");
@@ -58,7 +58,7 @@ pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
-    
+
     // Start or stop Nebula based on new status
     if new_status {
         // VPN enabled - start Nebula
@@ -75,7 +75,7 @@ pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
             // Don't return error, just log it - the toggle still succeeded
         }
     }
-    
+
     Ok(VpnStatus {
         is_enabled: new_status,
     })
@@ -90,18 +90,22 @@ pub struct AutoconnectStatus {
 #[tauri::command]
 pub async fn get_autoconnect_status() -> Result<AutoconnectStatus, String> {
     let pool = DB_POOL.get().ok_or("Database pool not available")?;
-    
-    match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1")
-        .fetch_optional(pool)
-        .await
+
+    match sqlx::query_as::<_, (bool,)>(
+        "SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
     {
         Ok(Some((is_enabled,))) => Ok(AutoconnectStatus { is_enabled }),
         Ok(None) => {
             // This should never happen due to our initialization, but handle it just in case
-            let _ = sqlx::query("INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)")
-                .execute(pool)
-                .await
-                .map_err(|e| e.to_string())?;
+            let _ = sqlx::query(
+                "INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)",
+            )
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
             Ok(AutoconnectStatus { is_enabled: false })
         }
         Err(e) => Err(e.to_string()),
@@ -112,13 +116,13 @@ pub async fn get_autoconnect_status() -> Result<AutoconnectStatus, String> {
 #[tauri::command]
 pub async fn toggle_autoconnect_status() -> Result<AutoconnectStatus, String> {
     let pool = DB_POOL.get().ok_or("Database pool not available")?;
-    
+
     // First get the current status
     let current = get_autoconnect_status().await?;
-    
+
     // Toggle the status
     let new_status = !current.is_enabled;
-    
+
     // Update in database
     sqlx::query(
         "UPDATE autoconnect_vpn_enabled SET is_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
@@ -127,7 +131,7 @@ pub async fn toggle_autoconnect_status() -> Result<AutoconnectStatus, String> {
     .execute(pool)
     .await
     .map_err(|e| e.to_string())?;
-    
+
     Ok(AutoconnectStatus {
         is_enabled: new_status,
     })

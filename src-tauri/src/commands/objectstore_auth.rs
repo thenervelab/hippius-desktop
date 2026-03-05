@@ -1,6 +1,6 @@
 use crate::utils::objectstore_tokens::{
-    ensure_master_token_env, get_temp_auth_key, save_master_token,
-    save_temp_auth_key, has_master_token,
+    ensure_master_token_env, get_temp_auth_key, has_master_token, save_master_token,
+    save_temp_auth_key,
 };
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,10 @@ struct CreateMasterTokenBody<'a> {
 }
 
 #[tauri::command]
-pub async fn save_temp_auth_key_command(account_id: String, temp_auth_key: String) -> Result<(), String> {
+pub async fn save_temp_auth_key_command(
+    account_id: String,
+    temp_auth_key: String,
+) -> Result<(), String> {
     println!("[Auth] Saving temp auth key for account: {}", account_id);
     save_temp_auth_key(&account_id, &temp_auth_key).await
 }

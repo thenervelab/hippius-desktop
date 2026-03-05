@@ -121,11 +121,9 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             .any(|row| row.get::<String, _>("name") == "label");
         if !has_label {
             println!("[Setup] Adding label column to sync_paths");
-            sqlx::query(
-                "ALTER TABLE sync_paths ADD COLUMN label TEXT NOT NULL DEFAULT 'default'",
-            )
-            .execute(pool)
-            .await?;
+            sqlx::query("ALTER TABLE sync_paths ADD COLUMN label TEXT NOT NULL DEFAULT 'default'")
+                .execute(pool)
+                .await?;
         }
     }
 
@@ -133,24 +131,18 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     // SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we recreate the table.
     // Wrapped in a transaction so the table is never left in a broken state.
     {
-        let table_sql = sqlx::query(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'",
-        )
-        .fetch_optional(pool)
-        .await?;
+        let table_sql =
+            sqlx::query("SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_paths'")
+                .fetch_optional(pool)
+                .await?;
         let needs_migration = table_sql
             .as_ref()
             .and_then(|row| row.try_get::<String, _>("sql").ok())
-            .map(|sql| {
-                sql.contains("UNIQUE(owner, type)")
-                    || sql.contains("UNIQUE (owner, type)")
-            })
+            .map(|sql| sql.contains("UNIQUE(owner, type)") || sql.contains("UNIQUE (owner, type)"))
             .unwrap_or(false);
 
         if needs_migration {
-            println!(
-                "[Setup] Migrating sync_paths: UNIQUE(owner, type) -> UNIQUE(owner, label)"
-            );
+            println!("[Setup] Migrating sync_paths: UNIQUE(owner, type) -> UNIQUE(owner, label)");
             // Clean up any leftover temp table from a previous failed attempt
             sqlx::query("DROP TABLE IF EXISTS sync_paths_new")
                 .execute(pool)
@@ -482,4 +474,3 @@ async fn verify_nebula_setup(app: tauri::AppHandle) -> Result<(), String> {
 
     Ok(())
 }
-

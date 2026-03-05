@@ -10,11 +10,18 @@
 //! It also contains `setup_progress_handlers()` which registers callbacks on the
 //! Drive that emit Tauri events for upload/download/encrypt/decrypt progress.
 
-use crate::hcfs_drive::{start_sync_loop, HcfsDriveManager, StagedChanges, HCFS_DRIVES, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE};
-use crate::sync_shared::{add_pending_activity, clear_cancel, discard_all_pending_activity, discard_pending_activity_for_label, request_cancel, reset_all_states, remove_state, update_state, SyncActivityItem};
+use crate::DB_POOL;
+use crate::hcfs_drive::{
+    HCFS_DRIVES, HcfsDriveManager, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE,
+    StagedChanges, start_sync_loop,
+};
+use crate::sync_shared::{
+    SyncActivityItem, add_pending_activity, clear_cancel, discard_all_pending_activity,
+    discard_pending_activity_for_label, remove_state, request_cancel, reset_all_states,
+    update_state,
+};
 use crate::utils::account_key::account_key;
 use crate::utils::objectstore_tokens::get_temp_auth_key;
-use crate::DB_POOL;
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
 use sha2::{Digest, Sha256};
@@ -22,8 +29,8 @@ use std::collections::HashMap;
 use std::error::Error as _;
 use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter};
 
 #[derive(serde::Serialize, Clone)]
@@ -142,14 +149,13 @@ async fn get_sync_path_for_label(account_id: &str, label: &str) -> Result<String
     let db = DB_POOL.get().ok_or("Database not initialized")?;
     let owner = account_key(account_id);
 
-    let result: Option<(String,)> = sqlx::query_as(
-        "SELECT path FROM sync_paths WHERE owner = ? AND label = ?",
-    )
-    .bind(&owner)
-    .bind(label)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| format!("Failed to get sync path: {}", e))?;
+    let result: Option<(String,)> =
+        sqlx::query_as("SELECT path FROM sync_paths WHERE owner = ? AND label = ?")
+            .bind(&owner)
+            .bind(label)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| format!("Failed to get sync path: {}", e))?;
 
     result
         .map(|(path,)| path)
@@ -195,8 +201,8 @@ fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String, 
     use std::str::FromStr;
     use zeroize::Zeroize;
 
-    let master = Mnemonic::from_str(master_mnemonic)
-        .map_err(|e| format!("Invalid master mnemonic: {e}"))?;
+    let master =
+        Mnemonic::from_str(master_mnemonic).map_err(|e| format!("Invalid master mnemonic: {e}"))?;
     let mut seed = master.to_seed("");
 
     let mut hasher = Sha256::new();
@@ -205,11 +211,10 @@ fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String, 
     seed.zeroize();
     let mut folder_entropy: [u8; 32] = hasher.finalize().into();
 
-    let folder_mnemonic = Mnemonic::from_entropy(&folder_entropy)
-        .map_err(|e| {
-            folder_entropy.zeroize();
-            format!("Failed to derive folder mnemonic: {e}")
-        })?;
+    let folder_mnemonic = Mnemonic::from_entropy(&folder_entropy).map_err(|e| {
+        folder_entropy.zeroize();
+        format!("Failed to derive folder mnemonic: {e}")
+    })?;
     folder_entropy.zeroize();
     Ok(folder_mnemonic.to_string())
 }
@@ -255,7 +260,9 @@ fn run_migration(
 
         // Verify critical file
         if !folder_dir.join("enc_mnemonic.json").exists() {
-            return Err("Migration A verification failed: enc_mnemonic.json not in folder dir".to_string());
+            return Err(
+                "Migration A verification failed: enc_mnemonic.json not in folder dir".to_string(),
+            );
         }
 
         // This mnemonic is the master — save it at account level if not already there
@@ -295,12 +302,15 @@ fn run_migration(
             .map_err(|e| format!("Failed to create folder config dir: {e}"))?;
 
         // Move enc_mnemonic.json, sync_state.json*, temp/ into folder_dir
-        for name in &["enc_mnemonic.json", "sync_state.json", "sync_state.json.bak"] {
+        for name in &[
+            "enc_mnemonic.json",
+            "sync_state.json",
+            "sync_state.json.bak",
+        ] {
             let src = account_dir.join(name);
             if src.exists() {
                 let dst = folder_dir.join(name);
-                std::fs::copy(&src, &dst)
-                    .map_err(|e| format!("Failed to copy {name}: {e}"))?;
+                std::fs::copy(&src, &dst).map_err(|e| format!("Failed to copy {name}: {e}"))?;
                 println!("[Migration] Copied {} to folder dir", name);
             }
         }
@@ -315,11 +325,17 @@ fn run_migration(
 
         // Verify critical file
         if !folder_dir.join("enc_mnemonic.json").exists() {
-            return Err("Migration B verification failed: enc_mnemonic.json not in folder dir".to_string());
+            return Err(
+                "Migration B verification failed: enc_mnemonic.json not in folder dir".to_string(),
+            );
         }
 
         // Clean up originals from account_dir (not master_enc_mnemonic.json)
-        for name in &["enc_mnemonic.json", "sync_state.json", "sync_state.json.bak"] {
+        for name in &[
+            "enc_mnemonic.json",
+            "sync_state.json",
+            "sync_state.json.bak",
+        ] {
             let src = account_dir.join(name);
             if src.exists() {
                 let _ = std::fs::remove_file(&src);
@@ -340,8 +356,8 @@ fn run_migration(
 
 /// Copy all entries from `src` into `dst`, recursing into subdirectories.
 fn copy_dir_contents(src: &Path, dst: &Path) -> Result<(), String> {
-    let entries = std::fs::read_dir(src)
-        .map_err(|e| format!("Failed to read dir {:?}: {e}", src))?;
+    let entries =
+        std::fs::read_dir(src).map_err(|e| format!("Failed to read dir {:?}: {e}", src))?;
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -389,13 +405,19 @@ pub async fn initialize_sync(
     label: String,
     existing_mnemonic: Option<String>,
 ) -> Result<InitSyncResult, String> {
-    println!("[Setup] initialize_sync called for account: {}, label: '{}'", account_id, label);
+    println!(
+        "[Setup] initialize_sync called for account: {}, label: '{}'",
+        account_id, label
+    );
 
     // 0. Stop only the drive with the matching label if it exists
     {
         let mut drives_guard = HCFS_DRIVES.lock().await;
         if drives_guard.remove(&label).is_some() {
-            println!("[Setup] Dropped previous drive instance for label '{}'", label);
+            println!(
+                "[Setup] Dropped previous drive instance for label '{}'",
+                label
+            );
         }
         discard_pending_activity_for_label(&label);
         remove_state(&label);
@@ -435,11 +457,12 @@ pub async fn initialize_sync(
     let bearer_token = get_temp_auth_key(&account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
-        .ok_or_else(|| {
-            "No authentication token found. Please log in again.".to_string()
-        })?;
+        .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
 
-    println!("[Setup] Retrieved auth token for account_id (SS58): {}", account_id);
+    println!(
+        "[Setup] Retrieved auth token for account_id (SS58): {}",
+        account_id
+    );
     println!("[Setup] This account_id will be used as user_id for sync requests.");
 
     // Set HCFS client config BEFORE unlock so account_ss58 is available
@@ -451,12 +474,19 @@ pub async fn initialize_sync(
         billing_bypass_token: None,
         account_ss58: format!("{}_{}", account_id, folder_hash(&label)),
     })?;
-    println!("[Setup] HCFS config set with account_ss58: {}_{} (before unlock)", account_id, folder_hash(&label));
+    println!(
+        "[Setup] HCFS config set with account_ss58: {}_{} (before unlock)",
+        account_id,
+        folder_hash(&label)
+    );
 
     // 7. Init or unlock the drive (now account_ss58 is set, so user_id will be correct)
     let (user_id, mnemonic, is_new_setup) = if manager.is_initialized() {
         // Existing folder — just unlock
-        println!("[Setup] Drive already initialized for '{}', unlocking...", label);
+        println!(
+            "[Setup] Drive already initialized for '{}', unlocking...",
+            label
+        );
         println!("[Setup] Config dir: {:?}", folder_dir);
         println!("[Setup] Password length: {} chars", drive_password.len());
 
@@ -473,7 +503,10 @@ pub async fn initialize_sync(
                 let enc_path = folder_dir.join("enc_mnemonic.json");
                 if enc_path.exists() {
                     if let Err(rm_err) = std::fs::remove_file(&enc_path) {
-                        println!("[Setup] WARNING: Failed to remove enc_mnemonic.json: {}", rm_err);
+                        println!(
+                            "[Setup] WARNING: Failed to remove enc_mnemonic.json: {}",
+                            rm_err
+                        );
                     } else {
                         println!("[Setup] Removed enc_mnemonic.json");
                     }
@@ -482,7 +515,10 @@ pub async fn initialize_sync(
                 // Also remove the master mnemonic - it might be encrypted with wrong password too
                 if master_path.exists() {
                     if let Err(rm_err) = std::fs::remove_file(&master_path) {
-                        println!("[Setup] WARNING: Failed to remove master_enc_mnemonic.json: {}", rm_err);
+                        println!(
+                            "[Setup] WARNING: Failed to remove master_enc_mnemonic.json: {}",
+                            rm_err
+                        );
                     } else {
                         println!("[Setup] Removed master_enc_mnemonic.json (will regenerate)");
                     }
@@ -525,7 +561,10 @@ pub async fn initialize_sync(
                 zeroize::Zeroize::zeroize(&mut init_mnemonic);
 
                 let uid = manager.unlock(&drive_password)?;
-                println!("[Setup] Drive re-initialized and unlocked, derived user_id: {}", uid);
+                println!(
+                    "[Setup] Drive re-initialized and unlocked, derived user_id: {}",
+                    uid
+                );
 
                 (uid, Some(master_str), true)
             }
@@ -534,52 +573,45 @@ pub async fn initialize_sync(
         // New folder — need to derive or generate mnemonic
         println!("[Setup] Drive not initialized for '{}', creating...", label);
 
-        let (folder_mnemonic, master_for_backup, generated_new_master) =
-            if let Some(ref imported) = existing_mnemonic {
-                // User importing a mnemonic (first setup or recovery)
-                if !master_path.exists() {
-                    hcfs_client::auth::save_encrypted_mnemonic(
-                        &master_path,
-                        imported,
-                        &drive_password,
-                    )
+        let (folder_mnemonic, master_for_backup, generated_new_master) = if let Some(ref imported) =
+            existing_mnemonic
+        {
+            // User importing a mnemonic (first setup or recovery)
+            if !master_path.exists() {
+                hcfs_client::auth::save_encrypted_mnemonic(&master_path, imported, &drive_password)
                     .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-                    println!("[Setup] Saved imported mnemonic as master");
-                    let derived = derive_folder_mnemonic(imported, &label)?;
-                    (derived, None, false)
-                } else {
-                    println!("[Setup] Master already exists, deriving from it (ignoring import)");
-                    let master = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)
-                        .map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
-                    let mut master_str = master.to_string();
-                    let derived = derive_folder_mnemonic(&master_str, &label)?;
-                    zeroize::Zeroize::zeroize(&mut master_str);
-                    (derived, None, false)
-                }
-            } else if master_path.exists() {
-                // Folder switch — read master, derive new folder mnemonic
+                println!("[Setup] Saved imported mnemonic as master");
+                let derived = derive_folder_mnemonic(imported, &label)?;
+                (derived, None, false)
+            } else {
+                println!("[Setup] Master already exists, deriving from it (ignoring import)");
                 let master = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)
                     .map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
                 let mut master_str = master.to_string();
                 let derived = derive_folder_mnemonic(&master_str, &label)?;
                 zeroize::Zeroize::zeroize(&mut master_str);
-                println!("[Setup] Derived folder mnemonic from existing master");
                 (derived, None, false)
-            } else {
-                // First-ever setup — generate new 24-word master mnemonic
-                let master = bip39::Mnemonic::generate(24)
-                    .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
-                let master_str = master.to_string();
-                hcfs_client::auth::save_encrypted_mnemonic(
-                    &master_path,
-                    &master_str,
-                    &drive_password,
-                )
+            }
+        } else if master_path.exists() {
+            // Folder switch — read master, derive new folder mnemonic
+            let master = hcfs_client::auth::recover_mnemonic(&master_path, &drive_password)
+                .map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
+            let mut master_str = master.to_string();
+            let derived = derive_folder_mnemonic(&master_str, &label)?;
+            zeroize::Zeroize::zeroize(&mut master_str);
+            println!("[Setup] Derived folder mnemonic from existing master");
+            (derived, None, false)
+        } else {
+            // First-ever setup — generate new 24-word master mnemonic
+            let master = bip39::Mnemonic::generate(24)
+                .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
+            let master_str = master.to_string();
+            hcfs_client::auth::save_encrypted_mnemonic(&master_path, &master_str, &drive_password)
                 .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-                println!("[Setup] Generated and saved new master mnemonic");
-                let derived = derive_folder_mnemonic(&master_str, &label)?;
-                (derived, Some(master_str), true)
-            };
+            println!("[Setup] Generated and saved new master mnemonic");
+            let derived = derive_folder_mnemonic(&master_str, &label)?;
+            (derived, Some(master_str), true)
+        };
 
         // Initialize drive with the folder-specific derived mnemonic
         let mut init_mnemonic = manager.init(&drive_password, Some(&folder_mnemonic))?;
@@ -589,14 +621,23 @@ pub async fn initialize_sync(
         zeroize::Zeroize::zeroize(&mut folder_mnemonic);
 
         let uid = manager.unlock(&drive_password)?;
-        println!("[Setup] Drive initialized and unlocked for '{}', derived user_id: {}", label, uid);
+        println!(
+            "[Setup] Drive initialized and unlocked for '{}', derived user_id: {}",
+            label, uid
+        );
 
         (uid, master_for_backup, generated_new_master)
     };
 
-    println!("[Setup] Drive user_id after unlock: {} (should match account_id)", user_id);
+    println!(
+        "[Setup] Drive user_id after unlock: {} (should match account_id)",
+        user_id
+    );
     if user_id != account_id {
-        println!("[Setup] WARNING: user_id ({}) != account_id ({}). This may cause 403 errors!", user_id, account_id);
+        println!(
+            "[Setup] WARNING: user_id ({}) != account_id ({}). This may cause 403 errors!",
+            user_id, account_id
+        );
     }
 
     // 8. Test server connectivity
@@ -704,7 +745,10 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
         start_sync_loop(app.clone()).await;
     }
 
-    println!("[Sync] Stopped drive '{}', {} drives remaining", label, remaining);
+    println!(
+        "[Sync] Stopped drive '{}', {} drives remaining",
+        label, remaining
+    );
     Ok(())
 }
 
@@ -745,10 +789,13 @@ pub async fn reset_sync_data(app: AppHandle, account_id: String) -> Result<(), S
     println!("[Sync] Reset: Cleared database config");
 
     // Emit event so frontend knows to show setup UI
-    let _ = app.emit("hcfs_sync_reset", serde_json::json!({
-        "account_id": account_id,
-        "message": "Sync data has been reset. Please set up sync again."
-    }));
+    let _ = app.emit(
+        "hcfs_sync_reset",
+        serde_json::json!({
+            "account_id": account_id,
+            "message": "Sync data has been reset. Please set up sync again."
+        }),
+    );
 
     println!("[Sync] Reset complete for account: {}", account_id);
 
@@ -796,7 +843,10 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
 
     manager.set_progress(SyncProgress {
         on_upload_progress: Some(Arc::new(move |b, t, p| {
-            println!("[Progress] Upload [{}]: {}/{} bytes, path: {:?}", l1, b, t, p);
+            println!(
+                "[Progress] Upload [{}]: {}/{} bytes, path: {:?}",
+                l1, b, t, p
+            );
             let _ = a1.emit(
                 "hcfs_upload_progress",
                 serde_json::json!({"label": l1, "bytes": b, "total": t, "path": p}),
@@ -819,27 +869,17 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
             }
         })),
         on_download_progress: Some(Arc::new(move |b, t, p| {
-            println!("[Progress] Download [{}]: {}/{} bytes, path: {:?}", l2, b, t, p);
+            println!(
+                "[Progress] Download [{}]: {}/{} bytes, path: {:?}",
+                l2, b, t, p
+            );
             let _ = a2.emit(
                 "hcfs_download_progress",
                 serde_json::json!({"label": l2, "bytes": b, "total": t, "path": p}),
             );
-            if b == t && t > 0 {
-                if let Some(path_str) = p {
-                    let file_name = Path::new(path_str)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path_str.to_string());
-                    println!("[Sync] Download received [{}]: {}", l2, file_name);
-                    add_pending_activity(SyncActivityItem {
-                        file_name,
-                        action: "downloaded".to_string(),
-                        timestamp: chrono::Utc::now().timestamp(),
-                        size_bytes: t,
-                        label: l2.clone(),
-                    });
-                }
-            }
+            // Download activity is recorded from the staged plan (which has real
+            // file names) in trigger_sync_for_drive, not here. The progress
+            // callback only receives encrypted names like "file_09977d01...".
         })),
         on_encrypt_progress: Some(Arc::new(move |b, t, p| {
             let _ = a3.emit(
@@ -899,13 +939,12 @@ pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
             // No active drive — try reading DB for any sync path
             let db = DB_POOL.get().ok_or("Database not initialized")?;
             let owner = account_key(&account_id);
-            let result: Option<(String, String)> = sqlx::query_as(
-                "SELECT path, label FROM sync_paths WHERE owner = ? LIMIT 1",
-            )
-            .bind(&owner)
-            .fetch_optional(db)
-            .await
-            .map_err(|e| format!("DB error: {e}"))?;
+            let result: Option<(String, String)> =
+                sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ? LIMIT 1")
+                    .bind(&owner)
+                    .fetch_optional(db)
+                    .await
+                    .map_err(|e| format!("DB error: {e}"))?;
 
             if let Some((path, lbl)) = result {
                 let folder_dir = config_dir_for_folder(&account_id, &lbl)?;
@@ -975,7 +1014,11 @@ pub async fn sync_with_conflict_resolutions(
     // For V1, use the first drive's label
     let label = {
         let guard = HCFS_DRIVES.lock().await;
-        guard.keys().next().cloned().unwrap_or_else(|| "default".to_string())
+        guard
+            .keys()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| "default".to_string())
     };
 
     // Mark syncing in shared state
@@ -1040,12 +1083,18 @@ pub async fn sync_with_conflict_resolutions(
             Ok(())
         }
         Some(Err(e)) => {
-            let _ = app.emit("hcfs_sync_error", serde_json::json!({"label": label, "error": e}));
+            let _ = app.emit(
+                "hcfs_sync_error",
+                serde_json::json!({"label": label, "error": e}),
+            );
             Err(e)
         }
         None => {
             let msg = "Drive not initialized or not unlocked";
-            let _ = app.emit("hcfs_sync_error", serde_json::json!({"label": label, "error": msg}));
+            let _ = app.emit(
+                "hcfs_sync_error",
+                serde_json::json!({"label": label, "error": msg}),
+            );
             Err(msg.to_string())
         }
     }
@@ -1080,7 +1129,9 @@ pub async fn create_encrypted_backup(
         zip.write_all(mnemonic.as_bytes())
             .map_err(|e| format!("Failed to write mnemonic: {e}"))?;
 
-        let cursor = zip.finish().map_err(|e| format!("Failed to finalize zip: {e}"))?;
+        let cursor = zip
+            .finish()
+            .map_err(|e| format!("Failed to finalize zip: {e}"))?;
         std::fs::write(&output_path, cursor.into_inner())
             .map_err(|e| format!("Failed to write backup file: {e}"))?;
 

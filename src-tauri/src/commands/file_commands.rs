@@ -195,15 +195,15 @@ const MAX_COPY_DEPTH: u32 = 64;
 
 async fn copy_dir_recursive(src: &Path, dst: &Path, depth: u32) -> Result<(), String> {
     if depth > MAX_COPY_DEPTH {
-        return Err(format!("Directory nesting exceeds maximum depth ({MAX_COPY_DEPTH})"));
+        return Err(format!(
+            "Directory nesting exceeds maximum depth ({MAX_COPY_DEPTH})"
+        ));
     }
 
     tokio::fs::create_dir_all(dst)
         .await
         .map_err(|e| e.to_string())?;
-    let mut dir = tokio::fs::read_dir(src)
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut dir = tokio::fs::read_dir(src).await.map_err(|e| e.to_string())?;
     while let Some(entry) = dir.next_entry().await.map_err(|e| e.to_string())? {
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());

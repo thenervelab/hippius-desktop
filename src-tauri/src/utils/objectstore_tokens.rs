@@ -14,7 +14,7 @@ pub fn clear_objectstore_env() {
 }
 
 /// Persist a temp auth key (OAuth token) for this account.
-/// 
+///
 /// **Usage**: This token is used for Hippius API authentication (Authorization: Token {temp_key})
 /// **NOT for S3**: Use master token for S3/Object Storage access instead.
 pub async fn save_temp_auth_key(account_id: &str, temp_key: &str) -> Result<(), String> {
@@ -38,10 +38,14 @@ pub async fn save_temp_auth_key(account_id: &str, temp_key: &str) -> Result<(), 
 }
 
 /// Save the master token (S3 credentials) for this account.
-/// 
+///
 /// **Usage**: This token is used for S3/Object Storage access (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
 /// **NOT for API**: Use temp auth key for Hippius API authentication instead.
-pub async fn save_master_token(account_id: &str, access_key_id: &str, secret: &str) -> Result<(), String> {
+pub async fn save_master_token(
+    account_id: &str,
+    access_key_id: &str,
+    secret: &str,
+) -> Result<(), String> {
     if let Some(pool) = DB_POOL.get() {
         sqlx::query(
             r#"
@@ -97,7 +101,8 @@ pub async fn has_master_token(account_id: &str) -> Result<bool, String> {
         {
             let access: Option<String> = row.get("master_access_key_id");
             let secret: Option<String> = row.get("master_secret");
-            if matches!((access.as_deref(), secret.as_deref()), (Some(a), Some(s)) if !a.is_empty() && !s.is_empty()) {
+            if matches!((access.as_deref(), secret.as_deref()), (Some(a), Some(s)) if !a.is_empty() && !s.is_empty())
+            {
                 return Ok(true);
             }
         }
@@ -108,17 +113,18 @@ pub async fn has_master_token(account_id: &str) -> Result<bool, String> {
 }
 
 /// Get the temp auth key (OAuth token) for this account.
-/// 
+///
 /// **Usage**: Use this for Hippius API authentication (Authorization: Token {temp_key})
 /// **Returns**: OAuth token string or None if not found
 pub async fn get_temp_auth_key(account_id: &str) -> Result<Option<String>, String> {
     if let Some(pool) = DB_POOL.get() {
         // Prefer scoped record, fall back to legacy single-row storage
-        let scoped = sqlx::query("SELECT temp_auth_key FROM objectstore_auth_scoped WHERE owner = ?")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("DB error fetching temp auth key: {}", e))?;
+        let scoped =
+            sqlx::query("SELECT temp_auth_key FROM objectstore_auth_scoped WHERE owner = ?")
+                .bind(account_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| format!("DB error fetching temp auth key: {}", e))?;
 
         if let Some(row) = scoped {
             return Ok(row.get::<Option<String>, _>("temp_auth_key"));
@@ -147,7 +153,7 @@ pub async fn get_temp_auth_key(account_id: &str) -> Result<Option<String>, Strin
 }
 
 /// Get the master token (S3 credentials) for this account.
-/// 
+///
 /// **Usage**: Use this for S3/Object Storage access (AWS credentials)
 /// **Returns**: Tuple of (access_key_id, secret) or None if not found
 /// **NOT for API**: Use get_temp_auth_key for Hippius API authentication instead.
@@ -228,8 +234,12 @@ pub async fn ensure_master_token_or_fetch(account_id: &str) -> Result<(), String
         .await?
         .ok_or_else(|| "No stored master token and no temp auth key available".to_string())?;
 
-    let api_base = std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE.to_string());
-    let url = format!("{}/objectstore/master-tokens/", api_base.trim_end_matches('/'));
+    let api_base =
+        std::env::var("HIPPIUS_API_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE.to_string());
+    let url = format!(
+        "{}/objectstore/master-tokens/",
+        api_base.trim_end_matches('/')
+    );
 
     #[derive(serde::Serialize)]
     struct CreateBody<'a> {

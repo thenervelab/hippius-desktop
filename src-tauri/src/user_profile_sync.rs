@@ -1547,10 +1547,7 @@ pub async fn list_folder_contents(
     Ok(entries)
 }
 
-async fn fetch_ipfs_json(
-    client: &Client,
-    cid: &str,
-) -> Result<serde_json::Value, String> {
+async fn fetch_ipfs_json(client: &Client, cid: &str) -> Result<serde_json::Value, String> {
     let url = format!("https://get.hippius.network/ipfs/{}", cid);
     let resp = client
         .get(&url)

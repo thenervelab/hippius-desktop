@@ -210,16 +210,19 @@ pub async fn get_sync_path_internal(
     let path_type = if is_public { "public" } else { "private" };
     if let Some(pool) = DB_POOL.get() {
         // Try scoped entry first
-        let rec_row = sqlx::query("SELECT path, label FROM sync_paths WHERE owner = ? AND type = ?")
-            .bind(owner)
-            .bind(path_type)
-            .fetch_optional(pool)
-            .await
-            .map_err(|e| format!("DB error: {}", e))?;
+        let rec_row =
+            sqlx::query("SELECT path, label FROM sync_paths WHERE owner = ? AND type = ?")
+                .bind(owner)
+                .bind(path_type)
+                .fetch_optional(pool)
+                .await
+                .map_err(|e| format!("DB error: {}", e))?;
 
         // If not found, migrate a legacy (owner='') row only when no scoped rows exist yet.
         let path_label_opt: Option<(String, String)> = if let Some(row) = rec_row {
-            let label: String = row.try_get("label").unwrap_or_else(|_| "default".to_string());
+            let label: String = row
+                .try_get("label")
+                .unwrap_or_else(|_| "default".to_string());
             Some((row.get::<String, _>("path"), label))
         } else {
             let scoped_count: i64 = sqlx::query_scalar(
@@ -250,14 +253,13 @@ pub async fn get_sync_path_internal(
                         .execute(&mut *tx)
                         .await;
 
-                    let _ = sqlx::query(
-                        "UPDATE sync_paths SET owner = ? WHERE id = ? AND owner = ''",
-                    )
-                    .bind(owner)
-                    .bind(legacy_id)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| format!("DB error updating legacy row: {}", e))?;
+                    let _ =
+                        sqlx::query("UPDATE sync_paths SET owner = ? WHERE id = ? AND owner = ''")
+                            .bind(owner)
+                            .bind(legacy_id)
+                            .execute(&mut *tx)
+                            .await
+                            .map_err(|e| format!("DB error updating legacy row: {}", e))?;
 
                     tx.commit()
                         .await
@@ -275,7 +277,11 @@ pub async fn get_sync_path_internal(
         };
 
         if let Some((path, label)) = path_label_opt {
-            Ok(SyncPathResult { path, is_public, label })
+            Ok(SyncPathResult {
+                path,
+                is_public,
+                label,
+            })
         } else {
             Err(format!(
                 "Sync path for {} not set yet. Please configure it first.",
@@ -299,7 +305,7 @@ pub async fn get_sync_path(params: GetSyncPathParams) -> Result<SyncPathResult, 
                 path: "".to_string(),
                 is_public: params.is_public,
                 label: "default".to_string(),
-            })
+            });
         }
     };
     let owner = account_key(&account_id);

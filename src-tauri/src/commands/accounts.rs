@@ -55,7 +55,10 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
             if sp.path.trim().is_empty() {
                 continue;
             }
-            println!("[Import] Importing sync path: {}, label: {}", sp.path, sp.label);
+            println!(
+                "[Import] Importing sync path: {}, label: {}",
+                sp.path, sp.label
+            );
             let existing: Option<(String,)> =
                 sqlx::query_as("SELECT path FROM sync_paths WHERE owner = '' AND label = ?")
                     .bind(&sp.label)
@@ -174,7 +177,9 @@ pub async fn export_app_data() -> Result<ExportDataResult, String> {
         .iter()
         .map(|row| SyncPathExport {
             path: row.get("path"),
-            label: row.try_get("label").unwrap_or_else(|_| "default".to_string()),
+            label: row
+                .try_get("label")
+                .unwrap_or_else(|_| "default".to_string()),
         })
         .collect();
 
