@@ -219,6 +219,82 @@ fn derive_folder_mnemonic(master_mnemonic: &str, label: &str) -> Result<String, 
     Ok(folder_mnemonic.to_string())
 }
 
+/// Ensure the folder uses a derived mnemonic, not the raw master.
+///
+/// After migration, the folder's `enc_mnemonic.json` may contain the master
+/// mnemonic verbatim (legacy). This function detects that by comparing the
+/// decrypted folder mnemonic against the master. If they match, it:
+///   1. Derives the correct folder-specific mnemonic
+///   2. Re-saves `enc_mnemonic.json` with the derived mnemonic
+///   3. Wipes `sync_state.json` so files are re-uploaded with the new key
+///
+/// This is idempotent — if the folder already has a derived mnemonic, it's a no-op.
+fn ensure_derived_mnemonic(
+    folder_dir: &Path,
+    master_path: &Path,
+    password: &str,
+    label: &str,
+) -> Result<(), String> {
+    use zeroize::Zeroize;
+
+    let folder_enc = folder_dir.join("enc_mnemonic.json");
+    if !folder_enc.exists() || !master_path.exists() {
+        return Ok(());
+    }
+
+    let master = hcfs_client::auth::recover_mnemonic(master_path, password)
+        .map_err(|e| format!("Failed to recover master mnemonic: {e}"))?;
+    let mut master_str = master.to_string();
+
+    let folder = hcfs_client::auth::recover_mnemonic(&folder_enc, password)
+        .map_err(|e| format!("Failed to recover folder mnemonic: {e}"))?;
+    let mut folder_str = folder.to_string();
+
+    if folder_str != master_str {
+        master_str.zeroize();
+        folder_str.zeroize();
+        return Ok(());
+    }
+    folder_str.zeroize();
+
+    println!(
+        "[Migration] Folder '{}' uses un-derived master mnemonic — re-deriving",
+        label
+    );
+
+    let mut derived = derive_folder_mnemonic(&master_str, label)?;
+    master_str.zeroize();
+
+    // Create the rekey marker BEFORE saving the new mnemonic. If the
+    // process crashes after the mnemonic is saved but before the marker
+    // is written, `ensure_derived_mnemonic` would see folder != master
+    // on next startup and skip re-derivation — leaving stale remote
+    // files encrypted with the old key and no purge scheduled.
+    let marker = folder_dir.join(".needs_rekey");
+    std::fs::File::create(&marker).map_err(|e| {
+        format!("Failed to create rekey marker: {e}")
+    })?;
+
+    hcfs_client::auth::save_encrypted_mnemonic(
+        &folder_enc, &derived, password,
+    )
+    .map_err(|e| format!("Failed to save derived mnemonic: {e}"))?;
+    derived.zeroize();
+
+    // Wipe sync state so files get re-uploaded with the new key
+    let state_path = folder_dir.join("sync_state.json");
+    let state_bak = folder_dir.join("sync_state.json.bak");
+    let _ = std::fs::remove_file(&state_path);
+    let _ = std::fs::remove_file(&state_bak);
+
+    println!(
+        "[Migration] Re-derived mnemonic for '{}', wiped sync state, marked for remote purge",
+        label
+    );
+
+    Ok(())
+}
+
 /// Run migration from legacy config layouts into the per-folder layout.
 ///
 /// Handles three legacy configurations:
@@ -462,6 +538,11 @@ async fn initialize_sync_inner(
     let master_path = master_mnemonic_path(&account_id)?;
     run_migration(&sync_path, &acct_dir, &folder_dir, &master_path)?;
 
+    // 4b. Detect legacy mnemonic: if the folder's mnemonic matches the master,
+    //     it was migrated without derivation. Re-derive so all devices share
+    //     the same folder-specific key.
+    ensure_derived_mnemonic(&folder_dir, &master_path, &drive_password, &label)?;
+
     // 5. Create HcfsDriveManager with per-folder config directory
     let mut manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
 
@@ -486,10 +567,10 @@ async fn initialize_sync_inner(
         billing_bypass_token: None,
         account_ss58: format!("{}_{}", account_id, folder_hash(&label)),
     })?;
+    let fhash = folder_hash(&label);
     println!(
-        "[Setup] HCFS config set with account_ss58: {}_{} (before unlock)",
-        account_id,
-        folder_hash(&label)
+        "[Setup] HCFS config set with account_ss58: {}_{} (before unlock). folder_hash('{}')={}",
+        account_id, fhash, label, fhash
     );
 
     // 7. Init or unlock the drive (now account_ss58 is set, so user_id will be correct)
@@ -541,6 +622,10 @@ async fn initialize_sync_inner(
                 let state_bak_path = folder_dir.join("sync_state.json.bak");
                 let _ = std::fs::remove_file(&state_path);
                 let _ = std::fs::remove_file(&state_bak_path);
+
+                // Clear any rekey marker — recovery generates a new key,
+                // so purging old remote files is pointless and would block init.
+                let _ = std::fs::remove_file(folder_dir.join(".needs_rekey"));
 
                 println!("[Setup] Recovery cleanup complete. Retrying initialization...");
 
@@ -684,13 +769,82 @@ async fn initialize_sync_inner(
     // 10. Clear any previous cancellation flag
     clear_cancel();
 
-    // 11. Store the manager in the drives registry
+    // 11. If ensure_derived_mnemonic left a rekey marker, purge all remote
+    //     files so the next sync re-uploads them encrypted with the new
+    //     derived key. Without this, salted_hash matches → BothModifiedSame
+    //     → no re-upload → Device B still can't decrypt.
+    {
+        let marker = folder_dir.join(".needs_rekey");
+        if marker.exists() {
+            let composite_id =
+                format!("{}_{}", account_id, folder_hash(&label));
+            println!(
+                "[Rekey] Purging remote files for '{}' (user_id={})",
+                label, composite_id
+            );
+            let purge_client = hcfs_client::client::HcfsClient::new(
+                HcfsClientConfig {
+                    base_url: server_url.clone(),
+                    api_key: "Arion".to_string(),
+                    bearer_token: bearer_token.clone(),
+                    accept_invalid_certs: true,
+                    billing_bypass_token: None,
+                    account_ss58: String::new(),
+                },
+            )
+            .map_err(|e| format!("Failed to create purge client: {e}"))?;
+
+            let remote_files = purge_client
+                .get_all_files::<fn(u64, u64)>(&composite_id, None)
+                .await
+                .map_err(|e| {
+                    format!("Failed to fetch remote files for rekey purge: {e}")
+                })?;
+
+            println!(
+                "[Rekey] Found {} remote files to delete for '{}'",
+                remote_files.len(),
+                label
+            );
+            let mut deleted = 0u64;
+            for entry in &remote_files {
+                let file_id = hex::encode(entry.path_hash);
+                match purge_client
+                    .delete(&composite_id, &file_id)
+                    .await
+                {
+                    Ok(_) => deleted += 1,
+                    Err(e) => println!(
+                        "[Rekey] Warning: failed to delete {}: {}",
+                        file_id, e
+                    ),
+                }
+            }
+            println!(
+                "[Rekey] Deleted {}/{} remote files for '{}'",
+                deleted,
+                remote_files.len(),
+                label
+            );
+
+            if deleted == remote_files.len() as u64 {
+                let _ = std::fs::remove_file(&marker);
+            } else {
+                println!(
+                    "[Rekey] Keeping marker — {} files failed, will retry next init",
+                    remote_files.len() as u64 - deleted
+                );
+            }
+        }
+    }
+
+    // 12. Store the manager in the drives registry
     {
         let mut guard = HCFS_DRIVES.lock().await;
         guard.insert(label.clone(), manager);
     }
 
-    // 12. Start (or restart) the background sync loop to pick up the new drive
+    // 13. Start (or restart) the background sync loop to pick up the new drive
     if start_loop {
         start_sync_loop(app.clone()).await;
     }

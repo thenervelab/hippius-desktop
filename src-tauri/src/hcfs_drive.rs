@@ -262,6 +262,65 @@ impl HcfsDriveManager {
         self.drive.cleanup_stale_temp_files();
     }
 
+    /// Log sync state diagnostics — user_id, local/remote/synced file counts.
+    pub fn log_sync_diagnostics(&self, label: &str) {
+        let state = match self.drive.load_sync_state() {
+            Ok(s) => s,
+            Err(e) => {
+                println!("[Diag] Failed to load sync state for '{}': {}", label, e);
+                return;
+            }
+        };
+        println!(
+            "[Diag] Drive '{}': user_id='{}', local={}, remote={}, synced={}, path_index={}",
+            label,
+            state.user_id,
+            state.local.files.len(),
+            state.remote.files.len(),
+            state.synced.files.len(),
+            state.path_index.len(),
+        );
+        // Log each remote file's path_hash prefix for cross-referencing
+        for (file_id, _meta) in &state.remote.files {
+            let known_path = state.path_index.get(file_id)
+                .map(|p| p.display().to_string());
+            let enc_path = state.remote_encrypted_paths.get(file_id).is_some();
+            println!(
+                "[Diag]   remote file_id={} known_path={:?} has_encrypted_path={}",
+                hex::encode(&file_id[..8]),
+                known_path,
+                enc_path,
+            );
+        }
+    }
+
+    /// Remove files left behind by failed downloads.
+    ///
+    /// When hcfs-client cannot decrypt a downloaded file it leaves a
+    /// partial or empty file on disk named `downloaded_<hex>`. These
+    /// are not real user files — they are artifacts of the fallback
+    /// naming in `resolve_download_path`. Scan the sync folder and
+    /// delete any that match.
+    pub fn cleanup_failed_downloads(&self) {
+        let Ok(entries) = std::fs::read_dir(&self.sync_path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("downloaded_")
+                && name_str.len() > "downloaded_".len()
+                && name_str["downloaded_".len()..].chars().all(|c| c.is_ascii_hexdigit())
+            {
+                println!(
+                    "[Sync] Removing failed download artifact: {}",
+                    name_str
+                );
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
     /// Build a path_index from the current sync state + local scan,
     /// mapping encrypted on-disk name prefixes to real file names.
     ///
@@ -531,6 +590,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         match guard.get_mut(label) {
             Some(m) if m.is_unlocked() => {
                 println!("[Sync] Drive '{}' is unlocked, staging changes...", label);
+                m.log_sync_diagnostics(label);
                 match m.stage_with_paths().await {
                     Ok(staged) if staged.conflicts.is_empty() => {
                         // Check if there are any actual changes to sync
@@ -693,6 +753,15 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         s.is_syncing = false;
         s.last_sync_time = Some(chrono::Utc::now().timestamp());
     });
+
+    // Log post-sync diagnostics and remove any files left behind by failed downloads.
+    {
+        let guard = HCFS_DRIVES.lock().await;
+        if let Some(m) = guard.get(label) {
+            m.log_sync_diagnostics(label);
+            m.cleanup_failed_downloads();
+        }
+    }
 
     let label_owned = label.to_string();
     match result {
