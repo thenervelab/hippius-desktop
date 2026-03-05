@@ -43,6 +43,22 @@ struct VerifyResponse {
     username: String,
 }
 
+fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), String> {
+    let (sr25519_pair, _) =
+        sp_core::sr25519::Pair::from_phrase(mnemonic, None).map_err(|e| format!("{e:?}"))?;
+    let substrate_address = sp_core::crypto::Ss58Codec::to_ss58check(&sr25519_pair.public());
+
+    let eth_signer: PrivateKeySigner = MnemonicBuilder::<English>::default()
+        .phrase(mnemonic)
+        .index(0)
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+    let eth_address = format!("{}", eth_signer.address());
+
+    Ok((substrate_address, eth_signer, eth_address))
+}
+
 /// Perform Ethereum challenge-response auth against the billing API.
 ///
 /// 1. Retrieves the mnemonic from the encrypted Drive (or uses the one provided)
@@ -64,31 +80,12 @@ pub async fn billing_auth(
         _ => get_mnemonic_for_account(&account_id).await?,
     };
 
-    // Derive keys, ensuring mnemonic is zeroized even if derivation panics.
-    let derive_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let (sr25519_pair, _) =
-            sp_core::sr25519::Pair::from_phrase(&mnemonic, None).map_err(|e| format!("{e:?}"))?;
-        let substrate_address = sp_core::crypto::Ss58Codec::to_ss58check(&sr25519_pair.public());
-
-        let eth_signer: PrivateKeySigner = MnemonicBuilder::<English>::default()
-            .phrase(&mnemonic)
-            .index(0)
-            .map_err(|e| e.to_string())?
-            .build()
-            .map_err(|e| e.to_string())?;
-        let eth_address = format!("{}", eth_signer.address());
-
-        Ok::<_, String>((substrate_address, eth_signer, eth_address))
-    }));
-
-    // Zeroize mnemonic regardless of derivation outcome
+    // Derive keys from the mnemonic, then zeroize it immediately.
+    // Using a scope + explicit zeroize (no catch_unwind / AssertUnwindSafe)
+    // to avoid unsound assumptions about panic safety of third-party code.
+    let derive_result = derive_keys(&mnemonic);
     mnemonic.zeroize();
-
-    let (substrate_address, eth_signer, eth_address) = match derive_result {
-        Ok(Ok(v)) => v,
-        Ok(Err(e)) => return Err(e),
-        Err(_) => return Err("Key derivation panicked".to_string()),
-    };
+    let (substrate_address, eth_signer, eth_address) = derive_result?;
 
     let client = reqwest::Client::new();
     let base = base_url();

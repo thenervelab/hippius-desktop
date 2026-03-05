@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { BackButton } from "@/components/ui";
 import TokenForm from "../wallet/shared/TokenForm";
@@ -20,9 +20,22 @@ const Unstake = () => {
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [pendingAmount, setPendingAmount] = useState("");
     const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
+    const pendingUnstakeAmount = useRef<string | undefined>();
+
+    // After passcode unlock, retry the pending unstake action.
+    // Only depends on needsUnlock — the ref carries the pending amount.
+    useEffect(() => {
+        if (!needsUnlock && pendingUnstakeAmount.current) {
+            const amount = pendingUnstakeAmount.current;
+            pendingUnstakeAmount.current = undefined;
+            handleUnstakeSubmit(amount);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [needsUnlock]);
 
     const handleUnstakeSubmit = async (amount?: string) => {
         if (needsUnlock) {
+            pendingUnstakeAmount.current = amount;
             setShowPasscodePrompt(true);
             return;
         }

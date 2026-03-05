@@ -263,9 +263,13 @@ impl HcfsDriveManager {
     }
 
     /// Build a path_index from the current sync state + local scan,
-    /// then return all `(file_id_hex_prefix, real_path)` pairs.
-    /// The file_id prefix is the first 8 bytes hex-encoded (16 chars),
-    /// matching the encrypted on-disk name format `file_<16hex>`.
+    /// mapping encrypted on-disk name prefixes to real file names.
+    ///
+    /// Stores both the truncated prefix (first 8 bytes hex = 16 chars,
+    /// matching `file_<16hex>`) and the full file_id hex. This way
+    /// lookups succeed regardless of how much of the ID is available,
+    /// and full-ID entries prevent collisions when two files share the
+    /// same 8-byte prefix.
     pub fn build_path_index(
         &self,
     ) -> Result<HashMap<String, String>, String> {
@@ -279,12 +283,18 @@ impl HcfsDriveManager {
 
         let mut index = HashMap::new();
         for (file_id, path) in &state.path_index {
-            let prefix = hex::encode(&file_id[..8]);
             let real_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| path.to_string_lossy().to_string());
-            index.insert(prefix, real_name);
+            // Insert full hex for collision-free lookup
+            let full_hex = hex::encode(file_id);
+            index.insert(full_hex, real_name.clone());
+            // Also insert truncated prefix for encrypted name matching
+            if file_id.len() >= 8 {
+                let prefix = hex::encode(&file_id[..8]);
+                index.insert(prefix, real_name);
+            }
         }
         Ok(index)
     }
@@ -538,6 +548,18 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                 "[Sync] No staged changes for '{}', running sync to check remote",
                                 label
                             );
+                            let empty: Vec<String> = Vec::new();
+                            let _ = app.emit("hcfs_sync_started", serde_json::json!({
+                                "label": label,
+                                "uploads": 0, "downloads": 0,
+                                "local_deletes": 0, "remote_deletes": 0,
+                                "upload_files": empty,
+                                "download_files": empty,
+                                "local_delete_files": empty,
+                                "remote_delete_files": empty,
+                            }));
+                            emitted_sync_started = true;
+
                             let outcome = m.sync_with_resolutions(HashMap::new()).await;
                             SyncResult::Synced {
                                 outcome,
@@ -732,24 +754,33 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                 .and_then(|m| m.build_path_index().ok())
                         };
 
-                        if let Some(idx) = path_index {
-                            let mut pending = crate::sync_shared::PENDING_ACTIVITY
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner());
-                            for item in pending.iter_mut() {
-                                if item.label == label_owned
-                                    && item.action == "downloaded"
-                                    && item.file_name.starts_with("file_")
-                                {
-                                    let hash_prefix =
-                                        item.file_name.trim_start_matches("file_");
-                                    if let Some(real_name) = idx.get(hash_prefix)
-                                    {
+                        let mut pending = crate::sync_shared::PENDING_ACTIVITY
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner());
+                        for item in pending.iter_mut() {
+                            if item.label == label_owned
+                                && item.action == "downloaded"
+                                && item.file_name.starts_with("file_")
+                            {
+                                let hash_prefix =
+                                    item.file_name.trim_start_matches("file_");
+                                let resolved = path_index
+                                    .as_ref()
+                                    .and_then(|idx| idx.get(hash_prefix).cloned());
+                                match resolved {
+                                    Some(real_name) => {
                                         println!(
                                             "[Sync] Resolved download name: {} -> {}",
                                             item.file_name, real_name
                                         );
-                                        item.file_name = real_name.clone();
+                                        item.file_name = real_name;
+                                    }
+                                    None => {
+                                        println!(
+                                            "[Sync] Could not resolve encrypted name: {}",
+                                            item.file_name
+                                        );
+                                        item.file_name = "synced file".to_string();
                                     }
                                 }
                             }
@@ -765,33 +796,6 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     label_owned
                 );
                 discard_pending_activity_for_label(&label_owned);
-            }
-
-            // If staging missed remote changes (stale cache), emit
-            // hcfs_sync_started now so the frontend session starts with
-            // the real counts before we send hcfs_sync_completed.
-            let had_transfers = outcome.files_uploaded > 0
-                || outcome.files_downloaded > 0
-                || outcome.files_deleted_locally > 0
-                || outcome.files_deleted_remotely > 0;
-
-            if !emitted_sync_started && had_transfers {
-                let empty: Vec<String> = Vec::new();
-                let _ = app.emit(
-                    "hcfs_sync_started",
-                    serde_json::json!({
-                        "label": label_owned,
-                        "uploads": outcome.files_uploaded,
-                        "downloads": outcome.files_downloaded,
-                        "local_deletes": outcome.files_deleted_locally,
-                        "remote_deletes": outcome.files_deleted_remotely,
-                        "upload_files": empty,
-                        "download_files": empty,
-                        "local_delete_files": empty,
-                        "remote_delete_files": empty,
-                    }),
-                );
-                emitted_sync_started = true;
             }
 
             if emitted_sync_started {

@@ -777,7 +777,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         enableExpanding: false,
         enableGrouping: false,
         // Use stable ID generation
-        getRowId: (row: FormattedUserFile, index: number) => `${row.actualFileName || row.name || "row"}-${index}`,
+        getRowId: (row: FormattedUserFile, index: number) => row.cid || `${row.actualFileName || row.name}-${index}`,
 
       }),
       [columns, allFiles, sorting, handleSortingChange, currentPage, files, isSelectionMode]

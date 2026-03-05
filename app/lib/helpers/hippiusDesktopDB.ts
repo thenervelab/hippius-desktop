@@ -189,14 +189,6 @@ export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
         console.error("Failed to ensure auth columns:", e);
       }
 
-      // Scrub any plaintext mnemonics from the session table.
-      // Idempotent: setting empty to empty is a no-op.
-      try {
-        db.run("UPDATE session SET mnemonic = '', oauthMnemonic = ''");
-        await saveBytes(db.export());
-      } catch (e) {
-        console.error("Failed to scrub session mnemonics:", e);
-      }
 
       store.set(hippiusDbAtom, db);
       return db;

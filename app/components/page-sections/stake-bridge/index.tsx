@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BackButton, Icons } from "@/components/ui";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
@@ -21,6 +21,18 @@ const StakeBridge = () => {
     const { stakingInfo, operations, needsUnlock } = useStaking();
     const { unlockWithPasscode } = useWalletAuth();
     const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
+    const pendingStakeAmount = useRef<string | undefined>();
+
+    // After passcode unlock, retry the pending stake action.
+    // Only depends on needsUnlock — the ref carries the pending amount.
+    useEffect(() => {
+        if (!needsUnlock && pendingStakeAmount.current) {
+            const amount = pendingStakeAmount.current;
+            pendingStakeAmount.current = undefined;
+            handleStakeSubmit(amount);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [needsUnlock]);
 
     // Set initial tab based on URL parameter, default to "Stake hAlpha"
     const [activeTab, setActiveTab] = useState(() => {
@@ -52,6 +64,7 @@ const StakeBridge = () => {
 
     const handleStakeSubmit = async (amount?: string) => {
         if (needsUnlock) {
+            pendingStakeAmount.current = amount;
             setShowPasscodePrompt(true);
             return;
         }

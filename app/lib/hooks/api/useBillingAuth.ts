@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { setApiAuth, getApiAuth } from "@/app/lib/helpers/sessionStore";
 
 let __billingAuthInFlight: Promise<{ ok: boolean; error?: string }> | null = null;
+let __billingAuthAccountId: string | null = null;
 
 interface BillingAuthResult {
     token: string;
@@ -13,8 +14,12 @@ export async function ensureBillingAuth(
     accountId: string,
     mnemonic?: string,
 ): Promise<{ ok: boolean; error?: string }> {
-    if (__billingAuthInFlight) return __billingAuthInFlight;
+    // Only deduplicate concurrent calls for the same account
+    if (__billingAuthInFlight && __billingAuthAccountId === accountId) {
+        return __billingAuthInFlight;
+    }
 
+    __billingAuthAccountId = accountId;
     __billingAuthInFlight = (async () => {
         try {
             const existing = await getApiAuth();
@@ -37,5 +42,6 @@ export async function ensureBillingAuth(
         return await __billingAuthInFlight;
     } finally {
         __billingAuthInFlight = null;
+        __billingAuthAccountId = null;
     }
 }

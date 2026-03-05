@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useState } from "react";
+import { FC, useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useStaking } from "@/app/lib/hooks/useStaking";
@@ -15,6 +15,17 @@ const StakeWidget: FC = () => {
     const { unlockWithPasscode } = useWalletAuth();
     const [isWithdrawing, setIsWithdrawing] = useState(false);
     const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
+    const pendingWithdraw = useRef(false);
+
+    // After passcode unlock, retry the pending withdraw action.
+    // Only depends on needsUnlock — the ref carries the pending flag.
+    useEffect(() => {
+        if (!needsUnlock && pendingWithdraw.current) {
+            pendingWithdraw.current = false;
+            handleWithdrawUnbonded();
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [needsUnlock]);
 
     const handleStakeNow = () => {
         router.push("/stake?tab=stake");
@@ -32,6 +43,7 @@ const StakeWidget: FC = () => {
 
     const handleWithdrawUnbonded = async () => {
         if (needsUnlock) {
+            pendingWithdraw.current = true;
             setShowPasscodePrompt(true);
             return;
         }
