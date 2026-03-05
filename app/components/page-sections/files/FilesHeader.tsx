@@ -1,6 +1,7 @@
 "use client";
 
 import { FC, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Icons, RefreshButton, SearchInput } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import AddButton from "./AddFileButton";
@@ -189,7 +190,10 @@ const FilesHeader: FC<FilesHeaderProps> = ({
           
           <RefreshButton
             refetching={isRefetching || isFetching}
-            onClick={() => refetchUserFiles()}
+            onClick={() => {
+              invoke("trigger_sync_now").catch(() => {});
+              refetchUserFiles();
+            }}
           />
           {isRecentFiles && (
             <>
