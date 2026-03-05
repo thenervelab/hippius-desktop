@@ -4,12 +4,12 @@ import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CardButton, Icons } from "@/components/ui";
 import { toast } from "sonner";
-import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { X, CloudDownload, Folder, Monitor, Clock } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
+import { restoreRemoteFolders } from "@/app/lib/utils/restoreUtils";
 
 interface RemoteFolderSelectorProps {
   open: boolean;
@@ -24,7 +24,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
   remoteFolders,
   onSuccess,
 }) => {
-  const { polkadotAddress } = useWalletAuth();
+  const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
   const [selectedFolder, setSelectedFolder] = useState<RemoteFolder | null>(null);
   const [localPath, setLocalPath] = useState<string>("");
   const [isSyncing, setIsSyncing] = useState(false);
@@ -41,7 +41,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
 
   const handleSelectLocalPath = async () => {
     try {
-      const path = await open({
+      const path = await openDialog({
         directory: true,
         multiple: false,
         title: "Select Local Destination for Synced Files",
@@ -74,12 +74,20 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
 
     setIsSyncing(true);
     try {
-      await invoke("add_sync_folder", {
-        accountId: polkadotAddress,
-        folderName: selectedFolder.folderName,
+      const mnemonic =
+        authType === "mnemonic" ? await getMnemonic() : undefined;
+
+      const results = await restoreRemoteFolders(
+        polkadotAddress,
+        [selectedFolder.folderName],
         localPath,
-        isRemote: true,
-      });
+        mnemonic ?? undefined,
+      );
+
+      const result = results[0];
+      if (result && !result.success) {
+        throw new Error(result.error ?? "Unknown error");
+      }
 
       toast.success(`Started syncing ${selectedFolder.folderName}`);
       setSelectedFolder(null);
@@ -107,7 +115,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
   };
 
   const formatDate = (timestamp: number) => {
-    return new Date(timestamp * 1000).toLocaleDateString("en-US", {
+    return new Date(timestamp).toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
       year: "numeric",

@@ -405,6 +405,18 @@ pub async fn initialize_sync(
     label: String,
     existing_mnemonic: Option<String>,
 ) -> Result<InitSyncResult, String> {
+    initialize_sync_inner(app, account_id, label, existing_mnemonic, true).await
+}
+
+/// Core init logic. When `start_loop` is false the caller is responsible for
+/// starting the sync loop after all drives have been registered (batch restore).
+async fn initialize_sync_inner(
+    app: tauri::AppHandle,
+    account_id: String,
+    label: String,
+    existing_mnemonic: Option<String>,
+    start_loop: bool,
+) -> Result<InitSyncResult, String> {
     println!(
         "[Setup] initialize_sync called for account: {}, label: '{}'",
         account_id, label
@@ -679,12 +691,44 @@ pub async fn initialize_sync(
     }
 
     // 12. Start (or restart) the background sync loop to pick up the new drive
-    start_sync_loop(app.clone()).await;
+    if start_loop {
+        start_sync_loop(app.clone()).await;
+    }
 
     println!(
         "[Setup] Sync initialized successfully for '{}'. User ID: {}, New setup: {}",
         label, user_id, is_new_setup
     );
+
+    // Register folder with server for cross-device discovery (best-effort)
+    {
+        let composite = format!("{}_{}", account_id, folder_hash(&label));
+        let reg_server = server_url.clone();
+        let reg_token = bearer_token.clone();
+        let reg_label = label.clone();
+        tokio::spawn(async move {
+            let config = HcfsClientConfig {
+                base_url: reg_server,
+                api_key: "Arion".to_string(),
+                bearer_token: reg_token,
+                accept_invalid_certs: true,
+                billing_bypass_token: None,
+                account_ss58: String::new(),
+            };
+            match hcfs_client::client::HcfsClient::new(config) {
+                Ok(client) => {
+                    if let Err(e) = client.register_folder(&composite, &reg_label).await {
+                        println!("[Setup] Warning: folder registration failed: {}", e);
+                    } else {
+                        println!("[Setup] Folder '{}' registered with server", reg_label);
+                    }
+                }
+                Err(e) => {
+                    println!("[Setup] Warning: could not create client for folder registration: {}", e);
+                }
+            }
+        });
+    }
 
     Ok(InitSyncResult {
         user_id,
@@ -1143,4 +1187,166 @@ pub async fn create_encrypted_backup(
     zeroize::Zeroize::zeroize(&mut password);
 
     result
+}
+
+// =============================================================================
+// Remote Folder Discovery (Restore from Remote)
+// =============================================================================
+
+#[derive(serde::Serialize, Clone)]
+pub struct RemoteFolderInfoResult {
+    pub label: String,
+    pub folder_hash: String,
+    pub file_count: u64,
+    pub total_bytes: u64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// List all folders registered for the current account on the remote server.
+#[tauri::command]
+pub async fn list_remote_folders(
+    account_id: String,
+) -> Result<Vec<RemoteFolderInfoResult>, String> {
+    let config = get_hcfs_config(account_id.clone()).await?;
+    let server_url = if config.server_url.is_empty() {
+        "https://arion.hippius.com".to_string()
+    } else {
+        config.server_url
+    };
+
+    let bearer_token = get_temp_auth_key(&account_id)
+        .await
+        .map_err(|e| format!("Failed to get auth token: {e}"))?
+        .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
+
+    let client_config = HcfsClientConfig {
+        base_url: server_url,
+        api_key: "Arion".to_string(),
+        bearer_token,
+        accept_invalid_certs: true,
+        billing_bypass_token: None,
+        account_ss58: String::new(),
+    };
+
+    let client = hcfs_client::client::HcfsClient::new(client_config)
+        .map_err(|e| format!("Failed to create HCFS client: {e}"))?;
+
+    let folders = client
+        .list_remote_folders(&account_id)
+        .await
+        .map_err(|e| format!("Failed to list remote folders: {e}"))?;
+
+    Ok(folders
+        .into_iter()
+        .map(|f| RemoteFolderInfoResult {
+            label: f.label,
+            folder_hash: f.folder_hash,
+            file_count: f.file_count,
+            total_bytes: f.total_bytes,
+            created_at: f.created_at,
+            updated_at: f.updated_at,
+        })
+        .collect())
+}
+
+#[derive(serde::Deserialize)]
+pub struct RestoreFolderRequest {
+    pub label: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct RestoreResult {
+    pub label: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+/// Restore multiple remote folders by creating local sync paths and initializing sync.
+///
+/// Initializes each folder without restarting the sync loop, then starts the
+/// loop once at the end so all restored drives are picked up in a single pass.
+#[tauri::command]
+pub async fn restore_remote_folders(
+    app: tauri::AppHandle,
+    account_id: String,
+    base_path: String,
+    folders: Vec<RestoreFolderRequest>,
+    existing_mnemonic: Option<String>,
+) -> Result<Vec<RestoreResult>, String> {
+    let mut results = Vec::with_capacity(folders.len());
+    let mut any_success = false;
+
+    for folder in &folders {
+        let folder_path = PathBuf::from(&base_path).join(&folder.label);
+
+        // Create the directory
+        if let Err(e) = std::fs::create_dir_all(&folder_path) {
+            results.push(RestoreResult {
+                label: folder.label.clone(),
+                success: false,
+                error: Some(format!("Failed to create directory: {e}")),
+            });
+            continue;
+        }
+
+        let path_str = folder_path.to_string_lossy().to_string();
+
+        // Set sync path in DB
+        if let Err(e) = crate::commands::substrate_tx::set_sync_path_internal(
+            &account_id,
+            &path_str,
+            false,
+            Some(&folder.label),
+        )
+        .await
+        {
+            results.push(RestoreResult {
+                label: folder.label.clone(),
+                success: false,
+                error: Some(format!("Failed to set sync path: {e}")),
+            });
+            continue;
+        }
+
+        // Initialize sync without starting the loop (start_loop = false)
+        match initialize_sync_inner(
+            app.clone(),
+            account_id.clone(),
+            folder.label.clone(),
+            existing_mnemonic.clone(),
+            false,
+        )
+        .await
+        {
+            Ok(_) => {
+                any_success = true;
+                results.push(RestoreResult {
+                    label: folder.label.clone(),
+                    success: true,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                // Rollback: remove the sync path we just inserted
+                let _ = crate::commands::substrate_tx::remove_sync_path_internal(
+                    &account_id,
+                    &folder.label,
+                )
+                .await;
+                results.push(RestoreResult {
+                    label: folder.label.clone(),
+                    success: false,
+                    error: Some(e),
+                });
+            }
+        }
+    }
+
+    // Start the sync loop once for all successfully restored drives
+    if any_success {
+        start_sync_loop(app.clone()).await;
+    }
+
+    Ok(results)
 }

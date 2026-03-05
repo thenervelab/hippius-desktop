@@ -503,8 +503,32 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                             || !staged.remote_deletes.is_empty();
 
                         if !has_changes {
-                            println!("[Sync] No changes to sync for '{}', skipping", label);
-                            SyncResult::NoChanges
+                            // Stage uses cached remote state — always run
+                            // the real sync so it can fetch fresh remote
+                            // data and discover files uploaded by other
+                            // devices.
+                            println!(
+                                "[Sync] No staged changes for '{}', running sync to check remote",
+                                label
+                            );
+                            let empty: Vec<String> = Vec::new();
+                            let _ = app.emit("hcfs_sync_started", serde_json::json!({
+                                "label": label,
+                                "uploads": 0, "downloads": 0,
+                                "local_deletes": 0, "remote_deletes": 0,
+                                "upload_files": empty,
+                                "download_files": empty,
+                                "local_delete_files": empty,
+                                "remote_delete_files": empty,
+                            }));
+                            emitted_sync_started = true;
+
+                            let outcome = m.sync_with_resolutions(HashMap::new()).await;
+                            SyncResult::Synced {
+                                outcome,
+                                staged_downloads: Vec::new(),
+                                staged_uploads: Vec::new(),
+                            }
                         } else {
                             println!(
                                 "[Sync] Changes detected for '{}' — syncing (uploads={}, downloads={}, local_deletes={}, remote_deletes={})",

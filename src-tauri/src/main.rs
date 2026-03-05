@@ -23,8 +23,8 @@ mod user_profile_sync;
 mod utils;
 
 use crate::commands::syncing::{
-    get_drive_mnemonic, initialize_sync, is_drive_active, reset_sync_data, stop_drive, stop_sync,
-    trigger_sync_now,
+    get_drive_mnemonic, initialize_sync, is_drive_active, list_remote_folders, reset_sync_data,
+    restore_remote_folders, stop_drive, stop_sync, trigger_sync_now,
 };
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::sync_shared::{app_close, get_sync_activity, get_sync_status};
@@ -176,6 +176,9 @@ fn main() {
             commands::syncing::cancel_review,
             // Encrypted backup
             commands::syncing::create_encrypted_backup,
+            // Remote folder discovery
+            list_remote_folders,
+            restore_remote_folders,
         ]);
 
     let builder = setup(builder);

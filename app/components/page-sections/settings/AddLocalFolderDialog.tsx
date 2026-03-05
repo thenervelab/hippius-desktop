@@ -4,10 +4,11 @@ import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CardButton, Icons } from "@/components/ui";
 import { toast } from "sonner";
-import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { X, Folder } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { setPrivateSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { initializeSync } from "@/app/lib/utils/hcfsConfigUtils";
 
 interface AddLocalFolderDialogProps {
   open: boolean;
@@ -20,14 +21,14 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { polkadotAddress } = useWalletAuth();
+  const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [folderName, setFolderName] = useState<string>("");
   const [isAdding, setIsAdding] = useState(false);
 
   const handleSelectFolder = async () => {
     try {
-      const path = await open({
+      const path = await openDialog({
         directory: true,
         multiple: false,
         title: "Select Folder to Sync",
@@ -58,12 +59,11 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
 
     setIsAdding(true);
     try {
-      await invoke("add_sync_folder", {
-        accountId: polkadotAddress,
-        folderName,
-        localPath: selectedPath,
-        isRemote: false,
-      });
+      const mnemonic =
+        authType === "mnemonic" ? await getMnemonic() : undefined;
+
+      await setPrivateSyncPath(selectedPath, polkadotAddress, folderName);
+      await initializeSync(polkadotAddress, folderName, mnemonic);
 
       toast.success("Folder added to sync");
       setSelectedPath("");

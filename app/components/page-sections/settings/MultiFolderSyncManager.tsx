@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Icons, CardButton } from "@/components/ui";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -21,44 +20,8 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "./AddLocalFolderDialog";
 import { RemoteFolderSelector } from "./RemoteFolderSelector";
-import { getAllSyncPaths } from "@/app/lib/utils/syncPathUtils";
-
-type SyncedFileEntry = {
-  fileName: string;
-  source: string;
-  isFolder: boolean;
-  createdAt: number;
-  lastChargedAt: number;
-  deleted?: boolean;
-};
-
-const FOLDER_SUFFIXES = [
-  ".folder.ec_metadata",
-  "-folder.ec_metadata",
-  ".folder",
-  "-folder",
-  ".ec_metadata",
-];
-
-const normalizeFolderName = (rawName: string) => {
-  const topSegment = rawName.split("/")[0] || rawName;
-  let folderName = topSegment;
-
-  for (const suffix of FOLDER_SUFFIXES) {
-    if (folderName.endsWith(suffix)) {
-      folderName = folderName.slice(0, -suffix.length);
-      break;
-    }
-  }
-
-  return folderName.trim();
-};
-
-const isRemoteOnlySource = (source?: string) => {
-  if (!source) return true;
-  const normalized = source.trim().toLowerCase();
-  return normalized === "hippius" || normalized === "";
-};
+import { getAllSyncPaths, removeSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { listRemoteFolders } from "@/app/lib/utils/restoreUtils";
 
 export default function MultiFolderSyncManager() {
   const { polkadotAddress } = useWalletAuth();
@@ -77,70 +40,38 @@ export default function MultiFolderSyncManager() {
     try {
       setIsLoading(true);
 
-      const [syncPaths, syncedFiles] = await Promise.all([
+      const [syncPaths, remoteList] = await Promise.all([
         getAllSyncPaths(polkadotAddress).catch(() => []),
-        invoke<SyncedFileEntry[]>("get_user_synced_files", {
-          owner: polkadotAddress,
-        }).catch(() => []),
+        listRemoteFolders(polkadotAddress).catch(() => []),
       ]);
 
-      const localFolders: SyncFolder[] = syncPaths.map((syncPath, index) => {
-        const folderName =
-          syncPath.path.split(/[\\/]/).filter(Boolean).pop() || syncPath.label;
+      const localFolders: SyncFolder[] = syncPaths.map(
+        (syncPath, index) => {
+          const folderName =
+            syncPath.path.split(/[\\/]/).filter(Boolean).pop() ||
+            syncPath.label;
 
-        return {
-          id: syncPath.label || `sync-folder-${index}`,
-          folderName,
-          localPath: syncPath.path,
-          isLocal: true,
-          status: "syncing",
-        };
-      });
-
-      const localFolderSet = new Set(
-        localFolders.map((folder) => folder.folderName.toLowerCase())
+          return {
+            id: syncPath.label || `sync-folder-${index}`,
+            folderName,
+            localPath: syncPath.path,
+            isLocal: true,
+            status: "syncing",
+          };
+        },
       );
 
-      const remoteFolderMap = new Map<
-        string,
-        { folderName: string; fileCount: number; lastModified: number; hasRemoteSource: boolean }
-      >();
+      const localLabelSet = new Set(
+        localFolders.map((f) => f.id.toLowerCase()),
+      );
 
-      for (const entry of syncedFiles) {
-        if (entry.deleted) continue;
-
-        const folderName = normalizeFolderName(entry.fileName);
-        if (!folderName) continue;
-
-        const key = folderName.toLowerCase();
-        const existing = remoteFolderMap.get(key) ?? {
-          folderName,
-          fileCount: 0,
-          lastModified: 0,
-          hasRemoteSource: false,
-        };
-
-        const eventTime = Math.max(entry.createdAt || 0, entry.lastChargedAt || 0) * 1000;
-        existing.lastModified = Math.max(existing.lastModified, eventTime);
-
-        if (!entry.isFolder) {
-          existing.fileCount += 1;
-        }
-
-        if (isRemoteOnlySource(entry.source)) {
-          existing.hasRemoteSource = true;
-        }
-
-        remoteFolderMap.set(key, existing);
-      }
-
-      const remoteFoldersData: RemoteFolder[] = Array.from(remoteFolderMap.entries())
-        .filter(([key, value]) => value.hasRemoteSource && !localFolderSet.has(key))
-        .map(([, value]) => ({
-          folderName: value.folderName,
+      const remoteFoldersData: RemoteFolder[] = remoteList
+        .filter((r) => !localLabelSet.has(r.label.toLowerCase()))
+        .map((r) => ({
+          folderName: r.label,
           deviceName: "Other Device",
-          fileCount: value.fileCount,
-          lastModified: value.lastModified || Date.now(),
+          fileCount: r.file_count,
+          lastModified: (r.updated_at || r.created_at) * 1000,
         }))
         .sort((a, b) => b.lastModified - a.lastModified);
 
@@ -162,11 +93,7 @@ export default function MultiFolderSyncManager() {
     if (!polkadotAddress) return;
 
     try {
-      // TODO: Uncomment when backend is ready
-      // await invoke("remove_sync_folder", {
-      //   accountId: polkadotAddress,
-      //   folderId
-      // });
+      await removeSyncPath(polkadotAddress, folderId);
       toast.success("Folder removed from sync");
       loadFolders();
     } catch (error) {

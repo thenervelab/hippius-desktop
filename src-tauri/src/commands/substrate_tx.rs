@@ -72,89 +72,96 @@ pub struct SyncPathResult {
     pub label: String,
 }
 
+/// Core DB upsert + macOS bookmark logic, shared by `set_sync_path` and `restore_remote_folders`.
+pub(crate) async fn set_sync_path_internal(
+    account_id: &str,
+    path: &str,
+    is_public: bool,
+    label: Option<&str>,
+) -> Result<String, String> {
+    let path_type = if is_public { "public" } else { "private" };
+    let label = label.unwrap_or("default");
+    let timestamp = Utc::now().timestamp();
+
+    let pool = DB_POOL.get().ok_or("DB_POOL not initialized")?;
+    let owner = account_key(account_id);
+
+    // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
+    if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
+    )
+    .bind(path_type)
+    .fetch_optional(pool)
+    .await
+    {
+        let _ = sqlx::query(
+            "REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(legacy_id)
+        .bind(&owner)
+        .bind(path)
+        .bind(path_type)
+        .bind(label)
+        .bind(timestamp)
+        .execute(pool)
+        .await;
+    }
+
+    let res = sqlx::query(
+        "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
+    )
+    .bind(&owner)
+    .bind(path)
+    .bind(path_type)
+    .bind(label)
+    .bind(timestamp)
+    .execute(pool)
+    .await;
+
+    match res {
+        Ok(_) => {
+            println!(
+                "[set_sync_path] Sync path for '{}' set successfully in DB.",
+                path_type
+            );
+
+            #[cfg(target_os = "macos")]
+            {
+                use crate::utils::bookmark_db::store_bookmark;
+                if let Err(e) = store_bookmark(path, path_type).await {
+                    eprintln!(
+                        "[set_sync_path] Warning: Failed to create security-scoped bookmark: {}",
+                        e
+                    );
+                }
+            }
+
+            Ok(format!("Sync path for '{}' set successfully.", path_type))
+        }
+        Err(e) => {
+            eprintln!(
+                "[set_sync_path] DB write failed for owner {} type {}: {}",
+                owner, path_type, e
+            );
+            Err(format!("Failed to set sync path: {}", e))
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn set_sync_path(
     _app_handle: tauri::AppHandle,
     params: SetSyncPathParams,
 ) -> Result<String, String> {
     crate::utils::sync::set_active_account(&params.account_id);
-
-    let path_type = if params.is_public {
-        "public"
-    } else {
-        "private"
-    };
-    let label = params.label.unwrap_or_else(|| "default".to_string());
-    let timestamp = Utc::now().timestamp();
-
-    if let Some(pool) = DB_POOL.get() {
-        let owner = account_key(&params.account_id);
-
-        // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
-        if let Ok(Some(legacy_id)) = sqlx::query_scalar::<_, i64>(
-            "SELECT id FROM sync_paths WHERE owner = '' AND type = ? LIMIT 1",
-        )
-        .bind(path_type)
-        .fetch_optional(pool)
-        .await
-        {
-            let _ = sqlx::query(
-                "REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .bind(legacy_id)
-            .bind(&owner)
-            .bind(&params.path)
-            .bind(path_type)
-            .bind(&label)
-            .bind(timestamp)
-            .execute(pool)
-            .await;
-        }
-
-        let res = sqlx::query(
-            "INSERT INTO sync_paths (owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(owner, label) DO UPDATE SET path=excluded.path, type=excluded.type, timestamp=excluded.timestamp",
-        )
-        .bind(&owner)
-        .bind(&params.path)
-        .bind(path_type)
-        .bind(&label)
-        .bind(timestamp)
-        .execute(pool)
-        .await;
-
-        match res {
-            Ok(_) => {
-                println!(
-                    "[set_sync_path] Sync path for '{}' set successfully in DB.",
-                    path_type
-                );
-
-                // Create security-scoped bookmark for macOS
-                #[cfg(target_os = "macos")]
-                {
-                    use crate::utils::bookmark_db::store_bookmark;
-                    if let Err(e) = store_bookmark(&params.path, path_type).await {
-                        eprintln!(
-                            "[set_sync_path] Warning: Failed to create security-scoped bookmark: {}",
-                            e
-                        );
-                    }
-                }
-
-                Ok(format!("Sync path for '{}' set successfully.", path_type))
-            }
-            Err(e) => {
-                eprintln!(
-                    "[set_sync_path] DB write failed for owner {} type {}: {}",
-                    owner, path_type, e
-                );
-                Err(format!("Failed to set sync path: {}", e))
-            }
-        }
-    } else {
-        Err("DB_POOL not initialized".to_string())
-    }
+    set_sync_path_internal(
+        &params.account_id,
+        &params.path,
+        params.is_public,
+        params.label.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -343,6 +350,25 @@ pub async fn get_all_sync_paths(params: GetSyncPathParams) -> Result<Vec<SyncPat
             }
         })
         .collect())
+}
+
+/// Delete a sync path row from the DB without stopping the drive.
+/// Used for rollback when `initialize_sync` fails after the path was inserted.
+pub(crate) async fn remove_sync_path_internal(
+    account_id: &str,
+    label: &str,
+) -> Result<(), String> {
+    let pool = DB_POOL.get().ok_or("DB_POOL not initialized")?;
+    let owner = account_key(account_id);
+
+    sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND label = ?")
+        .bind(&owner)
+        .bind(label)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to remove sync path: {}", e))?;
+
+    Ok(())
 }
 
 #[tauri::command]
