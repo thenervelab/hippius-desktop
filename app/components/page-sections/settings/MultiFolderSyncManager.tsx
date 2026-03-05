@@ -102,6 +102,7 @@ export default function MultiFolderSyncManager() {
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handlePauseFolder = async (folderId: string) => {
     if (!polkadotAddress) return;
 
@@ -119,6 +120,7 @@ export default function MultiFolderSyncManager() {
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleResumeFolder = async (folderId: string) => {
     if (!polkadotAddress) return;
 
@@ -186,7 +188,7 @@ export default function MultiFolderSyncManager() {
   return (
     <>
       <InView triggerOnce>
-        {({ inView, ref }) => (
+        {({ ref }) => (
           <div
             ref={ref}
             className="flex flex-col w-full"

@@ -21,7 +21,7 @@ const StakeBridge = () => {
     const { stakingInfo, operations, needsUnlock } = useStaking();
     const { unlockWithPasscode } = useWalletAuth();
     const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
-    const pendingStakeAmount = useRef<string | undefined>();
+    const pendingStakeAmount = useRef<string | undefined>(undefined);
 
     // After passcode unlock, retry the pending stake action.
     // Only depends on needsUnlock — the ref carries the pending amount.

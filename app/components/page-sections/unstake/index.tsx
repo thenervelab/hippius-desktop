@@ -20,7 +20,7 @@ const Unstake = () => {
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [pendingAmount, setPendingAmount] = useState("");
     const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
-    const pendingUnstakeAmount = useRef<string | undefined>();
+    const pendingUnstakeAmount = useRef<string | undefined>(undefined);
 
     // After passcode unlock, retry the pending unstake action.
     // Only depends on needsUnlock — the ref carries the pending amount.

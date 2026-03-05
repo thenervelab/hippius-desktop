@@ -54,7 +54,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
     setIsAdding(true);
     try {
       const mnemonic =
-        authType === "mnemonic" ? await getMnemonic() : undefined;
+        authType === "mnemonic" ? (await getMnemonic()) ?? undefined : undefined;
 
       await setPrivateSyncPath(selectedPath, polkadotAddress, folderName);
       await initializeSync(polkadotAddress, folderName, mnemonic);
