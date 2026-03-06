@@ -326,7 +326,7 @@ fn ensure_derived_mnemonic(
     let _ = std::fs::remove_file(&state_bak);
 
     println!(
-        "[Migration] Re-derived mnemonic for '{}', wiped sync state, marked for remote purge",
+        "[Migration] Re-derived mnemonic for '{}', wiped sync state (remote files preserved)",
         label
     );
 
@@ -670,17 +670,9 @@ async fn initialize_sync_inner(
                     }
                 }
 
-                // Also remove the master mnemonic - it might be encrypted with wrong password too
-                if master_path.exists() {
-                    if let Err(rm_err) = std::fs::remove_file(&master_path) {
-                        println!(
-                            "[Setup] WARNING: Failed to remove master_enc_mnemonic.json: {}",
-                            rm_err
-                        );
-                    } else {
-                        println!("[Setup] Removed master_enc_mnemonic.json (will regenerate)");
-                    }
-                }
+                // Keep the master mnemonic — deleting it causes derivation
+                // mismatches on other folders and cascading rekey markers.
+                // Only the folder mnemonic is removed above.
 
                 // Also remove sync_state.json to start fresh
                 let state_path = folder_dir.join("sync_state.json");
@@ -866,72 +858,19 @@ async fn initialize_sync_inner(
     // 10. Clear any previous cancellation flag
     clear_cancel();
 
-    // 11. If ensure_derived_mnemonic left a rekey marker, purge all remote
-    //     files so the next sync re-uploads them encrypted with the new
-    //     derived key. Without this, salted_hash matches → BothModifiedSame
-    //     → no re-upload → Device B still can't decrypt.
+    // 11. If ensure_derived_mnemonic left a rekey marker, just consume it.
+    //     We intentionally do NOT delete remote files — doing so destroys
+    //     data on other devices. Stale remote files encrypted with the old
+    //     key will fail to decrypt and be skipped; local files will be
+    //     re-uploaded with the new key on the next sync cycle.
     {
         let marker = folder_dir.join(".needs_rekey");
         if marker.exists() {
-            let composite_id =
-                format!("{}_{}", account_id, folder_hash(&label));
             println!(
-                "[Rekey] Purging remote files for '{}' (user_id={})",
-                label, composite_id
-            );
-            let purge_client = hcfs_client::client::HcfsClient::new(
-                HcfsClientConfig {
-                    base_url: server_url.clone(),
-                    api_key: "Arion".to_string(),
-                    bearer_token: bearer_token.clone(),
-                    accept_invalid_certs: true,
-                    billing_bypass_token: None,
-                    account_ss58: String::new(),
-                },
-            )
-            .map_err(|e| format!("Failed to create purge client: {e}"))?;
-
-            let remote_files = purge_client
-                .get_all_files::<fn(u64, u64)>(&composite_id, None)
-                .await
-                .map_err(|e| {
-                    format!("Failed to fetch remote files for rekey purge: {e}")
-                })?;
-
-            println!(
-                "[Rekey] Found {} remote files to delete for '{}'",
-                remote_files.len(),
+                "[Rekey] Rekey marker found for '{}' — consuming without remote purge",
                 label
             );
-            let mut deleted = 0u64;
-            for entry in &remote_files {
-                let file_id = hex::encode(entry.path_hash);
-                match purge_client
-                    .delete(&composite_id, &file_id)
-                    .await
-                {
-                    Ok(_) => deleted += 1,
-                    Err(e) => println!(
-                        "[Rekey] Warning: failed to delete {}: {}",
-                        file_id, e
-                    ),
-                }
-            }
-            println!(
-                "[Rekey] Deleted {}/{} remote files for '{}'",
-                deleted,
-                remote_files.len(),
-                label
-            );
-
-            if deleted == remote_files.len() as u64 {
-                let _ = std::fs::remove_file(&marker);
-            } else {
-                println!(
-                    "[Rekey] Keeping marker — {} files failed, will retry next init",
-                    remote_files.len() as u64 - deleted
-                );
-            }
+            let _ = std::fs::remove_file(&marker);
         }
     }
 
