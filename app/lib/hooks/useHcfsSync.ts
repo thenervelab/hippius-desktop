@@ -10,8 +10,8 @@ import {
 } from "../utils/hcfsConfigUtils";
 import { getPrivateSyncPath, getAllSyncPaths } from "../utils/syncPathUtils";
 import { invoke } from "@tauri-apps/api/core";
-import { getDefaultStore } from "jotai";
 import { isSyncConfiguredAtom, syncEngineStatusAtom } from "../global-atoms/unpinAtoms";
+import { appStore } from "@/lib/store/jotaiStore";
 
 export interface UseHcfsSyncResult {
   tryInitializeSync: (accountId: string, label: string, mnemonic?: string) => Promise<boolean>;
@@ -208,8 +208,7 @@ export async function tryAutoInitSync(
     }
 
     // HCFS config exists - mark sync as configured so SyncStoppedAlert can show when needed
-    const store = getDefaultStore();
-    store.set(isSyncConfiguredAtom, true);
+    appStore.set(isSyncConfiguredAtom, true);
 
     // If the user explicitly stopped sync, don't auto-start on login / session restore
     if (
@@ -235,7 +234,7 @@ export async function tryAutoInitSync(
 
     // Mark sync engine as active so the "Syncing is stopped" banner clears
     if (anyInitialized) {
-      store.set(syncEngineStatusAtom, "active");
+      appStore.set(syncEngineStatusAtom, "active");
     }
 
     return anyInitialized;

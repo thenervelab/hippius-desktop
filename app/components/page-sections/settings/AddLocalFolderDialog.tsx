@@ -11,6 +11,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { setPrivateSyncPath, getAllSyncPaths } from "@/app/lib/utils/syncPathUtils";
 import { getHcfsConfig, saveHcfsConfig, initializeSync } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
+import { syncEngineStatusAtom, isSyncConfiguredAtom, SYNC_STOPPED_STORAGE_KEY } from "@/app/lib/global-atoms/unpinAtoms";
+import { appStore } from "@/lib/store/jotaiStore";
 
 interface AddLocalFolderDialogProps {
   open: boolean;
@@ -68,6 +70,11 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
 
       await setPrivateSyncPath(selectedPath, polkadotAddress, label);
       await initializeSync(polkadotAddress, label, mnemonic);
+
+      // Clear "sync stopped" state — adding a folder means the user wants sync running
+      localStorage.removeItem(SYNC_STOPPED_STORAGE_KEY);
+      appStore.set(syncEngineStatusAtom, "active");
+      appStore.set(isSyncConfiguredAtom, true);
 
       toast.success("Folder added to sync");
       setSelectedPath("");
