@@ -9,6 +9,7 @@ import {
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
 import { getPrivateSyncPath, getAllSyncPaths } from "../utils/syncPathUtils";
+import { invoke } from "@tauri-apps/api/core";
 import { getDefaultStore } from "jotai";
 import { isSyncConfiguredAtom, syncEngineStatusAtom } from "../global-atoms/unpinAtoms";
 
@@ -165,6 +166,19 @@ export async function tryAutoInitSync(
   mnemonic?: string
 ): Promise<boolean> {
   try {
+    // Eagerly persist the master mnemonic to disk so it survives app restarts.
+    // This is a no-op if the master already exists or the HCFS password hasn't
+    // been set yet. Without this, an app restart loses the in-memory mnemonic
+    // and a subsequent sync setup would generate a random key, making
+    // cross-device decryption impossible.
+    if (mnemonic) {
+      try {
+        await invoke("persist_master_mnemonic", { accountId, mnemonic });
+      } catch {
+        // HCFS config not set up yet — will be saved during initialize_sync
+      }
+    }
+
     // Get all configured sync paths
     let syncPaths: { path: string; label: string }[] = [];
     try {

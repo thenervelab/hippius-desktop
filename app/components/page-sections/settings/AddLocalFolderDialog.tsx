@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { X, Folder } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { invoke } from "@tauri-apps/api/core";
 import { setPrivateSyncPath, getAllSyncPaths } from "@/app/lib/utils/syncPathUtils";
 import { getHcfsConfig, saveHcfsConfig, initializeSync } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
@@ -117,6 +118,15 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
 
     try {
       await saveHcfsConfig(polkadotAddress, result.serverUrl, result.password);
+      // Now that the password exists, persist the master mnemonic so it
+      // survives app restarts. getMnemonic() returns from memory if available.
+      const mnemonic = await getMnemonic();
+      if (mnemonic) {
+        await invoke("persist_master_mnemonic", {
+          accountId: polkadotAddress,
+          mnemonic,
+        }).catch(() => {});
+      }
       setShowHcfsSetup(false);
       await doAdd();
     } catch (err) {

@@ -576,7 +576,34 @@ async fn initialize_sync_inner(
     let master_path = master_mnemonic_path(&account_id)?;
     run_migration(&sync_path, &acct_dir, &folder_dir, &master_path)?;
 
-    // 4b. Detect legacy mnemonic: if the folder's mnemonic matches the master,
+    // 4b. If the login mnemonic is available, ensure the stored master matches.
+    //     A mismatch means the master was generated randomly (e.g. after an
+    //     app restart where the mnemonic was lost). Updating the master BEFORE
+    //     ensure_derived_mnemonic lets the derivation check detect the folder
+    //     key mismatch and trigger a rekey.
+    if let Some(ref imported) = existing_mnemonic {
+        if master_path.exists() {
+            use zeroize::Zeroize;
+            let stored = hcfs_client::auth::recover_mnemonic(
+                &master_path, &drive_password,
+            )
+            .map_err(|e| format!("Failed to recover master: {e}"))?;
+            let mut stored_str = stored.to_string();
+            if stored_str != *imported {
+                println!(
+                    "[Setup] Stored master differs from login mnemonic — \
+                     updating master before derivation check"
+                );
+                hcfs_client::auth::save_encrypted_mnemonic(
+                    &master_path, imported, &drive_password,
+                )
+                .map_err(|e| format!("Failed to update master: {e}"))?;
+            }
+            stored_str.zeroize();
+        }
+    }
+
+    // 4c. Detect legacy mnemonic: if the folder's mnemonic matches the master,
     //     it was migrated without derivation. Re-derive so all devices share
     //     the same folder-specific key.
     ensure_derived_mnemonic(&folder_dir, &master_path, &drive_password, &label)?;
@@ -769,22 +796,15 @@ async fn initialize_sync_inner(
             println!("[Setup] Derived folder mnemonic from existing master");
             (derived, None, false)
         } else {
-            // No login mnemonic AND no master on disk — generate random.
-            // WARNING: files encrypted with this key cannot be decrypted on
-            // other devices. Multi-device sync requires passing the login
-            // mnemonic (existing_mnemonic parameter).
-            println!(
-                "[Setup] WARNING: No login mnemonic provided and no master on disk for '{}'. \
-                 Generating random master — multi-device sync will NOT work!",
-                label
+            // No login mnemonic AND no master on disk. Generating a random
+            // master would silently encrypt files with a key that no other
+            // device can derive, causing "Chunk 0 decryption failed" on
+            // cross-device sync. Fail loudly so the user can re-login.
+            return Err(
+                "No encryption key available. Please log out and log in \
+                 again with your mnemonic to enable sync."
+                    .to_string(),
             );
-            let master = bip39::Mnemonic::generate(24)
-                .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
-            let master_str = master.to_string();
-            hcfs_client::auth::save_encrypted_mnemonic(&master_path, &master_str, &drive_password)
-                .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-            let derived = derive_folder_mnemonic(&master_str, &label)?;
-            (derived, Some(master_str), true)
         };
 
         // Initialize drive with the folder-specific derived mnemonic
@@ -1253,6 +1273,68 @@ pub async fn get_mnemonic_for_account(account_id: &str) -> Result<String, String
 #[tauri::command]
 pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
     get_mnemonic_for_account(&account_id).await
+}
+
+/// Persist the master mnemonic to disk early (during login), even before any
+/// sync folder is configured. This prevents the fallback to a random master
+/// that would make cross-device sync impossible.
+///
+/// If a master already exists on disk but differs from the provided mnemonic,
+/// it is updated to match the login mnemonic (source of truth for cross-device
+/// sync). No-op if the HCFS drive password has not been set yet.
+#[tauri::command]
+pub async fn persist_master_mnemonic(
+    account_id: String,
+    mnemonic: String,
+) -> Result<(), String> {
+    let master_path = master_mnemonic_path(&account_id)?;
+
+    let drive_password = match get_drive_password(&account_id).await {
+        Ok(pw) => pw,
+        Err(_) => {
+            // HCFS config not set up yet — nothing we can do.
+            // The master will be saved when initialize_sync runs.
+            return Ok(());
+        }
+    };
+
+    if master_path.exists() {
+        // Compare stored master with the login mnemonic. A mismatch means
+        // the master was generated randomly (e.g. app restart lost the
+        // in-memory mnemonic). Update it so initialize_sync's step 4b and
+        // ensure_derived_mnemonic can detect and fix folder key mismatches.
+        use zeroize::Zeroize;
+        let stored = hcfs_client::auth::recover_mnemonic(
+            &master_path, &drive_password,
+        )
+        .map_err(|e| format!("Failed to recover master: {e}"))?;
+        let mut stored_str = stored.to_string();
+        if stored_str == mnemonic {
+            stored_str.zeroize();
+            return Ok(());
+        }
+        stored_str.zeroize();
+        println!(
+            "[Setup] Stored master differs from login mnemonic — updating early"
+        );
+    }
+
+    let acct_dir = account_dir(&account_id)?;
+    std::fs::create_dir_all(&acct_dir)
+        .map_err(|e| format!("Failed to create account dir: {e}"))?;
+
+    hcfs_client::auth::save_encrypted_mnemonic(
+        &master_path,
+        &mnemonic,
+        &drive_password,
+    )
+    .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
+
+    println!(
+        "[Setup] Eagerly persisted master mnemonic for account {}",
+        &account_id[..8.min(account_id.len())]
+    );
+    Ok(())
 }
 
 /// Stage changes and return a preview of what will sync.

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { X, CloudDownload, Folder, Monitor, Clock } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { restoreRemoteFolders } from "@/app/lib/utils/restoreUtils";
@@ -137,6 +138,13 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
 
     try {
       await saveHcfsConfig(polkadotAddress, result.serverUrl, result.password);
+      const mnemonic = await getMnemonic();
+      if (mnemonic) {
+        await invoke("persist_master_mnemonic", {
+          accountId: polkadotAddress,
+          mnemonic,
+        }).catch(() => {});
+      }
       setShowHcfsSetup(false);
       await doRestore();
     } catch (err) {

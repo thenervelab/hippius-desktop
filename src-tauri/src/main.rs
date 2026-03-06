@@ -23,8 +23,9 @@ mod user_profile_sync;
 mod utils;
 
 use crate::commands::syncing::{
-    get_drive_mnemonic, initialize_sync, is_drive_active, list_remote_folders, reset_sync_data,
-    restore_remote_folders, stop_drive, stop_sync, trigger_sync_now,
+    get_drive_mnemonic, initialize_sync, is_drive_active, list_remote_folders,
+    persist_master_mnemonic, reset_sync_data, restore_remote_folders, stop_drive, stop_sync,
+    trigger_sync_now,
 };
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::sync_shared::{app_close, get_sync_activity, get_sync_status};
@@ -164,8 +165,9 @@ fn main() {
             save_temp_auth_key_command,
             has_master_token_command,
             request_master_token_command,
-            // HCFS mnemonic export
+            // HCFS mnemonic management
             get_drive_mnemonic,
+            persist_master_mnemonic,
             // Billing auth (Ethereum challenge-response)
             commands::billing_auth::billing_auth,
             // HCFS config commands
