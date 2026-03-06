@@ -8,13 +8,13 @@ import {
   BaseDirectory,
   mkdir,
 } from "@tauri-apps/plugin-fs";
-import { getDefaultStore } from "jotai";
 import {
   hippiusDbAtom,
   sqlJsModuleAtom,
   dbInitPromiseAtom,
   dbWriteQueueAtom,
 } from "./dbAtoms";
+import { appStore } from "@/lib/store/jotaiStore";
 
 export const DB_FILENAME = "hippius-desktop.db";
 const TABLE_SCHEMA = `
@@ -62,7 +62,7 @@ async function getBytes(): Promise<Uint8Array | null> {
 
 /** Serialize all writes to avoid clobbering. */
 async function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
-  const store = getDefaultStore();
+  const store = appStore;
   const prev = store.get(dbWriteQueueAtom);
   const next = prev
     .catch(() => void 0) // keep queue alive on error
@@ -135,7 +135,7 @@ export async function ensureSessionAuthColumns(): Promise<boolean> {
 
 /** Single entry point that returns the shared DB instance. */
 export async function initHippiusDesktopDB(): Promise<initSqlJsType.Database> {
-  const store = getDefaultStore();
+  const store = appStore;
   // Already created
   const existing = store.get(hippiusDbAtom);
   if (existing) return existing;
@@ -304,7 +304,7 @@ export async function hasWalletRecord(): Promise<boolean> {
 
 /** Reset DB file and update the shared instance reference. */
 export async function clearHippiusDesktopDB() {
-  const store = getDefaultStore();
+  const store = appStore;
   let SQL: any = store.get(sqlJsModuleAtom);
   if (!SQL) {
     SQL = await initSqlJs({ locateFile: () => "/sql-wasm.wasm" });
