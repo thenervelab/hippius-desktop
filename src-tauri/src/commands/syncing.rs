@@ -680,16 +680,24 @@ async fn initialize_sync_inner(
 
                 println!("[Setup] Creating fresh drive after recovery...");
 
-                let master = bip39::Mnemonic::generate(24)
-                    .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
-                let master_str = master.to_string();
+                // Use the login mnemonic if available so recovery stays
+                // compatible with other devices. Only generate a random
+                // master as a last resort.
+                let master_str = if let Some(ref imported) = existing_mnemonic {
+                    println!("[Setup] Using login mnemonic as master for recovery");
+                    imported.clone()
+                } else {
+                    let master = bip39::Mnemonic::generate(24)
+                        .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
+                    println!("[Setup] Generated new random master for recovery (no login mnemonic available)");
+                    master.to_string()
+                };
                 hcfs_client::auth::save_encrypted_mnemonic(
                     &master_path,
                     &master_str,
                     &drive_password,
                 )
                 .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-                println!("[Setup] Generated and saved new master mnemonic");
                 let derived = derive_folder_mnemonic(&master_str, &label)?;
 
                 let mut init_mnemonic = manager.init(&drive_password, Some(&derived))?;
@@ -706,7 +714,12 @@ async fn initialize_sync_inner(
         }
     } else {
         // New folder — need to derive or generate mnemonic
-        println!("[Setup] Drive not initialized for '{}', creating...", label);
+        println!(
+            "[Setup] Drive not initialized for '{}', creating... (existing_mnemonic={}, master_exists={})",
+            label,
+            existing_mnemonic.is_some(),
+            master_path.exists(),
+        );
 
         let (folder_mnemonic, master_for_backup, generated_new_master) = if let Some(ref imported) =
             existing_mnemonic
@@ -723,7 +736,7 @@ async fn initialize_sync_inner(
                         &master_path, imported, &drive_password,
                     )
                     .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-                    println!("[Setup] Saved imported mnemonic as master");
+                    println!("[Setup] Saved login mnemonic as master (new device)");
                 } else {
                     let stored = hcfs_client::auth::recover_mnemonic(
                         &master_path, &drive_password,
@@ -738,6 +751,8 @@ async fn initialize_sync_inner(
                             &master_path, imported, &drive_password,
                         )
                         .map_err(|e| format!("Failed to update master mnemonic: {e}"))?;
+                    } else {
+                        println!("[Setup] Stored master matches login mnemonic");
                     }
                     stored_str.zeroize();
                 }
@@ -754,13 +769,20 @@ async fn initialize_sync_inner(
             println!("[Setup] Derived folder mnemonic from existing master");
             (derived, None, false)
         } else {
-            // First-ever setup — generate new 24-word master mnemonic
+            // No login mnemonic AND no master on disk — generate random.
+            // WARNING: files encrypted with this key cannot be decrypted on
+            // other devices. Multi-device sync requires passing the login
+            // mnemonic (existing_mnemonic parameter).
+            println!(
+                "[Setup] WARNING: No login mnemonic provided and no master on disk for '{}'. \
+                 Generating random master — multi-device sync will NOT work!",
+                label
+            );
             let master = bip39::Mnemonic::generate(24)
                 .map_err(|e| format!("Failed to generate mnemonic: {e}"))?;
             let master_str = master.to_string();
             hcfs_client::auth::save_encrypted_mnemonic(&master_path, &master_str, &drive_password)
                 .map_err(|e| format!("Failed to save master mnemonic: {e}"))?;
-            println!("[Setup] Generated and saved new master mnemonic");
             let derived = derive_folder_mnemonic(&master_str, &label)?;
             (derived, Some(master_str), true)
         };

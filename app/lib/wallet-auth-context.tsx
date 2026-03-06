@@ -113,6 +113,10 @@ export function WalletAuthProvider({
 
   const syncInitialized = useRef(false);
   const logoutTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Keep the login mnemonic in-memory so getMnemonic() can return it
+  // even before a Drive is initialized (e.g. on a new device before
+  // the user creates their first sync folder).
+  const sessionMnemonicRef = useRef<string | null>(null);
 
   const ensureTempAuthKey = useCallback(
     async (accountId?: string | null, token?: string | null) => {
@@ -130,13 +134,19 @@ export function WalletAuthProvider({
   );
 
   const getMnemonic = useCallback(async (): Promise<string | null> => {
+    // 1. Try the Rust Drive backend (master mnemonic on disk)
     try {
-      // Retrieve mnemonic from encrypted Drive via Rust — never from session DB
-      if (!polkadotAddress) return null;
-      return await invoke<string>("get_drive_mnemonic", { accountId: polkadotAddress });
+      if (polkadotAddress) {
+        const result = await invoke<string>("get_drive_mnemonic", { accountId: polkadotAddress });
+        if (result) return result;
+      }
     } catch {
-      return null;
+      // Drive not initialized or password unavailable — fall through
     }
+    // 2. Fall back to the in-memory login mnemonic. This covers the
+    //    case where the user logged in on a new device but hasn't
+    //    created a sync folder yet (no Drive on disk).
+    return sessionMnemonicRef.current;
   }, [polkadotAddress]);
 
   const logout = useCallback(
@@ -178,6 +188,7 @@ export function WalletAuthProvider({
       setIsAuthenticated(false);
       setSessionTimeRemaining(null);
       syncInitialized.current = false; // Reset sync flag for next login
+      sessionMnemonicRef.current = null;
 
       // Optionally redirect after logout
       if (redirectPath && typeof window !== "undefined") {
@@ -489,6 +500,7 @@ export function WalletAuthProvider({
       console.error("[setSession] Invalid mnemonic");
       return false;
     }
+    sessionMnemonicRef.current = inputMnemonic;
     await cryptoWaitReady();
     try {
       const keyring = new Keyring({ type: "sr25519" });
@@ -552,6 +564,7 @@ export function WalletAuthProvider({
   // Mnemonic login with challenge-based authentication
   const login = async (inputMnemonic: string): Promise<void> => {
     setIsLoading(true);
+    sessionMnemonicRef.current = inputMnemonic;
     try {
       console.log("[WalletAuth] Starting mnemonic login with challenge");
 

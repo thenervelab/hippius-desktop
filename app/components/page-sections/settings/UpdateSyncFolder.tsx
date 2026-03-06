@@ -27,7 +27,7 @@ const UpdateSyncFolder: React.FC = () => {
     useState("");
   const [selectedPrivateFolderName, setSelectedPrivateFolderName] =
     useState("");
-  const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
+  const { polkadotAddress, getMnemonic } = useWalletAuth();
   const [showSelector, setShowSelector] = useState(false);
   const [stopSyncTarget, setStopSyncTarget] = useState<SyncType | null>(null);
   const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
@@ -141,7 +141,7 @@ const UpdateSyncFolder: React.FC = () => {
         setSyncEngineStatus("active");
 
         // Fire off stop + re-init in background (don't block UI)
-        const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+        const mnemonic = (await getMnemonic()) ?? undefined;
         invoke("stop_sync").catch(() => { }).then(() =>
           tryInitializeSync(polkadotAddress!, "default", mnemonic ?? undefined).catch((err) =>
             console.error("[UpdateSyncFolder] Background sync init failed:", err)
@@ -158,7 +158,7 @@ const UpdateSyncFolder: React.FC = () => {
     if (!polkadotAddress) return;
 
     try {
-      const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+      const mnemonic = (await getMnemonic()) ?? undefined;
       const initResult = await setupAndInitialize(
         polkadotAddress,
         "default",
@@ -225,7 +225,7 @@ const UpdateSyncFolder: React.FC = () => {
     try {
       // Clear the stopped flag — user explicitly wants sync running
       localStorage.removeItem("hippius_sync_stopped");
-      const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+      const mnemonic = (await getMnemonic()) ?? undefined;
       const success = await tryInitializeSync(polkadotAddress, "default", mnemonic ?? undefined);
       if (success) {
         toast.success("Syncing started!");

@@ -784,43 +784,22 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         s.last_sync_time = Some(chrono::Utc::now().timestamp());
     });
 
-    // Log post-sync diagnostics and remove any files left behind by
-    // failed downloads. If any are found, also delete them from the
-    // server so they stop being retried every sync cycle.
-    let (failed_ids, user_id_for_purge) = {
+    // Log post-sync diagnostics and clean up local artifacts from
+    // failed downloads (e.g. files named `downloaded_<hex>`).
+    // We intentionally do NOT delete the corresponding remote files —
+    // decryption failures usually mean a different device encrypted
+    // with a different key, and deleting would destroy their data.
+    {
         let guard = HCFS_DRIVES.lock().await;
         if let Some(m) = guard.get(label) {
             m.log_sync_diagnostics(label);
-            let ids = m.cleanup_failed_downloads();
-            let uid = m.user_id().map(String::from);
-            (ids, uid)
-        } else {
-            (Vec::new(), None)
-        }
-    };
-    if !failed_ids.is_empty() {
-        if let Some(uid) = user_id_for_purge {
-            // Build a temporary client outside the lock to delete
-            // undecryptable remote files without blocking other drives.
-            let cfg = {
-                let guard = HCFS_DRIVES.lock().await;
-                guard.get(label).and_then(|m| m.client_config.clone())
-            };
-            if let Some(cfg) = cfg {
-                if let Ok(client) = hcfs_client::client::HcfsClient::new(cfg) {
-                    for fid in &failed_ids {
-                        match client.delete(&uid, fid).await {
-                            Ok(_) => println!(
-                                "[Sync] Deleted undecryptable remote file {} for '{}'",
-                                fid, label
-                            ),
-                            Err(e) => println!(
-                                "[Sync] Warning: failed to delete remote file {}: {}",
-                                fid, e
-                            ),
-                        }
-                    }
-                }
+            let failed_ids = m.cleanup_failed_downloads();
+            if !failed_ids.is_empty() {
+                println!(
+                    "[Sync] Cleaned up {} local download artifact(s) for '{}' (remote files preserved)",
+                    failed_ids.len(),
+                    label,
+                );
             }
         }
     }

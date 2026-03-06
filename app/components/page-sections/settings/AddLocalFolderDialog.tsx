@@ -22,7 +22,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
+  const { polkadotAddress, getMnemonic } = useWalletAuth();
   const [selectedPath, setSelectedPath] = useState<string>("");
   const [folderName, setFolderName] = useState<string>("");
   const [isAdding, setIsAdding] = useState(false);
@@ -53,8 +53,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
 
     setIsAdding(true);
     try {
-      const mnemonic =
-        authType === "mnemonic" ? (await getMnemonic()) ?? undefined : undefined;
+      const mnemonic = (await getMnemonic()) ?? undefined;
 
       // Deduplicate label: if "Documents" exists, try "Documents-2", "Documents-3", etc.
       const existingPaths = await getAllSyncPaths(polkadotAddress).catch(() => []);

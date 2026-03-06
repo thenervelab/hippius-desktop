@@ -26,7 +26,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
   remoteFolders,
   onSuccess,
 }) => {
-  const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
+  const { polkadotAddress, getMnemonic } = useWalletAuth();
   const [selectedFolder, setSelectedFolder] = useState<RemoteFolder | null>(null);
   const [localPath, setLocalPath] = useState<string>("");
   const [isSyncing, setIsSyncing] = useState(false);
@@ -64,8 +64,10 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
 
     setIsSyncing(true);
     try {
-      const mnemonic =
-        authType === "mnemonic" ? await getMnemonic() : undefined;
+      // Always try to get the mnemonic — it's required for cross-device
+      // decryption. getMnemonic() falls back to in-memory login mnemonic
+      // when the Drive isn't initialized yet (new device scenario).
+      const mnemonic = await getMnemonic();
 
       const results = await restoreRemoteFolders(
         polkadotAddress,

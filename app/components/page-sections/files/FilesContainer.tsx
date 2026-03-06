@@ -50,7 +50,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
-  const { polkadotAddress, getMnemonic, authType } = useWalletAuth();
+  const { polkadotAddress, getMnemonic } = useWalletAuth();
 
   // Regular files hook
   const {
@@ -451,7 +451,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           localStorage.removeItem("hippius_sync_stopped");
 
           // Fire off stop + re-init in background (don't block UI)
-          const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+          const mnemonic = (await getMnemonic()) ?? undefined;
           invoke("stop_sync").catch(() => { }).then(() =>
             tryInitializeSync(polkadotAddress!, "default", mnemonic ?? undefined).catch((err) =>
               console.error("[FilesContainer] Background sync init failed:", err)
@@ -463,7 +463,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         toast.error("Failed to set sync folder");
       }
     },
-    [polkadotAddress, checkConfig, tryInitializeSync, authType, getMnemonic, triggerSyncPathRefresh, refetchUserFiles]
+    [polkadotAddress, checkConfig, tryInitializeSync, getMnemonic, triggerSyncPathRefresh, refetchUserFiles]
   );
 
   // Handle skipping sync folder setup
@@ -480,7 +480,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     if (!polkadotAddress) return;
 
     try {
-      const mnemonic = authType === "mnemonic" ? await getMnemonic() : undefined;
+      const mnemonic = (await getMnemonic()) ?? undefined;
       const initResult = await setupAndInitialize(
         polkadotAddress,
         "default",
@@ -509,7 +509,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       console.error("Failed to setup HCFS:", err);
       toast.error("Sync setup failed. Please try again.");
     }
-  }, [polkadotAddress, setupAndInitialize, authType, getMnemonic, refetchUserFiles, triggerSyncPathRefresh]);
+  }, [polkadotAddress, setupAndInitialize, getMnemonic, refetchUserFiles, triggerSyncPathRefresh]);
 
   const handleMnemonicBackupConfirm = useCallback(() => {
     setShowMnemonicBackup(false);

@@ -10,7 +10,7 @@ import {
 } from "../utils/hcfsConfigUtils";
 import { getPrivateSyncPath, getAllSyncPaths } from "../utils/syncPathUtils";
 import { getDefaultStore } from "jotai";
-import { isSyncConfiguredAtom } from "../global-atoms/unpinAtoms";
+import { isSyncConfiguredAtom, syncEngineStatusAtom } from "../global-atoms/unpinAtoms";
 
 export interface UseHcfsSyncResult {
   tryInitializeSync: (accountId: string, label: string, mnemonic?: string) => Promise<boolean>;
@@ -218,6 +218,12 @@ export async function tryAutoInitSync(
         console.error(`[AutoSync] Failed to init sync for label '${sp.label}':`, err);
       }
     }
+
+    // Mark sync engine as active so the "Syncing is stopped" banner clears
+    if (anyInitialized) {
+      store.set(syncEngineStatusAtom, "active");
+    }
+
     return anyInitialized;
   } catch (err) {
     console.error("[AutoSync] Auto-sync init failed:", err);
