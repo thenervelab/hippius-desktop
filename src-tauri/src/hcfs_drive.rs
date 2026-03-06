@@ -126,9 +126,29 @@ impl HcfsDriveManager {
         &self.sync_path
     }
 
+    /// Load the persisted sync state from disk.
+    ///
+    /// Returns the three-tree sync state (`local`, `remote`, `synced`) plus
+    /// the `path_index` mapping path hashes to relative file paths.
+    pub fn load_sync_state(
+        &self,
+    ) -> Result<hcfs_client::sync::SyncState, String> {
+        self.drive.load_sync_state().map_err(|e| e.to_string())
+    }
+
     pub fn set_config(&mut self, config: HcfsClientConfig) -> Result<(), String> {
         self.client_config = Some(config.clone());
         self.drive.set_config(config).map_err(|e| e.to_string())
+    }
+
+    /// Update only the bearer token on a live drive, preserving all other config.
+    pub fn update_bearer_token(&mut self, token: String) -> Result<(), String> {
+        let mut config = self
+            .client_config
+            .clone()
+            .ok_or("Drive has no config set")?;
+        config.bearer_token = token;
+        self.set_config(config)
     }
 
     pub fn set_progress(&mut self, progress: SyncProgress) {
@@ -928,11 +948,22 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             outcome: Err(e), ..
         } => {
             discard_pending_activity_for_label(&label_owned);
-            println!("[Sync] Sync failed for '{}' with error: {}", label_owned, e);
+            let err_str = e.to_string();
+            println!("[Sync] Sync failed for '{}' with error: {}", label_owned, err_str);
+
+            // Detect auth token expiration so the frontend can refresh
+            if err_str.contains("401") || err_str.contains("Unauthorized") {
+                println!("[Sync] Auth token expired for '{}', requesting refresh", label_owned);
+                let _ = app.emit(
+                    "hcfs_auth_token_expired",
+                    serde_json::json!({"label": label_owned}),
+                );
+            }
+
             if emitted_sync_started {
                 let _ = app.emit(
                     "hcfs_sync_error",
-                    serde_json::json!({"label": label_owned, "error": e}),
+                    serde_json::json!({"label": label_owned, "error": err_str}),
                 );
             }
         }

@@ -7,7 +7,10 @@
 //! All path-accepting commands include traversal protection via `ensure_within()`.
 
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+use crate::hcfs_drive::HCFS_DRIVES;
 
 #[derive(Serialize)]
 pub struct FileEntry {
@@ -15,6 +18,8 @@ pub struct FileEntry {
     pub is_folder: bool,
     pub size: u64,
     pub modified: Option<u64>,
+    /// Sync status: "synced", "pending", or "unknown"
+    pub sync_status: String,
 }
 
 /// Verify that `child` is contained within `parent` after canonicalization.
@@ -118,11 +123,30 @@ pub async fn remove_file(sync_path: String, name: String) -> Result<(), String> 
     Ok(())
 }
 
+/// Build the set of relative paths whose `path_hash` appears in the
+/// drive's persisted `synced` tree. These are files the server has
+/// acknowledged. Returns `None` when the drive isn't available (e.g.
+/// logged out) so the caller can fall back to "unknown".
+async fn synced_paths_for_label(label: &str) -> Option<HashSet<String>> {
+    let guard = HCFS_DRIVES.lock().await;
+    let manager = guard.get(label)?;
+    let state = manager.load_sync_state().ok()?;
+
+    let mut paths = HashSet::new();
+    for (hash, rel_path) in &state.path_index {
+        if state.synced.files.contains_key(hash) {
+            paths.insert(rel_path.to_string_lossy().to_string());
+        }
+    }
+    Some(paths)
+}
+
 /// List contents of sync folder
 #[tauri::command]
 pub async fn list_sync_folder(
     sync_path: String,
     subfolder: Option<String>,
+    label: Option<String>,
 ) -> Result<Vec<FileEntry>, String> {
     let base = PathBuf::from(&sync_path);
     let target = match subfolder {
@@ -140,6 +164,12 @@ pub async fn list_sync_folder(
         ensure_within(&base, &target)?;
     }
 
+    // Load synced file paths from the drive's persisted sync state
+    let synced_set = match label {
+        Some(ref l) => synced_paths_for_label(l).await,
+        None => None,
+    };
+
     let mut entries = Vec::new();
     let mut dir = tokio::fs::read_dir(&target)
         .await
@@ -154,15 +184,38 @@ pub async fn list_sync_folder(
         }
 
         let meta = entry.metadata().await.map_err(|e| e.to_string())?;
+        let is_folder = meta.is_dir();
+
+        // Build relative path matching hcfs-client convention:
+        // SHA256 is computed over relative_path.to_string_lossy()
+        let relative_path = match subfolder {
+            Some(ref sub) => format!("{}/{}", sub, name),
+            None => name.clone(),
+        };
+
+        // Folders don't have server-side entries — their children do
+        let sync_status = if is_folder {
+            "synced".to_string()
+        } else {
+            match &synced_set {
+                Some(set) if set.contains(&relative_path) => {
+                    "synced".to_string()
+                }
+                Some(_) => "pending".to_string(),
+                None => "unknown".to_string(),
+            }
+        };
+
         entries.push(FileEntry {
             name,
-            is_folder: meta.is_dir(),
+            is_folder,
             size: meta.len(),
             modified: meta
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs()),
+            sync_status,
         });
     }
 

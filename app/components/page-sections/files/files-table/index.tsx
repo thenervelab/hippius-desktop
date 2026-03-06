@@ -407,6 +407,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         isFolder={info.row.original.isFolder}
                         source={info.row.original.source}
                         mainReqHash={info.row.original.mainReqHash}
+                        syncStatus={info.row.original.syncStatus}
                       />
                     ) : (
                       <VideoDialogTrigger
@@ -422,6 +423,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                           isFolder={info.row.original.isFolder}
                           source={info.row.original.source}
                           mainReqHash={info.row.original.mainReqHash}
+                          syncStatus={info.row.original.syncStatus}
                         />
                       </VideoDialogTrigger>
                     )}
@@ -457,6 +459,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                           isFolder={info.row.original.isFolder}
                           source={info.row.original.source}
                           mainReqHash={info.row.original.mainReqHash}
+                          syncStatus={info.row.original.syncStatus}
                         />
                       </ImageDialogTrigger>
                     )}
@@ -492,6 +495,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                           isFolder={info.row.original.isFolder}
                           source={info.row.original.source}
                           mainReqHash={info.row.original.mainReqHash}
+                          syncStatus={info.row.original.syncStatus}
                         />
                       </PdfDialogTrigger>
                     )}
@@ -509,6 +513,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   isFolder={info.row.original.isFolder}
                   source={info.row.original.source}
                   mainReqHash={info.row.original.mainReqHash}
+                  syncStatus={info.row.original.syncStatus}
                 />
               );
             },

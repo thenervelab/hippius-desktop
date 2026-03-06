@@ -98,6 +98,36 @@ pub async fn update_hcfs_server_url(account_id: String, server_url: String) -> R
     Ok(())
 }
 
+/// Update the bearer token on all live drives and persist it in the DB.
+///
+/// Called by the frontend after re-authenticating when the server returns
+/// 401 Unauthorized (expired token).
+#[tauri::command]
+pub async fn update_sync_bearer_token(
+    account_id: String,
+    bearer_token: String,
+) -> Result<(), String> {
+    // 1. Persist to DB so future initialize_sync calls use the fresh token
+    crate::utils::objectstore_tokens::save_temp_auth_key(&account_id, &bearer_token)
+        .await
+        .map_err(|e| format!("Failed to persist auth token: {e}"))?;
+
+    // 2. Update all live drives in-memory
+    let mut guard = HCFS_DRIVES.lock().await;
+    for (label, manager) in guard.iter_mut() {
+        if let Err(e) = manager.update_bearer_token(bearer_token.clone()) {
+            eprintln!(
+                "[Auth] Failed to update bearer token for drive '{}': {}",
+                label, e
+            );
+        } else {
+            println!("[Auth] Updated bearer token for drive '{}'", label);
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_hcfs_config(account_id: String) -> Result<HcfsConfigResult, String> {
     let db = DB_POOL.get().ok_or("Database not initialized")?;

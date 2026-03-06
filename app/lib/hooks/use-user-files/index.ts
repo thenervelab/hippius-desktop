@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
@@ -30,6 +31,7 @@ export type FormattedUserFile = {
   parentFolderId?: string;
   parentFolderName?: string;
   mainReqHash: string;
+  syncStatus?: "synced" | "pending" | "unknown";
 };
 
 type FileEntry = {
@@ -37,6 +39,7 @@ type FileEntry = {
   is_folder: boolean;
   size: number;
   modified: number | null;
+  sync_status: "synced" | "pending" | "unknown";
 };
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
@@ -64,7 +67,20 @@ export const parseMinerIds = (minerIds: string | string[]): string[] => {
 
 export const useUserFiles = () => {
   const { polkadotAddress } = useWalletAuth();
-  const queryKey = [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress];
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(
+    () => [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
+    [polkadotAddress]
+  );
+
+  // Refetch file list after sync completes so sync_status updates
+  useEffect(() => {
+    const handler = () => {
+      queryClient.invalidateQueries({ queryKey });
+    };
+    window.addEventListener("sync_files_completed_changed", handler);
+    return () => window.removeEventListener("sync_files_completed_changed", handler);
+  }, [queryClient, queryKey]);
 
   return useQuery({
     queryKey,
@@ -77,11 +93,12 @@ export const useUserFiles = () => {
       }
 
       try {
-        const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
+        const { path: syncPath, label } = await getPrivateSyncPath(polkadotAddress);
 
         const entries = await invoke<FileEntry[]>("list_sync_folder", {
           syncPath,
           subfolder: null,
+          label,
         });
 
         console.log("Fetched file entries from sync folder:", entries);
@@ -108,6 +125,7 @@ export const useUserFiles = () => {
             type: "private",
             isErasureCoded: false,
             mainReqHash: "",
+            syncStatus: entry.sync_status,
           };
         });
 

@@ -28,6 +28,7 @@ import { useRouter } from "next/navigation";
 import { hashPasscode, decryptMnemonic } from "./helpers/crypto";
 import { isMnemonicValid } from "./helpers/validateMnemonic";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useTrayInit } from "./hooks/useTraySync";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
 import { tryAutoInitSync } from "./hooks/useHcfsSync";
@@ -367,6 +368,88 @@ export function WalletAuthProvider({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logout, router]);
+
+  // Silently refresh the auth token when the sync server returns 401.
+  // Only works for mnemonic-based auth (we have the mnemonic in the encrypted drive).
+  // Cooldown prevents retry storms when the auth API itself is down.
+  const refreshingTokenRef = useRef(false);
+  const lastRefreshAttemptRef = useRef(0);
+  const TOKEN_REFRESH_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    listen<{ label: string }>("hcfs_auth_token_expired", async () => {
+      const now = Date.now();
+      const elapsed = now - lastRefreshAttemptRef.current;
+      if (
+        refreshingTokenRef.current ||
+        !isAuthenticated ||
+        !polkadotAddress ||
+        elapsed < TOKEN_REFRESH_COOLDOWN_MS
+      ) {
+        return;
+      }
+      refreshingTokenRef.current = true;
+      lastRefreshAttemptRef.current = now;
+      console.log("[WalletAuth] Auth token expired, attempting silent refresh");
+
+      try {
+        const mnemonic = await getMnemonic();
+        if (!mnemonic) {
+          console.warn("[WalletAuth] Cannot refresh token: no mnemonic available");
+          return;
+        }
+
+        await cryptoWaitReady();
+        const { mnemonicToAccount } = await import("viem/accounts");
+        const ethAccount = mnemonicToAccount(mnemonic);
+        const { authService } = await import("./services/authService");
+
+        const challengeData = await authService.requestChallenge(
+          ethAccount.address,
+          polkadotAddress,
+        );
+        const signature = await ethAccount.signMessage({
+          message: challengeData.message,
+        });
+        await authService.verifySignature({
+          signature,
+          address: ethAccount.address,
+          substrateAddress: polkadotAddress,
+          referralCode: null,
+        });
+
+        const session = authService.getSession();
+        if (!session?.token) {
+          console.error("[WalletAuth] Token refresh failed: no session after verify");
+          return;
+        }
+
+        await invoke("update_sync_bearer_token", {
+          accountId: polkadotAddress,
+          bearerToken: session.token,
+        });
+
+        console.log("[WalletAuth] Auth token refreshed successfully");
+      } catch (err) {
+        console.error("[WalletAuth] Silent token refresh failed:", err);
+      } finally {
+        refreshingTokenRef.current = false;
+      }
+    }).then((u) => {
+      if (cancelled) {
+        u();
+      } else {
+        unlisten = u;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [isAuthenticated, polkadotAddress, getMnemonic]);
 
   const unlockWithPasscode = async (
     passcode: string,

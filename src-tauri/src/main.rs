@@ -172,6 +172,7 @@ fn main() {
             commands::syncing::save_hcfs_config,
             commands::syncing::get_hcfs_config,
             commands::syncing::update_hcfs_server_url,
+            commands::syncing::update_sync_bearer_token,
             // Stage & conflict resolution
             commands::syncing::stage_changes,
             commands::syncing::sync_with_conflict_resolutions,
