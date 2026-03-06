@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { X, Folder } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { setPrivateSyncPath } from "@/app/lib/utils/syncPathUtils";
+import { setPrivateSyncPath, getAllSyncPaths } from "@/app/lib/utils/syncPathUtils";
 import { getHcfsConfig, saveHcfsConfig, initializeSync } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 
@@ -56,8 +56,18 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
       const mnemonic =
         authType === "mnemonic" ? (await getMnemonic()) ?? undefined : undefined;
 
-      await setPrivateSyncPath(selectedPath, polkadotAddress, folderName);
-      await initializeSync(polkadotAddress, folderName, mnemonic);
+      // Deduplicate label: if "Documents" exists, try "Documents-2", "Documents-3", etc.
+      const existingPaths = await getAllSyncPaths(polkadotAddress).catch(() => []);
+      const existingLabels = new Set(existingPaths.map((p) => p.label));
+      let label = folderName;
+      let suffix = 2;
+      while (existingLabels.has(label)) {
+        label = `${folderName}-${suffix}`;
+        suffix++;
+      }
+
+      await setPrivateSyncPath(selectedPath, polkadotAddress, label);
+      await initializeSync(polkadotAddress, label, mnemonic);
 
       toast.success("Folder added to sync");
       setSelectedPath("");

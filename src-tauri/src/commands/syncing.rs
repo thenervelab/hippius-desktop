@@ -1460,6 +1460,18 @@ pub struct RestoreResult {
     pub error: Option<String>,
 }
 
+fn sanitize_label(label: &str) -> Result<String, String> {
+    let sanitized: String = label
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == ' ' || *c == '.')
+        .collect();
+    let trimmed = sanitized.trim_matches('.').trim();
+    if trimmed.is_empty() {
+        return Err(format!("Invalid folder label: '{}'", label));
+    }
+    Ok(trimmed.to_string())
+}
+
 /// Restore multiple remote folders by creating local sync paths and initializing sync.
 ///
 /// Initializes each folder without restarting the sync loop, then starts the
@@ -1476,7 +1488,18 @@ pub async fn restore_remote_folders(
     let mut any_success = false;
 
     for folder in &folders {
-        let folder_path = PathBuf::from(&base_path).join(&folder.label);
+        let safe_label = match sanitize_label(&folder.label) {
+            Ok(l) => l,
+            Err(e) => {
+                results.push(RestoreResult {
+                    label: folder.label.clone(),
+                    success: false,
+                    error: Some(e),
+                });
+                continue;
+            }
+        };
+        let folder_path = PathBuf::from(&base_path).join(&safe_label);
 
         // Create the directory
         if let Err(e) = std::fs::create_dir_all(&folder_path) {

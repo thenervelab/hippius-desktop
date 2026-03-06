@@ -62,11 +62,11 @@ export default function MultiFolderSyncManager() {
       );
 
       const localLabelSet = new Set(
-        localFolders.map((f) => f.id.toLowerCase()),
+        localFolders.map((f) => f.id),
       );
 
       const remoteFoldersData: RemoteFolder[] = remoteList
-        .filter((r) => !localLabelSet.has(r.label.toLowerCase()))
+        .filter((r) => !localLabelSet.has(r.label))
         .map((r) => ({
           folderName: r.label,
           deviceName: "Other Device",

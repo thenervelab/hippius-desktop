@@ -233,8 +233,9 @@ pub async fn get_sync_path_internal(
             Some((row.get::<String, _>("path"), label))
         } else {
             let scoped_count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(1) FROM sync_paths WHERE owner != '' AND owner IS NOT NULL",
+                "SELECT COUNT(1) FROM sync_paths WHERE owner = ?",
             )
+            .bind(owner)
             .fetch_one(pool)
             .await
             .unwrap_or(0);

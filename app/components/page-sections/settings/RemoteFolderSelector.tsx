@@ -273,7 +273,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
                         Files will be synced to:
                       </span>
                     </div>
-                    <p className="text-xs text-grey-60 break-all">{localPath}</p>
+                    <p className="text-xs text-grey-60 break-all">{localPath}/{selectedFolder?.folderName}</p>
                     <CardButton
                       variant="ghost"
                       className="mt-2 text-sm"
@@ -302,7 +302,8 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
             {selectedFolder && localPath && (
               <div className="p-3 bg-primary-98 border border-primary-90 rounded-lg animate-in fade-in duration-200">
                 <p className="text-xs text-primary-40">
-                  <strong>{selectedFolder.folderName}</strong> will be downloaded
+                  <strong>{selectedFolder.folderName}</strong> will be downloaded to{" "}
+                  <span className="font-mono">{localPath}/{selectedFolder.folderName}</span>{" "}
                   and kept in sync with your other devices. Any changes you make
                   locally will sync back to all devices.
                 </p>
