@@ -36,6 +36,7 @@ type AddButtonProps = {
   className?: string;
   isPrivateView?: boolean; // Optional override for private/public view
   disabled?: boolean; // Optional external disabled state
+  defaultFolderLabel?: string | null;
 };
 
 // Add ref interface for parent components to trigger the dialog
@@ -46,7 +47,7 @@ export interface AddButtonRef {
 }
 
 const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
-  ({ className, isPrivateView: isPrivateViewProp, disabled: externalDisabled }, ref) => {
+  ({ className, isPrivateView: isPrivateViewProp, disabled: externalDisabled, defaultFolderLabel }, ref) => {
     // Keep state simple and isolated
     const [isOpen, setIsOpen] = useState(false);
 
@@ -131,6 +132,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           isPrivateView={isPrivateView}
           initialFiles={droppedFiles}
           initialPaths={droppedPaths}
+          defaultFolderLabel={defaultFolderLabel}
         />
       );
     }, [

@@ -11,6 +11,7 @@ export type SyncActivityItem = {
   action: string; // "uploaded", "downloaded", "deleted", "conflict"
   timestamp: number;
   size_bytes: number;
+  label: string;
 };
 
 export type SyncActivityRow = {

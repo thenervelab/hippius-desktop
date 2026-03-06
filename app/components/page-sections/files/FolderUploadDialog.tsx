@@ -14,24 +14,31 @@ import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
+import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 
 type Props = {
     open: boolean;
     onClose: () => void;
     onSuccess?: (folderCid: string) => void;
     onRefresh?: () => void;
+    defaultFolderLabel?: string | null;
 };
 
 export default function FolderUploadDialog({
     open,
     onClose,
     onSuccess,
-    onRefresh
+    onRefresh,
+    defaultFolderLabel,
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
+    const [selectedFolderLabel, setSelectedFolderLabel] = useState<string | null>(
+        defaultFolderLabel ?? null
+    );
+    const [selectedSyncPath, setSelectedSyncPath] = useState<string | null>(null);
     // const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSelectFolder = async () => {
@@ -66,8 +73,8 @@ export default function FolderUploadDialog({
         const toastId = toast.loading("Uploading folder...");
 
         try {
-            // Get sync path and copy folder into it
-            const syncPath = (await getPrivateSyncPath(polkadotAddress || "")).path;
+            // Get sync path — use selected path or fall back to default
+            const syncPath = selectedSyncPath ?? (await getPrivateSyncPath(polkadotAddress || "")).path;
 
             const name = await invoke<string>("add_folder", {
                 syncPath,
@@ -97,6 +104,8 @@ export default function FolderUploadDialog({
     const handleClose = () => {
         setFolderPath("");
         setFolderError(null);
+        setSelectedFolderLabel(defaultFolderLabel ?? null);
+        setSelectedSyncPath(null);
         onClose();
     };
 
@@ -166,6 +175,16 @@ export default function FolderUploadDialog({
                                 </div>
                             </div>
                         )}
+
+                        {/* Sync folder selector (shown when 2+ folders) */}
+                        <SyncFolderSelect
+                            value={selectedFolderLabel}
+                            defaultLabel={defaultFolderLabel}
+                            onChange={(label, path) => {
+                                setSelectedFolderLabel(label);
+                                setSelectedSyncPath(path);
+                            }}
+                        />
 
                         <div className="space-y-2">
                             <Label htmlFor="folderPath" className="text-sm font-medium text-grey-70">

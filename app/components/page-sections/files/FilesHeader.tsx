@@ -55,6 +55,7 @@ interface FilesHeaderProps {
   onFileTypesChange: (types: FileTypes[]) => void;
   onDateChange: (date: string) => void;
   onFileSizesChange: (sizes: number[]) => void;
+  defaultFolderLabel?: string | null;
 }
 
 const FilesHeader: FC<FilesHeaderProps> = ({
@@ -84,6 +85,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   onFileTypesChange,
   onDateChange,
   onFileSizesChange,
+  defaultFolderLabel,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
   const [syncFolderPermissionGranted, setSyncFolderPermissionGranted] =
@@ -288,6 +290,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
                   className="h-9"
                   isPrivateView={isPrivateView}
                   disabled={IS_SYNC_PAUSED}
+                  defaultFolderLabel={defaultFolderLabel}
                 />
               )
             )}
@@ -317,6 +320,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
         open={isFolderUploadOpen}
         onClose={() => setIsFolderUploadOpen(false)}
         onRefresh={refetchUserFiles}
+        defaultFolderLabel={defaultFolderLabel}
       />
 
     </>

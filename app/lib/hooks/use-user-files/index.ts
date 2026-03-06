@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
-import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { getAllSyncPaths, SyncPathResult } from "@/lib/utils/syncPathUtils";
 
 export type FileDetail = {
   filename: string;
@@ -32,6 +32,7 @@ export type FormattedUserFile = {
   parentFolderName?: string;
   mainReqHash: string;
   syncStatus?: "synced" | "pending" | "unknown";
+  label?: string;
 };
 
 type FileEntry = {
@@ -93,48 +94,71 @@ export const useUserFiles = () => {
       }
 
       try {
-        const { path: syncPath, label } = await getPrivateSyncPath(polkadotAddress);
+        const syncPaths: SyncPathResult[] = await getAllSyncPaths(polkadotAddress);
 
-        const entries = await invoke<FileEntry[]>("list_sync_folder", {
-          syncPath,
-          subfolder: null,
-          label,
-        });
-
-        console.log("Fetched file entries from sync folder:", entries);
-
-        const privateStorageSize = entries.reduce(
-          (sum, entry) => sum + BigInt(entry.size),
-          BigInt(0)
-        );
-
-        const formattedFiles: FormattedUserFile[] = entries.map((entry) => {
-          const modifiedMs = (entry.modified ?? 0) * 1000;
+        if (syncPaths.length === 0) {
           return {
-            name: entry.name,
-            actualFileName: entry.name,
-            size: entry.size,
-            createdAt: modifiedMs,
-            cid: "",
-            source: `${syncPath}/${entry.name}`,
-            minerIds: [],
-            isAssigned: true,
-            lastChargedAt: modifiedMs,
-            fileDetails: [],
-            isFolder: entry.is_folder,
-            type: "private",
-            isErasureCoded: false,
-            mainReqHash: "",
-            syncStatus: entry.sync_status,
+            files: [],
+            publicStorageSize: BigInt(0),
+            privateStorageSize: BigInt(0),
+            syncFolderLabels: [],
           };
-        });
+        }
 
-        formattedFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
+        const allFiles: FormattedUserFile[] = [];
+        let totalPrivateSize = BigInt(0);
+
+        for (const { path: syncPath, label } of syncPaths) {
+          if (!syncPath) continue;
+          try {
+            const entries = await invoke<FileEntry[]>("list_sync_folder", {
+              syncPath,
+              subfolder: null,
+              label,
+            });
+
+            totalPrivateSize += entries.reduce(
+              (sum, entry) => sum + BigInt(entry.size),
+              BigInt(0)
+            );
+
+            for (const entry of entries) {
+              const modifiedMs = (entry.modified ?? 0) * 1000;
+              allFiles.push({
+                name: entry.name,
+                actualFileName: entry.name,
+                size: entry.size,
+                createdAt: modifiedMs,
+                cid: "",
+                source: `${syncPath}/${entry.name}`,
+                minerIds: [],
+                isAssigned: true,
+                lastChargedAt: modifiedMs,
+                fileDetails: [],
+                isFolder: entry.is_folder,
+                type: "private",
+                isErasureCoded: false,
+                mainReqHash: "",
+                syncStatus: entry.sync_status,
+                label,
+              });
+            }
+          } catch (err) {
+            console.warn(`Failed to list files for label "${label}":`, err);
+          }
+        }
+
+        allFiles.sort((a, b) => b.lastChargedAt - a.lastChargedAt);
+
+        const syncFolderLabels = syncPaths
+          .filter((sp) => !!sp.path)
+          .map((sp) => sp.label);
 
         return {
-          files: formattedFiles,
+          files: allFiles,
           publicStorageSize: BigInt(0),
-          privateStorageSize,
+          privateStorageSize: totalPrivateSize,
+          syncFolderLabels,
         };
       } catch (error) {
         console.error("Error fetching files from sync folder:", error);

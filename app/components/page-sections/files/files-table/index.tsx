@@ -137,6 +137,7 @@ interface FilesTableProps {
   currentPage: number;
   totalPages: number;
   setCurrentPage: (page: number) => void;
+  showFolderBadge?: boolean;
 }
 
 const FilesTable: FC<FilesTableProps> = memo(
@@ -151,6 +152,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     currentPage,
     totalPages,
     setCurrentPage,
+    showFolderBadge = false,
   }) => {
     // Use refs to store current values - header function will read from these
     // This prevents stale closure captures in TanStack Table's cached header functions
@@ -408,6 +410,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                         source={info.row.original.source}
                         mainReqHash={info.row.original.mainReqHash}
                         syncStatus={info.row.original.syncStatus}
+                        label={info.row.original.label}
+                        showFolderBadge={showFolderBadge}
                       />
                     ) : (
                       <VideoDialogTrigger
@@ -424,6 +428,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                           source={info.row.original.source}
                           mainReqHash={info.row.original.mainReqHash}
                           syncStatus={info.row.original.syncStatus}
+                          label={info.row.original.label}
+                          showFolderBadge={showFolderBadge}
                         />
                       </VideoDialogTrigger>
                     )}
@@ -444,6 +450,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                         isFolder={info.row.original.isFolder}
                         source={info.row.original.source}
                         mainReqHash={info.row.original.mainReqHash}
+                        label={info.row.original.label}
+                        showFolderBadge={showFolderBadge}
                       />
                     ) : (
                       <ImageDialogTrigger
@@ -460,6 +468,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                           source={info.row.original.source}
                           mainReqHash={info.row.original.mainReqHash}
                           syncStatus={info.row.original.syncStatus}
+                          label={info.row.original.label}
+                          showFolderBadge={showFolderBadge}
                         />
                       </ImageDialogTrigger>
                     )}
@@ -480,6 +490,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                         isFolder={info.row.original.isFolder}
                         source={info.row.original.source}
                         mainReqHash={info.row.original.mainReqHash}
+                        label={info.row.original.label}
+                        showFolderBadge={showFolderBadge}
                       />
                     ) : (
                       <PdfDialogTrigger
@@ -496,6 +508,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                           source={info.row.original.source}
                           mainReqHash={info.row.original.mainReqHash}
                           syncStatus={info.row.original.syncStatus}
+                          label={info.row.original.label}
+                          showFolderBadge={showFolderBadge}
                         />
                       </PdfDialogTrigger>
                     )}
@@ -514,6 +528,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                   source={info.row.original.source}
                   mainReqHash={info.row.original.mainReqHash}
                   syncStatus={info.row.original.syncStatus}
+                  label={info.row.original.label}
+                  showFolderBadge={showFolderBadge}
                 />
               );
             },
@@ -613,6 +629,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         files,
         currentPage,
         selectedFiles,
+        showFolderBadge,
       ]
     );
 

@@ -9,6 +9,7 @@ import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { basename } from '@tauri-apps/api/path';
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
+import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 
 
 interface UploadFilesFlowProps {
@@ -16,6 +17,7 @@ interface UploadFilesFlowProps {
   initialFiles?: FileList | null;
   initialPaths?: string[] | null;
   isPrivateView: boolean;
+  defaultFolderLabel?: string | null;
 }
 
 interface FilePathInfo {
@@ -28,12 +30,18 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
   reset,
   initialFiles,
   initialPaths,
-  isPrivateView
+  isPrivateView,
+  defaultFolderLabel,
 }) => {
   const [revealFiles, setRevealFiles] = useState(false);
   const [files, setFiles] = useState<FilePathInfo[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
+
+  const [selectedFolderLabel, setSelectedFolderLabel] = useState<string | null>(
+    defaultFolderLabel ?? null
+  );
+  const [selectedSyncPath, setSelectedSyncPath] = useState<string | null>(null);
 
   const { upload } = useFilesUpload({
     onError(err) {
@@ -188,15 +196,20 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
 
       reset(); // Close dialog
       // Pass the toast id so the hook reuses and updates the same toast
-      upload(processedPaths, isPrivateView, {
-        toastId,
-        messages: {
-          startSingle: files.length === 1 ? `Uploading ${firstFileName}: 0%` : undefined,
-          uploadingSingle: (percent) => files.length === 1 ? `Uploading ${firstFileName}: ${percent}%` : `Uploading: ${percent}%`,
-          successSingle: files.length === 1 ? `${firstFileName} successfully uploaded!` : undefined,
-          errorSingle: files.length === 1 ? `Failed to upload ${firstFileName}` : undefined
-        }
-      });
+      upload(
+        processedPaths,
+        isPrivateView,
+        {
+          toastId,
+          messages: {
+            startSingle: files.length === 1 ? `Uploading ${firstFileName}: 0%` : undefined,
+            uploadingSingle: (percent) => files.length === 1 ? `Uploading ${firstFileName}: ${percent}%` : `Uploading: ${percent}%`,
+            successSingle: files.length === 1 ? `${firstFileName} successfully uploaded!` : undefined,
+            errorSingle: files.length === 1 ? `Failed to upload ${firstFileName}` : undefined
+          }
+        },
+        selectedSyncPath ?? undefined,
+      );
     } catch (error) {
       console.error("Error preparing files:", error);
       toast.error(
@@ -210,6 +223,17 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
   return (
     <div className="w-full">
       <FileDropzone setFiles={handleFiles} isPrivateView={isPrivateView} />
+
+      {/* Sync folder selector (shown when 2+ folders) */}
+      <SyncFolderSelect
+        value={selectedFolderLabel}
+        defaultLabel={defaultFolderLabel}
+        onChange={(label, path) => {
+          setSelectedFolderLabel(label);
+          setSelectedSyncPath(path);
+        }}
+        className="mt-4"
+      />
 
       {/* Privacy Notice */}
       {isPrivateView && (

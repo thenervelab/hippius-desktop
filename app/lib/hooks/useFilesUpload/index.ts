@@ -57,7 +57,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   async function upload(
     filePaths: string[],
     isPrivateView: boolean,
-    options?: UploadOptions
+    options?: UploadOptions,
+    syncPathOverride?: string,
   ) {
     if (!polkadotAddress) {
       throw new Error("Wallet not connected. Please log in first.");
@@ -104,7 +105,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       const cids: string[] = [];
 
-      const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
+      const syncPath = syncPathOverride ?? (await getPrivateSyncPath(polkadotAddress)).path;
       if (!syncPath) {
         throw new Error("Sync path not configured. Please set a sync folder first.");
       }

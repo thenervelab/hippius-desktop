@@ -105,6 +105,7 @@ const useRecentFiles = () => {
               type: item.action === "uploaded" ? "Uploaded" : item.action,
               isErasureCoded: false,
               mainReqHash: "",
+              label: item.label,
             };
           }
         );

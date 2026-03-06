@@ -27,19 +27,22 @@ import { buildFolderPath } from '@/app/utils/folderPathUtils';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
+import SyncFolderBadge from "@/components/ui/SyncFolderBadge";
 
 interface FileCardProps {
   file: FormattedUserFile;
   state: "success" | "pending" | "error";
   onClick: () => void;
   actionMenu: React.ReactNode;
+  showFolderBadge?: boolean;
 }
 
 const FileCard: React.FC<FileCardProps> = ({
   file,
   state,
   onClick,
-  actionMenu
+  actionMenu,
+  showFolderBadge = false,
 }) => {
   const { fileName, fileFormat } = getFilePartsFromFileName(file.name);
   const { isSelectionMode, isFileSelected, toggleFileSelection } = useFileSelection();
@@ -327,6 +330,9 @@ const FileCard: React.FC<FileCardProps> = ({
             )}
             <Icon className={cn("size-5 mr-1", color)} />
             <span className="text-sm text-grey-20 truncate">{displayName}</span>
+            {showFolderBadge && file.label && (
+              <SyncFolderBadge label={file.label} className="ml-1" />
+            )}
           </div>
         )}
         <div className="max-w-[20px] pr-8">{actionMenu}</div>

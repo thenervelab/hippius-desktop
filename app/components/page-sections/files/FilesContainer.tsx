@@ -16,6 +16,7 @@ import {
   getPrivateSyncPath,
   setPrivateSyncPath,
 } from "@/lib/utils/syncPathUtils";
+import SyncFolderTabs from "./SyncFolderTabs";
 import { formatBytesFromBigInt } from "@/lib/utils";
 import { FileTypes } from "@/lib/types/fileTypes";
 import {
@@ -87,6 +88,11 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
   // Loading states for sync paths
   const [isLoadingPrivatePath, setIsLoadingPrivatePath] = useState(true);
+
+  // Folder tab state (null = "All")
+  const [selectedFolderTab, setSelectedFolderTab] = useState<string | null>(
+    null
+  );
 
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -183,6 +189,15 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
   const [showMnemonicBackup, setShowMnemonicBackup] = useState(false);
 
+  // Sync folder labels from the query data
+  const syncFolderLabels = useMemo(() => {
+    if (regularFilesData && "syncFolderLabels" in regularFilesData) {
+      return (regularFilesData as { syncFolderLabels?: string[] })
+        .syncFolderLabels ?? [];
+    }
+    return [];
+  }, [regularFilesData]);
+
   // Get the appropriate data based on view mode
   const allData = useMemo(() => {
     if (isRecentFiles) {
@@ -193,17 +208,23 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     return [];
   }, [isRecentFiles, recentFilesData, regularFilesData?.files]);
 
-  // Filter data to show only private files
+  // Filter data to show only private files, then by selected folder tab
   const allFilteredData = useMemo(() => {
-    if (isRecentFiles) {
-      return allData;
+    let data = allData;
+
+    if (!isRecentFiles) {
+      data = data.filter((file) => {
+        const fileType = file.type?.toLowerCase() || "";
+        return fileType === "private";
+      });
     }
 
-    return allData.filter((file) => {
-      const fileType = file.type?.toLowerCase() || "";
-      return fileType === "private";
-    });
-  }, [allData, isRecentFiles]);
+    if (selectedFolderTab && !isRecentFiles) {
+      data = data.filter((file) => file.label === selectedFolderTab);
+    }
+
+    return data;
+  }, [allData, isRecentFiles, selectedFolderTab]);
 
   // Filter data based on search and filter settings
   const filteredData = useMemo(() => {
@@ -259,7 +280,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     filterState.lastUpdated,
   ]);
 
-  // Reset pagination when filters change
+  // Reset pagination when filters or folder tab change
   useEffect(() => {
     setShouldResetPagination(true);
   }, [
@@ -269,6 +290,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     filterState.fileSize,
     filterState.fileSizes,
     filterState.lastUpdated,
+    selectedFolderTab,
   ]);
 
   // Reset pagination when data changes
@@ -318,17 +340,25 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     [filterState.fileTypes, filterState.fileSizes, updateFilters]
   );
 
-  // Format private storage size
+  // Format storage size — scoped to selected folder tab
   const formattedStorageSize = useMemo(() => {
     if (isRecentFiles) return "";
 
     if (!regularFilesData) return "0 B";
 
+    if (selectedFolderTab) {
+      const tabSize = allFilteredData.reduce(
+        (sum, f) => sum + BigInt(f.size ?? 0),
+        BigInt(0)
+      );
+      return formatBytesFromBigInt(tabSize);
+    }
+
     if (regularFilesData.privateStorageSize !== undefined) {
       return formatBytesFromBigInt(regularFilesData.privateStorageSize);
     }
     return "0 B";
-  }, [regularFilesData, isRecentFiles]);
+  }, [regularFilesData, isRecentFiles, selectedFolderTab, allFilteredData]);
 
   // Handle search input change
   const handleSearchChange = useCallback((value: string) => {
@@ -713,6 +743,12 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       regularFilesData?.files.filter((f) => f.type?.toLowerCase() === "private")
         .length || 0;
 
+    // Show folder badge when viewing "All" tab with multiple folders,
+    // or always on recent files when multiple folders exist
+    const showFolderBadge = isRecentFiles
+      ? syncFolderLabels.length >= 2
+      : selectedFolderTab === null && syncFolderLabels.length >= 2;
+
     content = (
       <FileSelectionProvider>
         <div className="w-full relative mt-6">
@@ -759,7 +795,16 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             onFileTypesChange={handleFileTypesChange}
             onDateChange={handleDateChange}
             onFileSizesChange={handleFileSizesChange}
+            defaultFolderLabel={selectedFolderTab}
           />
+
+          {!isRecentFiles && (
+            <SyncFolderTabs
+              labels={syncFolderLabels}
+              selectedTab={selectedFolderTab}
+              onTabChange={setSelectedFolderTab}
+            />
+          )}
 
           <FilesContent
             isRecentFiles={isRecentFiles}
@@ -782,6 +827,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             onSyncPathConfigured={
               isRecentFiles ? handleNavigateToSettings : handleStartSyncing
             }
+            showFolderBadge={showFolderBadge}
           />
         </div>
       </FileSelectionProvider>

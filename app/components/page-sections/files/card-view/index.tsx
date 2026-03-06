@@ -43,6 +43,7 @@ interface CardViewProps {
   currentPage: number;
   totalPages: number;
   setCurrentPage: (page: number) => void;
+  showFolderBadge?: boolean;
 }
 
 const CardView: FC<CardViewProps> = ({
@@ -55,6 +56,7 @@ const CardView: FC<CardViewProps> = ({
   currentPage,
   totalPages,
   setCurrentPage,
+  showFolderBadge = false,
 }) => {
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
@@ -170,6 +172,7 @@ const CardView: FC<CardViewProps> = ({
                   <FileCard
                     file={file}
                     state={cardState}
+                    showFolderBadge={showFolderBadge}
                     onClick={() => {
                       // Don't handle card clicks if dropdown menu is open
                       if (openMenuIndex === index) {
