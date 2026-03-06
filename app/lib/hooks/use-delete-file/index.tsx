@@ -7,7 +7,7 @@ import { queryClientAtom } from "jotai-tanstack-query";
 import { useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
 import { toast } from "sonner";
 import { useRef } from "react";
 
@@ -79,16 +79,29 @@ export const useDeleteFile = ({
             if (files.length === 0) throw new Error("No files to delete");
             if (!polkadotAddress) throw new Error("Wallet not connected");
 
-            const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
+            // Build a label → path lookup for multi-folder support
+            const allPaths = await getAllSyncPaths(polkadotAddress);
+            const pathByLabel = new Map(
+                allPaths.map((sp) => [sp.label, sp.path])
+            );
+            const defaultSyncPath =
+                (await getPrivateSyncPath(polkadotAddress)).path;
+
             const results = [];
 
             for (const file of files) {
                 const fileName = file.actualFileName || file.name;
 
+                // Resolve the correct sync path for this file
+                const syncPath =
+                    (file.label ? pathByLabel.get(file.label) : null) ??
+                    defaultSyncPath;
+
                 try {
                     await invoke("remove_file", {
                         syncPath,
                         name: fileName,
+                        label: file.label ?? null,
                     });
                     results.push({ file, success: true });
                 } catch (error) {
@@ -107,10 +120,21 @@ export const useDeleteFile = ({
                 throw new Error(`Failed to delete some files: ${errorMessages}`);
             }
 
-            // Refetch file listing
-            await queryClient.refetchQueries({
-                queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
-            });
+            // Trigger sync so server picks up the deletion
+            await invoke("trigger_sync_now").catch(() => {});
+
+            // Refetch file listing and recent files.
+            // The Rust remove_file command records "deleted" entries in the
+            // activity ring buffer, so the recent-files query will filter
+            // them out on refetch.
+            await Promise.all([
+                queryClient.refetchQueries({
+                    queryKey: [GET_USER_IPFS_FILES_QUERY_KEY, polkadotAddress],
+                }),
+                queryClient.refetchQueries({
+                    queryKey: ["recent-files"],
+                }),
+            ]);
 
             return results;
         },

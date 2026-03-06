@@ -14,16 +14,22 @@ const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
 }) => {
   if (labels.length < 2) return null;
 
+  const baseStyles = cn(
+    "px-3 py-2 rounded border text-sm font-medium leading-5 transition-colors",
+    "focus:outline-none focus:ring-2 focus:ring-primary-50"
+  );
+
+  const activeStyles = "bg-primary-50 text-white border-primary-50";
+  const inactiveStyles =
+    "bg-grey-100 text-grey-40 border-grey-80 hover:bg-grey-80";
+
   return (
     <div className="flex items-center gap-2 mb-4 flex-wrap">
       <button
         onClick={() => onTabChange(null)}
         className={cn(
-          "px-3 py-1.5 rounded-full text-sm font-medium transition-colors",
-          "border focus:outline-none focus:ring-2 focus:ring-primary-50",
-          selectedTab === null
-            ? "bg-primary-50 text-white border-primary-50"
-            : "bg-grey-100 text-grey-30 border-grey-80 hover:border-primary-60 hover:text-primary-40"
+          baseStyles,
+          selectedTab === null ? activeStyles : inactiveStyles
         )}
       >
         All
@@ -33,11 +39,8 @@ const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
           key={label}
           onClick={() => onTabChange(label)}
           className={cn(
-            "px-3 py-1.5 rounded-full text-sm font-medium transition-colors",
-            "border focus:outline-none focus:ring-2 focus:ring-primary-50",
-            selectedTab === label
-              ? "bg-primary-50 text-white border-primary-50"
-              : "bg-grey-100 text-grey-30 border-grey-80 hover:border-primary-60 hover:text-primary-40"
+            baseStyles,
+            selectedTab === label ? activeStyles : inactiveStyles
           )}
         >
           {label}

@@ -80,8 +80,21 @@ const useRecentFiles = () => {
           return [];
         }
 
-        // Filter out deleted items
-        const nonDeletedItems = items.filter((item) => item.action !== "deleted");
+        // Collect names of files that have been deleted — these should
+        // not appear in recent files even if an older "uploaded" entry
+        // exists. The Rust remove_file command records "deleted" entries
+        // in the activity ring buffer when a label is provided.
+        const deletedNames = new Set(
+          items
+            .filter((item) => item.action === "deleted")
+            .map((item) => `${item.file_name}::${item.label}`)
+        );
+
+        const nonDeletedItems = items.filter(
+          (item) =>
+            item.action !== "deleted" &&
+            !deletedNames.has(`${item.file_name}::${item.label}`)
+        );
 
         if (nonDeletedItems.length === 0) {
           return [];
@@ -113,7 +126,10 @@ const useRecentFiles = () => {
         // Remove duplicates based on name
         const uniqueFiles = formattedFiles.filter(
           (file, index, self) =>
-            index === self.findIndex((f) => f.name === file.name)
+            index ===
+            self.findIndex(
+              (f) => f.name === file.name && f.label === file.label
+            )
         );
 
         // Sort by timestamp (newest first)

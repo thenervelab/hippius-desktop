@@ -2,7 +2,19 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
-import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
+
+async function resolveSyncPath(
+  file: FormattedUserFile,
+  polkadotAddress: string
+): Promise<string> {
+  if (file.label) {
+    const allPaths = await getAllSyncPaths(polkadotAddress);
+    const match = allPaths.find((sp) => sp.label === file.label);
+    if (match?.path) return match.path;
+  }
+  return (await getPrivateSyncPath(polkadotAddress)).path;
+}
 
 const getFileSavePath = async (name: string) => {
   const fileExtension = name.split(".").pop() || "";
@@ -37,7 +49,7 @@ const downloadFileExport = async (
   const toastId = toast.loading(`Preparing download: ${name}`);
 
   try {
-    const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
+    const syncPath = await resolveSyncPath(file, polkadotAddress);
 
     const filePath = await getFileSavePath(name);
     if (!filePath) {
@@ -83,7 +95,7 @@ const downloadFolderExport = async (
       return { success: false, error: "Download cancelled" };
     }
 
-    const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
+    const syncPath = await resolveSyncPath(file, polkadotAddress);
 
     toast.loading(`Exporting folder: ${name}`, { id: toastId });
 

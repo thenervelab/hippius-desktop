@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
+import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
 
 export interface DownloadIpfsFolderOptions {
     folderName: string;
@@ -31,7 +31,14 @@ export const downloadFolder = async ({
     const toastId = toast.info("Downloading folder...", { duration: Infinity });
 
     try {
-        const syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
+        let syncPath: string;
+        if (file?.label) {
+            const allPaths = await getAllSyncPaths(polkadotAddress);
+            const match = allPaths.find((sp) => sp.label === file.label);
+            syncPath = match?.path ?? (await getPrivateSyncPath(polkadotAddress)).path;
+        } else {
+            syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
+        }
         const fileName = file?.actualFileName || folderName;
 
         await invoke("export_file", {

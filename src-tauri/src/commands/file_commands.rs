@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::hcfs_drive::HCFS_DRIVES;
+use crate::sync_shared::{update_state, SyncActivityItem};
 
 #[derive(Serialize)]
 pub struct FileEntry {
@@ -104,12 +105,22 @@ pub async fn add_folder(sync_path: String, folder_path: String) -> Result<String
     Ok(name)
 }
 
-/// Remove file/folder from sync folder
+/// Remove file/folder from sync folder.
+///
+/// When `label` is provided the deletion is recorded in the sync activity
+/// ring buffer so the frontend can immediately filter it from recent files.
 #[tauri::command]
-pub async fn remove_file(sync_path: String, name: String) -> Result<(), String> {
+pub async fn remove_file(sync_path: String, name: String, label: Option<String>) -> Result<(), String> {
     let parent = Path::new(&sync_path);
     let target = parent.join(&name);
     let target = ensure_within(parent, &target)?;
+
+    // Grab size before deleting so the activity entry is meaningful.
+    let size_bytes = if target.is_dir() {
+        0
+    } else {
+        tokio::fs::metadata(&target).await.map(|m| m.len()).unwrap_or(0)
+    };
 
     if target.is_dir() {
         tokio::fs::remove_dir_all(&target)
@@ -120,6 +131,20 @@ pub async fn remove_file(sync_path: String, name: String) -> Result<(), String> 
             .await
             .map_err(|e| format!("Remove failed: {e}"))?;
     }
+
+    // Record "deleted" activity so recent-files filtering works immediately.
+    if let Some(lbl) = label {
+        update_state(&lbl, |state| {
+            state.add_activity(SyncActivityItem {
+                file_name: name.clone(),
+                action: "deleted".to_string(),
+                timestamp: chrono::Utc::now().timestamp(),
+                size_bytes,
+                label: lbl.clone(),
+            });
+        });
+    }
+
     Ok(())
 }
 
