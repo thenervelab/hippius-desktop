@@ -85,7 +85,7 @@ export const useDeleteFile = ({
                 allPaths.map((sp) => [sp.label, sp.path])
             );
             const defaultSyncPath =
-                (await getPrivateSyncPath(polkadotAddress)).path;
+                (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
 
             const results = [];
 

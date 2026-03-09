@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { ensureBillingAuth } from "@/app/lib/hooks/api/useBillingAuth";
+import { getHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
 
 interface PreAuthProviderProps {
     children: React.ReactNode;
@@ -16,7 +17,12 @@ export default function PreAuthProvider({ children }: PreAuthProviderProps) {
         if (isAuthenticated && polkadotAddress && !authInitialized) {
             (async () => {
                 try {
-                    await ensureBillingAuth(polkadotAddress);
+                    // Only attempt billing auth if HCFS config exists
+                    // (mnemonic on disk is needed to sign the challenge)
+                    const config = await getHcfsConfig(polkadotAddress);
+                    if (config.has_password) {
+                        await ensureBillingAuth(polkadotAddress);
+                    }
                 } finally {
                     setAuthInitialized(true);
                 }

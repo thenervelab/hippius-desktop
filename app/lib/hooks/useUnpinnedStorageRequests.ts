@@ -42,10 +42,10 @@ export const useUnpinnedStorageRequests = () => {
       let hasPrivatePath = false;
 
       try {
-        const privatePath = (await getPrivateSyncPath(polkadotAddress)).path;
-        hasPrivatePath = !!privatePath;
+        const result = await getPrivateSyncPath(polkadotAddress);
+        hasPrivatePath = !!result?.path;
       } catch (error) {
-        console.log("No private sync path found", error);
+        console.log("No private sync path found:", error);
         hasPrivatePath = false;
       }
 

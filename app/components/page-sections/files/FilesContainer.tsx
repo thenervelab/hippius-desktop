@@ -392,12 +392,13 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     (async () => {
       try {
         setIsLoadingPrivatePath(true);
-        const privatefolderPath = (await getPrivateSyncPath(
+        const result = await getPrivateSyncPath(
           polkadotAddress || undefined
-        )).path;
-        setSelectedPrivateFolderPath(privatefolderPath);
-      } catch {
-        console.error("Failed to load private sync folder");
+        );
+        setSelectedPrivateFolderPath(result?.path ?? null);
+      } catch (err) {
+        console.error("Failed to load private sync folder:", err);
+        setSelectedPrivateFolderPath(null);
       } finally {
         setIsLoadingPrivatePath(false);
       }
@@ -649,14 +650,14 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       (async () => {
         try {
           setIsLoadingPrivatePath(true);
-          const privatefolderPath = (await getPrivateSyncPath(
+          const result = await getPrivateSyncPath(
             polkadotAddress || undefined
-          )).path;
-          setSelectedPrivateFolderPath(privatefolderPath);
+          );
+          setSelectedPrivateFolderPath(result?.path ?? null);
           // Refetch file list so it reads from the new sync folder
           refetchUserFiles();
-        } catch {
-          console.error("Failed to reload private sync folder");
+        } catch (err) {
+          console.error("Failed to reload private sync folder:", err);
         } finally {
           setIsLoadingPrivatePath(false);
         }

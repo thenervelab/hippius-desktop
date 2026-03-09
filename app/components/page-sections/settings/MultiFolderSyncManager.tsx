@@ -79,6 +79,7 @@ export default function MultiFolderSyncManager() {
           folderName: r.label,
           deviceName: "Other Device",
           fileCount: r.file_count,
+          totalBytes: r.total_bytes,
           lastModified: (r.updated_at || r.created_at) * 1000,
         }))
         .sort((a, b) => b.lastModified - a.lastModified);

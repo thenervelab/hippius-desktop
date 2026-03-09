@@ -5,8 +5,8 @@ import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
-import useUserFiles from "@/app/lib/hooks/use-user-files";
 import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
+import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
 import { toast } from "sonner";
@@ -27,9 +27,9 @@ export default function DetailList() {
   } = useUserCredits();
 
   const {
-    data: userFilesData,
-    isLoading: isUserFilesLoading,
-  } = useUserFiles();
+    data: remoteStats,
+    isLoading: isRemoteStatsLoading,
+  } = useRemoteStorageStats();
 
   // Fetch marketplace credits for Total Credits Used (all-time)
   const { data: marketplaceCredits, isLoading: isLoadingMarketplaceCredits } =
@@ -121,15 +121,9 @@ export default function DetailList() {
     return "≈0 GB/mo Storage";
   };
 
-  // Helper functions for file data - count only private files from local sync folder
   const getTotalFiles = () => {
-    if (isUserFilesLoading) return "Loading...";
-    if (!userFilesData?.files) return 0;
-    // Filter for private files only (matching FilesContainer logic)
-    const privateFiles = userFilesData.files.filter(
-      (file) => file.type?.toLowerCase() === "private"
-    );
-    return privateFiles.length;
+    if (isRemoteStatsLoading) return "Loading...";
+    return remoteStats?.totalFiles ?? 0;
   };
 
   // Calculate all-time Total Credits Used from marketplace credits
@@ -144,12 +138,11 @@ export default function DetailList() {
     return allTimeTotal.toFixed(6);
   }, [transformedCreditsData, isLoadingMarketplaceCredits]);
 
-  // Calculate Total Storage Used from local sync folder data
   const getTotalStorageUsed = useMemo(() => {
-    if (isUserFilesLoading) return "Loading...";
-    if (!userFilesData?.privateStorageSize) return "0 B";
-    return formatBytes(Number(userFilesData.privateStorageSize), 2);
-  }, [userFilesData, isUserFilesLoading]);
+    if (isRemoteStatsLoading) return "Loading...";
+    if (!remoteStats?.totalBytes) return "0 B";
+    return formatBytes(remoteStats.totalBytes, 2);
+  }, [remoteStats, isRemoteStatsLoading]);
 
 
 
@@ -172,8 +165,8 @@ export default function DetailList() {
       title: "Total Files",
       value: getTotalFiles(),
       showRefresh: false,
-      isLoading: isUserFilesLoading,
-      info: "Total number of files synced using the Hippius desktop app. This does not include files from other buckets or console uploads.",
+      isLoading: isRemoteStatsLoading,
+      info: "Total number of files stored across all your sync folders on the Hippius network.",
     },
     {
       id: "total-credits-used",
@@ -190,8 +183,8 @@ export default function DetailList() {
       title: "Total Storage Used",
       value: getTotalStorageUsed,
       showRefresh: false,
-      isLoading: isUserFilesLoading,
-      info: "Total storage space used across all synced files.",
+      isLoading: isRemoteStatsLoading,
+      info: "Total storage space used across all your sync folders on the Hippius network.",
     },
   ];
 

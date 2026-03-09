@@ -184,14 +184,14 @@ export async function tryAutoInitSync(
     try {
       syncPaths = await getAllSyncPaths(accountId);
     } catch {
-      // No sync paths configured yet — try legacy single path
-      try {
-        const legacy = await getPrivateSyncPath(accountId);
-        if (legacy.path) {
-          syncPaths = [{ path: legacy.path, label: legacy.label || "default" }];
-        }
-      } catch {
-        // No sync path configured at all
+      // No sync paths table or DB not ready yet
+    }
+
+    // Fallback: check legacy single-path config
+    if (syncPaths.length === 0) {
+      const legacy = await getPrivateSyncPath(accountId);
+      if (legacy?.path) {
+        syncPaths = [{ path: legacy.path, label: legacy.label || "default" }];
       }
     }
 

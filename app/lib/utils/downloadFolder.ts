@@ -35,9 +35,9 @@ export const downloadFolder = async ({
         if (file?.label) {
             const allPaths = await getAllSyncPaths(polkadotAddress);
             const match = allPaths.find((sp) => sp.label === file.label);
-            syncPath = match?.path ?? (await getPrivateSyncPath(polkadotAddress)).path;
+            syncPath = match?.path ?? (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
         } else {
-            syncPath = (await getPrivateSyncPath(polkadotAddress)).path;
+            syncPath = (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
         }
         const fileName = file?.actualFileName || folderName;
 

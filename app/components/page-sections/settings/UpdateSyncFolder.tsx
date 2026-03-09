@@ -62,13 +62,13 @@ const UpdateSyncFolder: React.FC = () => {
   useEffect(() => {
     (async () => {
       try {
-        const privatefolderPath = (await getPrivateSyncPath(polkadotAddress ?? undefined)).path;
+        const privatefolderPath = (await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "";
         setSelectedPrivateFolderPath(privatefolderPath);
         setSelectedPrivateFolderName(
           privatefolderPath.split(/[\\\/]/).pop() || ""
         );
-      } catch {
-        console.error("Failed to load sync folder");
+      } catch (err) {
+        console.error("Failed to load sync folder:", err);
       }
     })();
 

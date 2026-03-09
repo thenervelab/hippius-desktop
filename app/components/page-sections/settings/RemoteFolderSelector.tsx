@@ -5,10 +5,11 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Icons, AbstractIconWrapper } from "@/components/ui";
 import { toast } from "sonner";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { X, CloudDownload, Folder, Monitor, Clock } from "lucide-react";
+import { X, CloudDownload, Folder, Monitor, Clock, HardDrive } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils/formatBytes";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
 import { restoreRemoteFolders } from "@/app/lib/utils/restoreUtils";
 import { getHcfsConfig, saveHcfsConfig } from "@/app/lib/utils/hcfsConfigUtils";
@@ -270,6 +271,10 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
                               <span className="flex items-center gap-1">
                                 <Icons.File2 className="size-3" />
                                 {folder.fileCount} {folder.fileCount === 1 ? 'file' : 'files'}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <HardDrive className="size-3" />
+                                {formatBytes(folder.totalBytes)}
                               </span>
                               <span className="flex items-center gap-1">
                                 <Clock className="size-3" />

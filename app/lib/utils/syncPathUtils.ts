@@ -5,15 +5,19 @@ export interface SyncPathResult {
     label: string;
 }
 
-export async function getPrivateSyncPath(accountId?: string): Promise<SyncPathResult> {
+export async function getPrivateSyncPath(accountId?: string): Promise<SyncPathResult | null> {
     try {
         const result = await invoke<{ path: string; label: string }>("get_sync_path", {
             params: { isPublic: false, accountId },
         });
         return { path: result.path, label: result.label };
     } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (msg.includes("not set yet")) {
+            return null;
+        }
         console.error("Error fetching sync path:", error);
-        throw new Error(error instanceof Error ? error.message : `${error}`);
+        throw new Error(msg);
     }
 }
 

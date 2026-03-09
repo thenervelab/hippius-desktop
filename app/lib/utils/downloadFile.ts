@@ -13,7 +13,7 @@ async function resolveSyncPath(
     const match = allPaths.find((sp) => sp.label === file.label);
     if (match?.path) return match.path;
   }
-  return (await getPrivateSyncPath(polkadotAddress)).path;
+  return (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
 }
 
 const getFileSavePath = async (name: string) => {

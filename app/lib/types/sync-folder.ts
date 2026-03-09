@@ -18,4 +18,5 @@ export interface RemoteFolder {
   deviceName: string;
   lastModified: number;
   fileCount: number;
+  totalBytes: number;
 }
