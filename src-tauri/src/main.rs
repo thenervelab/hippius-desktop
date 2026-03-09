@@ -28,7 +28,7 @@ use crate::commands::syncing::{
     stop_drive, stop_sync, trigger_sync_now,
 };
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
-use crate::sync_shared::{app_close, get_sync_activity, get_sync_status};
+use crate::sync_shared::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
 use crate::user_profile_sync::{
     get_user_synced_files, get_user_total_file_size, list_folder_contents,
 };
@@ -113,6 +113,7 @@ fn main() {
             // Sync status
             get_sync_status,
             get_sync_activity,
+            get_sync_engine_health,
             // File operations
             add_file,
             add_folder,

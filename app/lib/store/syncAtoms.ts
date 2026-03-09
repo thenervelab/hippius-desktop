@@ -76,3 +76,43 @@ export const syncActionCountsAtom = atom<SyncActionCounts>({
   localDeletes: 0,
   remoteDeletes: 0,
 });
+
+// Connectivity health state from periodic backend health checks
+export type ConnectivityStatusType =
+  | "connected"
+  | "server_unreachable"
+  | "network_offline"
+  | "auth_expired"
+  | "degraded";
+
+export interface SyncEngineHealthState {
+  status: ConnectivityStatusType;
+  last_check_time: number | null;
+  last_successful_check: number | null;
+  consecutive_failures: number;
+  server_version: string | null;
+  error_message: string | null;
+}
+
+export const CONNECTIVITY_STATUS_LABELS: Record<
+  Exclude<ConnectivityStatusType, "connected">,
+  string
+> = {
+  network_offline: "Offline",
+  server_unreachable: "Server Unreachable",
+  auth_expired: "Session Expired",
+  degraded: "Connection Issues",
+};
+
+export const DEFAULT_SYNC_ENGINE_HEALTH: SyncEngineHealthState = {
+  status: "connected",
+  last_check_time: null,
+  last_successful_check: null,
+  consecutive_failures: 0,
+  server_version: null,
+  error_message: null,
+};
+
+export const syncEngineHealthAtom = atom<SyncEngineHealthState>(
+  DEFAULT_SYNC_ENGINE_HEALTH
+);

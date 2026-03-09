@@ -3,6 +3,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useSetAtom } from "jotai";
+import { invoke } from "@tauri-apps/api/core";
 import {
   isSyncingAtom,
   uploadProgressAtom,
@@ -13,7 +14,10 @@ import {
   completedFilesCountAtom,
   totalFilesToSyncAtom,
   syncActionCountsAtom,
+  syncEngineHealthAtom,
+  DEFAULT_SYNC_ENGINE_HEALTH,
   type SyncProgressPayload,
+  type SyncEngineHealthState,
 } from "../store/syncAtoms";
 import {
   startSession,
@@ -113,6 +117,9 @@ export function useSyncEvents() {
   // Atom to track that sync is configured (so SyncStoppedAlert knows to show)
   const setIsSyncConfiguredAtom = useSetAtom(isSyncConfiguredAtom);
 
+  // Connectivity health atom
+  const setSyncEngineHealthAtom = useSetAtom(syncEngineHealthAtom);
+
   /**
    * Refresh atoms from localStorage service
    */
@@ -134,7 +141,18 @@ export function useSyncEvents() {
     
     // Initial state refresh
     refreshProgressState();
-    
+
+    // Query current health state on mount (backend may already be running)
+    invoke<SyncEngineHealthState>("get_sync_engine_health")
+      .then((health) => {
+        if (!cancelled) {
+          setSyncEngineHealthAtom(health);
+        }
+      })
+      .catch((err) => {
+        console.warn("[SyncEvents] Failed to get initial health state:", err);
+      });
+
     // Setup periodic cleanup for expired files (every minute)
     cleanupIntervalRef.current = setInterval(() => {
       const removed = cleanupExpiredFiles();
@@ -362,13 +380,17 @@ export function useSyncEvents() {
             // Don't set sync percent from individual file progress - it causes flickering
             // setSyncPercentAtom(percent);
           }),
+          listen<SyncEngineHealthState>("hcfs_connectivity_changed", (e) => {
+            console.log("[SyncEvents] Connectivity changed:", e.payload);
+            setSyncEngineHealthAtom(e.payload);
+          }),
           listen("hcfs_sync_stopped", () => {
             console.log("[SyncEvents] Sync stopped - resetting all state");
-            
+
             // Stop session in localStorage service
             stopSession();
             refreshProgressState();
-            
+
             // Reset completed files tracking
             completedFilesRef.current.clear();
             setCompletedFilesCountAtom(0);
@@ -385,6 +407,8 @@ export function useSyncEvents() {
             setDownloadProgressAtom(null);
             setLastSyncErrorAtom(null);
             setSyncPercentAtom(null);
+            // Reset connectivity health to connected (sync is stopped, not offline)
+            setSyncEngineHealthAtom(DEFAULT_SYNC_ENGINE_HEALTH);
           }),
         ]);
         if (cancelled) {
@@ -406,7 +430,7 @@ export function useSyncEvents() {
         cleanupIntervalRef.current = null;
       }
     };
-  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setHasSyncErrorAtom, setSyncPercentAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, setSyncActionCountsAtom, setIsSyncConfiguredAtom, refreshProgressState]);
+  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setHasSyncErrorAtom, setSyncPercentAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, setSyncActionCountsAtom, setIsSyncConfiguredAtom, setSyncEngineHealthAtom, refreshProgressState]);
 
   return {
     isSyncing,

@@ -15,6 +15,68 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Wry};
 
+// === Connectivity Health ===
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectivityStatus {
+    Connected,
+    ServerUnreachable,
+    NetworkOffline,
+    AuthExpired,
+    Degraded,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SyncEngineHealth {
+    pub status: ConnectivityStatus,
+    pub last_check_time: Option<i64>,
+    pub last_successful_check: Option<i64>,
+    pub consecutive_failures: u32,
+    pub server_version: Option<String>,
+    pub error_message: Option<String>,
+}
+
+impl Default for SyncEngineHealth {
+    fn default() -> Self {
+        Self {
+            status: ConnectivityStatus::Connected,
+            last_check_time: None,
+            last_successful_check: None,
+            consecutive_failures: 0,
+            server_version: None,
+            error_message: None,
+        }
+    }
+}
+
+pub static SYNC_ENGINE_HEALTH: Lazy<Arc<Mutex<SyncEngineHealth>>> =
+    Lazy::new(|| Arc::new(Mutex::new(SyncEngineHealth::default())));
+
+pub fn get_health() -> SyncEngineHealth {
+    SYNC_ENGINE_HEALTH
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+pub fn update_health<F>(f: F)
+where
+    F: FnOnce(&mut SyncEngineHealth),
+{
+    let mut health = SYNC_ENGINE_HEALTH
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    f(&mut health);
+}
+
+pub fn reset_health() {
+    let mut health = SYNC_ENGINE_HEALTH
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *health = SyncEngineHealth::default();
+}
+
 // === Cancellation ===
 
 /// Global cancellation flag. Set to `true` to signal the sync loop to exit.
@@ -253,6 +315,11 @@ pub fn get_sync_activity(limit: Option<usize>, label: Option<String>) -> Vec<Syn
         all.truncate(max);
         all
     }
+}
+
+#[tauri::command]
+pub fn get_sync_engine_health() -> SyncEngineHealth {
+    get_health()
 }
 
 #[tauri::command]

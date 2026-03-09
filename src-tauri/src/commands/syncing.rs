@@ -18,7 +18,7 @@ use crate::hcfs_drive::{
 use crate::sync_shared::{
     SyncActivityItem, add_pending_activity, clear_cancel, discard_all_pending_activity,
     discard_pending_activity_for_label, remove_state, request_cancel, reset_all_states,
-    update_state,
+    reset_health, update_state,
 };
 use crate::utils::account_key::account_key;
 use crate::utils::objectstore_tokens::get_temp_auth_key;
@@ -944,6 +944,7 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
     guard.clear();
     SYNC_REVIEW_MODE.store(false, Ordering::Release);
     reset_all_states();
+    reset_health();
     discard_all_pending_activity();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)

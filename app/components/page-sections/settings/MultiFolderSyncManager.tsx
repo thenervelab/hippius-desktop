@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Icons } from "@/components/ui";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "sonner";
@@ -29,6 +30,7 @@ import {
   listRemoteFolders,
   deleteRemoteFolder,
 } from "@/app/lib/utils/restoreUtils";
+import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
 
 type ConfirmType =
   | "pause"
@@ -39,6 +41,7 @@ type ConfirmType =
 
 export default function MultiFolderSyncManager() {
   const { polkadotAddress } = useWalletAuth();
+  const queryClient = useQueryClient();
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -111,6 +114,13 @@ export default function MultiFolderSyncManager() {
     loadFolders();
   }, [loadFolders]);
 
+  const refreshFoldersAndStats = useCallback(() => {
+    loadFolders();
+    queryClient.invalidateQueries({
+      queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
+    });
+  }, [loadFolders, queryClient]);
+
   const openConfirmDialog = (
     type: ConfirmType,
     folderId: string,
@@ -147,7 +157,7 @@ export default function MultiFolderSyncManager() {
           toast.info("Resume sync is not yet supported.");
           break;
       }
-      loadFolders();
+      refreshFoldersAndStats();
     } catch (error) {
       console.error(`Failed to ${type} folder:`, error);
       toast.error(`Failed to ${type} folder`);
@@ -522,13 +532,13 @@ export default function MultiFolderSyncManager() {
       <AddLocalFolderDialog
         open={showAddDialog}
         onClose={() => setShowAddDialog(false)}
-        onSuccess={loadFolders}
+        onSuccess={refreshFoldersAndStats}
       />
       <RemoteFolderSelector
         open={showRemoteDialog}
         onClose={() => setShowRemoteDialog(false)}
         remoteFolders={remoteFolders}
-        onSuccess={loadFolders}
+        onSuccess={refreshFoldersAndStats}
       />
       <ConfirmDialog
         open={confirmDialog.open}

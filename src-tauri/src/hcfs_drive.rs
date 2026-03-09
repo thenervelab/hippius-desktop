@@ -16,8 +16,9 @@
 //! - `SYNC_IN_PROGRESS` — suppresses file watcher during active sync
 
 use crate::sync_shared::{
-    SyncActivityItem, add_pending_activity, commit_pending_activity_for_label,
-    discard_pending_activity_for_label, is_cancelled, update_state,
+    ConnectivityStatus, SyncActivityItem, SyncEngineHealth, add_pending_activity,
+    commit_pending_activity_for_label, discard_pending_activity_for_label, get_health, is_cancelled,
+    update_state,
 };
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::drive::Drive;
@@ -397,6 +398,181 @@ pub static HCFS_DRIVES: Lazy<Arc<Mutex<HashMap<String, HcfsDriveManager>>>> =
 pub static SYNC_LOOP_HANDLE: Lazy<Arc<Mutex<Option<JoinHandle<()>>>>> =
     Lazy::new(|| Arc::new(Mutex::new(None)));
 
+/// Number of consecutive health check failures before alerting the user.
+/// Auth expired (401/403) bypasses this and alerts immediately.
+const HEALTH_FAILURE_THRESHOLD: u32 = 2;
+
+/// Timeout for the health check HTTP request.
+const HEALTH_CHECK_TIMEOUT_SECS: u64 = 10;
+
+/// Shared HTTP client for health checks (reuses connection pool across calls).
+static HEALTH_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(HEALTH_CHECK_TIMEOUT_SECS))
+        .build()
+        .expect("Failed to build health check HTTP client")
+});
+
+/// Run a health check against the HCFS server's `/health` endpoint.
+///
+/// Classifies the result into a `ConnectivityStatus`, updates the global
+/// `SYNC_ENGINE_HEALTH`, and emits `hcfs_connectivity_changed` when the
+/// status transitions. Returns the new status.
+async fn check_server_health(app: &AppHandle) -> ConnectivityStatus {
+    let server_url: Option<String> = {
+        let guard = HCFS_DRIVES.lock().await;
+        guard
+            .values()
+            .find_map(|m| m.client_config.as_ref().map(|c| c.base_url.clone()))
+    };
+
+    let Some(server_url) = server_url else {
+        return ConnectivityStatus::Connected;
+    };
+
+    let health_url = format!("{}/health", server_url);
+    let now = chrono::Utc::now().timestamp();
+
+    let result = HEALTH_CLIENT
+        .get(&health_url)
+        .header("X-API-Key", "Arion")
+        .send()
+        .await;
+
+    match result {
+        Ok(resp) => {
+            let status_code = resp.status().as_u16();
+            match status_code {
+                200 => {
+                    let version = resp
+                        .json::<serde_json::Value>()
+                        .await
+                        .ok()
+                        .and_then(|v| v.get("version").and_then(|s| s.as_str()).map(String::from));
+                    record_health_success(app, version, now)
+                }
+                401 | 403 => {
+                    let msg = format!("Auth failed (HTTP {})", status_code);
+                    println!("[Health] {}", msg);
+                    record_health_failure(app, ConnectivityStatus::AuthExpired, msg, now)
+                }
+                _ => {
+                    let msg = format!("Server returned HTTP {}", status_code);
+                    println!("[Health] {}", msg);
+                    record_health_failure(app, ConnectivityStatus::Degraded, msg, now)
+                }
+            }
+        }
+        Err(e) => {
+            let (status, msg) = classify_request_error(&e);
+            println!("[Health] Check failed: {}", msg);
+            record_health_failure(app, status, msg, now)
+        }
+    }
+}
+
+/// Classify a reqwest error into a connectivity status.
+fn classify_request_error(e: &reqwest::Error) -> (ConnectivityStatus, String) {
+    let msg = format!("{e}");
+    if e.is_timeout() {
+        (ConnectivityStatus::Degraded, format!("Request timed out: {msg}"))
+    } else if e.is_connect() {
+        if msg.contains("dns") || msg.contains("resolve") || msg.contains("lookup") {
+            (ConnectivityStatus::NetworkOffline, format!("DNS resolution failed: {msg}"))
+        } else {
+            (ConnectivityStatus::ServerUnreachable, format!("Connection failed: {msg}"))
+        }
+    } else if e.is_request() {
+        (ConnectivityStatus::NetworkOffline, format!("Request failed: {msg}"))
+    } else {
+        (ConnectivityStatus::ServerUnreachable, format!("Unknown error: {msg}"))
+    }
+}
+
+/// Record a successful health check. Emits event if status was previously unhealthy.
+fn record_health_success(
+    app: &AppHandle,
+    version: Option<String>,
+    now: i64,
+) -> ConnectivityStatus {
+    let should_emit = update_health_atomic(|h| {
+        let was_unhealthy = h.status != ConnectivityStatus::Connected;
+        if was_unhealthy {
+            println!("[Health] Connection restored (was {:?})", h.status);
+        }
+        h.status = ConnectivityStatus::Connected;
+        h.last_check_time = Some(now);
+        h.last_successful_check = Some(now);
+        h.consecutive_failures = 0;
+        h.server_version = version;
+        h.error_message = None;
+        was_unhealthy
+    });
+    if should_emit {
+        emit_health_event(app);
+    }
+    ConnectivityStatus::Connected
+}
+
+/// Record a failed health check. Emits event based on threshold rules.
+fn record_health_failure(
+    app: &AppHandle,
+    new_status: ConnectivityStatus,
+    error_msg: String,
+    now: i64,
+) -> ConnectivityStatus {
+    let should_emit = update_health_atomic(|h| {
+        let previous_status = h.status.clone();
+        let new_failures = h.consecutive_failures + 1;
+        h.status = new_status.clone();
+        h.last_check_time = Some(now);
+        h.consecutive_failures = new_failures;
+        h.error_message = Some(error_msg);
+
+        match &new_status {
+            ConnectivityStatus::AuthExpired => true,
+            _ => new_failures >= HEALTH_FAILURE_THRESHOLD
+                && (previous_status == ConnectivityStatus::Connected
+                    || previous_status != new_status),
+        }
+    });
+
+    if should_emit {
+        emit_health_event(app);
+    }
+
+    new_status
+}
+
+/// Atomically update health state and return a computed value under the lock.
+fn update_health_atomic<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut SyncEngineHealth) -> R,
+{
+    let mut health = crate::sync_shared::SYNC_ENGINE_HEALTH
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    f(&mut health)
+}
+
+/// Emit the current health state to the frontend.
+fn emit_health_event(app: &AppHandle) {
+    let health = get_health();
+    println!(
+        "[Health] Emitting connectivity change: {:?} (failures={})",
+        health.status, health.consecutive_failures
+    );
+    let _ = app.emit("hcfs_connectivity_changed", &health);
+}
+
+/// Check if sync should be skipped based on health status.
+fn should_skip_sync(status: &ConnectivityStatus) -> bool {
+    matches!(status, ConnectivityStatus::AuthExpired)
+        || (!matches!(status, ConnectivityStatus::Connected)
+            && get_health().consecutive_failures >= HEALTH_FAILURE_THRESHOLD)
+}
+
 /// Heartbeat interval: sync every 30 seconds regardless of local changes
 const HEARTBEAT_SECS: u64 = 30;
 
@@ -459,6 +635,7 @@ pub async fn start_sync_loop(app: AppHandle) {
             let handle = tokio::spawn(async move {
                 // Initial sync on startup
                 println!("[Sync] Running initial sync (no file watcher)...");
+                check_server_health(&app).await;
                 trigger_sync(&app).await;
 
                 let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
@@ -467,7 +644,15 @@ pub async fn start_sync_loop(app: AppHandle) {
                     if is_cancelled() {
                         break;
                     }
-                    trigger_sync(&app).await;
+                    let health_status = check_server_health(&app).await;
+                    if should_skip_sync(&health_status) {
+                        println!(
+                            "[Sync] Skipping sync due to connectivity: {:?}",
+                            health_status
+                        );
+                    } else {
+                        trigger_sync(&app).await;
+                    }
                 }
                 println!("[Sync] Sync loop exited (no file watcher)");
             });
@@ -500,6 +685,7 @@ pub async fn start_sync_loop(app: AppHandle) {
 
         // Initial sync on startup — sync all drives
         println!("[Sync] Running initial sync...");
+        check_server_health(&app).await;
         trigger_sync(&app).await;
 
         let mut debounce = tokio::time::interval(Duration::from_secs(DEBOUNCE_SECS));
@@ -519,6 +705,19 @@ pub async fn start_sync_loop(app: AppHandle) {
                 _ = debounce.tick() => {
                     let heartbeat_due = last_sync.elapsed() >= Duration::from_secs(HEARTBEAT_SECS);
                     if has_changes || heartbeat_due {
+                        // Run health check on heartbeat ticks
+                        if heartbeat_due {
+                            let health_status = check_server_health(&app).await;
+                            if should_skip_sync(&health_status) {
+                                println!(
+                                    "[Sync] Skipping sync due to connectivity: {:?}",
+                                    health_status
+                                );
+                                last_sync = Instant::now();
+                                continue;
+                            }
+                        }
+
                         // Only clear has_changes if sync actually ran (not skipped)
                         let sync_ran = trigger_sync(&app).await;
                         if sync_ran {

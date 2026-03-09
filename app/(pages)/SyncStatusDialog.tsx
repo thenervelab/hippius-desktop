@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { Graphsheet } from "@/components/ui";
 import * as Icons from "@/components/ui/icons";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useAtomValue } from "jotai";
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
 import {
   cn,
@@ -15,6 +16,7 @@ import InfoTooltip from "@/components/ui/info-tooltip";
 import { SyncActivityRow } from "@/lib/hooks/useSyncActivity";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { getFileIcon } from "../lib/utils/fileTypeUtils";
+import { syncEngineHealthAtom, CONNECTIVITY_STATUS_LABELS } from "../lib/store/syncAtoms";
 
 const COLLAPSED_HEIGHT = 64;
 const EXPANDED_HEIGHT = 460;
@@ -61,6 +63,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 }) => {
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const engineHealth = useAtomValue(syncEngineHealthAtom);
+  const isUnhealthy = engineHealth.status !== "connected";
 
   // Extract current file being transferred from progress
   const activeTransfer = uploadProgress || downloadProgress;
@@ -245,7 +249,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               )}
             >
               <span className="text-base font-medium text-grey-10">
-                {isCompleted ? "Sync Complete" : "File Sync"}
+                {isUnhealthy
+                  ? CONNECTIVITY_STATUS_LABELS[engineHealth.status as keyof typeof CONNECTIVITY_STATUS_LABELS]
+                  : isCompleted
+                    ? "Sync Complete"
+                    : "File Sync"}
               </span>
               <InfoTooltip className="ml-2">
                 {isCompleted
@@ -262,11 +270,13 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             )}
           >
             <span className="text-sm text-grey-40 mr-2">
-              {isCompleted 
-                ? "Complete" 
-                : percentage !== null 
-                  ? `${percentage}%`
-                  : "Syncing..."
+              {isUnhealthy
+                ? "Disconnected"
+                : isCompleted
+                  ? "Complete"
+                  : percentage !== null
+                    ? `${percentage}%`
+                    : "Syncing..."
               }
             </span>
 

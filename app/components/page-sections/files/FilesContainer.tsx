@@ -44,6 +44,7 @@ import {
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import { SyncStoppedAlert } from "@/components/ui/SyncStoppedAlert";
+import { SyncConnectivityAlert } from "@/components/ui/SyncConnectivityAlert";
 import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 import { MnemonicBackupDialog } from "../settings/MnemonicBackupDialog";
 import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
@@ -760,8 +761,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
             </div>
           )}
 
-          {/* Sync Stopped Alert */}
-          <div className="mb-4">
+          {/* Sync connectivity and stopped alerts */}
+          <div className="mb-4 space-y-2">
+            <SyncConnectivityAlert variant={isRecentFiles ? "compact" : "banner"} />
             <SyncStoppedAlert variant={isRecentFiles ? "compact" : "banner"} />
           </div>
 
