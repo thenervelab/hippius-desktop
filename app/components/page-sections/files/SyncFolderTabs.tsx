@@ -15,16 +15,16 @@ const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
   if (labels.length < 2) return null;
 
   const baseStyles = cn(
-    "px-3 py-2 rounded border text-sm font-medium leading-5 transition-colors",
-    "focus:outline-none focus:ring-2 focus:ring-primary-50"
+    "px-4 py-2.5 rounded-lg border text-sm font-medium leading-5 transition-all shadow-sm",
+    "focus:outline-none focus:ring-2 focus:ring-primary-50 focus:ring-offset-2"
   );
 
-  const activeStyles = "bg-primary-50 text-white border-primary-50";
+  const activeStyles = "bg-primary-50 text-white border-primary-50 shadow-md";
   const inactiveStyles =
-    "bg-grey-100 text-grey-40 border-grey-80 hover:bg-grey-80";
+    "bg-white text-grey-40 border-grey-80 hover:bg-grey-95 hover:border-grey-70";
 
   return (
-    <div className="flex items-center gap-2 mb-4 flex-wrap">
+    <div className="flex items-center gap-2 mt-6 mb-5 flex-wrap">
       <button
         onClick={() => onTabChange(null)}
         className={cn(

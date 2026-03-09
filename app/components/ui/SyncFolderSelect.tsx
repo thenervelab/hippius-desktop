@@ -4,7 +4,8 @@ import { FC, useEffect, useState } from "react";
 import { getAllSyncPaths, SyncPathResult } from "@/lib/utils/syncPathUtils";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
-import { ChevronDown } from "lucide-react";
+import * as RadixSelect from "@radix-ui/react-select";
+import { Icons } from "@/components/ui";
 
 interface SyncFolderSelectProps {
   value: string | null;
@@ -53,32 +54,55 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
       <label className="text-sm font-medium text-grey-50">
         Upload to folder
       </label>
-      <div className="relative">
-        <select
-          value={value ?? ""}
-          onChange={(e) => {
-            const selected = syncPaths.find(
-              (sp) => sp.label === e.target.value
-            );
-            if (selected) {
-              onChange(selected.label, selected.path);
-            }
-          }}
+      <RadixSelect.Root
+        value={value ?? ""}
+        onValueChange={(val) => {
+          const selected = syncPaths.find((sp) => sp.label === val);
+          if (selected) {
+            onChange(selected.label, selected.path);
+          }
+        }}
+      >
+        <RadixSelect.Trigger
           className={cn(
-            "w-full appearance-none rounded-lg border border-grey-80 bg-white",
-            "px-3 py-2 pr-8 text-sm text-grey-20 font-medium",
-            "focus:outline-none focus:ring-2 focus:ring-primary-50",
-            "cursor-pointer hover:border-primary-60 transition-colors"
+            "flex justify-between cursor-pointer group items-center gap-2 px-3 py-2 h-10 text-sm font-medium border border-grey-80 rounded text-grey-10 bg-white focus:outline-none focus:ring-2 focus:ring-primary-50 hover:border-primary-60 transition-colors w-full",
           )}
+          aria-label="Upload to folder"
         >
-          {syncPaths.map((sp) => (
-            <option key={sp.label} value={sp.label}>
-              {sp.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 size-4 text-grey-60 pointer-events-none" />
-      </div>
+          <RadixSelect.Value placeholder="Select folder" />
+          <RadixSelect.Icon className="h-4 w-4 text-grey-40">
+            <Icons.ChevronDown className="transition-transform duration-200 group-data-[state=open]:rotate-180" />
+          </RadixSelect.Icon>
+        </RadixSelect.Trigger>
+
+        <RadixSelect.Portal>
+          <RadixSelect.Content
+            side="bottom"
+            position="popper"
+            sideOffset={4}
+            avoidCollisions={true}
+            className="mt-1 overflow-hidden rounded-md bg-white shadow-lg border border-grey-80 z-[100] w-[var(--radix-select-trigger-width)]"
+          >
+            <RadixSelect.Viewport className="py-1 max-h-60 overflow-auto">
+              {syncPaths.map((sp) => {
+                const isSelected = sp.label === value;
+                return (
+                  <RadixSelect.Item
+                    key={sp.label}
+                    value={sp.label}
+                    className={cn(
+                      "flex items-center px-3 py-2 text-sm cursor-pointer text-grey-10 hover:bg-grey-95 focus:bg-grey-95 transition-colors duration-150 focus:outline-none select-none data-[highlighted]:bg-grey-95",
+                      isSelected ? "bg-grey-95 font-medium" : "bg-white",
+                    )}
+                  >
+                    <RadixSelect.ItemText>{sp.label}</RadixSelect.ItemText>
+                  </RadixSelect.Item>
+                );
+              })}
+            </RadixSelect.Viewport>
+          </RadixSelect.Content>
+        </RadixSelect.Portal>
+      </RadixSelect.Root>
     </div>
   );
 };

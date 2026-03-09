@@ -99,7 +99,7 @@ function generateSessionId(): string {
  * Check if a filename looks like an encrypted file ID from the server
  * These have patterns like "file_b795e4f6669a9c22" or hex-only names
  */
-function isEncryptedFileId(fileName: string): boolean {
+export function isEncryptedFileId(fileName: string): boolean {
   // Pattern 1: Starts with "file_" followed by hex characters
   if (/^file_[a-f0-9]+$/i.test(fileName)) {
     return true;

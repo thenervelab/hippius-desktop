@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { getAllSyncPaths, SyncPathResult } from "@/lib/utils/syncPathUtils";
+import { isEncryptedFileId } from "@/lib/services/syncProgressService";
 
 export type FileDetail = {
   filename: string;
@@ -124,9 +125,15 @@ export const useUserFiles = () => {
 
             for (const entry of entries) {
               const modifiedMs = (entry.modified ?? 0) * 1000;
+              
+              // Check if this is an encrypted file name and provide friendly display name
+              const displayName = isEncryptedFileId(entry.name) 
+                ? "Encrypted file" 
+                : entry.name;
+              
               allFiles.push({
-                name: entry.name,
-                actualFileName: entry.name,
+                name: displayName,
+                actualFileName: entry.name, // Keep original name for backend operations
                 size: entry.size,
                 createdAt: modifiedMs,
                 cid: "",

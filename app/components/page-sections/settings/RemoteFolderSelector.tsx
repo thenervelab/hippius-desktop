@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { CardButton, Icons } from "@/components/ui";
+import { Icons, AbstractIconWrapper } from "@/components/ui";
 import { toast } from "sonner";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { X, CloudDownload, Folder, Monitor, Clock } from "lucide-react";
@@ -186,9 +186,9 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
         <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto z-50">
           <div className="flex items-start justify-between mb-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-primary-95 rounded-lg">
-                <CloudDownload className="size-5 text-primary-50" />
-              </div>
+              <AbstractIconWrapper className="size-10 relative">
+                <CloudDownload className="absolute size-5 text-primary-50" />
+              </AbstractIconWrapper>
               <div>
                 <Dialog.Title className="text-lg font-semibold text-grey-10">
                   Sync Remote Folder
@@ -222,7 +222,23 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2 max-h-64 overflow-y-auto">
+                <div className="space-y-2 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+                  <style jsx>{`
+                    .custom-scrollbar::-webkit-scrollbar {
+                      width: 6px;
+                    }
+                    .custom-scrollbar::-webkit-scrollbar-track {
+                      background: #f5f5f5;
+                      border-radius: 4px;
+                    }
+                    .custom-scrollbar::-webkit-scrollbar-thumb {
+                      background: #999;
+                      border-radius: 4px;
+                    }
+                    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+                      background: #888;
+                    }
+                  `}</style>
                   {remoteFolders.map((folder) => {
                     const isSelected =
                       selectedFolder?.folderName === folder.folderName;
@@ -253,7 +269,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
                               </span>
                               <span className="flex items-center gap-1">
                                 <Icons.File2 className="size-3" />
-                                {folder.fileCount} files
+                                {folder.fileCount} {folder.fileCount === 1 ? 'file' : 'files'}
                               </span>
                               <span className="flex items-center gap-1">
                                 <Clock className="size-3" />
@@ -284,33 +300,36 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
                 </label>
                 {localPath ? (
                   <div className="p-4 border border-grey-80 rounded-lg bg-grey-98">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Folder className="size-4 text-grey-40 flex-shrink-0" />
-                      <span className="font-medium text-sm text-grey-10">
-                        Files will be synced to:
-                      </span>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Folder className="size-4 text-grey-40 flex-shrink-0" />
+                          <span className="font-medium text-sm text-grey-10">
+                            Files will be synced to:
+                          </span>
+                        </div>
+                        <p className="text-xs text-grey-60 break-all font-mono bg-white px-2 py-1.5 rounded border border-grey-90">
+                          {localPath}/{selectedFolder?.folderName}
+                        </p>
+                      </div>
+                      <button
+                        className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
+                        onClick={handleSelectLocalPath}
+                        disabled={isSyncing}
+                      >
+                        Change
+                      </button>
                     </div>
-                    <p className="text-xs text-grey-60 break-all">{localPath}/{selectedFolder?.folderName}</p>
-                    <CardButton
-                      variant="ghost"
-                      className="mt-2 text-sm"
-                      onClick={handleSelectLocalPath}
-                      disabled={isSyncing}
-                    >
-                      Change Destination
-                    </CardButton>
                   </div>
                 ) : (
-                  <CardButton
-                    variant="secondary"
-                    className="w-full justify-center"
-                    icon={<Folder className="size-4" />}
-                    appendToStart
+                  <button
+                    className="w-full flex items-center justify-center gap-2 py-2.5 px-4 text-sm font-medium text-grey-10 bg-grey-90 hover:bg-grey-80 border border-grey-80 rounded transition-colors disabled:opacity-50"
                     onClick={handleSelectLocalPath}
                     disabled={isSyncing}
                   >
+                    <Folder className="size-4" />
                     Choose Destination Folder
-                  </CardButton>
+                  </button>
                 )}
               </div>
             )}
@@ -329,29 +348,27 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
 
             {/* Action Buttons */}
             <div className="flex gap-3 pt-2">
-              <CardButton
-                variant="secondary"
-                className="flex-1"
+              <button
+                className="flex-1 py-2.5 px-4 text-sm font-medium rounded border border-grey-80 bg-grey-90 hover:bg-grey-80 text-grey-10 transition-colors disabled:opacity-50"
                 onClick={handleClose}
                 disabled={isSyncing}
               >
                 Cancel
-              </CardButton>
-              <CardButton
-                variant="primary"
-                className="flex-1"
+              </button>
+              <button
+                className="flex-1 py-2.5 px-4 text-sm font-medium rounded border border-primary-40 bg-primary-50 hover:bg-primary-40 text-white transition-colors disabled:opacity-50"
                 onClick={handleSyncFolder}
                 disabled={!selectedFolder || !localPath || isSyncing}
               >
                 {isSyncing ? (
-                  <>
-                    <Icons.Loader className="size-4 mr-2 animate-spin" />
+                  <span className="flex items-center justify-center gap-2">
+                    <Icons.Loader className="size-4 animate-spin" />
                     Starting Sync...
-                  </>
+                  </span>
                 ) : (
                   "Start Syncing"
                 )}
-              </CardButton>
+              </button>
             </div>
           </div>
         </Dialog.Content>
