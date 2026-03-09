@@ -798,6 +798,8 @@ export function getOverallProgress(): {
   inProgressFiles: number;
   failedFiles: number;
   overallPercent: number;
+  totalBytesTransferred: number;
+  totalBytesExpected: number;
   currentFile: SyncFile | null;
 } {
   const state = getState();
@@ -810,6 +812,8 @@ export function getOverallProgress(): {
       inProgressFiles: 0,
       failedFiles: 0,
       overallPercent: 0,
+      totalBytesTransferred: 0,
+      totalBytesExpected: 0,
       currentFile: null,
     };
   }
@@ -818,29 +822,30 @@ export function getOverallProgress(): {
   const allFiles = Object.values(state.currentSession.files);
   const visibleFiles = allFiles.filter(f => !shouldHideFile(f.path));
   
-  const completedFiles = visibleFiles.filter(f => f.status === 'completed').length;
+  const visibleCompletedFiles = visibleFiles.filter(f => f.status === 'completed').length;
   const visibleInProgressFiles = visibleFiles.filter(f => 
     f.status === 'uploading' || f.status === 'downloading' || f.status === 'deleting'
   );
   const pendingFiles = visibleFiles.filter(f => f.status === 'pending');
   
-  // Count ALL in-progress files (including hidden encrypted downloads) for accurate activity detection
+  // Count ALL files by status (including hidden encrypted downloads) for accurate tracking
   const allInProgressFiles = allFiles.filter(f => 
     f.status === 'uploading' || f.status === 'downloading' || f.status === 'deleting'
   );
   const allPendingFiles = allFiles.filter(f => f.status === 'pending');
-  
-  // Count failed files from ALL files (including hidden encrypted downloads)
-  // This is important because downloads often have encrypted paths that get hidden
+  const allCompletedFiles = allFiles.filter(f => f.status === 'completed').length;
   const allFailedFiles = allFiles.filter(f => f.status === 'error').length;
   const visibleFailedFiles = visibleFiles.filter(f => f.status === 'error').length;
   
-  // Use all files for counts when there are hidden files (in-progress, pending, or failed)
-  // This ensures the UI shows accurate counts even when all files are encrypted downloads
+  // Use ALL completed files for count — hidden encrypted downloads still count toward completion
+  const completedFiles = allCompletedFiles;
+  
+  // Detect hidden files across all states (including completed) for accurate totalFiles
   const hasHiddenInProgress = allInProgressFiles.length > visibleInProgressFiles.length;
   const hasHiddenPending = allPendingFiles.length > pendingFiles.length;
   const hasHiddenFailures = allFailedFiles > visibleFailedFiles;
-  const hasHiddenFiles = hasHiddenInProgress || hasHiddenPending || hasHiddenFailures;
+  const hasHiddenCompleted = allCompletedFiles > visibleCompletedFiles;
+  const hasHiddenFiles = hasHiddenInProgress || hasHiddenPending || hasHiddenFailures || hasHiddenCompleted;
   
   // Count total files - include hidden files when necessary for accurate counts
   const visibleTotalFiles = visibleFiles.length;
@@ -859,8 +864,7 @@ export function getOverallProgress(): {
   if (effectiveTotalFiles > 0) {
     // Each completed file contributes (100 / totalFiles) to overall progress
     // In-progress files contribute their partial progress
-    const allCompletedCount = allFiles.filter(f => f.status === 'completed').length;
-    const completedContribution = allCompletedCount * (100 / effectiveTotalFiles);
+    const completedContribution = allCompletedFiles * (100 / effectiveTotalFiles);
     const inProgressContribution = effectiveInProgressFiles.reduce((sum, f) => {
       return sum + (f.progress * (100 / effectiveTotalFiles) / 100);
     }, 0);
@@ -881,13 +885,19 @@ export function getOverallProgress(): {
   const hasActiveWork = allInProgressFiles.length > 0 || allPendingFiles.length > 0;
   const isActive = state.currentSession.isActive || hasActiveWork;
   
+  // Sum bytes across all files for overall size progress
+  const totalBytesTransferred = allFiles.reduce((sum, f) => sum + f.bytesTransferred, 0);
+  const totalBytesExpected = allFiles.reduce((sum, f) => sum + f.totalBytes, 0);
+  
   return {
     isActive,
     totalFiles: hasHiddenFiles ? allFiles.length : totalFiles,
     completedFiles,
-    inProgressFiles: allInProgressFiles.length, // Use ALL in-progress files for accurate count
-    failedFiles: allFailedFiles, // Use count from ALL files, not just visible
+    inProgressFiles: allInProgressFiles.length,
+    failedFiles: allFailedFiles,
     overallPercent: Math.min(100, overallPercent),
+    totalBytesTransferred,
+    totalBytesExpected,
     currentFile,
   };
 }

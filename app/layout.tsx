@@ -51,7 +51,7 @@ export default function RootLayout({
                   </SplashWrapper>
 
                   <Toaster
-                    position="bottom-right"
+                    position="top-center"
                     className="toaster-auth-aware"
                     toastOptions={{
                       style: { fontFamily: "var(--font-geist-sans)" },

@@ -6,6 +6,7 @@ import {
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useRef, useEffect } from "react";
 import { SyncActivityItem } from "../useSyncActivity";
+import { getAllSyncPaths, SyncPathResult } from "@/lib/utils/syncPathUtils";
 
 // Re-export types for backward compatibility
 export type UserProfileFile = {
@@ -70,14 +71,22 @@ const useRecentFiles = () => {
       }
 
       try {
-        // New API returns SyncActivityItem[] directly
-        const items = await invoke<SyncActivityItem[]>(
-          "get_sync_activity",
-          { limit: 50 }
-        );
+        // Fetch sync paths and activity items in parallel
+        const [items, syncPaths] = await Promise.all([
+          invoke<SyncActivityItem[]>("get_sync_activity", { limit: 50 }),
+          getAllSyncPaths(polkadotAddress).catch(() => [] as SyncPathResult[]),
+        ]);
 
         if (!items || items.length === 0) {
           return [];
+        }
+
+        // Build label → folder path lookup
+        const labelToPath = new Map<string, string>();
+        for (const sp of syncPaths) {
+          if (sp.path && sp.label) {
+            labelToPath.set(sp.label, sp.path);
+          }
         }
 
         // Collect names of files that have been deleted — these should
@@ -103,13 +112,19 @@ const useRecentFiles = () => {
         // Format SyncActivityItem[] to FormattedUserFile[]
         const formattedFiles = nonDeletedItems.map(
           (item): FormattedUserFile => {
+            // Resolve the local file path from the sync folder for this label
+            const syncFolderPath = labelToPath.get(item.label);
+            const source = syncFolderPath && item.file_name
+              ? `${syncFolderPath}/${item.file_name}`
+              : "";
+
             return {
               name: item.file_name || "Unknown",
               actualFileName: item.file_name,
               size: item.size_bytes,
               createdAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
               cid: "",
-              source: "",
+              source,
               minerIds: [],
               isAssigned: true,
               lastChargedAt: item.timestamp ? item.timestamp * 1000 : Date.now(),

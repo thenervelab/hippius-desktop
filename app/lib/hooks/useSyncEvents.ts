@@ -282,11 +282,17 @@ export function useSyncEvents() {
               // All drives done — finalize UI state and reset expected
               // counts so stale values don't leak into the next round.
               expectedCountsRef.current = { uploads: 0, downloads: 0 };
-              setCompletedFilesCountAtom(totalCompleted);
-              setTotalFilesToSyncAtom(totalCompleted);
+              // Only update completion atoms when files were actually synced.
+              // Heartbeat rounds (totalCompleted=0) shouldn't reset a previous
+              // valid completion state — the localStorage-based progress
+              // (overallProgressAtom) is the source of truth for completion.
+              if (totalCompleted > 0) {
+                setCompletedFilesCountAtom(totalCompleted);
+                setTotalFilesToSyncAtom(totalCompleted);
+                setSyncPercentAtom(100);
+              }
               setIsSyncing(false);
               setIsSyncingAtom(false);
-              setSyncPercentAtom(totalCompleted > 0 ? 100 : null);
               setLastOutcome(e.payload);
               setUploadProgress(null);
               setUploadProgressAtom(null);

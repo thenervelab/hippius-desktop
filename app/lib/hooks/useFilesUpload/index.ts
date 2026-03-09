@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { useUserFiles } from "@/app/lib/hooks/use-user-files";
@@ -45,14 +45,6 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   const [requestState, setRequestState] = useState<
     "idle" | "uploading" | "submitting"
   >("idle");
-  const idleTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (idleTimeout.current) clearTimeout(idleTimeout.current);
-    },
-    []
-  );
 
   async function upload(
     filePaths: string[],
@@ -63,7 +55,6 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     if (!polkadotAddress) {
       throw new Error("Wallet not connected. Please log in first.");
     }
-    if (idleTimeout.current) clearTimeout(idleTimeout.current);
 
     const fileNames = await Promise.all(
       filePaths.map(async (path) => {
@@ -80,8 +71,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     const startText =
       filePaths.length > 1
         ? msgs?.startMultiple?.(filePaths.length) ??
-        `Uploading ${filePaths.length} files: 0%`
-        : msgs?.startSingle ?? `Uploading ${firstFileName}: 0%`;
+        `Adding ${filePaths.length} files to sync folder…`
+        : msgs?.startSingle ?? `Adding ${firstFileName} to sync folder…`;
 
     // If a toastId is given, update that toast; otherwise create a new one
     let localToastId = options?.toastId;
@@ -130,38 +121,35 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         const uploadingText =
           filePaths.length > 1
             ? msgs?.uploadingMultiple?.(filePaths.length, percent) ??
-            `Uploading ${filePaths.length} files: ${percent}%`
+            `Adding ${filePaths.length} files: ${percent}%`
             : msgs?.uploadingSingle?.(percent) ??
-            `Uploading ${fileName}: ${percent}%`;
+            `Adding ${fileName}: ${percent}%`;
 
         // Always update the same toast id
         toast.loading(uploadingText, { id: localToastId });
       }
 
+      // Show "added" confirmation
+      const addedText =
+        filePaths.length > 1
+          ? `${filePaths.length} files added. Syncing will start shortly`
+          : `${firstFileName} added. Syncing will start shortly`;
+      toast.success(addedText, { id: localToastId, duration: 2000, closeButton: true });
+
       // finish up
       setRequestState("idle");
-      idleTimeout.current = setTimeout(async () => {
-        // Trigger sync first so newly added files start uploading
-        await invoke("trigger_sync_now").catch((err) => {
-          console.error("[Upload] trigger_sync_now failed:", err);
-          toast.warning("File added but sync failed to start. It will retry automatically.", {
-            duration: 5000,
-          });
-        });
 
-        // Refetch after sync trigger so the file list reflects current state
-        refetchUserFiles();
-        setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
-        onSuccess?.();
+      // Fire-and-forget: trigger sync without awaiting (it may block if a
+      // sync cycle is already running). The file watcher will also pick up
+      // the new files on its own heartbeat cycle.
+      invoke("trigger_sync_now").catch((err) => {
+        console.error("[Upload] trigger_sync_now failed:", err);
+      });
 
-        const successText =
-          filePaths.length > 1
-            ? msgs?.successMultiple?.(filePaths.length) ??
-            `${filePaths.length} files successfully uploaded!`
-            : msgs?.successSingle ?? `${firstFileName} successfully uploaded!`;
-
-        toast.success(successText, { id: localToastId });
-      }, 500);
+      // Refetch immediately so the file list shows the new files
+      refetchUserFiles();
+      setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
+      onSuccess?.();
     } catch (err) {
       setRequestState("idle");
       setProgress(0);
@@ -170,8 +158,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       const errorText =
         filePaths.length > 1
           ? msgs?.errorMultiple?.(filePaths.length) ??
-          `${filePaths.length} files failed to upload!`
-          : msgs?.errorSingle ?? `${firstFileName} failed to upload!`;
+          `Failed to add ${filePaths.length} files`
+          : msgs?.errorSingle ?? `Failed to add ${firstFileName}`;
 
       // Convert loading -> error on the same toast id
       toast.error(errorText, { id: localToastId });

@@ -46,6 +46,9 @@ interface SyncStatusDialogProps {
     localDeletes: number;
     remoteDeletes: number;
   };
+  // Overall bytes synced
+  totalBytesTransferred?: number;
+  totalBytesExpected?: number;
 }
 
 const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
@@ -60,39 +63,31 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   uploadProgress = null,
   downloadProgress = null,
   actionCounts,
+  totalBytesTransferred = 0,
+  totalBytesExpected = 0,
 }) => {
   const fileListRef = useRef<HTMLDivElement>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const engineHealth = useAtomValue(syncEngineHealthAtom);
   const isUnhealthy = engineHealth.status !== "connected";
 
-  // Extract current file being transferred from progress
+  // Track if there's any active transfer (upload or download) for progress detection
   const activeTransfer = uploadProgress || downloadProgress;
-  const activeFileName = activeTransfer?.path 
-    ? activeTransfer.path.split('/').pop() 
-    : null;
-  const transferPercent = activeTransfer && activeTransfer.total > 0
-    ? Math.round((activeTransfer.bytes / activeTransfer.total) * 100)
-    : 0;
-  const isUploading = !!uploadProgress;
 
   // Calculate metrics from syncFiles if not provided
   // Use explicit checks to avoid JS falsy issues (0 is falsy but valid)
   const showIndeterminateProgress = isInProgress && (propSyncPercent === null || propSyncPercent === undefined);
   
   const calculatedMetrics = {
-    totalFiles: propTotalFiles !== undefined && propTotalFiles > 0 
-      ? propTotalFiles 
-      : syncFiles?.length || 0,
-    syncedFiles: propSyncedFiles !== undefined && propSyncedFiles >= 0 && propTotalFiles !== undefined && propTotalFiles > 0
-      ? propSyncedFiles
-      : syncFiles?.filter((f) => f.status === "uploaded").length || 0,
+    // Use displayed files for counts — includes both session and recent files
+    totalFiles: syncFiles?.length || propTotalFiles || 0,
+    syncedFiles: syncFiles?.filter((f) => f.status === "uploaded" || f.status === "deleted").length || 0,
     // For percentage: when in progress but no percent provided, use null to show indeterminate state
     percentage: showIndeterminateProgress 
       ? null 
       : (propSyncPercent !== null && propSyncPercent !== undefined 
         ? Math.round(propSyncPercent) 
-        : transferPercent),
+        : 0),
     isCompleted:
       (propSyncPercent !== null && propSyncPercent !== undefined && propSyncPercent >= 100) ||
       (!syncFiles?.some((f) => f.status === "uploading") &&
@@ -274,9 +269,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 ? "Disconnected"
                 : isCompleted
                   ? "Complete"
-                  : percentage !== null
-                    ? `${percentage}%`
-                    : "Syncing..."
+                  : isExpanded
+                    ? "Syncing..."
+                    : percentage !== null
+                      ? `${percentage}%`
+                      : "Syncing..."
               }
             </span>
 
@@ -414,43 +411,39 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
             </div>
           </div>
 
-          {/* Active transfer progress */}
-          {activeTransfer && (
+          {/* Overall sync progress bar */}
+          {!isCompleted && percentage !== null && percentage < 100 && (
             <div className="px-4 pt-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Icons.Refresh className="w-4 h-4 text-primary-50 animate-spin" />
-                  <span className="text-sm text-grey-30">
-                    {isUploading ? "Uploading" : "Downloading"}
-                    {activeFileName && `: ${activeFileName.length > 20 ? activeFileName.slice(0, 10) + "..." + activeFileName.slice(-7) : activeFileName}`}
-                  </span>
-                </div>
-                <span className="text-sm text-grey-40">{transferPercent}%</span>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-grey-40">Overall progress</span>
+                <span className="text-xs text-grey-40">{percentage}%</span>
               </div>
-              <div className="w-full h-2 bg-grey-80 rounded-full overflow-hidden">
+              <div className="w-full h-1.5 bg-grey-80 rounded-full overflow-hidden">
                 <div 
                   className="h-full bg-primary-50 rounded-full transition-all duration-300"
-                  style={{ width: `${transferPercent}%` }}
+                  style={{ width: `${percentage}%` }}
                 />
               </div>
-              <div className="text-xs text-grey-50 mt-1">
-                {formatBytes(activeTransfer.bytes)} / {formatBytes(activeTransfer.total)}
-              </div>
+              {totalBytesExpected > 0 && (
+                <div className="text-[10px] text-grey-50 mt-1">
+                  {formatBytes(totalBytesTransferred)} / {formatBytes(totalBytesExpected)}
+                </div>
+              )}
             </div>
           )}
 
           {/* File list */}
           <div 
             ref={fileListRef} 
-            className={cn(
-              "overflow-y-auto p-4",
-              activeTransfer ? "max-h-[220px]" : "max-h-[320px]"
-            )}
+            className="overflow-y-auto p-4 max-h-[320px]"
           >
             {syncFiles.map((file, index) => {
               const isFileCompleted = file.status === "uploaded";
-              const isUploading = file.status === "uploading";
+              const isFileInProgress = file.status === "uploading";
               const isFailed = file.status === "failed";
+              const fileProgress = (file as any).progress as number | undefined;
+              const fileBytesTransferred = (file as any).bytesTransferred as number | undefined;
+              const fileTotalBytes = (file as any).totalBytes as number | undefined;
               const { fileFormat } = getFilePartsFromFileName(file.fileName);
               const fileType = getFileTypeFromExtension(fileFormat || null);
               const { icon: Icon, color } = getFileIcon(
@@ -460,14 +453,15 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               return (
                 <div
                   key={`${file.id}-${index}`}
-                  className="flex items-center justify-between mb-4 last:mb-0 transition-opacity duration-200"
+                  className="mb-4 last:mb-0 transition-opacity duration-200"
                   data-file-item
                 >
-                  <div className="flex items-center gap-2">
-                    <AbstractIconWrapper className="size-8 flex items-center justify-center">
-                      <Icon className={cn("size-5 relative", color)} />
-                    </AbstractIconWrapper>
-                    <div className="flex flex-col justify-center">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <AbstractIconWrapper className="size-8 flex-shrink-0 flex items-center justify-center">
+                        <Icon className={cn("size-5 relative", color)} />
+                      </AbstractIconWrapper>
+                      <div className="flex flex-col justify-center min-w-0">
                       <div className="flex items-center gap-1 justify-center">
                         <div className="text-sm font-medium text-grey-10 truncate flex items-center gap-2">
                           <span>
@@ -488,53 +482,54 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center">
-                    {isFileCompleted ? (
-                      <>
-                        <Icons.TickCircle
-                          className={cn(
-                            "w-5 h-5",
-                            file.deleted ? "text-error-50" : "text-success-50"
-                          )}
-                        />
-                        <span
-                          className={cn(
-                            "text-sm ml-1",
-                            file.deleted ? "text-error-50" : "text-success-50"
-                          )}
-                        >
-                          {file.deleted ? "Deleted" : "Synced"}
-                        </span>
-                      </>
-                    ) : isFailed ? (
-                      <>
-                        <Icons.InfoCircle className="w-5 h-5 text-error-50" />
-                        <span className="text-sm ml-1 text-error-50">
-                          Failed
-                        </span>
-                      </>
-                    ) : isUploading ? (
-                      <>
-                        <div className="animate-spin mr-2">
-                          <Icons.Refresh
+                    <div className="flex items-center flex-shrink-0">
+                      {isFileCompleted ? (
+                        <>
+                          <Icons.TickCircle
                             className={cn(
-                              "w-4 h-4",
-                              file.deleted ? "text-error-50" : "text-primary-50"
+                              "w-5 h-5",
+                              file.deleted ? "text-error-50" : "text-success-50"
                             )}
                           />
-                        </div>
-                        <span
-                          className={cn(
-                            "text-sm",
-                            file.deleted ? "text-error-50" : "text-primary-50"
+                          <span
+                            className={cn(
+                              "text-sm ml-1",
+                              file.deleted ? "text-error-50" : "text-success-50"
+                            )}
+                          >
+                            {file.deleted ? "Deleted" : "Synced"}
+                          </span>
+                        </>
+                      ) : isFailed ? (
+                        <>
+                          <Icons.InfoCircle className="w-5 h-5 text-error-50" />
+                          <span className="text-sm ml-1 text-error-50">
+                            Failed
+                          </span>
+                        </>
+                      ) : isFileInProgress ? (
+                        <div className="flex flex-col items-end gap-0.5">
+                          <div className="flex items-center gap-2">
+                            <div className="w-[60px] h-1.5 bg-grey-80 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-primary-50 rounded-full transition-all duration-300"
+                                style={{ width: `${fileProgress ?? 0}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-primary-50 min-w-[32px] text-right">
+                              {fileProgress ?? 0}%
+                            </span>
+                          </div>
+                          {fileTotalBytes != null && fileTotalBytes > 0 && (
+                            <span className="text-[10px] text-grey-50">
+                              {formatBytes(fileBytesTransferred ?? 0)} / {formatBytes(fileTotalBytes)}
+                            </span>
                           )}
-                        >
-                          {file.deleted ? "Deleting..." : "Syncing..."}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-sm text-grey-50">Pending</span>
-                    )}
+                        </div>
+                      ) : (
+                        <span className="text-sm text-grey-50">Pending</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               );

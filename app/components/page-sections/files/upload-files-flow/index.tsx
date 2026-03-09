@@ -192,7 +192,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
         return;
       }
 
-      toast.loading(`Starting upload of ${firstFileName}...`, { id: toastId });
+      toast.loading(`Adding ${firstFileName} to sync folder…`, { id: toastId });
 
       reset(); // Close dialog
       // Pass the toast id so the hook reuses and updates the same toast
@@ -201,12 +201,6 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = ({
         isPrivateView,
         {
           toastId,
-          messages: {
-            startSingle: files.length === 1 ? `Uploading ${firstFileName}: 0%` : undefined,
-            uploadingSingle: (percent) => files.length === 1 ? `Uploading ${firstFileName}: ${percent}%` : `Uploading: ${percent}%`,
-            successSingle: files.length === 1 ? `${firstFileName} successfully uploaded!` : undefined,
-            errorSingle: files.length === 1 ? `Failed to upload ${firstFileName}` : undefined
-          }
         },
         selectedSyncPath ?? undefined,
       );

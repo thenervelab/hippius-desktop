@@ -59,8 +59,10 @@ function syncFileToActivityRow(file: SyncFile): SyncActivityRow {
     error: file.error, // Pass through error message for failed files
     // Extra fields for progress display (custom extension)
     progress: file.progress,
+    bytesTransferred: file.bytesTransferred,
+    totalBytes: file.totalBytes,
     isActive: file.status === 'uploading' || file.status === 'downloading' || file.status === 'deleting',
-  } as SyncActivityRow & { progress?: number; isActive?: boolean; error?: string };
+  } as SyncActivityRow & { progress?: number; bytesTransferred?: number; totalBytes?: number; isActive?: boolean; error?: string };
 }
 
 /**
@@ -427,6 +429,8 @@ const SyncStatusHandler: React.FC = () => {
       uploadProgress={uploadProgress}
       downloadProgress={downloadProgress}
       actionCounts={syncActionCounts}
+      totalBytesTransferred={overallProgress.totalBytesTransferred}
+      totalBytesExpected={overallProgress.totalBytesExpected}
     />
   );
 };

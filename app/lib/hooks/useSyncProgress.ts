@@ -39,6 +39,8 @@ export interface OverallProgress {
   inProgressFiles: number;
   failedFiles: number;
   overallPercent: number;
+  totalBytesTransferred: number;
+  totalBytesExpected: number;
   currentFile: SyncFile | null;
 }
 
@@ -49,6 +51,8 @@ export const overallProgressAtom = atom<OverallProgress>({
   inProgressFiles: 0,
   failedFiles: 0,
   overallPercent: 0,
+  totalBytesTransferred: 0,
+  totalBytesExpected: 0,
   currentFile: null,
 });
 
