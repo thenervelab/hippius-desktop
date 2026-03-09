@@ -5,6 +5,7 @@ import { Icons } from "@/components/ui";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { formatBytes } from "@/lib/utils/formatBytes";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import SectionHeader from "./SectionHeader";
 import { InView } from "react-intersection-observer";
@@ -17,24 +18,36 @@ import {
   PauseCircle,
   PlayCircle,
   RefreshCw,
+  ServerCrash,
 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import type { SyncFolder, RemoteFolder } from "@/app/lib/types/sync-folder";
 import { AddLocalFolderDialog } from "./AddLocalFolderDialog";
 import { RemoteFolderSelector } from "./RemoteFolderSelector";
 import { getAllSyncPaths, removeSyncPath } from "@/app/lib/utils/syncPathUtils";
-import { listRemoteFolders } from "@/app/lib/utils/restoreUtils";
+import {
+  listRemoteFolders,
+  deleteRemoteFolder,
+} from "@/app/lib/utils/restoreUtils";
+
+type ConfirmType =
+  | "pause"
+  | "resume"
+  | "remove"
+  | "delete-remote"
+  | "delete-server";
 
 export default function MultiFolderSyncManager() {
   const { polkadotAddress } = useWalletAuth();
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showRemoteDialog, setShowRemoteDialog] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean;
-    type: "pause" | "resume" | "remove" | null;
+    type: ConfirmType | null;
     folderId: string | null;
     folderName: string | null;
   }>({ open: false, type: null, folderId: null, folderName: null });
@@ -99,7 +112,7 @@ export default function MultiFolderSyncManager() {
   }, [loadFolders]);
 
   const openConfirmDialog = (
-    type: "pause" | "resume" | "remove",
+    type: ConfirmType,
     folderId: string,
     folderName: string
   ) => {
@@ -116,10 +129,19 @@ export default function MultiFolderSyncManager() {
           await removeSyncPath(polkadotAddress, folderId);
           toast.success("Folder removed from sync");
           break;
+        case "delete-remote":
+        case "delete-server": {
+          setIsDeleting(true);
+          const result = await deleteRemoteFolder(polkadotAddress, folderId);
+          toast.success(
+            `Folder deleted from server (${result.files_deleted} file${result.files_deleted !== 1 ? "s" : ""} removed)`
+          );
+          break;
+        }
         case "pause":
-          // Pause is handled by removing and noting intent;
-          // full pause/resume will be added when backend supports it
-          toast.info("Pause sync is not yet supported. You can remove the folder instead.");
+          toast.info(
+            "Pause sync is not yet supported. You can remove the folder instead."
+          );
           break;
         case "resume":
           toast.info("Resume sync is not yet supported.");
@@ -130,7 +152,13 @@ export default function MultiFolderSyncManager() {
       console.error(`Failed to ${type} folder:`, error);
       toast.error(`Failed to ${type} folder`);
     } finally {
-      setConfirmDialog({ open: false, type: null, folderId: null, folderName: null });
+      setIsDeleting(false);
+      setConfirmDialog({
+        open: false,
+        type: null,
+        folderId: null,
+        folderName: null,
+      });
     }
   };
 
@@ -142,6 +170,20 @@ export default function MultiFolderSyncManager() {
           title: "Remove Folder from Sync?",
           description: `Are you sure you want to remove "${folderName}" from sync? Local files will remain on your device, but this folder will no longer be synchronized across your devices.`,
           confirmText: "Remove Folder",
+          variant: "danger" as const,
+        };
+      case "delete-remote":
+        return {
+          title: "Delete Folder from Server?",
+          description: `This will permanently delete all files for "${folderName}" from the server. This cannot be undone. The folder will no longer be available on any device.`,
+          confirmText: "Delete from Server",
+          variant: "danger" as const,
+        };
+      case "delete-server":
+        return {
+          title: "Delete Folder from Server?",
+          description: `This will permanently delete all synced files for "${folderName}" from the server and stop syncing. Local files will remain on your device. This cannot be undone.`,
+          confirmText: "Delete from Server",
           variant: "danger" as const,
         };
       case "pause":
@@ -192,26 +234,22 @@ export default function MultiFolderSyncManager() {
 
   const formatLastSynced = (timestamp?: number) => {
     if (!timestamp) return null;
-    
+
     const now = Date.now();
     const diff = now - timestamp;
-    
-    // Less than a minute
+
     if (diff < 60000) return "Just now";
-    
-    // Less than an hour
+
     if (diff < 3600000) {
       const minutes = Math.floor(diff / 60000);
       return `${minutes} minute${minutes !== 1 ? "s" : ""} ago`;
     }
-    
-    // Less than a day
+
     if (diff < 86400000) {
       const hours = Math.floor(diff / 3600000);
       return `${hours} hour${hours !== 1 ? "s" : ""} ago`;
     }
-    
-    // More than a day
+
     return new Date(timestamp).toLocaleString();
   };
 
@@ -271,7 +309,8 @@ export default function MultiFolderSyncManager() {
                     No folders syncing yet
                   </p>
                   <p className="text-xs text-grey-60">
-                    Add a local folder or sync one from another device to get started
+                    Add a local folder or sync one from another device to get
+                    started
                   </p>
                 </div>
               ) : (
@@ -300,13 +339,17 @@ export default function MultiFolderSyncManager() {
                           <p className="text-sm text-grey-60 truncate mb-1">
                             {folder.localPath}
                           </p>
-                          {(folder.fileCount !== undefined || folder.lastSynced) && (
+                          {(folder.fileCount !== undefined ||
+                            folder.lastSynced) && (
                             <div className="flex items-center gap-3 text-xs text-grey-70">
                               {folder.fileCount !== undefined && (
                                 <span>{folder.fileCount} files</span>
                               )}
                               {folder.lastSynced && (
-                                <span>· Last synced {formatLastSynced(folder.lastSynced)}</span>
+                                <span>
+                                  · Last synced{" "}
+                                  {formatLastSynced(folder.lastSynced)}
+                                </span>
                               )}
                             </div>
                           )}
@@ -320,11 +363,17 @@ export default function MultiFolderSyncManager() {
                             </button>
                           </DropdownMenu.Trigger>
                           <DropdownMenu.Portal>
-                            <DropdownMenu.Content className="bg-white border border-grey-80 rounded-lg shadow-lg p-1 min-w-[160px] z-50">
+                            <DropdownMenu.Content className="bg-white border border-grey-80 rounded-lg shadow-lg p-1 min-w-[200px] z-50">
                               {folder.status === "syncing" ? (
                                 <DropdownMenu.Item
                                   className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
-                                  onSelect={() => openConfirmDialog("pause", folder.id, folder.folderName)}
+                                  onSelect={() =>
+                                    openConfirmDialog(
+                                      "pause",
+                                      folder.id,
+                                      folder.folderName
+                                    )
+                                  }
                                 >
                                   <PauseCircle className="size-4" />
                                   Pause Sync
@@ -332,7 +381,13 @@ export default function MultiFolderSyncManager() {
                               ) : (
                                 <DropdownMenu.Item
                                   className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
-                                  onSelect={() => openConfirmDialog("resume", folder.id, folder.folderName)}
+                                  onSelect={() =>
+                                    openConfirmDialog(
+                                      "resume",
+                                      folder.id,
+                                      folder.folderName
+                                    )
+                                  }
                                 >
                                   <PlayCircle className="size-4" />
                                   Resume Sync
@@ -340,11 +395,30 @@ export default function MultiFolderSyncManager() {
                               )}
                               <DropdownMenu.Separator className="h-px bg-grey-80 my-1" />
                               <DropdownMenu.Item
-                                className="flex items-center gap-2 px-3 py-2 text-sm text-error-50 hover:bg-error-95 rounded cursor-pointer outline-none"
-                                onSelect={() => openConfirmDialog("remove", folder.id, folder.folderName)}
+                                className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
+                                onSelect={() =>
+                                  openConfirmDialog(
+                                    "remove",
+                                    folder.id,
+                                    folder.folderName
+                                  )
+                                }
                               >
                                 <Trash2 className="size-4" />
                                 Remove Folder
+                              </DropdownMenu.Item>
+                              <DropdownMenu.Item
+                                className="flex items-center gap-2 px-3 py-2 text-sm text-error-50 hover:bg-error-95 rounded cursor-pointer outline-none"
+                                onSelect={() =>
+                                  openConfirmDialog(
+                                    "delete-server",
+                                    folder.id,
+                                    folder.folderName
+                                  )
+                                }
+                              >
+                                <ServerCrash className="size-4" />
+                                Delete from Server
                               </DropdownMenu.Item>
                             </DropdownMenu.Content>
                           </DropdownMenu.Portal>
@@ -361,26 +435,73 @@ export default function MultiFolderSyncManager() {
               <h3 className="text-sm font-semibold text-grey-30">
                 Available from Other Devices ({remoteFolders.length})
               </h3>
-              <div className="p-4 border border-primary-80 bg-primary-98 rounded-lg">
-                {remoteFolders.length > 0 ? (
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm text-primary-40">
-                      You have {remoteFolders.length} folder
-                      {remoteFolders.length !== 1 ? "s" : ""} synced on other
-                      devices that you can download to this machine.
-                    </p>
-                    <button
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors whitespace-nowrap flex-shrink-0"
-                      onClick={() => setShowRemoteDialog(true)}
+
+              {remoteFolders.length > 0 ? (
+                <div className="space-y-2">
+                  {remoteFolders.map((folder) => (
+                    <div
+                      key={folder.folderName}
+                      className="p-4 border border-primary-80 rounded-lg bg-primary-98 hover:bg-primary-95 transition-colors"
                     >
-                      <CloudDownload className="size-3.5" />
-                      View Available Folders
-                    </button>
-                  </div>
-                ) : (
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Folder className="size-4 text-primary-50 flex-shrink-0" />
+                            <span className="font-medium text-base text-grey-10 truncate">
+                              {folder.folderName}
+                            </span>
+                            <span className="text-xs font-medium px-2 py-0.5 rounded border bg-grey-95 text-grey-50 border-grey-80">
+                              {folder.deviceName}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 text-xs text-grey-60">
+                            {folder.fileCount > 0 && (
+                              <span>{folder.fileCount} files</span>
+                            )}
+                            {folder.totalBytes > 0 && (
+                              <span>· {formatBytes(folder.totalBytes)}</span>
+                            )}
+                            {folder.lastModified > 0 && (
+                              <span>
+                                · Last modified{" "}
+                                {formatLastSynced(folder.lastModified)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
+                            onClick={() => setShowRemoteDialog(true)}
+                          >
+                            <CloudDownload className="size-3.5" />
+                            Sync
+                          </button>
+                          <button
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-error-50 bg-white border border-error-80 rounded hover:bg-error-95 transition-colors"
+                            onClick={() =>
+                              openConfirmDialog(
+                                "delete-remote",
+                                folder.folderName,
+                                folder.folderName
+                              )
+                            }
+                          >
+                            <Trash2 className="size-3.5" />
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-4 border border-primary-80 bg-primary-98 rounded-lg">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-sm text-primary-40">
-                      No remote folders found yet. We check your on-chain synced folders.
+                      No remote folders found yet. We check your on-chain synced
+                      folders.
                     </p>
                     <button
                       className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors whitespace-nowrap flex-shrink-0"
@@ -390,8 +511,8 @@ export default function MultiFolderSyncManager() {
                       Refresh
                     </button>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -412,9 +533,15 @@ export default function MultiFolderSyncManager() {
       <ConfirmDialog
         open={confirmDialog.open}
         onOpenChange={(open) =>
-          setConfirmDialog({ open, type: null, folderId: null, folderName: null })
+          setConfirmDialog({
+            open,
+            type: null,
+            folderId: null,
+            folderName: null,
+          })
         }
         onConfirm={handleConfirmAction}
+        isLoading={isDeleting}
         {...getConfirmDialogProps()}
       />
     </>

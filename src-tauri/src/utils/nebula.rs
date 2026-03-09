@@ -18,6 +18,180 @@ use tokio::task::JoinHandle;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
+#[cfg(target_os = "macos")]
+mod macos_auth {
+    use std::ffi::CString;
+    use std::os::raw::c_char;
+    use std::ptr;
+
+    type AuthorizationRef = *mut std::ffi::c_void;
+    type OSStatus = i32;
+
+    const ERR_AUTHORIZATION_SUCCESS: OSStatus = 0;
+    const K_AUTHORIZATION_FLAG_DEFAULTS: u32 = 0;
+    const K_AUTHORIZATION_FLAG_INTERACTION_ALLOWED: u32 = 1;
+    const K_AUTHORIZATION_FLAG_EXTEND_RIGHTS: u32 = 1 << 1;
+    const K_AUTHORIZATION_FLAG_PRE_AUTHORIZE: u32 = 1 << 4;
+
+    #[repr(C)]
+    struct AuthorizationItem {
+        name: *const c_char,
+        value_length: usize,
+        value: *mut std::ffi::c_void,
+        flags: u32,
+    }
+
+    #[repr(C)]
+    struct AuthorizationItemSet {
+        count: u32,
+        items: *mut AuthorizationItem,
+    }
+
+    #[link(name = "Security", kind = "framework")]
+    unsafe extern "C" {
+        fn AuthorizationCreate(
+            rights: *const AuthorizationItemSet,
+            environment: *const AuthorizationItemSet,
+            flags: u32,
+            authorization: *mut AuthorizationRef,
+        ) -> OSStatus;
+
+        fn AuthorizationFree(
+            authorization: AuthorizationRef,
+            flags: u32,
+        ) -> OSStatus;
+
+        fn AuthorizationExecuteWithPrivileges(
+            authorization: AuthorizationRef,
+            path_to_tool: *const c_char,
+            options: u32,
+            arguments: *const *const c_char,
+            communications_pipe: *mut *mut libc::FILE,
+        ) -> OSStatus;
+    }
+
+    /// A session that holds macOS authorization, showing the
+    /// native password dialog with the app name and icon.
+    /// Multiple commands can be executed with a single prompt.
+    pub struct PrivilegedSession {
+        auth_ref: AuthorizationRef,
+    }
+
+    impl PrivilegedSession {
+        /// Creates a new privileged session.
+        /// Shows the native macOS authorization dialog with
+        /// the app name, icon, and the provided prompt text.
+        pub fn new(prompt: &str) -> Result<Self, String> {
+            let prompt_cstr = CString::new(prompt)
+                .map_err(|e| format!("Invalid prompt: {e}"))?;
+
+            let prompt_key = CString::new("prompt").unwrap();
+
+            let mut env_item = AuthorizationItem {
+                name: prompt_key.as_ptr(),
+                value_length: prompt_cstr.as_bytes().len(),
+                value: prompt_cstr.as_ptr() as *mut std::ffi::c_void,
+                flags: 0,
+            };
+
+            let environment = AuthorizationItemSet {
+                count: 1,
+                items: &mut env_item,
+            };
+
+            let flags = K_AUTHORIZATION_FLAG_DEFAULTS
+                | K_AUTHORIZATION_FLAG_INTERACTION_ALLOWED
+                | K_AUTHORIZATION_FLAG_EXTEND_RIGHTS
+                | K_AUTHORIZATION_FLAG_PRE_AUTHORIZE;
+
+            let mut auth_ref: AuthorizationRef = ptr::null_mut();
+
+            let status = unsafe {
+                AuthorizationCreate(
+                    ptr::null(),
+                    &environment,
+                    flags,
+                    &mut auth_ref,
+                )
+            };
+
+            if status != ERR_AUTHORIZATION_SUCCESS {
+                return Err(format!(
+                    "Authorization failed (status {status}). \
+                     The user may have cancelled the dialog."
+                ));
+            }
+
+            Ok(Self { auth_ref })
+        }
+
+        /// Executes a command with root privileges using the
+        /// existing authorization. No additional dialog is shown
+        /// if the session is still valid.
+        pub fn execute(
+            &self,
+            tool: &str,
+            args: &[&str],
+        ) -> Result<(), String> {
+            let tool_cstr = CString::new(tool)
+                .map_err(|e| format!("Invalid tool path: {e}"))?;
+
+            let args_cstr: Vec<CString> = args
+                .iter()
+                .map(|a| {
+                    CString::new(*a)
+                        .map_err(|e| format!("Invalid argument: {e}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut args_ptrs: Vec<*const c_char> =
+                args_cstr.iter().map(|a| a.as_ptr()).collect();
+            args_ptrs.push(ptr::null());
+
+            let mut pipe: *mut libc::FILE = ptr::null_mut();
+
+            let status = unsafe {
+                AuthorizationExecuteWithPrivileges(
+                    self.auth_ref,
+                    tool_cstr.as_ptr(),
+                    K_AUTHORIZATION_FLAG_DEFAULTS,
+                    args_ptrs.as_ptr(),
+                    &mut pipe,
+                )
+            };
+
+            if !pipe.is_null() {
+                unsafe {
+                    // Wait for the child process to finish
+                    libc::fclose(pipe);
+                    let mut child_status: libc::c_int = 0;
+                    libc::wait(&mut child_status);
+                }
+            }
+
+            if status != ERR_AUTHORIZATION_SUCCESS {
+                return Err(format!(
+                    "Privileged execution of '{tool}' failed \
+                     (status {status})"
+                ));
+            }
+
+            Ok(())
+        }
+    }
+
+    impl Drop for PrivilegedSession {
+        fn drop(&mut self) {
+            unsafe {
+                AuthorizationFree(
+                    self.auth_ref,
+                    K_AUTHORIZATION_FLAG_DEFAULTS,
+                );
+            }
+        }
+    }
+}
+
 const NEBULA_GITHUB_API: &str = "https://api.github.com/repos/slackhq/nebula/releases/latest";
 const NEBULA_VERSION_FILE: &str = "nebula_version.txt";
 const HIPPIUS_API_BASE: &str = "https://api.hippius.com/api";
@@ -1127,7 +1301,7 @@ pub async fn start_nebula_internal() -> Result<(), String> {
 /// Remove existing nebula binaries before re-extraction.
 /// Previous installs may have chown'd them to root (setuid for TUN/TAP),
 /// so a normal fs::remove_file will fail with "Permission denied".
-/// On macOS we use osascript to remove with admin privileges; on Linux, pkexec rm.
+/// On macOS we use the Security framework for native authorization; on Linux, pkexec rm.
 async fn remove_existing_binaries(nebula_dir: &Path) {
     let binary_names: &[&str] = if cfg!(target_os = "windows") {
         &["nebula.exe", "nebula-cert.exe"]
@@ -1156,30 +1330,33 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
 
         #[cfg(target_os = "macos")]
         {
-            let script = format!(
-                "do shell script \"rm -f '{}'\" with administrator privileges",
-                path_str
-            );
-            match std::process::Command::new("osascript")
-                .arg("-e")
-                .arg(&script)
-                .status()
-            {
-                Ok(status) if status.success() => {
-                    println!(
-                        "[Nebula] Removed root-owned binary via elevated privileges: {}",
-                        name
-                    );
-                }
-                Ok(_) => {
-                    eprintln!(
-                        "[Nebula] Warning: Failed to remove {} with elevated privileges",
-                        name
-                    );
+            match macos_auth::PrivilegedSession::new(
+                "Hippius needs to remove a previous \
+                 networking tool installation.",
+            ) {
+                Ok(session) => {
+                    match session.execute("/bin/rm", &["-f", &path_str])
+                    {
+                        Ok(()) => {
+                            println!(
+                                "[Nebula] Removed root-owned binary \
+                                 via elevated privileges: {}",
+                                name
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[Nebula] Warning: Failed to remove \
+                                 {} with elevated privileges: {}",
+                                name, e
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     eprintln!(
-                        "[Nebula] Warning: Could not run osascript to remove {}: {}",
+                        "[Nebula] Warning: Could not authorize \
+                         removal of {}: {}",
                         name, e
                     );
                 }
@@ -1268,23 +1445,24 @@ async fn grant_permissions(binary_path: &Path) -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        println!("[Nebula] Requesting setuid via osascript...");
+        println!("[Nebula] Requesting setuid via native authorization...");
         let path_str = binary_path
             .to_str()
             .ok_or_else(|| anyhow!("Invalid path"))?;
-        let script = format!(
-            "do shell script \"chown root '{0}' && chmod u+s '{0}'\" with administrator privileges",
-            path_str
-        );
 
-        let status = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .status()?;
+        let session = macos_auth::PrivilegedSession::new(
+            "Hippius needs administrator access to install \
+             networking tools for the VPN.",
+        )
+        .map_err(|e| anyhow!(e))?;
 
-        if !status.success() {
-            return Err(anyhow!("Failed to set setuid via osascript"));
-        }
+        session
+            .execute("/usr/sbin/chown", &["root", path_str])
+            .map_err(|e| anyhow!("Failed to chown: {e}"))?;
+
+        session
+            .execute("/bin/chmod", &["u+s", path_str])
+            .map_err(|e| anyhow!("Failed to chmod: {e}"))?;
     }
 
     Ok(())

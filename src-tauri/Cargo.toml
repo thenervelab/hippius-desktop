@@ -73,14 +73,15 @@ bip39 = { version = "2.2", features = ["rand"] }
 alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = ["mnemonic"] }
 # Use main branch from GitHub
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "ad7fafe" }
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "ad7fafe" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "e517328" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "e517328" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"
 objc = "0.2"
+libc = "0.2"
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }

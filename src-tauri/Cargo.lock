@@ -22,6 +22,7 @@ dependencies = [
  "hex",
  "hostname",
  "lazy_static",
+ "libc",
  "log",
  "notify",
  "objc",
@@ -5107,7 +5108,7 @@ dependencies = [
 [[package]]
 name = "hcfs-client"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=ad7fafe#ad7fafe5e8beea90deed2047c4f363c958fd4e85"
+source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=e517328#e517328ecdf137d92444ab52c536b3fdd859ab3a"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -5134,7 +5135,7 @@ dependencies = [
 [[package]]
 name = "hcfs-shared"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=ad7fafe#ad7fafe5e8beea90deed2047c4f363c958fd4e85"
+source = "git+ssh://git@github.com/thenervelab/hippius-arion.git?rev=e517328#e517328ecdf137d92444ab52c536b3fdd859ab3a"
 dependencies = [
  "ed25519-dalek",
  "hex",

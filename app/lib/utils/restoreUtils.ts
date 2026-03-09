@@ -21,6 +21,21 @@ export async function listRemoteFolders(
   return invoke<RemoteFolderInfo[]>("list_remote_folders", { accountId });
 }
 
+export interface DeleteRemoteFolderResult {
+  files_deleted: number;
+  was_local: boolean;
+}
+
+export async function deleteRemoteFolder(
+  accountId: string,
+  label: string,
+): Promise<DeleteRemoteFolderResult> {
+  return invoke<DeleteRemoteFolderResult>("delete_remote_folder", {
+    accountId,
+    label,
+  });
+}
+
 export async function restoreRemoteFolders(
   accountId: string,
   labels: string[],

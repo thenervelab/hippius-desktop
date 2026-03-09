@@ -1644,3 +1644,78 @@ pub async fn restore_remote_folders(
 
     Ok(results)
 }
+
+// =============================================================================
+// Delete Remote Folder
+// =============================================================================
+
+#[derive(serde::Serialize)]
+pub struct DeleteRemoteFolderResult {
+    pub files_deleted: u64,
+    pub was_local: bool,
+}
+
+/// Delete all files for a folder from the remote server and unregister it.
+/// If the folder is also synced locally, stops the drive and removes the sync path.
+#[tauri::command]
+pub async fn delete_remote_folder(
+    app: tauri::AppHandle,
+    account_id: String,
+    label: String,
+) -> Result<DeleteRemoteFolderResult, String> {
+    let config = get_hcfs_config(account_id.clone()).await?;
+    let server_url = if config.server_url.is_empty() {
+        "https://arion.hippius.com".to_string()
+    } else {
+        config.server_url
+    };
+
+    let bearer_token = get_temp_auth_key(&account_id)
+        .await
+        .map_err(|e| format!("Failed to get auth token: {e}"))?
+        .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
+
+    let composite = format!("{}_{}", account_id, folder_hash(&label));
+
+    let client_config = HcfsClientConfig {
+        base_url: server_url,
+        api_key: "Arion".to_string(),
+        bearer_token,
+        accept_invalid_certs: true,
+        billing_bypass_token: None,
+        account_ss58: String::new(),
+    };
+
+    let client = hcfs_client::client::HcfsClient::new(client_config)
+        .map_err(|e| format!("Failed to create HCFS client: {e}"))?;
+
+    let result = client
+        .unregister_folder(&composite)
+        .await
+        .map_err(|e| format!("Failed to delete remote folder: {e}"))?;
+
+    // If this folder is also synced locally, stop the drive and remove the path
+    let was_local = {
+        let guard = HCFS_DRIVES.lock().await;
+        guard.contains_key(&label)
+    };
+
+    if was_local {
+        let _ = stop_drive(app, label.clone()).await;
+        let _ = crate::commands::substrate_tx::remove_sync_path_internal(
+            &account_id,
+            &label,
+        )
+        .await;
+    }
+
+    println!(
+        "[Sync] Remote folder '{}' deleted: {} files removed, was_local={}",
+        label, result.files_deleted, was_local
+    );
+
+    Ok(DeleteRemoteFolderResult {
+        files_deleted: result.files_deleted,
+        was_local,
+    })
+}
