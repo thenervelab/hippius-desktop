@@ -331,30 +331,98 @@ export function startSession(
 }
 
 /**
- * Complete the current sync session
+ * Merge new files into an existing active session (multi-drive support).
+ * If no active session exists, starts a new one.
+ */
+export function mergeIntoSession(
+  expectedUploads: number,
+  expectedDownloads: number,
+  expectedLocalDeletes: number = 0,
+  expectedRemoteDeletes: number = 0,
+  fileList?: SessionFileList
+): void {
+  const state = getState();
+
+  if (!state.currentSession || !state.currentSession.isActive) {
+    startSession(expectedUploads, expectedDownloads, expectedLocalDeletes, expectedRemoteDeletes, fileList);
+    return;
+  }
+
+  // Accumulate expected counts
+  state.currentSession.expectedUploads += expectedUploads;
+  state.currentSession.expectedDownloads += expectedDownloads;
+  state.currentSession.expectedLocalDeletes += expectedLocalDeletes;
+  state.currentSession.expectedRemoteDeletes += expectedRemoteDeletes;
+
+  // Add new files from the file list
+  if (fileList) {
+    const now = Date.now();
+
+    const addFiles = (paths: string[] | undefined, action: FileAction, status: FileStatus) => {
+      if (!paths) return;
+      for (const path of paths) {
+        if (state.currentSession!.files[path]) continue; // already tracked
+        const id = generateFileId(path);
+        state.currentSession!.files[path] = {
+          id,
+          path,
+          fileName: extractFileName(path),
+          action,
+          status,
+          progress: 0,
+          bytesTransferred: 0,
+          totalBytes: 0,
+          startedAt: now,
+        };
+      }
+    };
+
+    addFiles(fileList.uploadFiles, 'upload', 'pending');
+    addFiles(fileList.downloadFiles, 'download', 'pending');
+    addFiles(fileList.localDeleteFiles, 'local_delete', 'pending');
+    addFiles(fileList.remoteDeleteFiles, 'remote_delete', 'pending');
+  }
+
+  const totalFiles = Object.keys(state.currentSession.files).length;
+  console.log('[SyncProgressService] Merged into session:', state.currentSession.sessionId,
+    'now expecting', state.currentSession.expectedUploads, 'uploads,',
+    state.currentSession.expectedDownloads, 'downloads,',
+    'total registered files:', totalFiles);
+
+  saveState(state);
+}
+
+/**
+ * Complete the current sync session.
+ * If there are still pending/in-progress files (from other drives), the
+ * session stays active so subsequent progress events are tracked correctly.
  */
 export function completeSession(filesUploaded: number, filesDownloaded: number): void {
   const state = getState();
-  
+
   if (state.currentSession) {
-    state.currentSession.isActive = false;
-    state.currentSession.completedAt = Date.now();
-    
-    // Move any completed files to recent files
-    // Also mark any in-progress files as completed (they finished via backend)
     const now = Date.now();
+
+    // Check if any files are still pending or in-progress (from other drives)
+    const hasPendingWork = Object.values(state.currentSession.files).some(
+      f => f.status === 'pending' || f.status === 'uploading' ||
+           f.status === 'downloading' || f.status === 'deleting'
+    );
+
+    if (hasPendingWork) {
+      // Other drives still have work — keep session active
+      console.log('[SyncProgressService] Drive completed but session has pending files, staying active');
+      saveState(state);
+      return;
+    }
+
+    // All files done — finalize session
+    state.currentSession.isActive = false;
+    state.currentSession.completedAt = now;
+
+    // Move completed files to recent files
     Object.values(state.currentSession.files).forEach(file => {
-      // First, mark any still in-progress files as completed
-      if (file.status === 'uploading' || file.status === 'downloading' || 
-          file.status === 'pending' || file.status === 'deleting') {
-        file.status = 'completed';
-        file.completedAt = now;
-        file.progress = 100;
-      }
-      
-      // Then add completed files to recent files
       if (file.status === 'completed' && file.completedAt) {
-        // Check if already in recent files
         const exists = state.recentFiles.some(r => r.id === file.id);
         if (!exists) {
           state.recentFiles.unshift({
@@ -369,17 +437,17 @@ export function completeSession(filesUploaded: number, filesDownloaded: number):
         }
       }
     });
-    
+
     // Clean up expired recent files
     state.recentFiles = state.recentFiles.filter(
       f => now - f.completedAt < RECENT_FILES_RETENTION_MS
     );
-    
-    console.log('[SyncProgressService] Session completed:', 
+
+    console.log('[SyncProgressService] Session completed:',
       filesUploaded, 'uploads,', filesDownloaded, 'downloads',
       'recent files:', state.recentFiles.length);
   }
-  
+
   saveState(state);
 }
 
