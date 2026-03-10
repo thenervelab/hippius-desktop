@@ -80,12 +80,7 @@ const FilesContent: FC<FilesContentProps> = ({
   const { enterSelectionModeAndSelectFile } = useFileSelection();
 
   // Use shared functionality between FilesTable and CardView
-  const sharedState = useFileViewShared({
-    files: displayedData,
-    isRecentFiles,
-    resetPagination: shouldResetPagination,
-    onPaginationReset: handlePaginationReset,
-  });
+  const sharedState = useFileViewShared();
 
   const {
     fileToDelete,

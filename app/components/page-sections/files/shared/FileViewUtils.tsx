@@ -9,13 +9,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import { resolveArionHash } from "@/app/lib/utils/resolveArionHash";
 
-export interface FileViewSharedProps {
-  files: FormattedUserFile[];
-  isRecentFiles: boolean;
-  resetPagination: boolean;
-  onPaginationReset: () => void;
-}
-
 export interface FileViewSharedState {
   fileToDelete: FormattedUserFile | null;
   setFileToDelete: (file: FormattedUserFile | null) => void;
@@ -43,12 +36,7 @@ export interface FileViewSharedState {
   handleContextMenu: (e: React.MouseEvent, file: FormattedUserFile) => void;
 }
 
-export function useFileViewShared(
-  props: FileViewSharedProps
-): FileViewSharedState {
-  const { files } = props;
-  // Ensure files is always an array to prevent undefined errors
-  const safeFiles = files || [];
+export function useFileViewShared(): FileViewSharedState {
 
   const [fileToDelete, setFileToDelete] =
     useState<FormattedUserFile | null>(null);
