@@ -241,6 +241,9 @@ const FilesHeader: FC<FilesHeaderProps> = ({
                 migration.files[migration.currentFileIndex]?.name || ""
               }
               isCancelling={migration.isCancelling}
+              phase={migration.phase}
+              uploadedCount={migration.uploadedCount}
+              currentUploadFile={migration.currentUploadFile}
             />
           )}
           {migration.currentStep === "complete" && (

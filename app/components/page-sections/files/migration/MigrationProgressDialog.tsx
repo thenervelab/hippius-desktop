@@ -21,6 +21,9 @@ export interface MigrationProgressDialogProps {
     overallProgress: number;
     currentFileName: string;
     isCancelling?: boolean;
+    phase?: "downloading" | "syncing";
+    uploadedCount?: number;
+    currentUploadFile?: string;
 }
 
 const formatBytes = (bytes: number): string => {
@@ -39,10 +42,14 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
     overallProgress,
     currentFileName,
     isCancelling = false,
+    phase = "downloading",
+    uploadedCount = 0,
+    currentUploadFile = "",
 }) => {
     const completedCount = files.filter((f) => f.status === "completed").length;
     const failedCount = files.filter((f) => f.status === "failed").length;
     const totalCount = files.length;
+    const isSyncing = phase === "syncing";
 
     return (
         <Dialog.Root open={open}>
@@ -75,13 +82,36 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
                             </div>
                         </div>
                         <h2 className="text-xl font-semibold text-grey-10">
-                            {isCancelling ? "Cancelling Migration..." : "Migrating Your Files"}
+                            {isCancelling
+                                ? "Cancelling Migration..."
+                                : isSyncing
+                                    ? "Uploading to Sync Engine"
+                                    : "Downloading Your Files"}
                         </h2>
                         <p className="text-sm text-grey-50 max-w-sm">
                             {isCancelling
                                 ? "Please wait while we safely stop the migration process."
-                                : "Please keep this window open. This may take several minutes."}
+                                : isSyncing
+                                    ? "Your files are being encrypted and uploaded to the new sync engine."
+                                    : "Downloading files from the old storage. Please keep this window open."}
                         </p>
+                    </div>
+
+                    {/* Step Indicator */}
+                    <div className="flex items-center gap-2 px-1">
+                        <div className="flex items-center gap-1.5">
+                            <div className={`size-2 rounded-full ${isSyncing ? "bg-success-50" : "bg-primary-50 animate-pulse"}`} />
+                            <span className={`text-xs ${isSyncing ? "text-success-50" : "text-primary-50 font-medium"}`}>
+                                Download
+                            </span>
+                        </div>
+                        <div className="flex-1 h-px bg-grey-80" />
+                        <div className="flex items-center gap-1.5">
+                            <div className={`size-2 rounded-full ${isSyncing ? "bg-primary-50 animate-pulse" : "bg-grey-70"}`} />
+                            <span className={`text-xs ${isSyncing ? "text-primary-50 font-medium" : "text-grey-60"}`}>
+                                Upload
+                            </span>
+                        </div>
                     </div>
 
                     {/* Overall Progress */}
@@ -89,7 +119,9 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
                         <div className="flex justify-between items-center mb-2">
                             <span className="text-sm font-medium text-grey-30">Overall Progress</span>
                             <span className="text-sm font-medium text-primary-50">
-                                {completedCount} / {totalCount} files
+                                {isSyncing
+                                    ? `${uploadedCount} / ${totalCount} uploaded`
+                                    : `${completedCount} / ${totalCount} downloaded`}
                             </span>
                         </div>
                         <ProgressBar value={overallProgress} className="h-2" />
@@ -109,10 +141,14 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
                             </div>
                             <div className="flex-1 min-w-0">
                                 <p className="text-sm font-medium text-grey-20 truncate">
-                                    {currentFileName || "Preparing..."}
+                                    {isSyncing
+                                        ? (currentUploadFile || "Preparing sync engine...")
+                                        : (currentFileName || "Preparing...")}
                                 </p>
                                 <p className="text-xs text-grey-50">
-                                    File {currentFileIndex + 1} of {totalCount}
+                                    {isSyncing
+                                        ? `Uploading ${uploadedCount + 1} of ${totalCount}`
+                                        : `Downloading ${currentFileIndex + 1} of ${totalCount}`}
                                 </p>
                             </div>
                             <Icons.Loader className="size-5 text-primary-50 animate-spin flex-shrink-0" />

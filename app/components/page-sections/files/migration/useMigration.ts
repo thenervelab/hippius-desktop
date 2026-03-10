@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -50,6 +50,9 @@ export interface UseMigrationReturn {
   failedFiles: Array<{ name: string; error: string }>;
   totalSize: number;
   isResuming: boolean;
+  phase: "downloading" | "syncing";
+  uploadedCount: number;
+  currentUploadFile: string;
   checkMigration: (accountId: string) => Promise<boolean>;
   startMigration: (accountId: string) => Promise<void>;
   cancelMigration: () => Promise<void>;
@@ -67,6 +70,12 @@ export function useMigration(): UseMigrationReturn {
   const [isResuming, setIsResuming] = useState(false);
   const [resumeSyncPath, setResumeSyncPath] = useState<string | null>(null);
 
+  const [phase, setPhase] = useState<"downloading" | "syncing">("downloading");
+  const [uploadedCount, setUploadedCount] = useState(0);
+  const [currentUploadFile, setCurrentUploadFile] = useState("");
+  const uploadedFilesRef = useRef(new Set<string>());
+  const totalFilesRef = useRef(0);
+
   const [successCount, setSuccessCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
   const [failedFiles, setFailedFiles] = useState<
@@ -77,8 +86,12 @@ export function useMigration(): UseMigrationReturn {
     const unlisteners: Array<() => void> = [];
 
     listen<MigrationProgressPayload>("migration_progress", (event) => {
-      const { current_file, completed, total, failed } = event.payload;
-      setOverallProgress(total > 0 ? (completed / total) * 100 : 0);
+      const { phase: eventPhase, current_file, completed, total, failed } = event.payload;
+      setPhase(eventPhase);
+      totalFilesRef.current = total;
+      if (eventPhase === "downloading") {
+        setOverallProgress(total > 0 ? (completed / total) * 50 : 0);
+      }
       setSuccessCount(Number(completed));
       setFailedCount(Number(failed));
       setCurrentFileIndex(Number(completed));
@@ -114,6 +127,7 @@ export function useMigration(): UseMigrationReturn {
     }).then((u) => unlisteners.push(u));
 
     listen("migration_complete", () => {
+      setOverallProgress(100);
       setCurrentStep("complete");
     }).then((u) => unlisteners.push(u));
 
@@ -125,6 +139,31 @@ export function useMigration(): UseMigrationReturn {
       ]);
       setCurrentStep("complete");
     }).then((u) => unlisteners.push(u));
+
+    listen<{ label: string; bytes: number; total: number; path: string | null }>(
+      "hcfs_upload_progress",
+      (event) => {
+        const { label, bytes, total, path } = event.payload;
+        if (label !== "migration") return;
+
+        if (path) {
+          const fileName = path.split("/").pop() || path;
+          setCurrentUploadFile(fileName);
+        }
+
+        if (bytes === total && total > 0 && path) {
+          if (!uploadedFilesRef.current.has(path)) {
+            uploadedFilesRef.current.add(path);
+            const count = uploadedFilesRef.current.size;
+            setUploadedCount(count);
+            const totalFiles = totalFilesRef.current;
+            if (totalFiles > 0) {
+              setOverallProgress(50 + (count / totalFiles) * 50);
+            }
+          }
+        }
+      }
+    ).then((u) => unlisteners.push(u));
 
     return () => {
       unlisteners.forEach((u) => u());
@@ -181,6 +220,10 @@ export function useMigration(): UseMigrationReturn {
       setFailedCount(0);
       setFailedFiles([]);
       setCurrentFileIndex(0);
+      setPhase("downloading");
+      setUploadedCount(0);
+      setCurrentUploadFile("");
+      uploadedFilesRef.current.clear();
 
       try {
         await invoke("start_migration", { accountId, syncPath });
@@ -217,6 +260,10 @@ export function useMigration(): UseMigrationReturn {
     setTotalSize(0);
     setIsResuming(false);
     setResumeSyncPath(null);
+    setPhase("downloading");
+    setUploadedCount(0);
+    setCurrentUploadFile("");
+    uploadedFilesRef.current.clear();
   }, []);
 
   return {
@@ -231,6 +278,9 @@ export function useMigration(): UseMigrationReturn {
     failedFiles,
     totalSize,
     isResuming,
+    phase,
+    uploadedCount,
+    currentUploadFile,
     checkMigration,
     startMigration,
     cancelMigration,
