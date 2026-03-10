@@ -83,14 +83,22 @@ export function useMigration(): UseMigrationReturn {
       setFailedCount(Number(failed));
       setCurrentFileIndex(Number(completed));
 
-      setFiles((prev) =>
-        prev.map((f) => {
-          if (f.name === current_file && f.status === "pending") {
+      setFiles((prev) => {
+        let completedSoFar = 0;
+        return prev.map((f) => {
+          if (f.status === "failed") return f;
+          if (completedSoFar < completed && f.name !== current_file) {
+            completedSoFar++;
+            return f.status === "completed"
+              ? f
+              : { ...f, status: "completed" as const };
+          }
+          if (f.name === current_file) {
             return { ...f, status: "migrating" as const };
           }
           return f;
-        })
-      );
+        });
+      });
     }).then((u) => unlisteners.push(u));
 
     listen<MigrationFileErrorPayload>("migration_file_error", (event) => {

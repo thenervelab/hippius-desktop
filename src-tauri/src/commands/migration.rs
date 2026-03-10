@@ -222,7 +222,11 @@ pub(crate) async fn fetch_migration_files(
             format!("Failed to parse migration response: {e}")
         })?;
 
-    Ok(parsed.files)
+    Ok(parsed
+        .files
+        .into_iter()
+        .filter(|f| !should_skip_key(&f.key))
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -658,6 +662,15 @@ async fn run_migration_download(
         .bind(&sync_path)
         .execute(pool)
         .await;
+    }
+
+    // Verify HCFS config exists — migration requires sync to be set up first
+    if let Err(_) = crate::commands::syncing::get_drive_password(account_id).await {
+        return Err(
+            "Please set up sync before migrating. \
+             Go to Files and configure your sync folder first."
+                .to_string(),
+        );
     }
 
     // Initialize the migration drive

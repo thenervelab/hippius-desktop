@@ -18,8 +18,8 @@ export default function ConflictEventListener() {
 
   useEffect(() => {
     const listeners = [
-      listen<StagedChanges>("hcfs_conflicts_pending", (event) => {
-        setPendingConflicts(event.payload);
+      listen<{ label: string; staged: StagedChanges }>("hcfs_conflicts_pending", (event) => {
+        setPendingConflicts(event.payload.staged);
       }),
       listen("hcfs_sync_completed", () => {
         setPendingConflicts(null);
