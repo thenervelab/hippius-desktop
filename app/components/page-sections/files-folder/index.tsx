@@ -473,7 +473,6 @@ export default function FolderView({
               <FilesContent
                 isRecentFiles={false}
                 isLoading={false}
-                isFetching={false}
                 filteredData={filteredData}
                 displayedData={paginatedData}
                 searchTerm={searchTerm}

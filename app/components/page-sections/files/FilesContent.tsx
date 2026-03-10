@@ -34,7 +34,6 @@ import NoMatchingResults from "./NoMatchingResults";
 interface FilesContentProps {
   isRecentFiles?: boolean;
   isLoading: boolean;
-  isFetching: boolean;
   filteredData: Array<FormattedUserFile & { timestamp?: Date | null }>;
   displayedData: Array<FormattedUserFile & { timestamp?: Date | null }>;
   searchTerm: string;
@@ -56,7 +55,6 @@ interface FilesContentProps {
 const FilesContent: FC<FilesContentProps> = ({
   isRecentFiles = false,
   isLoading,
-  isFetching,
   filteredData,
   displayedData,
   searchTerm,
@@ -232,7 +230,9 @@ const FilesContent: FC<FilesContentProps> = ({
 
   const renderContent = () => {
 
-    if (isLoading || isFetching) {
+    // Only show full loading state on initial load (no data yet).
+    // During background refetches (isFetching), keep showing existing data.
+    if (isLoading) {
       return <WaitAMoment isRecentFiles={isRecentFiles} />;
     }
 

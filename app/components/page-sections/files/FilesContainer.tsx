@@ -79,7 +79,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const isFetching = isRecentFiles
     ? isRecentFilesFetching
     : isRegularFilesFetching;
-
   const addButtonRef = useRef<{ openWithFiles(files: FileList): void; openWithPaths(paths: string[]): void; isDialogOpen(): boolean }>(null);
   const [viewMode, setViewMode] = useState<"list" | "card">("list");
   const [shouldResetPagination, setShouldResetPagination] = useState(false);
@@ -812,7 +811,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           <FilesContent
             isRecentFiles={isRecentFiles}
             isLoading={isLoading}
-            isFetching={isFetching}
             isPrivateView={effectiveIsPrivateView}
             filteredData={filteredData}
             displayedData={paginatedData}
