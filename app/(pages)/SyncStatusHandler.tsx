@@ -423,7 +423,6 @@ const SyncStatusHandler: React.FC = () => {
       syncFiles={filesToRender}
       syncPercent={syncMetrics.syncPercent}
       totalFiles={syncMetrics.totalFiles}
-      syncedFiles={syncMetrics.syncedFiles}
       filesFailed={filesFailed}
       isInProgress={syncMetrics.isInProgress}
       uploadProgress={uploadProgress}

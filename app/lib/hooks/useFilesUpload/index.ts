@@ -132,8 +132,8 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       // Show "added" confirmation
       const addedText =
         filePaths.length > 1
-          ? `${filePaths.length} files added. Syncing will start shortly`
-          : `${firstFileName} added. Syncing will start shortly`;
+          ? `${filePaths.length} files added. Syncing started`
+          : `${firstFileName} added. Syncing started`;
       toast.success(addedText, { id: localToastId, duration: 2000, closeButton: true });
 
       // finish up

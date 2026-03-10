@@ -203,8 +203,8 @@ const FolderFileUploadFlow: React.FC<FolderFileUploadFlowProps> = ({
 
             toast.success(
                 files.length > 1
-                    ? `${files.length} files added. Syncing will start shortly`
-                    : `File added. Syncing will start shortly`,
+                    ? `${files.length} files added. Syncing started.`
+                    : `File added. Syncing started.`,
                 { id: toastId, duration: 2000, closeButton: true }
             );
 

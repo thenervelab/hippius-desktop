@@ -34,7 +34,6 @@ interface SyncStatusDialogProps {
   onClose?: () => void;
   syncPercent?: number | null;
   totalFiles?: number;
-  syncedFiles?: number;
   filesFailed?: number;
   isInProgress?: boolean;
   uploadProgress?: ProgressPayload | null;
@@ -57,7 +56,6 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   onClose,
   syncPercent: propSyncPercent = null,
   totalFiles: propTotalFiles = 0,
-  syncedFiles: propSyncedFiles = 0,
   filesFailed: propFilesFailed = 0,
   isInProgress = false,
   uploadProgress = null,
