@@ -907,7 +907,8 @@ async fn initialize_sync_inner(
             };
             match hcfs_client::client::HcfsClient::new(config) {
                 Ok(client) => {
-                    if let Err(e) = client.register_folder(&composite, &reg_label).await {
+                    let dev_name = get_device_name_internal().await.ok();
+                    if let Err(e) = client.register_folder(&composite, &reg_label, dev_name.as_deref()).await {
                         println!("[Setup] Warning: folder registration failed: {}", e);
                     } else {
                         println!("[Setup] Folder '{}' registered with server", reg_label);
@@ -1473,6 +1474,7 @@ pub struct RemoteFolderInfoResult {
     pub total_bytes: u64,
     pub created_at: i64,
     pub updated_at: i64,
+    pub device_name: String,
 }
 
 /// List all folders registered for the current account on the remote server.
@@ -1518,6 +1520,7 @@ pub async fn list_remote_folders(
             total_bytes: f.total_bytes,
             created_at: f.created_at,
             updated_at: f.updated_at,
+            device_name: f.device_name,
         })
         .collect())
 }
@@ -1719,4 +1722,46 @@ pub async fn delete_remote_folder(
         files_deleted: result.files_deleted,
         was_local,
     })
+}
+
+// =============================================================================
+// Device Name
+// =============================================================================
+
+/// Internal helper to read the device name from DB.
+async fn get_device_name_internal() -> Result<String, String> {
+    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+    let row = sqlx::query_scalar::<_, String>(
+        "SELECT device_name FROM device_settings WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to read device name: {e}"))?;
+    Ok(row.unwrap_or_else(|| "My Device".to_string()))
+}
+
+/// Get the friendly device name for this machine.
+#[tauri::command]
+pub async fn get_device_name() -> Result<String, String> {
+    get_device_name_internal().await
+}
+
+/// Set a custom friendly device name for this machine.
+#[tauri::command]
+pub async fn set_device_name(name: String) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Device name cannot be empty".to_string());
+    }
+    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+    sqlx::query(
+        "INSERT INTO device_settings (id, device_name, updated_at) VALUES (1, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(id) DO UPDATE SET device_name = excluded.device_name, updated_at = CURRENT_TIMESTAMP",
+    )
+    .bind(&name)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to save device name: {e}"))?;
+    println!("[Settings] Device name updated: {}", name);
+    Ok(())
 }

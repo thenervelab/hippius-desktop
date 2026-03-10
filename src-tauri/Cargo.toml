@@ -73,8 +73,8 @@ bip39 = { version = "2.2", features = ["rand"] }
 alloy-signer = { version = "0.8", default-features = false }
 alloy-signer-local = { version = "0.8", default-features = false, features = ["mnemonic"] }
 # Use main branch from GitHub
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "e517328" }
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "e517328" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "c613fbf" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "c613fbf" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

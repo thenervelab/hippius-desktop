@@ -93,7 +93,7 @@ export default function MultiFolderSyncManager() {
         .filter((r) => !localLabelSet.has(r.label))
         .map((r) => ({
           folderName: r.label,
-          deviceName: "Other Device",
+          deviceName: r.device_name || "Unknown Device",
           fileCount: r.file_count,
           totalBytes: r.total_bytes,
           lastModified: (r.updated_at || r.created_at) * 1000,

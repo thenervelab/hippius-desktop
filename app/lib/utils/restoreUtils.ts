@@ -7,6 +7,7 @@ export interface RemoteFolderInfo {
   total_bytes: number;
   created_at: number;
   updated_at: number;
+  device_name: string;
 }
 
 export interface RestoreResult {

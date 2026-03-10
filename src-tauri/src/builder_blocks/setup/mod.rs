@@ -254,6 +254,34 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Device settings table (singleton row, stores friendly device name)
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS device_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            device_name TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Seed with OS hostname if no row exists yet
+    {
+        let existing = sqlx::query("SELECT id FROM device_settings WHERE id = 1")
+            .fetch_optional(pool)
+            .await?;
+        if existing.is_none() {
+            let hostname = hostname::get()
+                .map(|h| h.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| "My Device".to_string());
+            sqlx::query("INSERT INTO device_settings (id, device_name) VALUES (1, ?)")
+                .bind(&hostname)
+                .execute(pool)
+                .await?;
+            println!("[Setup] Device name seeded: {}", hostname);
+        }
+    }
+
     Ok(())
 }
 

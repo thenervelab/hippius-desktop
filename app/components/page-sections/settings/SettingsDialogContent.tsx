@@ -14,6 +14,7 @@ import OAuthTokenSection from "./OAuthTokenSection";
 import EmailNotificationSection from "./EmailNotificationSection";
 import VPNSettings from "./VPNSettings";
 import RecoveryPhraseSettings from "./RecoveryPhraseSettings";
+import DeviceNameSetting from "./DeviceNameSetting";
 
 const SettingsDialogContent: React.FC = () => {
   const [activeTab, setActiveTab] = useAtom(activeSettingsTabAtom);
@@ -118,10 +119,19 @@ const SettingsDialogContent: React.FC = () => {
                     className="delay-300 w-full"
                     parentClassName="w-full"
                   >
+                    <DeviceNameSetting />
+                  </RevealTextLine>
+                </div>
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                  <RevealTextLine
+                    rotate
+                    reveal={inView}
+                    className="delay-300 w-full"
+                    parentClassName="w-full"
+                  >
                     <MultiFolderSyncManager />
                   </RevealTextLine>
                 </div>
-
               </div>
             )}
             {activeTab === "API Token" && (
