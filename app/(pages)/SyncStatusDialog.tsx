@@ -152,7 +152,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className={cn(
         " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
-        isExpanded ? "w-[378px]" : "w-16 sm:w-[220px]"
+        isExpanded ? "w-[378px]" : "w-[170px]"
       )}
     >
       {/* Header */}
@@ -161,7 +161,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
           isExpanded
             ? "rounded-t-[8px] w-[378px]"
-            : "rounded-[8px] w-16 sm:w-[220px]"
+            : "rounded-[8px] w-[170px]"
         )}
         onClick={handleHeaderClick}
       >
@@ -227,15 +227,19 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
               {/* Icon wrapper */}
               <div className="absolute inset-0 size-12 flex items-center justify-center">
-                <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[50%]">
-                  {hasFailed ? (
+                {hasFailed ? (
+                  <div className="size-10 flex items-center justify-center rounded-full bg-error-100/30">
                     <Icons.Close className="size-5 relative text-error-50" />
-                  ) : isCompleted ? (
-                    <Icons.TickCircle className="size-6 relative text-success-50" />
-                  ) : (
-                    <Icons.Refresh className="size-6 relative text-primary-50 animate-spin" />
-                  )}
-                </AbstractIconWrapper>
+                  </div>
+                ) : (
+                  <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[50%]">
+                    {isCompleted ? (
+                      <Icons.TickCircle className="size-6 relative text-success-50" />
+                    ) : (
+                      <Icons.Refresh className="size-6 relative text-primary-50 animate-spin" />
+                    )}
+                  </AbstractIconWrapper>
+                )}
               </div>
             </div>
 
