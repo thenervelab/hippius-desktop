@@ -33,6 +33,29 @@ import { useTrayInit } from "./hooks/useTraySync";
 import { cryptoWaitReady } from "@polkadot/util-crypto";
 import { tryAutoInitSync } from "./hooks/useHcfsSync";
 import { ensureSyncMnemonic } from "./helpers/ensureSyncMnemonic";
+import { appStore } from "./store/jotaiStore";
+import { migrationCheckAtom } from "./global-atoms/migrationAtoms";
+
+async function checkMigrationAfterLogin(accountId: string) {
+  try {
+    const result = await invoke<{
+      needs_migration: boolean;
+      file_count: number;
+      total_size: number;
+    }>("check_migration", { accountId });
+
+    if (result.needs_migration) {
+      appStore.set(migrationCheckAtom, {
+        checked: true,
+        needsMigration: true,
+        fileCount: result.file_count,
+        totalSize: result.total_size,
+      });
+    }
+  } catch (err) {
+    console.error("[WalletAuth] Migration check failed:", err);
+  }
+}
 
 interface WalletContextType {
   isAuthenticated: boolean;
@@ -286,6 +309,9 @@ export function WalletAuthProvider({
                     ).catch((err) =>
                       console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err)
                     );
+                    checkMigrationAfterLogin(oauthSessionData.substrateAddress).catch((err) =>
+                      console.error("[WalletAuth] Migration check error:", err)
+                    );
                   } catch (err) {
                     console.error("[WalletAuth] Failed to start sync for mnemonic restore:", err);
                   }
@@ -304,6 +330,9 @@ export function WalletAuthProvider({
                   const mnemonic = await ensureSyncMnemonic(oauthSessionData.substrateAddress);
                   tryAutoInitSync(oauthSessionData.substrateAddress, mnemonic).catch((err) =>
                     console.error("[WalletAuth] Failed to start sync for OAuth restore:", err)
+                  );
+                  checkMigrationAfterLogin(oauthSessionData.substrateAddress).catch((err) =>
+                    console.error("[WalletAuth] Migration check error:", err)
                   );
                 } catch (err) {
                   console.error("[WalletAuth] Failed to start sync for OAuth restore:", err);
@@ -549,6 +578,9 @@ export function WalletAuthProvider({
         tryAutoInitSync(pair.address, inputMnemonic).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from setSession:", err)
         );
+        checkMigrationAfterLogin(pair.address).catch((err) =>
+          console.error("[WalletAuth] Migration check error:", err)
+        );
       }
 
       return true;
@@ -636,6 +668,9 @@ export function WalletAuthProvider({
         tryAutoInitSync(polkadotAddr, inputMnemonic).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from login:", err)
         );
+        checkMigrationAfterLogin(polkadotAddr).catch((err) =>
+          console.error("[WalletAuth] Migration check error:", err)
+        );
       }
 
       // Ensure temp auth key is stored for S3 access if no master token yet
@@ -682,6 +717,9 @@ export function WalletAuthProvider({
       const mnemonic = await ensureSyncMnemonic(session.substrateAddress);
       tryAutoInitSync(session.substrateAddress, mnemonic).catch((err) =>
         console.error("[WalletAuth] Failed to start sync from OAuth login:", err)
+      );
+      checkMigrationAfterLogin(session.substrateAddress).catch((err) =>
+        console.error("[WalletAuth] Migration check error:", err)
       );
     }
   };

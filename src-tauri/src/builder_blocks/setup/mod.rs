@@ -282,6 +282,23 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         }
     }
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS migration_status (
+            account_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'in_progress',
+            total_files INTEGER NOT NULL DEFAULT 0,
+            completed_files INTEGER NOT NULL DEFAULT 0,
+            failed_files TEXT NOT NULL DEFAULT '[]',
+            sync_path TEXT NOT NULL DEFAULT '',
+            server_url TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 

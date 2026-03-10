@@ -1121,6 +1121,28 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                     }),
                 );
             }
+
+            // After a successful migration drive sync, report migrated files
+            if label_owned == "migration" {
+                match crate::utils::sync::current_account_id() {
+                    Ok(active_account) => {
+                        let app_clone = app.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = crate::commands::migration::report_migrated_files(
+                                &app_clone,
+                                &active_account,
+                            )
+                            .await
+                            {
+                                println!("[Migration] Report error: {e}");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        println!("[Migration] Cannot report: no active account ({e})");
+                    }
+                }
+            }
         }
         SyncResult::Synced {
             outcome: Err(e), ..

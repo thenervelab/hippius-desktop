@@ -2,7 +2,6 @@ export { default as MigrationPromptDialog } from "./MigrationPromptDialog";
 export { default as MigrationConfirmSkipDialog } from "./MigrationConfirmSkipDialog";
 export { default as MigrationProgressDialog } from "./MigrationProgressDialog";
 export { default as MigrationCompleteDialog } from "./MigrationCompleteDialog";
-export { default as MigrationPreview } from "./MigrationPreview";
 export { useMigration } from "./useMigration";
 export type { MigrationPromptDialogProps } from "./MigrationPromptDialog";
 export type { MigrationConfirmSkipDialogProps } from "./MigrationConfirmSkipDialog";

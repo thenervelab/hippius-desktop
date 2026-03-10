@@ -189,6 +189,10 @@ fn main() {
             // Device settings
             get_device_name,
             set_device_name,
+            // Migration
+            commands::migration::check_migration,
+            commands::migration::start_migration,
+            commands::migration::cancel_migration,
         ]);
 
     let builder = setup(builder);

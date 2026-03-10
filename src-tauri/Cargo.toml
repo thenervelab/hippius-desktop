@@ -46,6 +46,8 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "stream",
     "rustls",
 ] }
+aws-sdk-s3 = { version = "1.125.0", features = ["behavior-version-latest"] }
+aws-credential-types = { version = "1.2.14", features = ["hardcoded-credentials"] }
 zip = "4.2.0"
 dotenvy = "0.15"
 base64 = "0.21"
@@ -77,6 +79,9 @@ hcfs-client = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev 
 hcfs-shared = { git = "ssh://git@github.com/thenervelab/hippius-arion.git", rev = "c613fbf" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.2", features = ["fs"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"
