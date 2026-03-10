@@ -144,6 +144,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
   const { totalFiles, syncedFiles, percentage, isCompleted } =
     calculatedMetrics;
+  const hasFailed = propFilesFailed > 0 && isCompleted;
   if (!open) return null;
 
   return (
@@ -213,17 +214,23 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   r="22"
                   className={cn(
                     "fill-none stroke-[4]",
-                    isCompleted ? "stroke-[#4ade80]" : "stroke-[#4171e0]"
+                    hasFailed
+                      ? "stroke-[#ef4444]"
+                      : isCompleted
+                        ? "stroke-[#4ade80]"
+                        : "stroke-[#4171e0]"
                   )}
                   strokeLinecap="round"
-                  strokeDasharray={percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
+                  strokeDasharray={hasFailed ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
                 />
               </svg>
 
               {/* Icon wrapper */}
               <div className="absolute inset-0 size-12 flex items-center justify-center">
                 <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[50%]">
-                  {isCompleted ? (
+                  {hasFailed ? (
+                    <Icons.Close className="size-5 relative text-error-50" />
+                  ) : isCompleted ? (
                     <Icons.TickCircle className="size-6 relative text-success-50" />
                   ) : (
                     <Icons.Refresh className="size-6 relative text-primary-50 animate-spin" />
@@ -244,14 +251,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               <span className="text-base font-medium text-grey-10">
                 {isUnhealthy
                   ? CONNECTIVITY_STATUS_LABELS[engineHealth.status as keyof typeof CONNECTIVITY_STATUS_LABELS]
-                  : isCompleted
-                    ? "Sync Complete"
-                    : "File Sync"}
+                  : hasFailed
+                    ? "Sync Failed"
+                    : isCompleted
+                      ? "Sync Complete"
+                      : "File Sync"}
               </span>
               <InfoTooltip className="ml-2">
-                {isCompleted
-                  ? "All files have been successfully synced to the network."
-                  : "Your files are being synced to the Hippius network. This process may take a few minutes."}
+                {hasFailed
+                  ? "Some files failed to sync. Please try again."
+                  : isCompleted
+                    ? "All files have been successfully synced to the network."
+                    : "Your files are being synced to the Hippius network. This process may take a few minutes."}
               </InfoTooltip>
             </h2>
           </div>
@@ -262,18 +273,21 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               isExpanded ? "opacity-100" : "opacity-0 sm:opacity-100"
             )}
           >
-            <span className="text-sm text-grey-40 mr-2">
-              {isUnhealthy
-                ? "Disconnected"
-                : isCompleted
-                  ? "Complete"
-                  : isExpanded
-                    ? "Syncing..."
-                    : percentage !== null
-                      ? `${percentage}%`
-                      : "Syncing..."
-              }
-            </span>
+            {/* Status text — hidden when expanded since the title already shows status */}
+            {!isExpanded && (
+              <span className={cn("text-sm mr-2", hasFailed ? "text-error-50" : "text-grey-40")}>
+                {isUnhealthy
+                  ? "Disconnected"
+                  : hasFailed
+                    ? "Failed"
+                    : isCompleted
+                      ? "Complete"
+                      : percentage !== null
+                        ? `${percentage}%`
+                        : "Syncing..."
+                }
+              </span>
+            )}
 
             <div className="transition-transform duration-300 ease-in-out">
               {isExpanded ? (
@@ -285,8 +299,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
             {/* Divider to separate actions */}
 
-            {/* Close button - only shown when completed and expanded */}
-            {isCompleted && isExpanded && onClose && (
+            {/* Close button - shown when completed or failed and expanded */}
+            {(isCompleted || hasFailed) && isExpanded && onClose && (
               <>
                 <span className="mx-2 h-5 w-px bg-grey-80" role="separator" />
                 <button
