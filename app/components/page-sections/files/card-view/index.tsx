@@ -26,11 +26,12 @@ import { Folder } from "@/app/components/ui/icons";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
 interface CardViewProps {
-  showUnpinnedDialog?: boolean;
   files: FormattedUserFile[];
   resetPagination?: boolean;
   onPaginationReset?: () => void;
@@ -147,6 +148,7 @@ const CardView: FC<CardViewProps> = ({
             {files.map((file, index) => {
               const { fileFormat } = getFilePartsFromFileName(file.name);
               const fileType = getFileTypeFromExtension(fileFormat || null);
+              const arionHash = resolveArionHash(file.arionHash);
 
               let cardState: "success" | "pending" | "error" = "success";
               if (file.tempData) {
@@ -165,7 +167,7 @@ const CardView: FC<CardViewProps> = ({
 
               return (
                 <div
-                  key={file.cid || `${file.actualFileName || file.name}-${index}`}
+                  key={file.arionHash || `${file.actualFileName || file.name}-${index}`}
                   className="card-container relative"
                   onContextMenu={(e) => localHandleContextMenu(e, file)}
                 >
@@ -248,13 +250,33 @@ const CardView: FC<CardViewProps> = ({
                               localHandleShowFileDetails(file);
                             }
                           },
+                          ...(!file.isFolder && arionHash && arionHash !== "pending"
+                            ? [
+                              {
+                                icon: <Icons.SendSquare2 className="size-4" />,
+                                itemTitle: "View on Explorer",
+                                onItemClick: async (e?: React.MouseEvent) => {
+                                  if (e) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                  }
+                                  setOpenMenuIndex(null);
+                                  try {
+                                    await openUrl(`https://hipstats.com/file-tracker/${arionHash}`);
+                                  } catch (error) {
+                                    console.error("Failed to open Explorer:", error);
+                                  }
+                                },
+                              },
+                            ]
+                            : []),
                           // Always show delete option, but disabled for unpinned files
                           {
                             icon: <Icons.Trash className="size-4" />,
-                            itemTitle: !file.isAssigned ? "Delete (Pinning in progress...)" : "Delete",
+                            itemTitle: !file.isAssigned ? "Delete (Syncing in progress...)" : "Delete",
                             disabled: !file.isAssigned,
                             className: !file.isAssigned ? "cursor-not-allowed opacity-60" : "",
-                            tooltip: !file.isAssigned ? "This file is currently being pinned and cannot be deleted yet. Please wait for the pinning process to complete." : undefined,
+                            tooltip: !file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : undefined,
                             onItemClick: (e?: React.MouseEvent) => {
                               // Always prevent event bubbling to avoid triggering card's onClick
                               if (e) {

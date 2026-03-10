@@ -157,7 +157,7 @@ export default function FolderView({
             actualFileName: entry.name,
             size: entry.size,
             createdAt: modifiedMs,
-            cid: "",
+            arionHash: "",
             source: filePath,
             minerIds: [],
             isAssigned: true,

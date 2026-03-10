@@ -16,8 +16,6 @@ import AddressBookTable from "./AddressBookTable";
 import useBalanceTransactions from "@/app/lib/hooks/api/useBalanceTransactions";
 import useSystemBalance from "@/app/lib/hooks/api/useSystemBalance";
 import BalanceTrends from "./balance-trends";
-import { useAtomValue } from "jotai";
-import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { cn } from "@/app/lib/utils";
 
 export default function Wallet() {
@@ -27,7 +25,6 @@ export default function Wallet() {
     isLoading: isBalanceLoading,
     refetch: refetchSystemBalance,
   } = useSystemBalance();
-  const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
   const [activeTab, setActiveTab] = useState("Transaction History");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [contacts, setContacts] = useState<
@@ -107,17 +104,6 @@ export default function Wallet() {
 
         <div
           className={cn(
-            isUnpinnedOpen &&
-              ((activeTab === "Transaction History" &&
-                transactions &&
-                transactions?.length > 0 &&
-                transactions?.length < 11) ||
-                (activeTab === "Address Book" &&
-                  contacts &&
-                  contacts?.length > 0 &&
-                  contacts?.length < 11))
-              ? "pb-[90px]"
-              : "",
             "mt-6"
           )}
         >

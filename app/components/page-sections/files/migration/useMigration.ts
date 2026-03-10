@@ -36,11 +36,11 @@ export interface UseMigrationReturn {
 
 // Mock files for preview mode
 const mockFiles: MigrationFile[] = [
-  { cid: "Qm1234567890abcdef", name: "document.pdf", size: 2456789, status: "pending" },
-  { cid: "Qm2345678901bcdefg", name: "vacation-photo.jpg", size: 4567890, status: "pending" },
-  { cid: "Qm3456789012cdefgh", name: "presentation.pptx", size: 8901234, status: "pending" },
-  { cid: "Qm4567890123defghi", name: "spreadsheet.xlsx", size: 1234567, status: "pending" },
-  { cid: "Qm5678901234efghij", name: "notes.txt", size: 12345, status: "pending" },
+  { arionHash: "Qm1234567890abcdef", name: "document.pdf", size: 2456789, status: "pending" },
+  { arionHash: "Qm2345678901bcdefg", name: "vacation-photo.jpg", size: 4567890, status: "pending" },
+  { arionHash: "Qm3456789012cdefgh", name: "presentation.pptx", size: 8901234, status: "pending" },
+  { arionHash: "Qm4567890123defghi", name: "spreadsheet.xlsx", size: 1234567, status: "pending" },
+  { arionHash: "Qm5678901234efghij", name: "notes.txt", size: 12345, status: "pending" },
 ];
 
 export function useMigration(): UseMigrationReturn {

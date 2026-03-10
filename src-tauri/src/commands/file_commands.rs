@@ -7,7 +7,7 @@
 //! All path-accepting commands include traversal protection via `ensure_within()`.
 
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::hcfs_drive::HCFS_DRIVES;
@@ -21,6 +21,8 @@ pub struct FileEntry {
     pub modified: Option<u64>,
     /// Sync status: "synced", "pending", or "unknown"
     pub sync_status: String,
+    /// Hex-encoded path_hash from the synced state (empty if not synced yet)
+    pub arion_hash: String,
 }
 
 /// Verify that `child` is contained within `parent` after canonicalization.
@@ -148,19 +150,22 @@ pub async fn remove_file(sync_path: String, name: String, label: Option<String>)
     Ok(())
 }
 
-/// Build the set of relative paths whose `path_hash` appears in the
-/// drive's persisted `synced` tree. These are files the server has
-/// acknowledged. Returns `None` when the drive isn't available (e.g.
-/// logged out) so the caller can fall back to "unknown".
-async fn synced_paths_for_label(label: &str) -> Option<HashSet<String>> {
+/// Build a map of relative paths → hex-encoded path_hash for files whose
+/// `path_hash` appears in the drive's persisted `synced` tree.
+/// Returns `None` when the drive isn't available (e.g. logged out)
+/// so the caller can fall back to "unknown".
+async fn synced_paths_for_label(label: &str) -> Option<HashMap<String, String>> {
     let guard = HCFS_DRIVES.lock().await;
     let manager = guard.get(label)?;
     let state = manager.load_sync_state().ok()?;
 
-    let mut paths = HashSet::new();
+    let mut paths = HashMap::new();
     for (hash, rel_path) in &state.path_index {
         if state.synced.files.contains_key(hash) {
-            paths.insert(rel_path.to_string_lossy().to_string());
+            paths.insert(
+                rel_path.to_string_lossy().to_string(),
+                hex::encode(hash),
+            );
         }
     }
     Some(paths)
@@ -219,15 +224,15 @@ pub async fn list_sync_folder(
         };
 
         // Folders don't have server-side entries — their children do
-        let sync_status = if is_folder {
-            "synced".to_string()
+        let (sync_status, arion_hash) = if is_folder {
+            ("synced".to_string(), String::new())
         } else {
             match &synced_set {
-                Some(set) if set.contains(&relative_path) => {
-                    "synced".to_string()
-                }
-                Some(_) => "pending".to_string(),
-                None => "unknown".to_string(),
+                Some(map) => match map.get(&relative_path) {
+                    Some(hash) => ("synced".to_string(), hash.clone()),
+                    None => ("pending".to_string(), String::new()),
+                },
+                None => ("unknown".to_string(), String::new()),
             }
         };
 
@@ -241,6 +246,7 @@ pub async fn list_sync_folder(
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs()),
             sync_status,
+            arion_hash,
         });
     }
 

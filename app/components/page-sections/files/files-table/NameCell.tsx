@@ -1,5 +1,5 @@
 import { FC } from "react";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
+import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import Link from "next/link";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { getFileIcon } from "@/lib/utils/fileTypeUtils";
@@ -12,7 +12,7 @@ import SyncFolderBadge from "@/components/ui/SyncFolderBadge";
 type NameCellProps = {
   rawName: string;
   actualName?: string;
-  cid: string;
+  arionHash: string;
   className?: string;
   isAssigned: boolean;
   fileType?: FileTypes;
@@ -41,7 +41,7 @@ const SyncStatusBadge: FC<{ status?: "synced" | "pending" | "unknown" }> = ({ st
 const NameCell: FC<NameCellProps> = ({
   rawName,
   actualName,
-  cid,
+  arionHash,
   className,
   fileType,
   isPreviewable = false,
@@ -55,17 +55,17 @@ const NameCell: FC<NameCellProps> = ({
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
 
-  const mainFolderCid = getParam("mainFolderCid", "");
+  const mainFolderHash = getParam("mainFolderCid", "");
   const folderActualName = isFolder ? actualName || "" : "";
   const mainFolderActualName = getParam("mainFolderActualName", isFolder ? actualName || "" : "");
   const subFolderPath = getParam("subFolderPath", "");
 
-  const effectiveMainFolderCid = mainFolderCid || cid;
+  const effectiveMainFolderHash = mainFolderHash || arionHash;
 
   // Build the folder path for navigation
   const { mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
     folderActualName,
-    effectiveMainFolderCid,
+    effectiveMainFolderHash,
     mainFolderActualName || folderActualName,
     subFolderPath
   );
@@ -74,8 +74,8 @@ const NameCell: FC<NameCellProps> = ({
   const folderUrl = {
     pathname: "/files",
     query: {
-      mainFolderCid: effectiveMainFolderCid ?? "",
-      folderCid: decodeHexCid(cid) ?? "",
+      mainFolderCid: effectiveMainFolderHash ?? "",
+      folderCid: resolveArionHash(arionHash) ?? "",
       folderName: rawName ?? "",
       folderActualName: actualName ?? "",
       mainFolderActualName: newMainFolder ?? "",

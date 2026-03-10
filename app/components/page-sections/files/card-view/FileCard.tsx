@@ -3,7 +3,7 @@ import Image from "next/image";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { cn } from "@/lib/utils";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
+import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import { FileTypeIcon } from "@/components/ui";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 // import { Graphsheet } from "@/components/ui";
@@ -62,16 +62,16 @@ const FileCard: React.FC<FileCardProps> = ({
 
   // Get current path information for folder navigation
   const folderActualName = file.isFolder ? file.actualFileName || "" : "";
-  const mainFolderCid = getParam("mainFolderCid", "");
+  const mainFolderHash = getParam("mainFolderCid", "");
   const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
   const subFolderPath = getParam("subFolderPath", "");
-  const effectiveMainFolderCid = mainFolderCid || file.cid;
+  const effectiveMainFolderHash = mainFolderHash || file.arionHash;
   const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
 
   // Build the folder path for navigation
-  const { mainFolderCid: newMainFolderCID, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
+  const { mainFolderCid: newMainFolderHash, mainFolderActualName: newMainFolder, subFolderPath: newSubFolderPath } = buildFolderPath(
     folderActualName,
-    effectiveMainFolderCid,
+    effectiveMainFolderHash,
     effectiveMainFolderActualName,
     subFolderPath
   );
@@ -79,7 +79,7 @@ const FileCard: React.FC<FileCardProps> = ({
   // Reset thumbnail state when file changes
   useEffect(() => {
     // Generate a unique ID for this file to track changes
-    const currentFileId = `${file.cid}-${file.name}`;
+    const currentFileId = `${file.arionHash}-${file.name}`;
 
     // If the file changed, reset all thumbnail states
     if (fileIdRef.current !== currentFileId) {
@@ -95,7 +95,7 @@ const FileCard: React.FC<FileCardProps> = ({
         timeoutRef.current = null;
       }
     }
-  }, [file.cid, file.name]);
+  }, [file.arionHash, file.name]);
 
   useEffect(() => {
     // Only attempt to load thumbnails for image and video files
@@ -229,7 +229,7 @@ const FileCard: React.FC<FileCardProps> = ({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    file.cid,
+    file.arionHash,
     file.name,
     file.isFolder,
     fileType,
@@ -302,7 +302,7 @@ const FileCard: React.FC<FileCardProps> = ({
                 {displayName}
               </span>
             ) : (
-              <Link href={`/files?folderCid=${decodeHexCid(file.cid)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderCID)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
+              <Link href={`/files?folderCid=${resolveArionHash(file.arionHash)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderHash)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
                 <span
                   className={cn(
                     "text-sm text-grey-20 hover:text-primary-40 transition truncate"

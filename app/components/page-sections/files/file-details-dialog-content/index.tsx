@@ -2,16 +2,13 @@ import React from "react";
 import { FormattedTimestamp, Icons } from "@/components/ui";
 import * as TableModule from "@/components/ui/alt-table";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
+import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getFileIcon } from "@/app/lib/utils/fileTypeUtils";
 import { cn } from "@/app/lib/utils";
-import { HIPPIUS_EXPLORER_CONFIG } from "@/app/lib/config";
-import { useNodeLocations } from "@/app/lib/hooks/api/useNodeLocations";
-import { useFileNodes } from "@/app/lib/hooks/api/useFileNodes";
 import { useIsPrivateView } from "@/app/lib/utils/viewUtils";
 
 interface DetailRowProps {
@@ -35,41 +32,6 @@ const DetailRow: React.FC<DetailRowProps> = ({
   </div>
 );
 
-interface FileLocationItemProps {
-  location: string;
-  lastChild?: boolean;
-}
-
-const FileLocationItem: React.FC<FileLocationItemProps> = ({
-  location,
-  lastChild
-}) => (
-  <div className="inline-flex items-center text-base text-grey-20">
-    {location}
-    {!lastChild && (
-      <span className="mx-2 h-1 w-1 bg-grey-80 rounded-full"></span>
-    )}
-  </div>
-);
-
-interface NodeItemProps {
-  nodeId: string;
-}
-
-const NodeItem: React.FC<NodeItemProps> = ({ nodeId }) => (
-  <div className="inline-flex items-center gap-1 hover:bg-grey-90 border border-grey-80 rounded px-2 py-1 text-xs text-grey-10 mr-2 mb-2">
-    <TableModule.CopyableCell
-      title="Copy Node ID"
-      toastMessage="Node ID Copied Successfully!"
-      copyAbleText={nodeId}
-      link={`${HIPPIUS_EXPLORER_CONFIG.baseUrl}/nodes/${nodeId}`}
-      linkClass="group-hover:underline group-hover:text-primary-50 hover:underline"
-      forSmallScreen
-      className="max-sm:[200px] max-w-[400px] h-full"
-    />
-  </div>
-);
-
 interface FileDetailsDialogContentProps {
   file?: FormattedUserFile;
 }
@@ -79,24 +41,15 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
 }) => {
   const isPrivateView = useIsPrivateView();
 
-  // Get CID for API calls
-  const decodedCid = file ? decodeHexCid(file.cid) : null;
-  const isCidValid = decodedCid && decodedCid !== "pending";
-
-  // Fetch nodes for the file CID
-  const { data: nodesData, isLoading: isNodesLoading, error: nodesError } = useFileNodes(isCidValid ? decodedCid : null);
-
-  // Extract node IDs from the response
-  const minerIds = nodesData?.nodes || [];
-
-  // Fetch locations for the nodes
-  const { uniqueLocations, isLoading: isLocationsLoading } = useNodeLocations(minerIds);
+  // Get Arion Hash for display
+  const arionHash = file ? resolveArionHash(file.arionHash) : null;
+  const isHashValid = arionHash && arionHash !== "pending";
 
   if (!file) return null;
 
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
-  // decodedCid is already defined above
+  // arionHash is already defined above
   const { icon: Icon, color } = getFileIcon(
     fileType ?? undefined,
     !!file.isFolder
@@ -107,35 +60,13 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
     ? formatBytesFromBigInt(BigInt(file.size))
     : "Unknown";
 
-  // Determine what to show for locations
-  const getLocationsDisplay = () => {
-    if (!isCidValid) {
-      return ["No CID available"];
-    }
-    if (isNodesLoading || isLocationsLoading) {
-      return ["Loading locations..."];
-    }
-    if (nodesError) {
-      return ["Failed to load node data"];
-    }
-    if (minerIds.length === 0) {
-      return ["No nodes available"];
-    }
-    if (uniqueLocations.length === 0) {
-      return ["No location data available"];
-    }
-    return uniqueLocations;
-  };
-
-  const locationsToShow = getLocationsDisplay();
-
   const handleViewOnExplorer = async () => {
     try {
-      if (!decodedCid) {
-        console.error("No CID available");
+      if (!arionHash) {
+        console.error("No Arion Hash available");
         return;
       }
-      await openUrl(`http://hipstats.com/cid-tracker/${decodedCid}`);
+      await openUrl(`https://hipstats.com/file-tracker/${arionHash}`);
     } catch (error) {
       console.error("Failed to open Explorer:", error);
     }
@@ -176,13 +107,13 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
           </div>
         </DetailRow>
 
-        <DetailRow label="CID">
-          {isCidValid ? (
+        <DetailRow label="Arion Hash" lastChild>
+          {isHashValid ? (
             <>
               <TableModule.CopyableCell
-                title="Copy CID"
-                toastMessage="CID Copied Successfully!"
-                copyAbleText={decodedCid || ""}
+                title="Copy Arion Hash"
+                toastMessage="Arion Hash Copied Successfully!"
+                copyAbleText={arionHash || ""}
                 isTable={true}
                 className="max-sm:[200px] max-w-[400px] h-full"
               />
@@ -190,62 +121,12 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
                 className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
                 onClick={handleViewOnExplorer}
               >
-                View CID Tracker
+                View on File Tracker
                 <Icons.SendSquare2 className="size-5 text-primary-50" />
               </div>
             </>
           ) : (
-            <span className="text-grey-50">No CID available</span>
-          )}
-        </DetailRow>
-
-        <DetailRow label="File Location">
-          <div className="flex flex-wrap">
-            {locationsToShow.map((location, idx) => (
-              <FileLocationItem
-                key={idx}
-                location={location}
-                lastChild={idx === locationsToShow.length - 1}
-              />
-            ))}
-          </div>
-          {isCidValid && (
-            <div
-              className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
-              onClick={handleViewOnExplorer}
-            >
-              View on Explorer
-              <Icons.SendSquare2 className="size-5 text-primary-50" />
-            </div>
-          )}
-        </DetailRow>
-
-        <DetailRow label="Nodes" lastChild>
-          <div className="flex flex-wrap">
-            {isCidValid ? (
-              minerIds.length > 0 ? (
-                minerIds.map((nodeId, idx) => (
-                  <NodeItem key={idx} nodeId={nodeId} />
-                ))
-              ) : (
-                <span className="text-grey-50">
-                  {isNodesLoading ? "Loading nodes..." : "No nodes available"}
-                </span>
-              )
-            ) : (
-              <span className="text-grey-50">
-                No CID available
-              </span>
-            )}
-          </div>
-          {isCidValid && (
-            <div
-              className="p-0 h-auto text-primary-50 text-base flex items-center gap-1 hover:underline cursor-pointer"
-              onClick={handleViewOnExplorer}
-            >
-              View on Explorer
-              <Icons.SendSquare2 className="size-5 text-primary-50" />
-            </div>
+            <span className="text-grey-50">No Arion Hash available</span>
           )}
         </DetailRow>
       </div>

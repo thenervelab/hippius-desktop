@@ -24,8 +24,6 @@ import useBillingTransactions, {
   TransactionObject,
 } from "@/app/lib/hooks/api/useBillingTransactions";
 import StatusTypeBadge from "./StatusTypeBadge";
-import { useAtomValue } from "jotai";
-import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { cn } from "@/app/lib/utils";
 
 export const formatDate = (
@@ -121,7 +119,6 @@ const saveColumnWidths = (columnWidths: Record<string, number>) => {
 
 const BillingHistoryTable: React.FC = () => {
   const { data: transactions, isPending, error } = useBillingTransactions();
-  const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
 
   const tableRef = useRef<HTMLDivElement>(null);
 
@@ -338,7 +335,6 @@ const BillingHistoryTable: React.FC = () => {
     <>
       <TableWrapper
         className={cn(
-          isUnpinnedOpen && transactions && transactions.length > 0 ? "mb-[90px]" : "",
           "mt-5 overflow-x-hidden"
         )}
       >

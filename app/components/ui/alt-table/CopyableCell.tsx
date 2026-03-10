@@ -44,7 +44,7 @@ export const CopyableCell: React.FC<{
 
   let display;
 
-  // For CIDs or similar long strings, use the truncation style provided
+  // For Arion hashes or similar long strings, use the truncation style provided
   if (numberOfCharactersFromStartAndEnd) {
     display = shortenCopyAbleText(copyAbleText, {
       style: "middle",

@@ -7,7 +7,7 @@ import { isEncryptedFileId } from "@/lib/services/syncProgressService";
 
 export type FileDetail = {
   filename: string;
-  cid: string;
+  arionHash: string;
 };
 
 export type FormattedUserFile = {
@@ -15,7 +15,7 @@ export type FormattedUserFile = {
   actualFileName?: string;
   size?: number;
   createdAt: number;
-  cid: string;
+  arionHash: string;
   minerIds: string | string[];
   isAssigned: boolean;
   lastChargedAt: number;
@@ -42,6 +42,7 @@ type FileEntry = {
   size: number;
   modified: number | null;
   sync_status: "synced" | "pending" | "unknown";
+  arion_hash: string;
 };
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
@@ -118,6 +119,8 @@ export const useUserFiles = () => {
               label,
             });
 
+            console.log(`[useUserFiles] Raw entries from list_sync_folder (label: "${label}", path: "${syncPath}"):`, JSON.stringify(entries.slice(0, 5), null, 2));
+
             totalPrivateSize += entries.reduce(
               (sum, entry) => sum + BigInt(entry.size),
               BigInt(0)
@@ -136,7 +139,7 @@ export const useUserFiles = () => {
                 actualFileName: entry.name, // Keep original name for backend operations
                 size: entry.size,
                 createdAt: modifiedMs,
-                cid: "",
+                arionHash: entry.arion_hash || "",
                 source: `${syncPath}/${entry.name}`,
                 minerIds: [],
                 isAssigned: true,

@@ -6,7 +6,7 @@ import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Graphsheet, Icons, ProgressBar } from "@/components/ui";
 
 export interface MigrationFile {
-    cid: string;
+    arionHash: string;
     name: string;
     size: number;
     status: "pending" | "migrating" | "completed" | "failed";
@@ -125,7 +125,7 @@ const MigrationProgressDialog: React.FC<MigrationProgressDialogProps> = ({
                         <div className="space-y-1">
                             {files.map((file, index) => (
                                 <div
-                                    key={file.cid || `${file.name}-${index}`}
+                                    key={file.arionHash || `${file.name}-${index}`}
                                     className={`flex items-center gap-2 px-2 py-1.5 rounded ${index === currentFileIndex ? "bg-primary-50/10" : ""
                                         }`}
                                 >

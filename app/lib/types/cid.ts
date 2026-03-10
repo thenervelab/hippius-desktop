@@ -1,9 +1,16 @@
 import { Pagination } from "./pagination";
 import { FileNodeMetric } from "./nodes";
 
+export type FileDetail = {
+  filename: string;
+  arionHash: string;
+  createdAt?: number;
+  type?: string;
+};
+
 export interface FileRecord {
   id: number;
-  cid: string;
+  arionHash: string;
   owner: string;
   [key: `miner${number}`]: string;
   created_at: number;

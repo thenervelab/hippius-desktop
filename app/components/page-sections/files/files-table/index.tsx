@@ -26,7 +26,7 @@ import {
   MoreVertical,
   Folder,
 } from "lucide-react";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
+import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
@@ -47,8 +47,7 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import { useAtomValue } from "jotai";
-import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -123,7 +122,6 @@ const convertBaseWidthsToMode = (baseWidths: Record<string, number>, isSelection
 
 
 interface FilesTableProps {
-  showUnpinnedDialog?: boolean;
   files: FormattedUserFile[];
   allFiles: FormattedUserFile[];
   resetPagination?: boolean;
@@ -174,7 +172,6 @@ const FilesTable: FC<FilesTableProps> = memo(
       enterSelectionModeAndSelectFile,
       toggleFileSelection,
     } = useFileSelection();
-    const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
 
     // Determine if this is a private folder based on the files
     const isPrivateFolder = useMemo(() => {
@@ -285,7 +282,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       (
         file: FormattedUserFile,
         fileType: string | null,
-        decodedCid: string,
+        arionHash: string,
         canPreview: boolean = true
       ) => {
         // Compute folderUrl if file is a folder
@@ -327,15 +324,30 @@ const FilesTable: FC<FilesTableProps> = memo(
             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
             onItemClick: () => localHandleShowFileDetails(file),
           },
+          ...(!file.isFolder && arionHash && arionHash !== "pending"
+            ? [
+              {
+                icon: <Icons.SendSquare2 className="size-4" />,
+                itemTitle: "View on Explorer",
+                onItemClick: async () => {
+                  try {
+                    await openUrl(`https://hipstats.com/file-tracker/${arionHash}`);
+                  } catch (error) {
+                    console.error("Failed to open Explorer:", error);
+                  }
+                },
+              },
+            ]
+            : []),
           // Always show delete option, but disabled for unpinned files
           {
             icon: <Icons.Trash className="size-4" />,
             itemTitle: !file.isAssigned
-              ? "Delete (Pinning in progress...)"
+              ? "Delete (Syncing in progress...)"
               : "Delete",
             disabled: !file.isAssigned,
             tooltip: !file.isAssigned
-              ? "This file is currently being pinned and cannot be deleted yet. Please wait for the pinning process to complete."
+              ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
               : undefined,
             onItemClick: () => {
               if (file.isAssigned) {
@@ -402,7 +414,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         className="px-4 py-[22px]"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
-                        cid={info.row.original.cid}
+                        arionHash={info.row.original.arionHash}
                         isAssigned={info.row.original.isAssigned}
                         fileType={fileType}
                         isPreviewable={false}
@@ -420,7 +432,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         <NameCell
                           rawName={info.getValue()}
                           actualName={info.row.original.actualFileName}
-                          cid={info.row.original.cid}
+                          arionHash={info.row.original.arionHash}
                           isAssigned={info.row.original.isAssigned}
                           fileType={fileType}
                           isPreviewable={true}
@@ -443,7 +455,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         className="px-4 py-[22px]"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
-                        cid={info.row.original.cid}
+                        arionHash={info.row.original.arionHash}
                         isAssigned={info.row.original.isAssigned}
                         fileType={fileType}
                         isPreviewable={false}
@@ -460,7 +472,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         <NameCell
                           rawName={info.getValue()}
                           actualName={info.row.original.actualFileName}
-                          cid={info.row.original.cid}
+                          arionHash={info.row.original.arionHash}
                           isAssigned={info.row.original.isAssigned}
                           fileType={fileType}
                           isPreviewable={true}
@@ -483,7 +495,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         className="px-4 py-[22px]"
                         rawName={info.getValue()}
                         actualName={info.row.original.actualFileName}
-                        cid={info.row.original.cid}
+                        arionHash={info.row.original.arionHash}
                         isAssigned={info.row.original.isAssigned}
                         fileType={fileType}
                         isPreviewable={false}
@@ -500,7 +512,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                         <NameCell
                           rawName={info.getValue()}
                           actualName={info.row.original.actualFileName}
-                          cid={info.row.original.cid}
+                          arionHash={info.row.original.arionHash}
                           isAssigned={info.row.original.isAssigned}
                           fileType={fileType}
                           isPreviewable={true}
@@ -521,7 +533,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   className="px-4 py-[22px]"
                   rawName={info.getValue()}
                   actualName={info.row.original.actualFileName}
-                  cid={info.row.original.cid}
+                  arionHash={info.row.original.arionHash}
                   isAssigned={info.row.original.isAssigned}
                   fileType={fileType || "document"}
                   isFolder={info.row.original.isFolder}
@@ -598,11 +610,11 @@ const FilesTable: FC<FilesTableProps> = memo(
             enableResizing: false,
             cell: ({ cell }) => {
               const file = cell.row.original;
-              const { cid, name } = file;
-              const decodedCid = decodeHexCid(cid);
+              const { arionHash, name } = file;
+              const resolvedHash = resolveArionHash(arionHash);
               const { fileFormat } = getFilePartsFromFileName(name);
               const fileType = getFileTypeFromExtension(fileFormat || null);
-              const menuItems = createTableItems(file, fileType, decodedCid);
+              const menuItems = createTableItems(file, fileType, resolvedHash);
 
               return (
                 <div className="flex justify-center items-center">
@@ -799,7 +811,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         enableExpanding: false,
         enableGrouping: false,
         // Use stable ID generation
-        getRowId: (row: FormattedUserFile, index: number) => row.cid || `${row.actualFileName || row.name}-${index}`,
+        getRowId: (row: FormattedUserFile, index: number) => row.arionHash || `${row.actualFileName || row.name}-${index}`,
 
       }),
       [columns, allFiles, sorting, handleSortingChange, currentPage, files, isSelectionMode]
@@ -897,7 +909,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   className={cn(
                     cell.column.id === "actions" && "",
                     cell.column.id === "name" && "p-0 relative",
-                    cell.column.id === "cid" && "p-0"
+                    cell.column.id === "arionHash" && "p-0"
                   )}
                   key={cell.id}
                   cell={cell}
@@ -952,11 +964,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         >
           <TableModule.TableWrapper
             className={cn(
-              "duration-300 delay-300",
-              isUnpinnedOpen &&
-              totalPages === 1 &&
-              files.length > 2 &&
-              "mb-[90px]"
+              "duration-300 delay-300"
             )}
             key={`pagination-${currentPage}-${files?.length}-${isSelectionMode}`}
           >

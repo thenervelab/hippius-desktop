@@ -1,5 +1,5 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { decodeHexCid } from "@/lib/utils/decodeHexCid";
+import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 // Type for IPFS metadata response with parts
@@ -49,37 +49,37 @@ export const convertS3ToHttpsUrl = (source: string): string => {
 };
 
 /**
- * Checks if a CID is valid (not pending, not empty)
+ * Checks if an Arion hash is valid (not pending, not empty)
  */
-export const isValidCid = (cid: string): boolean => {
-    const decodedCid = decodeHexCid(cid);
-    return Boolean(decodedCid && decodedCid !== "pending" && decodedCid.trim() !== "");
+export const isValidArionHash = (hash: string): boolean => {
+    const resolved = resolveArionHash(hash);
+    return Boolean(resolved && resolved !== "pending" && resolved.trim() !== "");
 };
 
 /**
  * Fetches IPFS metadata to check for parts array
  * Returns the CID to use for the actual file content
  */
-export const resolveIPFSCid = async (originalCid: string): Promise<string> => {
-    const decodedCid = decodeHexCid(originalCid);
-    if (!decodedCid) return originalCid;
+export const resolveIPFSCid = async (originalHash: string): Promise<string> => {
+    const resolved = resolveArionHash(originalHash);
+    if (!resolved) return originalHash;
 
     // Check cache first
-    if (ipfsMetadataCache.has(decodedCid)) {
-        const cached = ipfsMetadataCache.get(decodedCid);
+    if (ipfsMetadataCache.has(resolved)) {
+        const cached = ipfsMetadataCache.get(resolved);
         if (cached?.parts && cached.parts.length > 0) {
             return cached.parts[0].cid;
         }
-        return decodedCid;
+        return resolved;
     }
 
     try {
-        console.log(`IPFS: Checking metadata for CID ${decodedCid}`);
+        console.log(`IPFS: Checking metadata for hash ${resolved}`);
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-        const response = await fetch(`https://get.hippius.network/ipfs/${decodedCid}`, {
+        const response = await fetch(`https://get.hippius.network/ipfs/${resolved}`, {
             method: 'GET',
             headers: {
                 'Accept': 'application/json',
@@ -97,34 +97,34 @@ export const resolveIPFSCid = async (originalCid: string): Promise<string> => {
             console.log(`IPFS: Received metadata:`, metadata);
 
             // Cache the metadata
-            ipfsMetadataCache.set(decodedCid, metadata);
+            ipfsMetadataCache.set(resolved, metadata);
 
             // If parts exist, use the first part's CID
             if (metadata.parts && metadata.parts.length > 0) {
-                console.log(`IPFS: Found parts for CID ${decodedCid}, using part CID: ${metadata.parts[0].cid}`);
+                console.log(`IPFS: Found parts for hash ${resolved}, using part CID: ${metadata.parts[0].cid}`);
                 return metadata.parts[0].cid;
             } else {
-                console.log(`IPFS: No parts found in metadata for CID ${decodedCid}`);
+                console.log(`IPFS: No parts found in metadata for hash ${resolved}`);
             }
         } else {
-            console.log(`IPFS: Direct file response for CID ${decodedCid}`);
+            console.log(`IPFS: Direct file response for hash ${resolved}`);
             // Cache as null to indicate it's a direct file (not metadata)
-            ipfsMetadataCache.set(decodedCid, null);
+            ipfsMetadataCache.set(resolved, null);
         }
     } catch (error) {
-        console.error(`Error resolving IPFS CID ${decodedCid}:`, error);
+        console.error(`Error resolving IPFS hash ${resolved}:`, error);
         // Cache as null to avoid repeated failed requests
-        ipfsMetadataCache.set(decodedCid, null);
+        ipfsMetadataCache.set(resolved, null);
     }
 
-    return decodedCid;
+    return resolved;
 };
 
 /**
- * Determines the appropriate file URL and source type with async CID resolution
+ * Determines the appropriate file URL and source type with async hash resolution
  */
 export const getFileUrlAndSource = async (file: FormattedUserFile) => {
-    const isCidValid = isValidCid(file.cid);
+    const isHashValid = isValidArionHash(file.arionHash);
     const hasLocalSource = isLocalFile(file.source);
     const hasS3Source = isS3Source(file.source);
 
@@ -153,11 +153,11 @@ export const getFileUrlAndSource = async (file: FormattedUserFile) => {
         };
     }
 
-    // Priority 3: Use IPFS if CID is valid
-    if (isCidValid) {
+    // Priority 3: Use IPFS if hash is valid
+    if (isHashValid) {
         try {
-            console.log(`URL Resolver: Resolving IPFS CID for file ${file.name}`);
-            const resolvedCid = await resolveIPFSCid(file.cid);
+            console.log(`URL Resolver: Resolving IPFS hash for file ${file.name}`);
+            const resolvedCid = await resolveIPFSCid(file.arionHash);
             const finalUrl = `https://get.hippius.network/ipfs/${resolvedCid}`;
             console.log(`URL Resolver: Final IPFS URL for ${file.name}: ${finalUrl}`);
             return {
@@ -168,30 +168,30 @@ export const getFileUrlAndSource = async (file: FormattedUserFile) => {
                 resolvedCid,
             };
         } catch (error) {
-            console.error('Failed to resolve IPFS CID, falling back to original:', error);
-            const decodedCid = decodeHexCid(file.cid);
-            const fallbackUrl = `https://get.hippius.network/ipfs/${decodedCid}`;
+            console.error('Failed to resolve IPFS hash, falling back to original:', error);
+            const resolvedHash = resolveArionHash(file.arionHash);
+            const fallbackUrl = `https://get.hippius.network/ipfs/${resolvedHash}`;
             console.log(`URL Resolver: Fallback IPFS URL for ${file.name}: ${fallbackUrl}`);
             return {
                 url: fallbackUrl,
                 isFromIpfs: true,
                 isFromLocal: false,
                 isFromS3: false,
-                resolvedCid: decodedCid,
+                resolvedCid: resolvedHash,
             };
         }
     }
 
 
 
-    // Fallback: Try IPFS even with potentially invalid CID
-    const decodedCid = decodeHexCid(file.cid) || file.cid;
+    // Fallback: Try IPFS even with potentially invalid hash
+    const resolvedHash = resolveArionHash(file.arionHash) || file.arionHash;
     return {
-        url: `https://get.hippius.network/ipfs/${decodedCid}`,
+        url: `https://get.hippius.network/ipfs/${resolvedHash}`,
         isFromIpfs: true,
         isFromLocal: false,
         isFromS3: false,
-        resolvedCid: decodedCid,
+        resolvedCid: resolvedHash,
     };
 };
 
@@ -248,10 +248,10 @@ if (typeof window !== 'undefined') {
 
 /**
  * Synchronous version for cases where we can't use async
- * This will use cached data if available, otherwise falls back to original CID
+ * This will use cached data if available, otherwise falls back to original hash
  */
 export const getFileUrlAndSourceSync = (file: FormattedUserFile) => {
-    const isCidValid = isValidCid(file.cid);
+    const isHashValid = isValidArionHash(file.arionHash);
     const hasLocalSource = isLocalFile(file.source);
     const hasS3Source = isS3Source(file.source);
 
@@ -279,15 +279,15 @@ export const getFileUrlAndSourceSync = (file: FormattedUserFile) => {
         };
     }
 
-    // Priority 3: Use IPFS if CID is valid
-    if (isCidValid) {
-        const decodedCid = decodeHexCid(file.cid);
+    // Priority 3: Use IPFS if hash is valid
+    if (isHashValid) {
+        const resolvedHash = resolveArionHash(file.arionHash);
 
         // Check cache for resolved CID
-        const cached = ipfsMetadataCache.get(decodedCid || '');
+        const cached = ipfsMetadataCache.get(resolvedHash || '');
         const resolvedCid = (cached?.parts && cached.parts.length > 0)
             ? cached.parts[0].cid
-            : decodedCid;
+            : resolvedHash;
 
         return {
             url: `https://get.hippius.network/ipfs/${resolvedCid}`,
@@ -298,13 +298,13 @@ export const getFileUrlAndSourceSync = (file: FormattedUserFile) => {
         };
     }
 
-    // Fallback: Try IPFS even with potentially invalid CID
-    const decodedCid = decodeHexCid(file.cid) || file.cid;
+    // Fallback: Try IPFS even with potentially invalid hash
+    const resolvedHash = resolveArionHash(file.arionHash) || file.arionHash;
     return {
-        url: `https://get.hippius.network/ipfs/${decodedCid}`,
+        url: `https://get.hippius.network/ipfs/${resolvedHash}`,
         isFromIpfs: true,
         isFromLocal: false,
         isFromS3: false,
-        resolvedCid: decodedCid,
+        resolvedCid: resolvedHash,
     };
 };

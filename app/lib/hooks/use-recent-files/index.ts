@@ -13,7 +13,7 @@ export type UserProfileFile = {
   fileName: string;
   fileSizeInBytes: number;
   lastChargedAt: number;
-  cid?: string;
+  arionHash?: string;
   createdAt: number;
   fileHash: string;
   selectedValidator?: string;
@@ -35,7 +35,7 @@ function makeFilesSignature(files: Array<FormattedUserFile>): string {
   return files
     .map(
       (f) =>
-        `${f.cid}|${f.name}|${f.lastChargedAt}|${f.size}|${f.isFolder ? 1 : 0
+        `${f.arionHash}|${f.name}|${f.lastChargedAt}|${f.size}|${f.isFolder ? 1 : 0
         }|${f.type}|${f.isAssigned ? 1 : 0}`
     )
     .join("||");
@@ -123,7 +123,7 @@ const useRecentFiles = () => {
               actualFileName: item.file_name,
               size: item.size_bytes,
               createdAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
-              cid: "",
+              arionHash: "",
               source,
               minerIds: [],
               isAssigned: true,

@@ -49,7 +49,7 @@ export function filterFiles(
     if (criteria.searchTerm.trim()) {
         const search = criteria.searchTerm.toLowerCase().trim();
         result = result.filter(file =>
-            file.name.toLowerCase().includes(search) || file.cid.toLowerCase().includes(search)
+            file.name.toLowerCase().includes(search) || file.arionHash.toLowerCase().includes(search)
         );
     }
 

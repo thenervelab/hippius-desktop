@@ -19,8 +19,6 @@ import {
 import {
   ReferralEvent,
 } from "@/app/lib/hooks/api/useUserReferrals";
-import { useAtomValue } from "jotai";
-import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { cn } from "@/app/lib/utils";
 import { useState, useMemo, useCallback, useEffect } from "react";
 
@@ -88,7 +86,6 @@ const ReferralHistoryTable: React.FC = () => {
   const data = { referralHistory: [] as ReferralEvent[], totalReferrals: 0, totalRewards: "0", referralCodes: [] };
   const isPending = false;
   const isError = false;
-  const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
 
   // Column resizing state
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>(
@@ -233,11 +230,7 @@ const ReferralHistoryTable: React.FC = () => {
   return (
     <div
       className={cn(
-        isUnpinnedOpen &&
-        data &&
-        data.referralHistory &&
-        data.referralHistory.length > 0 &&
-        "mb-[90px]"
+        ""
       )}
     >
       <div className="flex items-center gap-x-2 mb-4">

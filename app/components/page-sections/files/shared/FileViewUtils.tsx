@@ -7,12 +7,10 @@ import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
-import { decodeHexCid } from "@/app/lib/utils/decodeHexCid";
-import { FileDetail } from "@/app/(pages)/UnpinFilesDialog";
+import { resolveArionHash } from "@/app/lib/utils/resolveArionHash";
 
 export interface FileViewSharedProps {
   files: FormattedUserFile[];
-  showUnpinnedDialog: boolean;
   isRecentFiles: boolean;
   resetPagination: boolean;
   onPaginationReset: () => void;
@@ -25,8 +23,6 @@ export interface FileViewSharedState {
   setOpenDeleteModal: (open: boolean) => void;
   selectedFile: FormattedUserFile | null;
   setSelectedFile: (file: FormattedUserFile | null) => void;
-  unpinnedFiles: FileDetail[] | null;
-  isUnpinnedOpen: boolean;
   fileDetailsFile: FormattedUserFile | null;
   setFileDetailsFile: (file: FormattedUserFile | null) => void;
   isFileDetailsOpen: boolean;
@@ -50,7 +46,7 @@ export interface FileViewSharedState {
 export function useFileViewShared(
   props: FileViewSharedProps
 ): FileViewSharedState {
-  const { files, showUnpinnedDialog } = props;
+  const { files } = props;
   // Ensure files is always an array to prevent undefined errors
   const safeFiles = files || [];
 
@@ -64,8 +60,6 @@ export function useFileViewShared(
 
   const [selectedFile, setSelectedFile] =
     useState<FormattedUserFile | null>(null);
-  const [unpinnedFiles, setUnpinnedFiles] = useState<FileDetail[] | null>(null);
-  const [isUnpinnedOpen, setIsUnpinnedOpen] = useState(false);
   const [fileDetailsFile, setFileDetailsFile] =
     useState<FormattedUserFile | null>(null);
   const [isFileDetailsOpen, setIsFileDetailsOpen] = useState(false);
@@ -74,31 +68,6 @@ export function useFileViewShared(
     y: number;
     file: FormattedUserFile;
   } | null>(null);
-
-  // Extract unpinned file details from files
-  const unpinnedFileDetails = showUnpinnedDialog
-    ? safeFiles
-      .filter((file) => !file.isAssigned)
-      .map((file) => ({
-        filename: file.name || "Unnamed File",
-        cid: decodeHexCid(file.cid),
-        createdAt: file.createdAt,
-      }))
-    : [];
-
-  // Update unpinned files state when unpinned file details change
-  if (showUnpinnedDialog && unpinnedFileDetails.length > 0 && !unpinnedFiles) {
-    setUnpinnedFiles(unpinnedFileDetails);
-    setIsUnpinnedOpen(true);
-  } else if (
-    (showUnpinnedDialog && unpinnedFileDetails.length === 0 && unpinnedFiles) ||
-    !showUnpinnedDialog
-  ) {
-    if (unpinnedFiles !== null) {
-      setUnpinnedFiles(null);
-      setIsUnpinnedOpen(false);
-    }
-  }
 
   const deleteFile = async () => {
     await deleteFileMutation();
@@ -110,7 +79,7 @@ export function useFileViewShared(
 
   const handleCopyLink = useCallback((file: FormattedUserFile) => {
     navigator.clipboard
-      .writeText(`https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`)
+      .writeText(`https://get.hippius.network/ipfs/${resolveArionHash(file.arionHash)}`)
       .then(() => {
         toast.success("Copied to clipboard successfully!");
       });
@@ -120,7 +89,7 @@ export function useFileViewShared(
     async (file: FormattedUserFile) => {
       try {
         await openUrl(
-          `http://hipstats.com/cid-tracker/${decodeHexCid(file.cid)}`
+          `https://hipstats.com/file-tracker/${resolveArionHash(file.arionHash)}`
         );
       } catch (error) {
         console.error("Failed to open Explorer:", error);
@@ -132,7 +101,7 @@ export function useFileViewShared(
   const handleOpenOnIpfs = useCallback(async (file: FormattedUserFile) => {
     try {
       await openUrl(
-        `https://get.hippius.network/ipfs/${decodeHexCid(file.cid)}`
+        `https://get.hippius.network/ipfs/${resolveArionHash(file.arionHash)}`
       );
     } catch (error) {
       console.error("Failed to open on IPFS:", error);
@@ -172,8 +141,6 @@ export function useFileViewShared(
     setOpenDeleteModal,
     selectedFile,
     setSelectedFile,
-    unpinnedFiles,
-    isUnpinnedOpen,
     fileDetailsFile,
     setFileDetailsFile,
     isFileDetailsOpen,

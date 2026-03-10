@@ -100,7 +100,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
                             <div className="text-xs text-grey-50 mb-2">Files to delete:</div>
                             <ul className="text-sm space-y-1">
                                 {selectedFiles.slice(0, 5).map((file, index) => (
-                                    <li key={file.cid || `${file.actualFileName || file.name}-${index}`} className="text-grey-20 truncate">
+                                    <li key={file.arionHash || `${file.actualFileName || file.name}-${index}`} className="text-grey-20 truncate">
                                         • {file.actualFileName || file.name}
                                     </li>
                                 ))}

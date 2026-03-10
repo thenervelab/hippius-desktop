@@ -5,6 +5,8 @@ import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
+import { resolveArionHash } from "@/app/lib/utils/resolveArionHash";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Link from "next/link";
@@ -137,13 +139,33 @@ export default function FileContextMenu({
             <span>{file?.isFolder ? "Folder" : "File"} Details</span>
           </button>
 
+          {!file.isFolder && (() => {
+            const resolvedHash = resolveArionHash(file.arionHash);
+            return resolvedHash && resolvedHash !== "pending" ? (
+              <button
+                className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
+                onClick={async () => {
+                  try {
+                    await openUrl(`https://hipstats.com/file-tracker/${resolvedHash}`);
+                  } catch (error) {
+                    console.error("Failed to open Explorer:", error);
+                  }
+                  onClose();
+                }}
+              >
+                <Icons.SendSquare2 className="size-4" />
+                <span>View on Explorer</span>
+              </button>
+            ) : null;
+          })()}
+
           <button
             className={cn("flex items-center gap-2 p-2 text-xs font-medium", {
               "text-error-70 hover:text-error-80 hover:bg-grey-90 cursor-pointer": file.isAssigned,
               "text-grey-60 cursor-not-allowed opacity-60": !file.isAssigned
             })}
             disabled={!file.isAssigned}
-            title={!file.isAssigned ? "This file is currently being pinned and cannot be deleted yet. Please wait for the pinning process to complete." : "Delete this file"}
+            title={!file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : "Delete this file"}
             onClick={() => {
               if (file.isAssigned && onDelete) {
                 onDelete(file);
@@ -152,7 +174,7 @@ export default function FileContextMenu({
             }}
           >
             <Trash2 className="size-4" />
-            <span>{!file.isAssigned ? "Delete (Pinning in progress...)" : "Delete"}</span>
+            <span>{!file.isAssigned ? "Delete (Syncing in progress...)" : "Delete"}</span>
           </button>
         </div>
       </div>

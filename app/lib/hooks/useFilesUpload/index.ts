@@ -8,7 +8,6 @@ import { uploadProgressAtom } from "@/app/components/page-sections/files/atoms/q
 import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
-import { triggerUnpinnedFilesRefetchAtom } from "../../global-atoms/unpinAtoms";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 
 export type UploadFilesHandlers = {
@@ -37,9 +36,6 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   const setProgress = useSetAtom(uploadProgressAtom);
   const { data: credits } = useUserCredits();
   const { refetch: refetchUserFiles } = useUserFiles();
-  const setTriggerUnpinnedFilesRefetch = useSetAtom(
-    triggerUnpinnedFilesRefetchAtom
-  );
   const { polkadotAddress } = useWalletAuth();
 
   const [requestState, setRequestState] = useState<
@@ -148,7 +144,6 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       // Refetch immediately so the file list shows the new files
       refetchUserFiles();
-      setTriggerUnpinnedFilesRefetch((prev) => prev + 1);
       onSuccess?.();
     } catch (err) {
       setRequestState("idle");

@@ -8,7 +8,7 @@ import {
   P,
 } from "@/components/ui";
 
-export type ResourceType = "node" | "miner" | "account" | "CID";
+export type ResourceType = "node" | "miner" | "account" | "Arion Hash";
 
 export interface ResourceDetailsErrorProps {
   errorType: "not-found" | "unknown";
@@ -21,12 +21,12 @@ const getErrorMessage = (
   resourceType: ResourceType
 ) => {
   if (errorType === "not-found") {
-    return resourceType === "CID"
+    return resourceType === "Arion Hash"
       ? `${resourceType} not found`
       : "No data found.";
   }
 
-  return resourceType === "CID"
+  return resourceType === "Arion Hash"
     ? `Error tracking ${resourceType}`
     : "Sorry, An Error Occurred";
 };
@@ -37,12 +37,12 @@ const getDetailedErrorMessage = (
   resourceType: ResourceType
 ) => {
   if (errorType === "unknown") {
-    return resourceType === "CID"
+    return resourceType === "Arion Hash"
       ? `An error occurred while tracking this ${resourceType}`
       : `An error occurred while fetching this ${resourceType.toLowerCase()}'s data`;
   }
 
-  return resourceType === "CID"
+  return resourceType === "Arion Hash"
     ? `There is no data available for this ${resourceType} at this time`
     : `There is no data available for this ${resourceType.toLowerCase()} at this time`;
 };

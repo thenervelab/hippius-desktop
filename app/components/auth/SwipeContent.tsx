@@ -16,9 +16,9 @@ export const SWIPE_CONTENT = [
   },
   {
     heading: "Secure Your Files with Blockchain",
-    text: "Track Every File with CID",
+    text: "Track Every File with Arion Hash",
     subText:
-      "Your files are stored securely on our decentralized blockchain, with CID tracking ensuring traceability and preventing unauthorized access",
+      "Your files are stored securely on our decentralized blockchain, with Arion Hash tracking ensuring traceability and preventing unauthorized access",
 
     icon: (
       <SecureFilesWithBlockChain className="xl:h-[270px] h-[160px] w-full" />

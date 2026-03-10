@@ -3,7 +3,7 @@ import { indexerGet } from "@/lib/api/indexerClient";
 
 interface FileRecord {
   id: number;
-  cid: string;
+  arionHash: string;
   owner: string;
   miner1: string;
   miner2: string;
@@ -34,16 +34,16 @@ interface NodeResponse {
   nodes: string[];
 }
 
-// Hook to fetch nodes for a given CID
-export const useFileNodes = (cid: string | null) => {
+// Hook to fetch nodes for a given Arion hash
+export const useFileNodes = (arionHash: string | null) => {
   return useQuery<NodeResponse, Error>({
-    queryKey: ["file-nodes", cid],
+    queryKey: ["file-nodes", arionHash],
     queryFn: async (): Promise<NodeResponse> => {
-      if (!cid || cid === "pending") {
-        throw new Error("Invalid CID");
+      if (!arionHash || arionHash === "pending") {
+        throw new Error("Invalid Arion hash");
       }
 
-      const data = await indexerGet<FilesApiResponse>("/files", { cid });
+      const data = await indexerGet<FilesApiResponse>("/files", { cid: arionHash });
 
       // Get the first file record
       const firstFile = data.files?.[0];
@@ -63,7 +63,7 @@ export const useFileNodes = (cid: string | null) => {
 
       return { nodes: miners };
     },
-    enabled: !!(cid && cid !== "pending"),
+    enabled: !!(arionHash && arionHash !== "pending"),
     staleTime: 5 * 60 * 1000, // 5 minutes
     retry: 2,
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),

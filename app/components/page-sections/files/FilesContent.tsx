@@ -84,7 +84,6 @@ const FilesContent: FC<FilesContentProps> = ({
   // Use shared functionality between FilesTable and CardView
   const sharedState = useFileViewShared({
     files: displayedData,
-    showUnpinnedDialog: false,
     isRecentFiles,
     resetPagination: shouldResetPagination,
     onPaginationReset: handlePaginationReset,
@@ -267,7 +266,6 @@ const FilesContent: FC<FilesContentProps> = ({
       return (
         <FilesTable
           isRecentFiles={isRecentFiles}
-          showUnpinnedDialog={false}
           files={displayedData}
           allFiles={filteredData}
           resetPagination={shouldResetPagination}
@@ -284,7 +282,6 @@ const FilesContent: FC<FilesContentProps> = ({
       return (
         <CardView
           isRecentFiles={isRecentFiles}
-          showUnpinnedDialog={false}
           files={displayedData}
           resetPagination={shouldResetPagination}
           onPaginationReset={handlePaginationReset}

@@ -3,8 +3,6 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 
 import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { cn } from "@/lib/utils";
-import { useAtomValue } from "jotai";
 import TicketsTable from "./TicketsTable";
 import { P } from "@/components/ui/typography";
 import CreateTicketModal, {
@@ -26,7 +24,6 @@ import useSupportTickets, {
 } from "@/app/lib/hooks/useSupportTickets";
 import useUpdateSupportTicket from "@/app/lib/hooks/useUpdateSupportTicket";
 import CreateButton from "../../ui/button/CreateButton";
-import { isUnpinnedDialogOpenAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import ConfirmModal from "./SupportConfirmModal";
 import { OAuthButtonsGroup } from "../../auth/OAuthButtons";
 
@@ -36,7 +33,6 @@ const Support: React.FC = () => {
   const { oauthSession } = useWalletAuth();
   const createTicketModalRef = useRef<CreateTicketModalRef>(null);
 
-  const isUnpinnedOpen = useAtomValue(isUnpinnedDialogOpenAtom);
   const [pageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
@@ -238,7 +234,7 @@ const Support: React.FC = () => {
   const isAccessKeyLogin = oauthSession?.provider === "mnemonic";
 
   return (
-    <div className={cn("w-full", isUnpinnedOpen && "mb-[90px]")}>
+    <div className="w-full">
       {/* Access Key Login Overlay */}
       {isAccessKeyLogin ? (
         <div className="flex items-center justify-center min-h-[600px]">
