@@ -856,19 +856,27 @@ export function getOverallProgress(): {
     : 0;
   const totalFiles = visibleTotalFiles + hiddenActiveCount;
   
-  // Calculate overall percentage based on ALL files when there are hidden ones
-  let overallPercent = 0;
-  const effectiveTotalFiles = hasHiddenFiles ? allFiles.length : totalFiles;
-  const effectiveInProgressFiles = hasHiddenFiles ? allInProgressFiles : visibleInProgressFiles;
+  // Sum bytes across all files for overall size progress
+  const totalBytesTransferred = allFiles.reduce((sum, f) => sum + f.bytesTransferred, 0);
+  const totalBytesExpected = allFiles.reduce((sum, f) => sum + f.totalBytes, 0);
   
-  if (effectiveTotalFiles > 0) {
-    // Each completed file contributes (100 / totalFiles) to overall progress
-    // In-progress files contribute their partial progress
-    const completedContribution = allCompletedFiles * (100 / effectiveTotalFiles);
-    const inProgressContribution = effectiveInProgressFiles.reduce((sum, f) => {
-      return sum + (f.progress * (100 / effectiveTotalFiles) / 100);
-    }, 0);
-    overallPercent = Math.round(completedContribution + inProgressContribution);
+  // Calculate overall percentage — prefer byte-based when available (more accurate for mixed file sizes)
+  let overallPercent = 0;
+  if (totalBytesExpected > 0) {
+    // Byte-based progress: accounts for actual data transferred
+    overallPercent = Math.round((totalBytesTransferred / totalBytesExpected) * 100);
+  } else {
+    // Fall back to file-count-based progress when no byte info available
+    const effectiveTotalFiles = hasHiddenFiles ? allFiles.length : totalFiles;
+    const effectiveInProgressFiles = hasHiddenFiles ? allInProgressFiles : visibleInProgressFiles;
+    
+    if (effectiveTotalFiles > 0) {
+      const completedContribution = allCompletedFiles * (100 / effectiveTotalFiles);
+      const inProgressContribution = effectiveInProgressFiles.reduce((sum, f) => {
+        return sum + (f.progress * (100 / effectiveTotalFiles) / 100);
+      }, 0);
+      overallPercent = Math.round(completedContribution + inProgressContribution);
+    }
   }
   
   // Get current file being processed (prioritize in-progress over pending)
@@ -884,10 +892,6 @@ export function getOverallProgress(): {
   // Determine if sync is truly active - session is active OR there are still pending/in-progress files
   const hasActiveWork = allInProgressFiles.length > 0 || allPendingFiles.length > 0;
   const isActive = state.currentSession.isActive || hasActiveWork;
-  
-  // Sum bytes across all files for overall size progress
-  const totalBytesTransferred = allFiles.reduce((sum, f) => sum + f.bytesTransferred, 0);
-  const totalBytesExpected = allFiles.reduce((sum, f) => sum + f.totalBytes, 0);
   
   return {
     isActive,
