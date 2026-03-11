@@ -107,10 +107,12 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
     try {
       const config = await getHcfsConfig(polkadotAddress);
       if (!config.has_password) {
+        onClose();
         setShowHcfsSetup(true);
         return;
       }
     } catch {
+      onClose();
       setShowHcfsSetup(true);
       return;
     }

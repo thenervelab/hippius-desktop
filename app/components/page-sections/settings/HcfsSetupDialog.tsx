@@ -6,7 +6,7 @@ import DialogContainer from "@/components/ui/DialogContainer";
 import { CardButton, Graphsheet, Icons } from "@/components/ui";
 import { Input } from "@/components/ui/input/Input2";
 import { HCFS_CONFIG } from "@/app/lib/config";
-import { AlertCircle, Lock } from "lucide-react";
+import { AlertCircle, Lock, Eye, EyeOff } from "lucide-react";
 import { Label } from "@/components/ui/label";
 
 interface HcfsSetupDialogProps {
@@ -25,6 +25,8 @@ export function HcfsSetupDialog({
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const handleSubmit = () => {
     setError("");
@@ -118,15 +120,25 @@ export function HcfsSetupDialog({
                 <Lock className="w-4 h-4" />
                 Encryption Password
               </Label>
-              <Input
-                id="hcfs-password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter a strong password"
-                disabled={loading}
-                className="border-grey-80 h-12 text-grey-30 w-full bg-transparent font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
-              />
+              <div className="relative">
+                <Input
+                  id="hcfs-password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Enter a strong password"
+                  disabled={loading}
+                  className="border-grey-80 h-12 text-grey-30 w-full bg-transparent font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 hover:text-grey-30 transition-colors"
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
               <p className="text-xs text-grey-50">
                 Used to encrypt your files. Choose a strong, memorable password.
               </p>
@@ -140,16 +152,26 @@ export function HcfsSetupDialog({
               >
                 Confirm Password
               </Label>
-              <Input
-                id="hcfs-confirm-password"
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Confirm your password"
-                disabled={loading}
-                onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
-                className="border-grey-80 h-12 text-grey-30 w-full bg-transparent font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus"
-              />
+              <div className="relative">
+                <Input
+                  id="hcfs-confirm-password"
+                  type={showConfirmPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm your password"
+                  disabled={loading}
+                  onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+                  className="border-grey-80 h-12 text-grey-30 w-full bg-transparent font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 hover:text-grey-30 transition-colors"
+                  tabIndex={-1}
+                >
+                  {showConfirmPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
             </div>
           </div>
 

@@ -356,11 +356,13 @@ export default function MultiFolderSyncManager() {
       const config = await getHcfsConfig(polkadotAddress);
       if (!config.has_password) {
         setPendingAction("sync");
+        setSyncDialog(prev => ({ ...prev, open: false }));
         setShowHcfsSetup(true);
         return;
       }
     } catch {
       setPendingAction("sync");
+      setSyncDialog(prev => ({ ...prev, open: false }));
       setShowHcfsSetup(true);
       return;
     }
