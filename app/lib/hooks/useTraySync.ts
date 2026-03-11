@@ -3,7 +3,6 @@ import { TrayIcon } from "@tauri-apps/api/tray";
 import {
   Menu,
   MenuItem,
-  IconMenuItem as TauriIconMenuItem,
   PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
@@ -18,7 +17,7 @@ import {
   checkForUpdates,
   getAvailableUpdate,
 } from "@/components/updater/checkForUpdates";
-import { SyncActivityItem } from "./useSyncActivity";
+
 import {
   lastUpdatedPercentAtom,
   isSyncingAtom,
@@ -32,6 +31,10 @@ import {
   overallProgressAtom,
   hasSyncActivityAtom,
 } from "./useSyncProgress";
+import {
+  getOverallProgress,
+} from "../services/syncProgressService";
+import { formatBytes } from "@/app/lib/utils/formatBytes";
 
 /* ─ IDs ───────────────────────────────────────────────────────── */
 const TRAY_ID = "hippius-tray";
@@ -43,6 +46,8 @@ const OPEN_APP_ID = "open-app";
 const OPEN_FILES_ID = "open-files";
 const OPEN_VM_ID = "open-vm";
 const SYNC_ITEM_PREFIX = "sync-activity-item:";
+const SYNC_PROGRESS_ID = "sync-progress-summary";
+const SYNC_SIZE_ID = "sync-size-info";
 
 // add cached icon paths + state
 const DEFAULT_TRAY_ICON = "icons/TrayIcon.png";
@@ -61,43 +66,11 @@ let openItemsSeparator: PredefinedMenuItem | null = null;
 let syncSectionSeparator: PredefinedMenuItem | null = null;
 let openFilesItem: MenuItem | null = null;
 let openVmItem: MenuItem | null = null;
-const syncRowItems = new Map<string, MenuItem>(); // rows under header
-
-// Cache last rendered "rows signature" to avoid flicker
-let lastRowsSignature = "";
-
-
-// Runtime check for icon rows
-const hasIconMenuItems =
-  typeof (TauriIconMenuItem as unknown as { new?: unknown })?.new ===
-  "function";
+const syncRowItems = new Map<string, MenuItem>(); // legacy rows (cleaned up on init)
+let syncProgressItem: MenuItem | null = null; // "X of Y files synced" row
+let syncSizeItem: MenuItem | null = null; // "208 MB / 1 GB" row
 
 /* ─ Backend payload types ─────────────────────────────────────── */
-type BackendActivityItem = {
-  name: string;
-  path: string;
-  scope: string;
-  action: "uploaded" | "deleted" | "uploading";
-  kind: "file" | "folder" | string;
-  timestamp?: number; // when action happened (ms)
-  file_type?: string;
-  deleted: boolean;
-};
-
-type SyncActivityRow = {
-  id: string;
-  fileName: string;
-  rawName: string;
-  scope: string;
-  status: "uploading" | "uploaded" | "deleted" | "failed";
-  fileType: string;
-  timestamp?: number;
-  progress?: number;
-  path?: string; // thumbnail/icon path for menu item
-  rawPath?: string; // actual file path
-  deleted: boolean;
-  error?: string; // Error message for failed files
-};
 
 interface VpnStatus {
   is_enabled: boolean;
@@ -119,9 +92,6 @@ interface CreditsApiResponse {
 const MINIMUM_CREDITS = 10;
 const OAUTH_SESSION_KEY = "hippius_oauth_session";
 const CREDITS_CACHE_DURATION = 30000; // Cache credits for 30 seconds
-
-// Cache for resolved generic icons
-const iconPathCache: Record<string, string | undefined | null> = {};
 
 // Cache for credits to avoid repeated API calls
 let creditsCache: {
@@ -983,58 +953,104 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
   }
 }
 
-/* ─ Sync Activity watcher (debounced & diffed) ────────────────── */
+/* ─ Sync Activity watcher (polls localStorage for summary rows) ─ */
+let lastSyncSummarySignature = "";
+
 function startSyncActivityWatcher() {
-  const INTERVAL_MS = 3000;
+  const INTERVAL_MS = 2000;
+
+  // Clear any old watcher from HMR
+  if (typeof window !== "undefined") {
+    // @ts-expect-error custom watcher handle
+    if (window.__hippiusSyncWatcher) clearInterval(window.__hippiusSyncWatcher);
+  }
 
   const tick = async () => {
     try {
       const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
       if (!menu) return;
 
-      // New API returns SyncActivityItem[] directly
-      const items = await invoke<SyncActivityItem[]>("get_sync_activity", {
-        limit: 50,
-      });
+      // Clean up any legacy per-file rows from old implementation
+      await removeAllSyncActivityRows(menu);
 
-      if (!items || items.length === 0) {
-        await updateSyncRowsDirectly(menu, []);
-        lastRowsSignature = "";
+      // Read progress directly from localStorage (no atom dependency)
+      const progress = getOverallProgress();
+      const isActive = progress.isActive ||
+        progress.inProgressFiles > 0 ||
+        (progress.totalFiles > 0 && progress.completedFiles < progress.totalFiles && progress.failedFiles === 0);
+
+      // Build signature to avoid redundant updates
+      const signature = `${isActive}:${progress.completedFiles}/${progress.totalFiles}:${progress.overallPercent}:${progress.totalBytesTransferred}`;
+      if (signature === lastSyncSummarySignature) return;
+      lastSyncSummarySignature = signature;
+
+      if (!isActive) {
+        // Not syncing — remove summary rows if they exist
+        if (syncProgressItem) {
+          try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
+          syncProgressItem = null;
+        }
+        if (syncSizeItem) {
+          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          syncSizeItem = null;
+        }
         return;
       }
 
-      // Convert SyncActivityItem[] to BackendActivityItem[]
-      const activityItems: BackendActivityItem[] = items.map((item) => ({
-        name: item.file_name || "Unknown",
-        path: "",
-        scope: "",
-        action: item.action === "deleted"
-          ? "deleted" as const
-          : item.action === "uploading"
-            ? "uploading" as const
-            : "uploaded" as const,
-        kind: "file",
-        timestamp: item.timestamp ? item.timestamp * 1000 : Date.now(),
-        file_type: undefined,
-        deleted: item.action === "deleted",
-      }));
+      // Update the header label with byte-based percentage directly from localStorage
+      const percent = progress.overallPercent;
+      void updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
 
-      const rows = await normalizeActivityToRows(activityItems);
+      // Build progress text: "23 of 50 files synced"
+      const progressText = progress.totalFiles > 0
+        ? `${progress.completedFiles} of ${progress.totalFiles} files synced`
+        : "Preparing files…";
 
-      const signature = JSON.stringify(
-        rows.map((r) => ({
-          id: r.id,
-          text: formatRowText(r),
-          icon: r.path || "",
-        })),
-      );
+      // Build size text: "208.85 MB / 1 GB"
+      let sizeText: string | null = null;
+      if (progress.totalBytesExpected > 0) {
+        sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
+      }
 
-      if (signature === lastRowsSignature) return;
-      lastRowsSignature = signature;
+      // Find insert position: right after the sync header (SYNC_ID)
+      const items = await menu.items();
+      let insertPos = items.findIndex((i) => i.id === SYNC_ID);
+      insertPos = insertPos >= 0 ? insertPos + 1 : 0;
 
-      await updateSyncRowsDirectly(menu, rows);
+      // Update or create progress row
+      if (!syncProgressItem) {
+        syncProgressItem = await MenuItem.new({
+          id: SYNC_PROGRESS_ID,
+          text: progressText,
+          enabled: false,
+        });
+        await menu.insert(syncProgressItem, insertPos);
+      } else {
+        await syncProgressItem.setText(progressText);
+      }
+
+      // Update or create size row
+      if (sizeText) {
+        const itemsAfterProgress = await menu.items();
+        const progressIdx = itemsAfterProgress.findIndex((i) => i.id === SYNC_PROGRESS_ID);
+        const sizeInsertPos = progressIdx >= 0 ? progressIdx + 1 : insertPos + 1;
+
+        if (!syncSizeItem) {
+          syncSizeItem = await MenuItem.new({
+            id: SYNC_SIZE_ID,
+            text: sizeText,
+            enabled: false,
+          });
+          await menu.insert(syncSizeItem, sizeInsertPos);
+        } else {
+          await syncSizeItem.setText(sizeText);
+        }
+      } else if (syncSizeItem) {
+        try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+        syncSizeItem = null;
+      }
     } catch (error) {
-      console.error("Error updating sync activity in tray:", error);
+      console.error("[TraySync] Error updating sync summary:", error);
     }
   };
 
@@ -1042,137 +1058,7 @@ function startSyncActivityWatcher() {
   const h = setInterval(tick, INTERVAL_MS);
   if (typeof window !== "undefined") {
     // @ts-expect-error custom watcher handle
-    if (window.__hippiusSyncWatcher) clearInterval(window.__hippiusSyncWatcher);
-    // @ts-expect-error custom watcher handle
     window.__hippiusSyncWatcher = h;
-  }
-}
-
-/* ─ Normalize backend shape to rows (with thumbnails) ────────── */
-async function normalizeActivityToRows(
-  items: BackendActivityItem[],
-): Promise<SyncActivityRow[]> {
-  // Resolve generic icons once
-  if (!iconPathCache.file) {
-    try {
-      iconPathCache.file = await resolveResource("icons/generic-file.png");
-    } catch {
-      iconPathCache.file = null;
-    }
-  }
-  if (!iconPathCache.folder) {
-    try {
-      iconPathCache.folder = await resolveResource("icons/generic-folder.png");
-    } catch {
-      iconPathCache.folder = null;
-    }
-  }
-  if (!iconPathCache.video) {
-    try {
-      iconPathCache.video = await resolveResource("icons/generic-video.png");
-    } catch {
-      iconPathCache.video = null;
-    }
-  }
-
-  const rows: SyncActivityRow[] = [];
-  const seen = new Set<string>(); // ensure one row per id per tick
-
-  for (const it of items) {
-    const status: "uploading" | "uploaded" | "deleted" =
-      it.action === "uploading"
-        ? "uploading"
-        : it.action === "deleted"
-          ? "deleted"
-          : "uploaded";
-
-    const id = hashId(it);
-    if (seen.has(id)) continue;
-    seen.add(id);
-
-    const rawName = it.name || "Unknown";
-    const fileName = shortenName(rawName);
-    const fileType = getFileType(it.file_type || it.path || it.name, it.kind);
-
-    // Build thumbnail/icon path:
-    // - Deleted: always generic file icon
-    // - Folder: generic folder icon
-    // - Image: use convertFileSrc(localPath)
-    // - Video: extract a frame, write to temp, use that file path
-    // - Other: generic file icon
-    let iconPath: string | undefined;
-
-    try {
-      if (status === "deleted") {
-        iconPath = iconPathCache.file ?? undefined;
-      } else if (it.kind === "folder") {
-        iconPath = iconPathCache.folder ?? iconPathCache.file ?? undefined;
-      } else if (isImagePath(it.path)) {
-        try {
-          iconPath = await resolveResource("icons/generic-image.png");
-        } catch {
-          iconPathCache.image = null;
-        }
-      } else if (isVideoPath(it.path)) {
-        try {
-          iconPath = await resolveResource("icons/generic-video.png");
-        } catch {
-          iconPathCache.video = null;
-        }
-      } else {
-        iconPath = iconPathCache.file ?? undefined;
-      }
-    } catch (e) {
-      console.warn("Failed to prepare thumbnail for", it.name, e);
-      iconPath = iconPathCache.file ?? undefined;
-    }
-
-    rows.push({
-      id,
-      rawName,
-      fileName,
-      scope: it.scope || "",
-      status,
-      fileType,
-      timestamp: it.timestamp,
-      path: iconPath,
-      rawPath: it.path,
-      deleted: it.deleted,
-    });
-  }
-
-  // Keep the list compact
-  return rows;
-}
-
-/* ─ Add rows (deduped) after sync percentage, above nav links ── */
-async function updateSyncRowsDirectly(menu: Menu, rows: SyncActivityRow[]) {
-  try {
-    // Hard-purge old rows to avoid duplicates
-    await removeAllSyncActivityRows(menu);
-
-    if (rows.length === 0) return;
-
-    // Find the insert position: right after the sync percentage item
-    // If sync item exists, insert after it. Otherwise insert at 0 (top).
-    const items = await menu.items();
-    let insertPosition = items.findIndex((i) => i.id === SYNC_ID);
-    insertPosition = insertPosition >= 0 ? insertPosition + 1 : 0;
-
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const row = rows[i];
-      const id = SYNC_ITEM_PREFIX + row.id;
-      const text = formatRowText(row);
-      try {
-        const item = await newSyncRowMenuItem(id, text, row.path);
-        await menu.insert(item, insertPosition);
-        syncRowItems.set(id, item);
-      } catch (error) {
-        console.error(`Failed to create menu item for ${row.fileName}:`, error);
-      }
-    }
-  } catch (error) {
-    console.error("Error managing tray menu items:", error);
   }
 }
 
@@ -1197,79 +1083,4 @@ async function removeAllSyncActivityRows(menu: Menu) {
   } catch (error) {
     console.error("Failed to purge sync-activity rows:", error);
   }
-}
-
-/* ─ Create menu item with icon (thumbnail) if supported ─────── */
-async function newSyncRowMenuItem(id: string, text: string, iconPath?: string) {
-  if (hasIconMenuItems && iconPath) {
-    try {
-      return await TauriIconMenuItem.new({
-        id,
-        text,
-        icon: iconPath,
-        enabled: false,
-      });
-    } catch (error) {
-      console.warn("Icon menu item failed; falling back to text row:", error);
-    }
-  }
-  return await MenuItem.new({ id, text, enabled: false });
-}
-
-/* ─ Row label: name + status ──────────────────────────────────── */
-function formatRowText(r: SyncActivityRow) {
-  const first = r.fileName;
-
-  let statusText = "✓ Synced";
-  if (r.status === "uploading" && !r.deleted) statusText = "⟳ Uploading…";
-  else if (r.status === "uploading" && r.deleted) statusText = "⟳ Deleting…";
-  else if (r.status === "uploaded" && !r.deleted) statusText = "✓ Uploaded";
-  else if (r.status === "uploaded" && r.deleted) statusText = "✗ Deleted";
-  else if (r.status === "deleted") statusText = "✗ Deleted";
-
-  return [first, statusText].filter(Boolean).join("\n");
-}
-
-/* ─ Helpers ───────────────────────────────────────────────────── */
-function isImagePath(p?: string) {
-  if (!p) return false;
-  const ext = p.split(".").pop()?.toLowerCase();
-  return (
-    !!ext &&
-    [
-      "png",
-      "jpg",
-      "jpeg",
-      "webp",
-      "gif",
-      "bmp",
-      "ico",
-      "tiff",
-      "svg",
-      "heic",
-      "heif",
-    ].includes(ext)
-  );
-}
-function isVideoPath(p?: string) {
-  if (!p) return false;
-  const ext = p.split(".").pop()?.toLowerCase();
-  return (
-    !!ext && ["mp4", "mov", "m4v", "avi", "mkv", "webm", "flv"].includes(ext)
-  );
-}
-function hashId(it: BackendActivityItem) {
-  return `${it.action}:${it.path || it.name}`;
-}
-function shortenName(name: string) {
-  if (!name) return name;
-  if (name.length <= 30) return name;
-  const head = name.slice(0, 15);
-  const tail = name.slice(-12);
-  return `${head}…${tail}`;
-}
-function getFileType(path: string, kind?: string): string {
-  if (kind === "folder") return "folder";
-  const ext = path.split(".").pop()?.toLowerCase();
-  return ext && ext !== path ? ext : kind || "file";
 }
