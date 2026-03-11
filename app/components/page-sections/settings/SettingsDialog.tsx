@@ -40,12 +40,12 @@ const SettingsWidthDialog: React.FC<SettingsWidthDialogProps> = ({
   }, [open]);
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root open={open} onOpenChange={onOpenChange} modal={false}>
       <Dialog.Portal>
         {/* Fade backdrop */}
         <Dialog.Overlay
           forceMount
-          className="fixed inset-0 z-40 bg-white/80 
+          className="fixed inset-0 z-40 bg-white/80 pointer-events-none
                    data-[state=open]:animate-fade-in-0.2 data-[state=closed]:animate-fade-out-0.2"
         />
 
