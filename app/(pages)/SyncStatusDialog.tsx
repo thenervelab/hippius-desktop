@@ -152,7 +152,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       onClick={(e: React.MouseEvent) => e.stopPropagation()}
       className={cn(
         " outline-none shadow-menu rounded-[8px] transition-all duration-300 ease-in-out",
-        isExpanded ? "w-[378px]" : "w-[170px]"
+        isExpanded ? "w-[378px]" : (isUnhealthy || hasFailed) ? "w-[210px]" : "w-[170px]"
       )}
     >
       {/* Header */}
@@ -161,7 +161,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           "shadow-menu bg-grey-100 border border-grey-80 cursor-pointer hover:bg-grey-90 transition-all duration-300 ease-in-out",
           isExpanded
             ? "rounded-t-[8px] w-[378px]"
-            : "rounded-[8px] w-[170px]"
+            : (isUnhealthy || hasFailed) ? "rounded-[8px] w-[210px]" : "rounded-[8px] w-[170px]"
         )}
         onClick={handleHeaderClick}
       >
@@ -214,23 +214,23 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   r="22"
                   className={cn(
                     "fill-none stroke-[4]",
-                    hasFailed
+                    isUnhealthy || hasFailed
                       ? "stroke-[#ef4444]"
                       : isCompleted
                         ? "stroke-[#4ade80]"
                         : "stroke-[#4171e0]"
                   )}
                   strokeLinecap="round"
-                  strokeDasharray={hasFailed ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
+                  strokeDasharray={isUnhealthy || hasFailed ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
                 />
               </svg>
 
               {/* Icon wrapper */}
               <div className="absolute inset-0 size-12 flex items-center justify-center">
-                {hasFailed ? (
-                  <div className="size-10 flex items-center justify-center rounded-full bg-error-100/30">
+                {isUnhealthy || hasFailed ? (
+                  <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[100%]">
                     <Icons.Close className="size-5 relative text-error-50" />
-                  </div>
+                  </AbstractIconWrapper>
                 ) : (
                   <AbstractIconWrapper className="size-10 flex items-center justify-center rounded-[50%]">
                     {isCompleted ? (

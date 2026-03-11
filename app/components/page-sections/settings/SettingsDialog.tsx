@@ -52,6 +52,7 @@ const SettingsWidthDialog: React.FC<SettingsWidthDialogProps> = ({
         {/* Full-width panel */}
         <Dialog.Content
           forceMount
+          onInteractOutside={(e) => e.preventDefault()}
           className={cn(
             "fixed inset-0 z-50 bg-grey-100 border border-grey-80 shadow-menu font-geist duration-300 data-[state=open]:animate-full-panel-in data-[state=closed]:animate-full-panel-out overscroll-contain",
             className

@@ -956,6 +956,35 @@ export function cleanupExpiredFiles(): number {
 }
 
 /**
+ * Record a file deletion immediately (called when user deletes from UI).
+ * Adds the file directly to recentFiles with the human-readable name so the
+ * sync widget shows it right away, without waiting for the next sync cycle.
+ */
+export function recordDeletedFile(fileName: string, sizeBytes: number = 0): void {
+  const state = getState();
+  const now = Date.now();
+  const id = generateFileId(fileName);
+
+  // Don't add if already in recent files
+  if (state.recentFiles.some(r => r.id === id && r.action === 'remote_delete')) {
+    return;
+  }
+
+  state.recentFiles.unshift({
+    id,
+    path: fileName,
+    fileName: extractFileName(fileName),
+    action: 'remote_delete',
+    completedAt: now,
+    sizeBytes,
+    sessionId: state.currentSession?.sessionId || 'manual-delete',
+  });
+
+  saveState(state);
+  console.log('[SyncProgressService] Recorded deleted file:', fileName);
+}
+
+/**
  * Clear all sync data (for testing/reset)
  */
 export function clearAllData(): void {

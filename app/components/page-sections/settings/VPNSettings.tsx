@@ -138,7 +138,7 @@ const VPNSettings: React.FC = () => {
                 rotate
                 reveal={inView}
                 parentClassName="w-full"
-                className="delay-300 w-full mt-[38px]"
+                className="delay-300 w-full mt-4"
               >
                 <div className="space-y-4 text-grey-10 w-full flex flex-col">
                   {/* Autoconnect Checkbox */}

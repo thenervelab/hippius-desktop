@@ -83,7 +83,7 @@ const NotificationSettings: React.FC = () => {
             </RevealTextLine>
 
             <RevealTextLine rotate reveal={inView} className="delay-300 w-full">
-              <div className="mt-12 flex">
+              <div className="mt-4 flex">
                 <button
                   onClick={handleSelectAll}
                   className="text-primary-50 hover:text-primary-40 text-sm font-medium"

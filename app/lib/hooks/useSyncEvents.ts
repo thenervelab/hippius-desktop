@@ -161,6 +161,10 @@ export function useSyncEvents() {
       }
     }, 60 * 1000);
 
+    // Listen for manual sync progress updates (e.g. file deletions from UI)
+    const handleSyncProgressUpdate = () => refreshProgressState();
+    window.addEventListener("sync_progress_update", handleSyncProgressUpdate);
+
     (async () => {
       try {
         const results = await Promise.all([
@@ -430,6 +434,7 @@ export function useSyncEvents() {
     return () => {
       cancelled = true;
       unsubs.forEach((u) => u());
+      window.removeEventListener("sync_progress_update", handleSyncProgressUpdate);
       // Cleanup the periodic interval
       if (cleanupIntervalRef.current) {
         clearInterval(cleanupIntervalRef.current);

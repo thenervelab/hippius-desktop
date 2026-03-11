@@ -2,10 +2,10 @@
 
 import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { CardButton, Icons } from "@/components/ui";
+import { CardButton, Graphsheet } from "@/components/ui";
 import { toast } from "sonner";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { X, Folder } from "lucide-react";
+import { Folder } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { setPrivateSyncPath, getAllSyncPaths } from "@/app/lib/utils/syncPathUtils";
@@ -13,6 +13,7 @@ import { getHcfsConfig, saveHcfsConfig, initializeSync } from "@/app/lib/utils/h
 import { HcfsSetupDialog } from "./HcfsSetupDialog";
 import { syncEngineStatusAtom, isSyncConfiguredAtom, SYNC_STOPPED_STORAGE_KEY } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import DialogContainer from "@/components/ui/DialogContainer";
 
 interface AddLocalFolderDialogProps {
   open: boolean;
@@ -153,109 +154,98 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   return (
     <>
     <Dialog.Root open={open} onOpenChange={handleClose}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50" />
-        <Dialog.Content className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-lg shadow-xl p-6 w-full max-w-md z-50">
-          <div className="flex items-start justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-primary-95 rounded-lg">
-                <Folder className="size-5 text-primary-50" />
-              </div>
-              <div>
-                <Dialog.Title className="text-lg font-semibold text-grey-10">
-                  Add Local Folder
-                </Dialog.Title>
-                <Dialog.Description className="text-sm text-grey-60">
-                  Select a folder from this device to sync
-                </Dialog.Description>
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit" preventClose={isAdding}>
+        <Dialog.Title className="sr-only">Add Local Folder</Dialog.Title>
+
+        <div className="px-4 py-6 flex flex-col gap-5">
+          {/* Centered icon header */}
+          <div className="flex flex-col items-center text-center gap-3">
+            <div className="size-14 flex justify-center items-center relative">
+              <Graphsheet
+                majorCell={{ lineColor: [31, 80, 189, 1.0], lineWidth: 2, cellDim: 200 }}
+                minorCell={{ lineColor: [49, 103, 211, 1.0], lineWidth: 1, cellDim: 20 }}
+                className="absolute w-full h-full duration-500 opacity-30 z-0"
+              />
+              <div className="bg-white-cloud-gradient-sm absolute w-full h-full z-10" />
+              <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center z-20">
+                <Folder className="size-5 text-grey-100" />
               </div>
             </div>
-            <Dialog.Close asChild>
-              <button
-                className="p-1 hover:bg-grey-95 rounded transition-colors"
-                disabled={isAdding}
-              >
-                <X className="size-5 text-grey-50" />
-              </button>
-            </Dialog.Close>
+            <div className="flex flex-col gap-1">
+              <h2 className="text-xl font-semibold text-grey-10">Add Local Folder</h2>
+              <p className="text-sm text-grey-50 max-w-sm">
+              Select a folder from this device to sync
+            </p>
+            </div>
           </div>
 
-          <div className="space-y-4">
-            {/* Folder Selection */}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-grey-30">
-                Selected Folder
-              </label>
-              {selectedPath ? (
-                <div className="p-4 border border-grey-80 rounded-lg bg-grey-98">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Folder className="size-4 text-grey-40 flex-shrink-0" />
-                    <span className="font-medium text-base text-grey-10">
-                      {folderName}
-                    </span>
+          {/* Folder Selection */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-grey-30">
+              Selected Folder
+            </label>
+            {selectedPath ? (
+              <div className="p-3 border border-grey-80 rounded-lg bg-grey-98">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-grey-60 break-all font-mono bg-white px-2 py-1.5 rounded border border-grey-90">
+                      {selectedPath}
+                    </p>
                   </div>
-                  <p className="text-xs text-grey-60 break-all">{selectedPath}</p>
-                  <CardButton
-                    variant="ghost"
-                    className="mt-2 text-sm"
+                  <button
+                    className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
                     onClick={handleSelectFolder}
                     disabled={isAdding}
                   >
-                    Change Folder
-                  </CardButton>
+                    Change
+                  </button>
                 </div>
-              ) : (
-                <CardButton
-                  variant="secondary"
-                  className="w-full justify-center"
-                  icon={<Folder className="size-4" />}
-                  appendToStart
-                  onClick={handleSelectFolder}
-                  disabled={isAdding}
-                >
-                  Select Folder
-                </CardButton>
-              )}
-            </div>
-
-            {/* Info Box */}
-            <div className="p-3 bg-primary-98 border border-primary-90 rounded-lg">
-              <p className="text-xs text-primary-40">
-                All files in this folder will be encrypted and synced to the
-                Hippius network. Changes will automatically sync across your
-                devices.
-              </p>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex gap-3 pt-2">
+              </div>
+            ) : (
               <CardButton
                 variant="secondary"
-                className="flex-1"
-                onClick={handleClose}
+                className="w-full justify-center"
+                icon={<Folder className="size-4" />}
+                appendToStart
+                onClick={handleSelectFolder}
                 disabled={isAdding}
               >
-                Cancel
+                Select Folder
               </CardButton>
-              <CardButton
-                variant="primary"
-                className="flex-1"
-                onClick={handleAddFolder}
-                disabled={!selectedPath || isAdding}
-              >
-                {isAdding ? (
-                  <>
-                    <Icons.Loader className="size-4 mr-2 animate-spin" />
-                    Adding...
-                  </>
-                ) : (
-                  "Add Folder"
-                )}
-              </CardButton>
-            </div>
+            )}
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
+
+          {/* Info Box */}
+          <div className="p-3 bg-primary-95 border border-primary-80 rounded-lg">
+            <p className="text-xs text-primary-40">
+              All files in this folder will be encrypted and synced to the
+              Hippius network. Changes will automatically sync across your
+              devices.
+            </p>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3">
+            <CardButton
+              className="w-full"
+              variant="secondary"
+              onClick={handleClose}
+              disabled={isAdding}
+            >
+              Cancel
+            </CardButton>
+            <CardButton
+              className="w-full"
+              variant="primary"
+              onClick={handleAddFolder}
+              disabled={!selectedPath || isAdding}
+              loading={isAdding}
+            >
+              {isAdding ? "Adding..." : "Add Folder"}
+            </CardButton>
+          </div>
+        </div>
+      </DialogContainer>
     </Dialog.Root>
 
       <HcfsSetupDialog

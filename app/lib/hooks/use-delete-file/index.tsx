@@ -8,6 +8,7 @@ import { useAtomValue } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getPrivateSyncPath, getAllSyncPaths } from "@/lib/utils/syncPathUtils";
+import { recordDeletedFile } from "@/lib/services/syncProgressService";
 import { toast } from "sonner";
 import { useRef } from "react";
 
@@ -104,6 +105,9 @@ export const useDeleteFile = ({
                         label: file.label ?? null,
                     });
                     results.push({ file, success: true });
+
+                    // Record in sync progress so widget shows delete immediately
+                    recordDeletedFile(fileName, file.size ?? 0);
                 } catch (error) {
                     console.error(`Failed to delete ${file.isFolder ? 'folder' : 'file'}: ${fileName}`, error);
                     results.push({
@@ -122,6 +126,9 @@ export const useDeleteFile = ({
 
             // Trigger sync so server picks up the deletion
             await invoke("trigger_sync_now").catch(() => {});
+
+            // Notify sync progress system so the widget refreshes immediately
+            window.dispatchEvent(new CustomEvent("sync_progress_update"));
 
             // Refetch file listing and recent files.
             // The Rust remove_file command records "deleted" entries in the

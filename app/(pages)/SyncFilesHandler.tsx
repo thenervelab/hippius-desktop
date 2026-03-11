@@ -12,7 +12,7 @@ const SyncFilesHandler: React.FC = () => {
   return (
     <>
       {createPortal(
-        <div className="fixed z-[10] right-4 bottom-20 sm:bottom-7 pointer-events-none">
+        <div className="fixed z-[60] right-4 bottom-20 sm:bottom-7 pointer-events-none">
           <div className="flex flex-col gap-4 items-end pointer-events-auto">
             <SyncStatusHandler />
           </div>
