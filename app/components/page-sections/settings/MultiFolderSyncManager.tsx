@@ -612,7 +612,11 @@ export default function MultiFolderSyncManager() {
 
             <div className="w-full">
               <div className="space-y-3 w-full">
-                {remoteFolders.length > 0 ? (
+                {isLoading ? (
+                  <div className="flex justify-center py-8">
+                    <Icons.Loader className="size-6 animate-spin text-primary-50" />
+                  </div>
+                ) : remoteFolders.length > 0 ? (
                   <div className="space-y-2 w-full">
                     {remoteFolders.map((folder) => (
                       <div
