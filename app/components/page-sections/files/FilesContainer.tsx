@@ -11,10 +11,9 @@ import React, {
 import useUserFiles from "@/app/lib/hooks/use-user-files";
 import useRecentFiles from "@/lib/hooks/use-recent-files";
 import { WaitAMoment } from "@/components/ui";
-import SyncFolderSelector from "./SyncFolderSelector";
+import FilesOnboarding from "./FilesOnboarding";
 import {
   getPrivateSyncPath,
-  setPrivateSyncPath,
 } from "@/lib/utils/syncPathUtils";
 import SyncFolderTabs from "./SyncFolderTabs";
 import { formatBytesFromBigInt } from "@/lib/utils";
@@ -452,60 +451,27 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     refetchRecentFiles();
   }, [refetchRecentFiles]);
 
-  // Handle folder selection from SyncFolderSelector
-  const handleFolderSelected = useCallback(
-    async (path: string) => {
-      if (!polkadotAddress) return;
-
-      try {
-        // Save sync path and update UI immediately (fast operations)
-        await setPrivateSyncPath(path, polkadotAddress);
-        setSelectedPrivateFolderPath(path);
-
-        // Signal other components (e.g. settings, dashboard) about the path change
-        triggerSyncPathRefresh((prev) => prev + 1);
-
-        // Check if HCFS config exists
-        const hasConfig = await checkConfig(polkadotAddress);
-
-        if (!hasConfig.has_password) {
-          // Need to show setup dialog — user must enter password first
-          setShowHcfsSetup(true);
-        } else {
-          // Config exists — show success immediately, sync in background
-          toast.success("Sync folder set — syncing started!");
-          setIsSyncPathConfigured(true);
-          setShowPrivateStartSyncingSelector(false);
-          refetchUserFiles();
-
-          // Clear stopped flag — selecting a folder means user wants sync running
-          localStorage.removeItem("hippius_sync_stopped");
-
-          // Fire off stop + re-init in background (don't block UI)
-          const mnemonic = (await getMnemonic()) ?? undefined;
-          invoke("stop_sync").catch((err: unknown) => console.warn("[FilesContainer] stop_sync failed:", err)).then(() =>
-            tryInitializeSync(polkadotAddress!, "default", mnemonic ?? undefined).catch((err) =>
-              console.error("[FilesContainer] Background sync init failed:", err)
-            )
-          );
-        }
-      } catch (err) {
-        console.error("Failed to set sync folder:", err);
-        toast.error("Failed to set sync folder");
-      }
-    },
-    [polkadotAddress, checkConfig, tryInitializeSync, getMnemonic, triggerSyncPathRefresh, refetchUserFiles]
-  );
-
-  // Handle skipping sync folder setup
-  const handleSkipSyncFolder = useCallback(async () => {
-    if (!polkadotAddress) return;
-    const emptyPath = "";
-    await setPrivateSyncPath(emptyPath, polkadotAddress);
-    setSelectedPrivateFolderPath(emptyPath);
+  // Handle skipping sync folder setup — UI-only, no backend calls
+  const handleSkipSyncFolder = useCallback(() => {
     setIsSyncPathConfigured(true);
     setShowPrivateStartSyncingSelector(false);
-  }, [polkadotAddress]);
+  }, []);
+
+  // Handle sync started from onboarding (folder added or remote folder synced)
+  const handleOnboardingSyncStarted = useCallback(async () => {
+    if (!polkadotAddress) return;
+    // Reload sync paths so we pick up the newly added folder
+    try {
+      const result = await getPrivateSyncPath(polkadotAddress);
+      setSelectedPrivateFolderPath(result?.path ?? null);
+    } catch {
+      // Ignore — we still want to mark as configured
+    }
+    setIsSyncPathConfigured(true);
+    setShowPrivateStartSyncingSelector(false);
+    triggerSyncPathRefresh((prev) => prev + 1);
+    refetchUserFiles();
+  }, [polkadotAddress, triggerSyncPathRefresh, refetchUserFiles]);
 
   const handleHcfsSetupComplete = useCallback(async (result: { serverUrl: string; password: string }) => {
     if (!polkadotAddress) return;
@@ -564,21 +530,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     // If on /files page, show the sync folder selector
     setShowPrivateStartSyncingSelector(true);
   }, [isRecentFiles, handleNavigateToSettings]);
-
-  // Handle folder selection from Start Syncing flow
-  const handleStartSyncingFolderSelected = useCallback(
-    async (path: string) => {
-      try {
-        await handleFolderSelected(path);
-        // Hide the start syncing selector on success
-        setShowPrivateStartSyncingSelector(false);
-      } catch (error) {
-        // Keep the selector open on error so user can try again
-        console.error("Failed to set sync folder:", error);
-      }
-    },
-    [handleFolderSelected]
-  );
 
   // Load data on mount and set up interval refresh
   useEffect(() => {
@@ -667,7 +618,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
   // Computed values for current view (always private)
   const currentSyncPath = selectedPrivateFolderPath;
-  const isCurrentSyncPathEmpty = currentSyncPath === "";
+  const isCurrentSyncPathEmpty = !currentSyncPath;
   const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
 
   // Recent files specific logic - check if private path is available
@@ -704,17 +655,17 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     content = <WaitAMoment />;
   } else if (isSyncPathConfigured === false && !isRecentFiles) {
     content = (
-      <SyncFolderSelector
-        onFolderSelected={handleFolderSelected}
+      <FilesOnboarding
         onSkip={handleSkipSyncFolder}
+        onSyncStarted={handleOnboardingSyncStarted}
       />
     );
   } else if (showCurrentStartSyncingSelector && !isRecentFiles) {
-    // Show sync folder selector when Start Syncing is clicked
+    // Show onboarding when Start Syncing is clicked
     content = (
-      <SyncFolderSelector
-        onFolderSelected={handleStartSyncingFolderSelected}
+      <FilesOnboarding
         onSkip={handleSkipSyncFolder}
+        onSyncStarted={handleOnboardingSyncStarted}
       />
     );
   } else {
