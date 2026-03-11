@@ -1,10 +1,9 @@
 "use client";
 
-import { FC, useEffect, useState } from "react";
+import { FC, useEffect, useState, useRef } from "react";
 import { getAllSyncPaths, SyncPathResult } from "@/lib/utils/syncPathUtils";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
-import * as RadixSelect from "@radix-ui/react-select";
 import { Icons } from "@/components/ui";
 
 interface SyncFolderSelectProps {
@@ -23,6 +22,8 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
   const { polkadotAddress } = useWalletAuth();
   const [syncPaths, setSyncPaths] = useState<SyncPathResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     (async () => {
@@ -47,62 +48,69 @@ const SyncFolderSelect: FC<SyncFolderSelectProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polkadotAddress]);
 
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
   if (loading || syncPaths.length < 2) return null;
 
+  const selectedLabel = syncPaths.find((sp) => sp.label === value)?.label;
+
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
+    <div className={cn("flex flex-col gap-1.5", className)} ref={containerRef}>
       <label className="text-sm font-medium text-grey-50">
         Upload to folder
       </label>
-      <RadixSelect.Root
-        value={value ?? ""}
-        onValueChange={(val) => {
-          const selected = syncPaths.find((sp) => sp.label === val);
-          if (selected) {
-            onChange(selected.label, selected.path);
-          }
-        }}
-      >
-        <RadixSelect.Trigger
-          className={cn(
-            "flex justify-between cursor-pointer group items-center gap-2 px-3 py-2 h-10 text-sm font-medium border border-grey-80 rounded text-grey-10 bg-white focus:outline-none focus:ring-2 focus:ring-primary-50 hover:border-primary-60 transition-colors w-full",
-          )}
-          aria-label="Upload to folder"
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen((prev) => !prev)}
+          className="flex w-full justify-between cursor-pointer items-center gap-2 px-4 h-[48px] text-sm font-medium border border-grey-80 rounded-lg text-grey-10 bg-grey-100 focus:outline-none"
         >
-          <RadixSelect.Value placeholder="Select folder" />
-          <RadixSelect.Icon className="h-4 w-4 text-grey-40">
-            <Icons.ChevronDown className="transition-transform duration-200 group-data-[state=open]:rotate-180" />
-          </RadixSelect.Icon>
-        </RadixSelect.Trigger>
+          <span className="truncate">{selectedLabel ?? "Select folder"}</span>
+          <Icons.ChevronDown
+            className={cn(
+              "h-5 w-5 text-grey-50 shrink-0 transition-transform duration-200",
+              open && "rotate-180"
+            )}
+          />
+        </button>
 
-        <RadixSelect.Portal>
-          <RadixSelect.Content
-            side="bottom"
-            position="popper"
-            sideOffset={4}
-            avoidCollisions={true}
-            className="mt-1 overflow-hidden rounded-md bg-white shadow-lg border border-grey-80 z-[100] w-[var(--radix-select-trigger-width)]"
-          >
-            <RadixSelect.Viewport className="py-1 max-h-60 overflow-auto">
+        {open && (
+          <div className="absolute left-0 right-0 top-full mt-1 overflow-hidden rounded-lg bg-white shadow-lg border border-grey-80 z-[100]">
+            <div className="p-1.5 max-h-60 overflow-auto flex flex-col gap-0.5">
               {syncPaths.map((sp) => {
                 const isSelected = sp.label === value;
                 return (
-                  <RadixSelect.Item
+                  <div
                     key={sp.label}
-                    value={sp.label}
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => {
+                      onChange(sp.label, sp.path);
+                      setOpen(false);
+                    }}
                     className={cn(
-                      "flex items-center px-3 py-2 text-sm cursor-pointer text-grey-10 hover:bg-grey-95 focus:bg-grey-95 transition-colors duration-150 focus:outline-none select-none data-[highlighted]:bg-grey-95",
-                      isSelected ? "bg-grey-95 font-medium" : "bg-white",
+                      "flex items-center px-3 py-2.5 text-sm cursor-pointer text-grey-10 transition-colors duration-150 select-none rounded-md hover:bg-grey-90",
+                      isSelected ? "bg-grey-80 font-medium" : "",
                     )}
                   >
-                    <RadixSelect.ItemText>{sp.label}</RadixSelect.ItemText>
-                  </RadixSelect.Item>
+                    {sp.label}
+                  </div>
                 );
               })}
-            </RadixSelect.Viewport>
-          </RadixSelect.Content>
-        </RadixSelect.Portal>
-      </RadixSelect.Root>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

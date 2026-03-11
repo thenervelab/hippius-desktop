@@ -388,8 +388,71 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         />
       )}
 
-      {/* Privacy Notice — root mode only */}
-      {!isFolder && isPrivateView && (
+      {/* Selected files list */}
+      {files.length > 0 && (
+        <div className="mt-4">
+          <label className="text-sm font-medium text-grey-50 mb-1.5 block">
+            Selected File{files.length > 1 ? "s" : ""}
+          </label>
+          <div className="bg-grey-90 max-h-[200px] overflow-y-auto custom-scrollbar-thin pr-2 rounded-[8px]">
+            <div className="flex items-center font-medium px-2 gap-x-3 pr-1.5 py-1.5">
+              <div className="text-grey-10 flex items-center justify-start w-0 grow">
+                <div className="w-fit truncate">{files[0].name}</div>
+                {files.length > 1 && !revealFiles && (
+                  <div className="text-grey-60 ml-1 mr-auto min-w-fit p-0.5 px-[3px] border rounded-[2px] border-grey-80 text-[10px]">
+                    + {files.length - 1} More File
+                    {files.length > 2 ? "s" : ""}
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-x-2">
+                {files.length > 1 && (
+                  <button
+                    onClick={() => setRevealFiles((v) => !v)}
+                    className="flex items-center gap-x-2 text-sm text-grey-10"
+                    disabled={isUploading}
+                  >
+                    {revealFiles ? "Hide" : "View"}{" "}
+                    <Icons.ArrowRight className="size-4" />
+                  </button>
+                )}
+                <button
+                  onClick={() => removeFile(0)}
+                  className="text-grey-60 hover:text-error-50"
+                  title="Remove file"
+                  disabled={isUploading}
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              </div>
+            </div>
+
+            {revealFiles && (
+              <div className="px-2 flex flex-col w-full gap-y-1 pb-1 font-medium text-grey-10">
+                {files.slice(1).map((file, i) => (
+                  <div
+                    key={file.path || file.name}
+                    className="w-full flex items-center justify-between"
+                  >
+                    <div className="w-0 grow truncate">{file.name}</div>
+                    <button
+                      onClick={() => removeFile(i + 1)}
+                      className="ml-2 text-grey-60 hover:text-error-50 flex-shrink-0"
+                      title="Remove file"
+                      disabled={isUploading}
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Privacy Notice */}
+      {isPrivateView && (
         <div className="mt-4 p-3 bg-primary-95 border border-primary-80 rounded-lg">
           <div className="flex items-start gap-2">
             <div className="flex-shrink-0 mt-0.5">
@@ -405,64 +468,6 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
               </p>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* File list */}
-      {files.length > 0 && (
-        <div className="bg-grey-90 max-h-[200px] overflow-y-auto custom-scrollbar-thin pr-2 rounded-[8px] mt-4">
-          <div className="flex items-center font-medium px-2 gap-x-3 pr-1.5 py-1.5">
-            <div className="text-grey-10 flex items-center justify-start w-0 grow">
-              <div className="w-fit truncate">{files[0].name}</div>
-              {files.length > 1 && !revealFiles && (
-                <div className="text-grey-60 ml-1 mr-auto min-w-fit p-0.5 px-[3px] border rounded-[2px] border-grey-80 text-[10px]">
-                  + {files.length - 1} More File
-                  {files.length > 2 ? "s" : ""}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-x-2">
-              {files.length > 1 && (
-                <button
-                  onClick={() => setRevealFiles((v) => !v)}
-                  className="flex items-center gap-x-2 text-sm text-grey-10"
-                  disabled={isUploading}
-                >
-                  {revealFiles ? "Hide" : "View"}{" "}
-                  <Icons.ArrowRight className="size-4" />
-                </button>
-              )}
-              <button
-                onClick={() => removeFile(0)}
-                className="text-grey-60 hover:text-error-50"
-                title="Remove file"
-                disabled={isUploading}
-              >
-                <Trash2 className="size-4" />
-              </button>
-            </div>
-          </div>
-
-          {revealFiles && (
-            <div className="px-2 flex flex-col w-full gap-y-1 pb-1 font-medium text-grey-10">
-              {files.slice(1).map((file, i) => (
-                <div
-                  key={file.path || file.name}
-                  className="w-full flex items-center justify-between"
-                >
-                  <div className="w-0 grow truncate">{file.name}</div>
-                  <button
-                    onClick={() => removeFile(i + 1)}
-                    className="ml-2 text-grey-60 hover:text-error-50 flex-shrink-0"
-                    title="Remove file"
-                    disabled={isUploading}
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
