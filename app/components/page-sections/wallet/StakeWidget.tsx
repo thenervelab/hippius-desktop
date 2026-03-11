@@ -1,31 +1,16 @@
 "use client";
 
-import { FC, useState, useEffect, useRef } from "react";
+import { FC, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AbstractIconWrapper, CardButton, Icons } from "@/components/ui";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { formatStakingAmount } from "@/app/lib/utils/staking";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { toast } from "sonner";
-import PasscodePromptDialog from "../stake-bridge/PasscodePromptDialog";
 
 const StakeWidget: FC = () => {
     const router = useRouter();
-    const { stakingInfo, operations, needsUnlock } = useStaking();
-    const { unlockWithPasscode } = useWalletAuth();
+    const { stakingInfo, operations } = useStaking();
     const [isWithdrawing, setIsWithdrawing] = useState(false);
-    const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
-    const pendingWithdraw = useRef(false);
-
-    // After passcode unlock, retry the pending withdraw action.
-    // Only depends on needsUnlock — the ref carries the pending flag.
-    useEffect(() => {
-        if (!needsUnlock && pendingWithdraw.current) {
-            pendingWithdraw.current = false;
-            handleWithdrawUnbonded();
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [needsUnlock]);
 
     const handleStakeNow = () => {
         router.push("/stake?tab=stake");
@@ -42,11 +27,6 @@ const StakeWidget: FC = () => {
     // };
 
     const handleWithdrawUnbonded = async () => {
-        if (needsUnlock) {
-            pendingWithdraw.current = true;
-            setShowPasscodePrompt(true);
-            return;
-        }
         if (!operations.withdrawUnbonded) return;
 
         setIsWithdrawing(true);
@@ -203,11 +183,6 @@ const StakeWidget: FC = () => {
 
             </div>
 
-            <PasscodePromptDialog
-                open={showPasscodePrompt}
-                onOpenChange={setShowPasscodePrompt}
-                onSubmit={unlockWithPasscode}
-            />
         </div>
     );
 };

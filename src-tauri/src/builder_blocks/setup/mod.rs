@@ -216,6 +216,37 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Wallet store — replaces frontend IndexedDB "wallet" table
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS wallet_store (
+            owner TEXT PRIMARY KEY,
+            encrypted_mnemonic TEXT NOT NULL,
+            passcode_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Auth session — replaces frontend IndexedDB "session" table + localStorage tokens
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS auth_session (
+            owner TEXT PRIMARY KEY,
+            auth_token TEXT,
+            token_expiry INTEGER,
+            user_id INTEGER,
+            username TEXT,
+            provider TEXT,
+            substrate_address TEXT,
+            logout_time_minutes INTEGER DEFAULT 1440,
+            last_login_at TEXT,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     // HCFS config table
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS hcfs_config (

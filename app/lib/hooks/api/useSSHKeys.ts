@@ -6,7 +6,7 @@ import {
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface SSHKeyResponse {
@@ -42,7 +42,7 @@ export default function useSSHKeys(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<SSHKeysResponse, Error> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   const { page = 1, page_size = 10, search = "", ordering = "" } = params || {};
 
@@ -53,52 +53,24 @@ export default function useSSHKeys(
       page_size,
       search,
       ordering,
-      oauthSession?.token,
     ],
     queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      // Build query string
-      const queryParams = new URLSearchParams({
-        page: String(page),
-        page_size: String(page_size),
+      return invoke<SSHKeysResponse>("list_ssh_keys", {
+        accountId: polkadotAddress,
+        page,
+        pageSize: page_size,
+        search: search || null,
+        ordering: ordering || null,
       });
-
-      // Add search parameter if provided
-      if (search) {
-        queryParams.append("search", search);
-      }
-
-      // Add ordering parameter if provided
-      if (ordering) {
-        queryParams.append("ordering", ordering);
-      }
-
-      // Direct API call
-      const url = `${API_CONFIG.baseUrl}${
-        API_CONFIG.sshKeys.list
-      }?${queryParams.toString()}`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: Failed to fetch SSH keys`);
-      }
-
-      return response.json() as Promise<SSHKeysResponse>;
     },
-    enabled: !!oauthSession?.token,
+    enabled: !!polkadotAddress,
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 5 * 60 * 1000,
     ...options,
   });
 }

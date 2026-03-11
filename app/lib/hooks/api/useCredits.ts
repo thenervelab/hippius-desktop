@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { invoke } from "@tauri-apps/api/core";
 
 // Define types based on the indexer API response
 export interface CreditEvent {
@@ -113,10 +113,10 @@ export default function useCredits(
         throw new Error("No wallet address available");
       }
 
-      return indexerGet<CreditsResponse>("/credits/free-credits", {
-        account_id: polkadotAddress,
-        limit,
+      return invoke<CreditsResponse>("get_indexer_credits", {
+        accountId: polkadotAddress,
         page,
+        limit,
       });
     },
     select: (data) => {

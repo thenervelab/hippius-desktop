@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { BackButton } from "@/components/ui";
 import TokenForm from "../wallet/shared/TokenForm";
@@ -9,37 +9,15 @@ import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { toPlancks } from "@/app/lib/utils/staking";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
-import PasscodePromptDialog from "../stake-bridge/PasscodePromptDialog";
 
 const Unstake = () => {
     const router = useRouter();
-    const { stakingInfo, operations, needsUnlock } = useStaking();
-    const { unlockWithPasscode } = useWalletAuth();
+    const { stakingInfo, operations } = useStaking();
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [pendingAmount, setPendingAmount] = useState("");
-    const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
-    const pendingUnstakeAmount = useRef<string | undefined>(undefined);
-
-    // After passcode unlock, retry the pending unstake action.
-    // Only depends on needsUnlock — the ref carries the pending amount.
-    useEffect(() => {
-        if (!needsUnlock && pendingUnstakeAmount.current) {
-            const amount = pendingUnstakeAmount.current;
-            pendingUnstakeAmount.current = undefined;
-            handleUnstakeSubmit(amount);
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [needsUnlock]);
 
     const handleUnstakeSubmit = async (amount?: string) => {
-        if (needsUnlock) {
-            pendingUnstakeAmount.current = amount;
-            setShowPasscodePrompt(true);
-            return;
-        }
-
         if (!amount || parseFloat(amount) <= 0) {
             toast.error("Please enter a valid amount");
             return;
@@ -122,12 +100,6 @@ const Unstake = () => {
                 isUnstaking={true}
             />
 
-            {/* Passcode prompt when wallet keypair is not in memory */}
-            <PasscodePromptDialog
-                open={showPasscodePrompt}
-                onOpenChange={setShowPasscodePrompt}
-                onSubmit={unlockWithPasscode}
-            />
         </>
     );
 };

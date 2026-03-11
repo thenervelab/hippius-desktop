@@ -27,7 +27,7 @@ import {
 } from "@/app/lib/store/syncAtoms";
 import { useAtomValue, useAtom, useSetAtom } from "jotai";
 import { vpnConnectedAtom } from "@/components/dashboard-title-wrapper/vpn-menu/vpnAtoms";
-import { API_CONFIG } from "@/app/lib/config";
+// API_CONFIG removed - credits now fetched via invoke
 import {
   overallProgressAtom,
   hasSyncActivityAtom,
@@ -157,22 +157,7 @@ function isUserLoggedIn(): boolean {
   }
 }
 
-// Helper to get OAuth token from localStorage
-function getOAuthToken(): string | null {
-  if (!isUserLoggedIn()) return null;
-
-  try {
-    const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
-    if (!storedSession) return null;
-    const session: OAuthSession = JSON.parse(storedSession);
-    return session.token || null;
-  } catch (error) {
-    console.error("[Tray] Failed to get OAuth token:", error);
-    return null;
-  }
-}
-
-// Helper to fetch credits from API with caching
+// Helper to fetch credits via Rust backend with caching
 async function fetchUserCredits(forceRefresh = false): Promise<{
   credits: number;
   isLoading: boolean;
@@ -191,56 +176,32 @@ async function fetchUserCredits(forceRefresh = false): Promise<{
   }
 
   try {
-    const token = getOAuthToken();
-    if (!token) {
-      const result = {
-        credits: 0,
-        isLoading: true,
-        error: "Loading credits",
-      };
+    // Get substrate address from localStorage session
+    const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
+    if (!storedSession) {
+      const result = { credits: 0, isLoading: true, error: "Loading credits" };
+      creditsCache = { ...result, timestamp: Date.now() };
+      return result;
+    }
+    const session: OAuthSession = JSON.parse(storedSession);
+    if (!session.substrateAddress) {
+      const result = { credits: 0, isLoading: true, error: "Loading credits" };
       creditsCache = { ...result, timestamp: Date.now() };
       return result;
     }
 
-    const response = await fetch(
-      `${API_CONFIG.baseUrl}${API_CONFIG.billing.credits}`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Token ${token}`,
-          Accept: "application/json",
-        },
-      },
-    );
-
-    if (!response.ok) {
-      console.error("[Tray] Failed to fetch credits:", response.status);
-      const result = {
-        credits: 0,
-        isLoading: true,
-        error: "Loading credits",
-      };
-      creditsCache = { ...result, timestamp: Date.now() };
-      return result;
-    }
-
-    const data: CreditsApiResponse = await response.json();
+    const data = await invoke<CreditsApiResponse>("get_user_credits_balance", {
+      accountId: session.substrateAddress,
+    });
     const balanceStr = data.balance || "0";
     const credits = parseFloat(balanceStr);
 
-    const result = {
-      credits,
-      isLoading: false,
-    };
+    const result = { credits, isLoading: false };
     creditsCache = { ...result, timestamp: Date.now() };
     return result;
   } catch (error) {
     console.error("[Tray] Failed to fetch credits:", error);
-    const result = {
-      credits: 0,
-      isLoading: true,
-      error: "Loading credits",
-    };
+    const result = { credits: 0, isLoading: true, error: "Loading credits" };
     creditsCache = { ...result, timestamp: Date.now() };
     return result;
   }

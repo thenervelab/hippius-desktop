@@ -5,7 +5,7 @@ import {
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface VMFlavorResponse {
@@ -27,41 +27,23 @@ export default function useVMFlavors(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<VMFlavorResponse[], Error> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   return useQuery<VMFlavorResponse[], Error, VMFlavorResponse[]>({
     queryKey: ["vmFlavors"],
     queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.flavors}`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
+      return invoke<VMFlavorResponse[]>("list_vm_flavors", {
+        accountId: polkadotAddress,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message =
-          errorData.error ||
-          errorData.message ||
-          errorData.detail ||
-          `Failed to fetch VM flavors`;
-        throw new Error(message);
-      }
-
-      return response.json() as Promise<VMFlavorResponse[]>;
     },
-    enabled: !!oauthSession?.token,
+    enabled: !!polkadotAddress,
     refetchOnWindowFocus: false,
-    staleTime: 10 * 60 * 1000, // 10 minutes (flavors don't change often)
-    retry: false, // Don't retry on error to avoid long loading states
+    staleTime: 10 * 60 * 1000,
+    retry: false,
     ...options,
   });
 }

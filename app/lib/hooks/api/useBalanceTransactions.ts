@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { invoke } from "@tauri-apps/api/core";
 
 // Define types based on the indexer API response
 export interface TransferEvent {
@@ -66,8 +66,8 @@ export default function useBalanceTransactions(
         throw new Error("No wallet address available");
       }
 
-      return indexerGet<TransfersResponse>("/balance-transfers", {
-        account: polkadotAddress,
+      return invoke<TransfersResponse>("get_balance_transfers", {
+        accountId: polkadotAddress,
         page,
         limit,
       });

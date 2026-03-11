@@ -1,4 +1,3 @@
-import { cryptoWaitReady, mnemonicGenerate } from "@polkadot/util-crypto";
 import { invoke } from "@tauri-apps/api/core";
 
 /** Module-level promise to prevent concurrent generation. */
@@ -42,9 +41,8 @@ async function doEnsure(accountId?: string): Promise<string> {
     }
   }
 
-  // 2. Generate a new mnemonic (OAuth users on first sync)
-  await cryptoWaitReady();
-  const mnemonic = mnemonicGenerate(12);
+  // 2. Generate a new mnemonic via Rust (OAuth users on first sync)
+  const mnemonic = await invoke<string>("generate_mnemonic");
 
   console.log(
     "[ensureSyncMnemonic] Generated new mnemonic for OAuth user"

@@ -6,7 +6,7 @@ import {
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { SUPPORT_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { TicketMessage } from "./useSupportTickets";
 
@@ -39,7 +39,7 @@ export default function useSupportTicketMessages(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<SupportTicketMessagesResponse, Error> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   const { ticket_id, search, ordering, page = 1, limit = 10 } = params || {};
 
@@ -55,49 +55,33 @@ export default function useSupportTicketMessages(
       ordering,
       page,
       limit,
-      oauthSession?.token,
+      polkadotAddress,
     ],
     queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
       if (!ticket_id) {
         throw new Error("Ticket ID is required");
       }
 
-      // Build query string
-      const queryParams = new URLSearchParams();
-      if (search) queryParams.append("search", search);
-      if (ordering) queryParams.append("ordering", ordering);
-      if (page) queryParams.append("page", String(page));
-      if (limit) queryParams.append("limit", String(limit));
-
-      // Direct API call
-      const url = `${SUPPORT_CONFIG.baseUrl}/tickets/${ticket_id}/messages/${
-        queryParams.toString() ? `?${queryParams.toString()}` : ""
-      }`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `HTTP ${response.status}: Failed to fetch ticket messages`
-        );
-      }
-
-      return response.json() as Promise<SupportTicketMessagesResponse>;
+      return invoke<SupportTicketMessagesResponse>(
+        "get_support_ticket_messages",
+        {
+          accountId: polkadotAddress,
+          ticketId: typeof ticket_id === "string" ? parseInt(ticket_id, 10) : ticket_id,
+          page,
+          limit,
+          search: search || null,
+          ordering: ordering || null,
+        }
+      );
     },
-    enabled: !!oauthSession?.token && !!ticket_id,
+    enabled: !!polkadotAddress && !!ticket_id,
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
-    staleTime: 1 * 60 * 1000, // 1 minute (shorter than tickets since messages update more frequently)
+    staleTime: 1 * 60 * 1000,
     ...options,
   });
 }

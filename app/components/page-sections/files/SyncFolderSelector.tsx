@@ -8,7 +8,6 @@ import SectionHeader from "@/components/page-sections/settings/SectionHeader";
 import { useHippiusBalance } from "@/app/lib/hooks/api/useHippiusBalance";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
-import { usePolkadotApi } from "@/app/lib/polkadot-api-context";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 
 interface SyncFolderSelectorProps {
@@ -26,8 +25,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
   isFromSettingsPage = false,
   handleBackClick,
 }) => {
-  const { api, isConnected } = usePolkadotApi();
-  const { data: balanceInfo } = useHippiusBalance();
+  const { data: balanceInfo, isLoading: balanceLoading } = useHippiusBalance();
   const { data: credits } = useUserCredits();
   const [suggested, setSuggested] = useState({
     desktop: "",
@@ -113,10 +111,10 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
       return;
     }
 
-    // Check if chain connection is established
-    if (!api || !isConnected) {
+    // Check if balance data is available
+    if (balanceLoading) {
       toast.info(
-        "Please wait while we establish connection to the blockchain. This may take a few moments."
+        "Please wait while we fetch your balance. This may take a few moments."
       );
       return;
     }
@@ -328,7 +326,7 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
           loading={loading}
           onClick={apply}
         >
-          {!isConnected ? (
+          {balanceLoading ? (
             <ThreeDotLoader dotClassName="bg-white" />
           ) : (
             <span className="text-lg leading-6 font-medium">

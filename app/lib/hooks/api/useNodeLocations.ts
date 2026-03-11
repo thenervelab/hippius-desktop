@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface NodeMetric {
     miner_id: string;
@@ -31,12 +31,12 @@ export function useNodeLocations(minerIds: string[] = []) {
             queryFn: async () => {
                 if (!minerId) return null;
 
-                const data = await indexerGet<NodeMetricsResponse>(
-                    "/node-metrics",
+                const data = await invoke<NodeMetricsResponse>(
+                    "get_node_locations",
                     {
                         page: 1,
                         limit: 1,
-                        miner_id: minerId,
+                        minerId,
                     }
                 );
 
@@ -91,12 +91,12 @@ export function useSingleNodeLocation(minerId: string | undefined) {
         queryFn: async () => {
             if (!minerId) return null;
 
-            const data = await indexerGet<NodeMetricsResponse>(
-                "/node-metrics",
+            const data = await invoke<NodeMetricsResponse>(
+                "get_node_locations",
                 {
                     page: 1,
                     limit: 1,
-                    miner_id: minerId,
+                    minerId,
                 }
             );
 

@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { invoke } from "@tauri-apps/api/core";
 
 // Define types based on the indexer API response for MintedAccountCredits events
 export interface EventData {
@@ -70,9 +70,8 @@ export default function useAddCreditEvent(
         throw new Error("No wallet address available");
       }
 
-      return indexerGet<CreditEventsResponse>("/events", {
-        event_name: "MintedAccountCredits",
-        account_id: polkadotAddress,
+      return invoke<CreditEventsResponse>("get_add_credit_events", {
+        accountId: polkadotAddress,
         page,
         limit,
       });

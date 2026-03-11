@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { invoke } from "@tauri-apps/api/core";
 
 // Define types based on the indexer API response
 export interface MarketplaceCreditEvent {
@@ -67,11 +67,10 @@ export default function useMarketplaceCredits(
           throw new Error("No wallet address available");
         }
 
-        return indexerGet<MarketplaceCreditsResponse>("/marketplace/credit", {
-          account_id: polkadotAddress,
-          limit,
+        return invoke<MarketplaceCreditsResponse>("get_marketplace_credits", {
+          accountId: polkadotAddress,
           page,
-          event_name: "CreditsConsumed",
+          limit,
         });
       },
       select: (data) => {

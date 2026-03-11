@@ -6,7 +6,7 @@ import {
   UseMutationResult,
   useQueryClient,
 } from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { SSHKeyResponse } from "./useSSHKeys";
 
@@ -25,39 +25,22 @@ export default function useCreateSSHKey(
     "mutationFn"
   >
 ): UseMutationResult<SSHKeyResponse, Error, CreateSSHKeyPayload> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
   const queryClient = useQueryClient();
 
   return useMutation<SSHKeyResponse, Error, CreateSSHKeyPayload>({
     mutationFn: async (payload: CreateSSHKeyPayload) => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      const url = `${API_CONFIG.baseUrl}${API_CONFIG.sshKeys.create}`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+      return invoke<SSHKeyResponse>("create_ssh_key", {
+        accountId: polkadotAddress,
+        name: payload.name,
+        publicKey: payload.public_key,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(
-          errorData.message ||
-            errorData.detail ||
-            `HTTP ${response.status}: Failed to create SSH key`
-        );
-      }
-
-      return response.json() as Promise<SSHKeyResponse>;
     },
     onSuccess: () => {
-      // Invalidate SSH keys query to refetch the list
       queryClient.invalidateQueries({
         queryKey: ["sshKeys"],
       });

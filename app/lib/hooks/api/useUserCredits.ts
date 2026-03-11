@@ -1,6 +1,6 @@
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { useQuery } from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 
 /**
  * Fetch user credits from API
@@ -8,34 +8,21 @@ import { API_CONFIG } from "@/lib/config";
  * Returns undefined → no token or error
  */
 export function useUserCredits() {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   return useQuery<bigint | undefined>({
-    queryKey: ["user-credits", oauthSession?.userId],
+    queryKey: ["user-credits", polkadotAddress],
     refetchOnWindowFocus: false,
-    enabled: !!oauthSession?.token,
-    staleTime: Infinity, // Keep data fresh indefinitely - only refetch when manually invalidated
+    enabled: !!polkadotAddress,
+    staleTime: Infinity,
     queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}${API_CONFIG.billing.credits}`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Token ${oauthSession.token}`,
-            Accept: "application/json",
-          },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch credits balance: ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await invoke<{ balance?: string }>("get_user_credits_balance", {
+        accountId: polkadotAddress,
+      });
 
       // Convert balance string to bigint (scaled to 18 decimals)
       const balanceStr = data.balance || "0";

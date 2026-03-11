@@ -19,8 +19,8 @@ import CancelSubscriptionDialog, {
 } from "@/app/components/page-sections/billing/CancelSubscriptionDialog";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
 import ButtonCard from "@/app/components/ui/button/CardButton";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { API_CONFIG } from "@/lib/config";
 import DashboardTitleWrapper from "@/app/components/dashboard-title-wrapper";
 import { GoBackButton } from "@/app/components/ui";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -32,7 +32,7 @@ import pricingJson from "@/app/utils/data/pricing-cfg.json";
 import SectionHeader from "@/app/components/page-sections/settings/SectionHeader";
 
 export default function PlansPage() {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
   const {
     subscriptionPlans: plans,
     isLoadingPlans,
@@ -110,7 +110,7 @@ export default function PlansPage() {
       return;
     }
 
-    if (!oauthSession?.token) {
+    if (!polkadotAddress) {
       toast.error("Not authenticated");
       return;
     }
@@ -124,36 +124,23 @@ export default function PlansPage() {
         throw new Error("Selected plan not found");
       }
 
-      const response = await fetch(
-        `${API_CONFIG.baseUrl}${API_CONFIG.billing.createSubscription}`,
+      const data = await invoke<{ checkout_url?: string }>(
+        "create_subscription",
         {
-          method: "POST",
-          headers: {
-            Authorization: `Token ${oauthSession.token}`,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({
-            price_id: selectedPlan.price_id,
-            success_url: `${window.location.origin}/billing/success`,
-            cancel_url: `${window.location.origin}/billing/cancel`,
-          }),
+          accountId: polkadotAddress,
+          priceId: selectedPlan.price_id,
+          successUrl: `${window.location.origin}/billing/success`,
+          cancelUrl: `${window.location.origin}/billing/cancel`,
         }
       );
 
-      if (!response.ok) {
-        toast.error("Failed to subscribe to plan. Please try again.");
-      } else {
-        const data = await response.json();
-        if (data.checkout_url) {
-          window.open(data.checkout_url, "_blank");
-          try {
-            await openUrl(data.checkout_url);
-            toast.success("Stripe checkout opened in a your browser");
-          } catch (error) {
-            console.error("Error subscribing to plan:", error);
-            toast.error("Failed to subscribe to plan. Please try again.");
-          }
+      if (data.checkout_url) {
+        try {
+          await openUrl(data.checkout_url);
+          toast.success("Stripe checkout opened in your browser");
+        } catch (error) {
+          console.error("Error opening checkout:", error);
+          toast.error("Failed to open checkout. Please try again.");
         }
       }
     } catch (error) {

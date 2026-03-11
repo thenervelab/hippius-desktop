@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { invoke } from "@tauri-apps/api/core";
 
 /** Row as returned by the new API */
 export interface BalanceRow {
@@ -69,7 +69,7 @@ const rowMs = (r: BalanceRow): number => {
   return unitSafeMs(r.timestamp);
 };
 
-/** Build a LOCAL day key (user’s machine local time) */
+/** Build a LOCAL day key (user's machine local time) */
 const localDayKey = (ms: number): string => {
   const d = new Date(ms);
   const y = d.getFullYear();
@@ -122,14 +122,11 @@ export default function useSystemBalance(
     queryFn: async () => {
       if (!polkadotAddress) throw new Error("No wallet address available");
 
-      return indexerGet<PagedResponse<BalanceRow>>(
-        "/system-account-balance",
-        {
-          account_id: polkadotAddress,
-          page,
-          limit,
-        }
-      );
+      return invoke<PagedResponse<BalanceRow>>("get_system_balance_history", {
+        accountId: polkadotAddress,
+        page,
+        limit,
+      });
     },
     select: (resp) => {
       if (!resp?.data?.length) return [];

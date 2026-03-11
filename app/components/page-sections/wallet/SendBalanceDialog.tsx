@@ -9,7 +9,6 @@ import AddressSelect from "./AddressSelect";
 
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
-import { isAddress } from "@polkadot/util-crypto";
 import SendBalanceConfirmationDialog from "./SendBalanceConfirmationDialog";
 
 // Use string to preserve precision for very small values
@@ -19,7 +18,7 @@ export interface SendBalanceDialogProps {
   open: boolean;
   onClose: () => void;
   availableBalance: number | undefined;
-  mnemonic: string;
+  mnemonic?: string;
   refetchBalance?: () => void;
   polkadotAddress: string;
 }
@@ -28,7 +27,6 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   open,
   onClose,
   availableBalance,
-  mnemonic,
   refetchBalance,
   polkadotAddress
 }) => {
@@ -52,7 +50,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     setErrors((prev) => ({ ...prev, amount: undefined }));
   };
 
-  const validateForm = () => {
+  const validateForm = async () => {
     const newErrors: { address?: string; amount?: string } = {};
     let isValid = true;
 
@@ -60,10 +58,14 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     if (!address.trim()) {
       newErrors.address = "Address is required";
       isValid = false;
-    } else if (!isAddress(address)) {
-      newErrors.address = "Invalid address format";
-      isValid = false;
-    } else if (address.trim() === polkadotAddress) {
+    } else {
+      const valid = await invoke<boolean>("validate_address", { address });
+      if (!valid) {
+        newErrors.address = "Invalid address format";
+        isValid = false;
+      }
+    }
+    if (isValid && address.trim() === polkadotAddress) {
       newErrors.address = "Cannot send to your own address";
       isValid = false;
     }
@@ -98,8 +100,8 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     return isValid;
   };
 
-  const handleOpenConfirmation = () => {
-    if (!validateForm()) return;
+  const handleOpenConfirmation = async () => {
+    if (!(await validateForm())) return;
     setShowConfirmation(true);
   };
 
@@ -126,8 +128,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       planckAmount = planckAmount.replace(/^0+/, "");
       if (!planckAmount) planckAmount = "0";
 
-      await invoke<string>("transfer_balance_tauri", {
-        senderSeed: mnemonic,
+      await invoke<{ txHash: string; success: boolean }>("transfer_balance", {
         recipientAddress: address,
         amount: planckAmount
       });

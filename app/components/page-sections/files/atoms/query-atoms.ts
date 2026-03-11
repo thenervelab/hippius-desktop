@@ -1,6 +1,5 @@
 import { atomWithMutation } from "jotai-tanstack-query";
 import axios from "axios";
-import { ApiPromise } from "@polkadot/api";
 import { atom } from "jotai";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 
@@ -85,73 +84,6 @@ export const uploadFilesToIpfsAtom = atomWithMutation(() => {
       console.log("uploadResults", uploadResults)
 
       return { files: uploadResults, infoFile };
-    },
-  };
-});
-
-export const submitFilesToBlockchainAtom = atomWithMutation(() => {
-  return {
-    mutationKey: ["submit-files-to-blockchain"],
-    mutationFn: async (args: {
-      infoFile: { filename: string; cid: string };
-      polkadotPair: import('@polkadot/keyring/types').KeyringPair;
-      api: ApiPromise;
-    }) => {
-      const { infoFile, api, polkadotPair } = args;
-      const { filename, cid } = infoFile;
-
-      try {
-        // Convert fileName and cid to bytes format
-        const fileNameBytes = Array.from(new TextEncoder().encode(filename));
-        const cidBytes = Array.from(new TextEncoder().encode(cid));
-
-        // Create the file input object
-        const fileInput = {
-          fileHash: cidBytes,
-          fileName: fileNameBytes,
-        };
-
-        // Create the extrinsic
-        const tx = api.tx.marketplace.storageRequest([fileInput], null);
-
-        await new Promise((resolve, reject) => {
-          tx.signAndSend(polkadotPair, { nonce: -1 }, ({ status, events }) => {
-            if (status.isInBlock || status.isFinalized) {
-              // Get the appropriate block hash based on status type
-              const blockHash = status.isInBlock
-                ? status.asInBlock.toString()
-                : status.isFinalized
-                  ? status.asFinalized.toString()
-                  : "unknown";
-
-              // Check for events
-              /* eslint-disable @typescript-eslint/no-explicit-any */
-              events.forEach(({ event }: { event: any }) => {
-                if (api.events.system.ExtrinsicSuccess.is(event)) {
-                  resolve(blockHash);
-                  // Refresh the file list and storage stats after successful transaction
-                  // fetchUserFiles();
-                  // fetchTotalStorageSize();
-                } else if (api.events.system.ExtrinsicFailed.is(event)) {
-                  reject("Transaction failed");
-                }
-              });
-            }
-          });
-        });
-      } catch (error) {
-        if (error instanceof Error) {
-          throw Error;
-        }
-
-        if (typeof error === "string") {
-          throw new Error(error);
-        }
-
-        throw new Error("Transaction failed");
-      }
-
-      // Sign and send the transaction using the in-memory keypair
     },
   };
 });

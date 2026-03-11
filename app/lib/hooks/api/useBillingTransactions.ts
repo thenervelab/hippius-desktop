@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { API_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 
 // Define types based on the indexer API response
 export interface BillingTransferEvent {
@@ -50,13 +50,13 @@ export interface UseBillingTransfersParams {
 }
 
 export default function useBillingTransactions() {
-    const { oauthSession } = useWalletAuth();
+    const { polkadotAddress } = useWalletAuth();
     const [data, setData] = useState<TransactionObject[] | null>(null);
     const [isPending, setIsPending] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     const fetchTransactions = useCallback(async () => {
-        if (!oauthSession?.token) {
+        if (!polkadotAddress) {
             setData([]);
             setError("Not authenticated");
             setIsPending(false);
@@ -68,21 +68,10 @@ export default function useBillingTransactions() {
             setError(null);
             setData(null);
 
-            const url = `${API_CONFIG.baseUrl}${API_CONFIG.billing.transactions}`;
-            const res = await fetch(url, {
-                method: "GET",
-                headers: {
-                    Authorization: `Token ${oauthSession.token}`,
-                    Accept: "application/json",
-                },
+            const json = await invoke<BillingTransactionsResponse>("get_billing_transactions", {
+                accountId: polkadotAddress,
             });
 
-            if (!res.ok) {
-                const text = await res.text();
-                throw new Error(`Failed to fetch billing transactions: ${res.status} ${text}`);
-            }
-
-            const json: BillingTransactionsResponse = await res.json();
             const mapped: TransactionObject[] = (json.results || []).map((t) => ({
                 id: t.id,
                 transaction_type: t.payment_type.toLowerCase().includes('stripe') ? 'card' : 'tao',
@@ -98,13 +87,13 @@ export default function useBillingTransactions() {
         } finally {
             setIsPending(false);
         }
-    }, [oauthSession?.token]);
+    }, [polkadotAddress]);
 
     useEffect(() => {
-        if (oauthSession?.token) {
+        if (polkadotAddress) {
             fetchTransactions();
         }
-    }, [oauthSession?.token, fetchTransactions]);
+    }, [polkadotAddress, fetchTransactions]);
 
     return { data, isPending, error, refetch: fetchTransactions };
 }

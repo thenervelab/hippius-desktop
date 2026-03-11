@@ -52,6 +52,9 @@ zip = "4.2.0"
 dotenvy = "0.15"
 base64 = "0.21"
 sha2 = "0.10"
+aes = "0.8"
+cbc = "0.1"
+md5 = "0.7"
 subxt = { version = "0.38", features = ["substrate-compat"] }
 sp-core = "34.0.0"
 uuid = { version = "1", features = ["v4"] }

@@ -2,16 +2,17 @@
 
 import { useState, useEffect } from 'react';
 import { parseDateAndTime } from '@/app/lib/utils/dateUtils';
-import { usePolkadotApi } from "@/lib/polkadot-api-context";
 import { Skeleton } from '@/components/ui';
-import { getBlockTimestamp } from '@/lib/utils/blockTimestampUtils';
+import { invoke } from '@tauri-apps/api/core';
 
 interface BlockTimestampProps {
     blockNumber: number;
 }
 
+// Cache for block timestamps to avoid redundant Rust calls
+const blockTimestampCache: Record<number, Date> = {};
+
 const BlockTimestamp: React.FC<BlockTimestampProps> = ({ blockNumber }) => {
-    const { api } = usePolkadotApi();
     const [timestamp, setTimestamp] = useState<Date | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState(false);
@@ -22,14 +23,32 @@ const BlockTimestamp: React.FC<BlockTimestampProps> = ({ blockNumber }) => {
         const fetchTimestamp = async () => {
             try {
                 setIsLoading(true);
-                const date = await getBlockTimestamp(api, blockNumber);
+
+                // Check cache first
+                if (blockTimestampCache[blockNumber]) {
+                    if (isMounted) {
+                        setTimestamp(blockTimestampCache[blockNumber]);
+                        setIsLoading(false);
+                    }
+                    return;
+                }
+
+                const result = await invoke<{ timestamp: number }>(
+                    'get_block_timestamp',
+                    { blockNumber }
+                );
+                const date = new Date(result.timestamp);
+
+                // Cache the result
+                blockTimestampCache[blockNumber] = date;
 
                 if (isMounted) {
                     setTimestamp(date);
                     setIsLoading(false);
                 }
             } catch (err) {
-                if (isMounted && err instanceof Error) {
+                if (isMounted) {
+                    console.error('Block timestamp fetch failed:', err);
                     setError(true);
                     setIsLoading(false);
                 }
@@ -43,7 +62,7 @@ const BlockTimestamp: React.FC<BlockTimestampProps> = ({ blockNumber }) => {
         return () => {
             isMounted = false;
         };
-    }, [blockNumber, api]);
+    }, [blockNumber]);
 
     if (isLoading) {
         return (

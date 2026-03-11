@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { API_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface NotificationSettings {
   email_enabled: boolean;
@@ -12,54 +12,8 @@ export interface NotificationSettings {
 
 const NOTIFICATION_SETTINGS_KEY = "notification-settings";
 
-// Fetch notification settings
-async function fetchNotificationSettings(
-  token: string
-): Promise<NotificationSettings> {
-  const response = await fetch(
-    `${API_CONFIG.baseUrl}/api/notifications/settings/`,
-    {
-      method: "GET",
-      headers: {
-        Authorization: `Token ${token}`,
-        "Content-Type": "application/json",
-      },
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error("Failed to fetch notification settings");
-  }
-
-  return response.json();
-}
-
-// Update notification settings (PATCH for partial updates)
-async function updateNotificationSettings(
-  token: string,
-  settings: Partial<NotificationSettings>
-): Promise<NotificationSettings> {
-  const response = await fetch(
-    `${API_CONFIG.baseUrl}/api/notifications/settings/`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Token ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(settings),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error("Failed to update notification settings");
-  }
-
-  return response.json();
-}
-
 export const useNotificationSettings = () => {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
   const queryClient = useQueryClient();
 
   // Query to fetch settings
@@ -69,30 +23,34 @@ export const useNotificationSettings = () => {
     error,
     refetch,
   } = useQuery({
-    queryKey: [NOTIFICATION_SETTINGS_KEY, oauthSession?.email],
-    queryFn: () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+    queryKey: [NOTIFICATION_SETTINGS_KEY, polkadotAddress],
+    queryFn: async () => {
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
-      return fetchNotificationSettings(oauthSession.token);
+      return invoke<NotificationSettings>("get_notification_settings", {
+        accountId: polkadotAddress,
+      });
     },
-    enabled: !!oauthSession?.token,
-    staleTime: 300000, // 5 minutes
+    enabled: !!polkadotAddress,
+    staleTime: 300000,
     retry: 1,
   });
 
   // Mutation to update settings
   const updateMutation = useMutation({
-    mutationFn: (newSettings: Partial<NotificationSettings>) => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+    mutationFn: async (newSettings: Partial<NotificationSettings>) => {
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
-      return updateNotificationSettings(oauthSession.token, newSettings);
+      return invoke<NotificationSettings>("update_notification_settings", {
+        accountId: polkadotAddress,
+        settings: newSettings,
+      });
     },
     onSuccess: (data) => {
-      // Update the cache with new data
       queryClient.setQueryData(
-        [NOTIFICATION_SETTINGS_KEY, oauthSession?.email],
+        [NOTIFICATION_SETTINGS_KEY, polkadotAddress],
         data
       );
     },

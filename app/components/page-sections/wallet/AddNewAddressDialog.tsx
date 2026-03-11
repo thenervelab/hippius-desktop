@@ -4,7 +4,7 @@ import { Label } from "@/components/ui/label";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { AbstractIconWrapper, CardButton, Icons, Input } from "@/components/ui";
 import { AlertCircle } from "lucide-react";
-import { isAddress } from "@polkadot/util-crypto";
+import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { addContact } from "@/app/lib/helpers/addressBookDb";
 
@@ -27,7 +27,7 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
     address?: string;
   }>({});
 
-  const validateForm = () => {
+  const validateForm = async () => {
     const newErrors: { name?: string; address?: string } = {};
     let isValid = true;
 
@@ -41,9 +41,12 @@ const AddNewAddressDialog: React.FC<AddNewAddressDialogProps> = ({
     if (!address.trim()) {
       newErrors.address = "Address is required";
       isValid = false;
-    } else if (!isAddress(address)) {
-      newErrors.address = "Invalid address format";
-      isValid = false;
+    } else {
+      const valid = await invoke<boolean>("validate_address", { address });
+      if (!valid) {
+        newErrors.address = "Invalid address format";
+        isValid = false;
+      }
     }
 
     setErrors(newErrors);

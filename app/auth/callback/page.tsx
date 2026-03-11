@@ -9,10 +9,10 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { oauthService } from "@/app/lib/services/oAuthService";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2, AlertCircle } from "lucide-react";
-import type { OAuthCallbackParams } from "@/app/lib/types/oAuth";
+import type { OAuthSession } from "@/app/lib/types/oAuth";
 import {
     addNotification,
 } from "@/app/lib/helpers/notificationsDb";
@@ -60,51 +60,65 @@ export default function OAuthCallbackPage() {
                     const questionMarkCount = (currentUrl.match(/\?/g) || []).length;
 
                     if (questionMarkCount > 1) {
-                        // Replace all ? after the first one with &
                         const fixedUrl = currentUrl.replace(/\?/, "?FIRST?").replace(/\?/g, "&").replace(/\?FIRST\?/, "?");
-
-                        // Parse the fixed URL
                         const url = new URL(fixedUrl);
                         fixedSearchParams = url.searchParams;
                     }
                 }
 
-                // Use fixed params if available, otherwise use original
                 const paramsToUse = fixedSearchParams || searchParams;
 
-                // Extract callback parameters
-                const params: OAuthCallbackParams = {
-                    code: paramsToUse.get("code") || undefined,
-                    token: paramsToUse.get("token") || undefined,
-                    error: paramsToUse.get("error") || undefined,
-                    error_description: paramsToUse.get("error_description") || undefined,
-                };
+                const token = paramsToUse.get("token") || undefined;
+                const code = paramsToUse.get("code") || undefined;
+                const error = paramsToUse.get("error") || undefined;
+                const errorDescription = paramsToUse.get("error_description") || undefined;
 
-                // If no token and no code, user landed here without valid OAuth params
-                // Since we already checked for valid session at the start, redirect to login
-                if (!params.token && !params.code && !params.error) {
+                if (!token && !code && !error) {
                     router.replace("/login");
                     return;
                 }
 
-                // Extract user data if provided (also check 'id' as fallback for 'user_id')
                 const userId = paramsToUse.get("user_id") || paramsToUse.get("id");
                 const username = paramsToUse.get("username");
                 const email = paramsToUse.get("email");
                 const substrateAddress = paramsToUse.get("substrate_address");
 
-                if (userId || username) {
-                    params.user = {
-                        id: userId || undefined,
-                        username: username || undefined,
-                        email: email || undefined,
-                        substrate_address: substrateAddress || undefined,
-                    };
-                }
+                // Call Rust backend to handle token exchange + DB persistence
+                const result = await invoke<{
+                    token: string;
+                    userId: number;
+                    username: string;
+                    email: string;
+                    substrateAddress: string;
+                    provider: string;
+                    expiresAt: string;
+                }>("complete_oauth_flow", {
+                    params: {
+                        token: token || null,
+                        code: code || null,
+                        error: error || null,
+                        errorDescription: errorDescription || null,
+                        userId: userId ? parseInt(userId, 10) : null,
+                        username: username || null,
+                        email: email || null,
+                        substrateAddress: substrateAddress || null,
+                    },
+                });
 
-                // Handle OAuth callback
-                const session = await oauthService.handleCallback(params);
+                // Map Rust result to OAuthSession for the auth context
+                const session: OAuthSession = {
+                    token: result.token,
+                    userId: result.userId,
+                    username: result.username,
+                    email: result.email,
+                    substrateAddress: result.substrateAddress,
+                    provider: result.provider as OAuthSession["provider"],
+                    expiresAt: result.expiresAt,
+                };
 
+                // Store in localStorage for session restoration on boot
+                localStorage.setItem("hippius_oauth_session", JSON.stringify(session));
+                localStorage.setItem("hippius_oauth_session_expiry", session.expiresAt);
 
                 // Update auth context with OAuth session
                 await setOAuthSession(session);

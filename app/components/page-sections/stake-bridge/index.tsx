@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BackButton, Icons } from "@/components/ui";
 import TabList, { TabOption } from "@/components/ui/tabs/TabList";
@@ -10,29 +10,12 @@ import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
 import { toPlancks } from "@/app/lib/utils/staking";
 import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
-import { BN } from "@polkadot/util";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
-import PasscodePromptDialog from "./PasscodePromptDialog";
 
 const StakeBridge = () => {
     const searchParams = useSearchParams();
     const router = useRouter();
     const tabParam = searchParams.get("tab");
-    const { stakingInfo, operations, needsUnlock } = useStaking();
-    const { unlockWithPasscode } = useWalletAuth();
-    const [showPasscodePrompt, setShowPasscodePrompt] = useState(false);
-    const pendingStakeAmount = useRef<string | undefined>(undefined);
-
-    // After passcode unlock, retry the pending stake action.
-    // Only depends on needsUnlock — the ref carries the pending amount.
-    useEffect(() => {
-        if (!needsUnlock && pendingStakeAmount.current) {
-            const amount = pendingStakeAmount.current;
-            pendingStakeAmount.current = undefined;
-            handleStakeSubmit(amount);
-        }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [needsUnlock]);
+    const { stakingInfo, operations } = useStaking();
 
     // Set initial tab based on URL parameter, default to "Stake hAlpha"
     const [activeTab, setActiveTab] = useState(() => {
@@ -63,12 +46,6 @@ const StakeBridge = () => {
     ];
 
     const handleStakeSubmit = async (amount?: string) => {
-        if (needsUnlock) {
-            pendingStakeAmount.current = amount;
-            setShowPasscodePrompt(true);
-            return;
-        }
-
         if (!amount || parseFloat(amount) <= 0) {
             toast.error("Please enter a valid amount");
             return;
@@ -128,28 +105,17 @@ const StakeBridge = () => {
     const calculateAvailableBalance = () => {
         if (!stakingInfo.balance) return "0";
 
-        const totalFreeBalance = stakingInfo.balance.toString();
-        const bondedAmount = stakingInfo.bonded || "0";
-        const unbondingAmount = stakingInfo.unbonding || "0";
-
         try {
-            // Convert to BN for safe calculation
-            const totalBN = new BN(totalFreeBalance);
-            const bondedBN = new BN(bondedAmount);
-            const unbondingBN = new BN(unbondingAmount);
-
-            // Available = Total Free - Bonded - Unbonding
-            const availableBN = totalBN.sub(bondedBN).sub(unbondingBN);
-
-            // Ensure we don't return negative values
-            return availableBN.gte(new BN(0)) ? availableBN.toString() : "0";
-        } catch (error) {
-            console.warn("Error calculating available balance:", error);
-            return totalFreeBalance; // Fallback to total balance
+            const total = BigInt(stakingInfo.balance || "0");
+            const bonded = BigInt(stakingInfo.bonded || "0");
+            const unbonding = BigInt(stakingInfo.unbonding || "0");
+            const available = total - bonded - unbonding;
+            return available > BigInt(0) ? available.toString() : "0";
+        } catch {
+            return stakingInfo.balance; // Fallback to total balance
         }
     };
 
-    // Get available balance for staking (truly free amount)
     const availableBalance = calculateAvailableBalance();
 
     return (
@@ -213,12 +179,6 @@ const StakeBridge = () => {
                 isUnstaking={false}
             />
 
-            {/* Passcode prompt when wallet keypair is not in memory */}
-            <PasscodePromptDialog
-                open={showPasscodePrompt}
-                onOpenChange={setShowPasscodePrompt}
-                onSubmit={unlockWithPasscode}
-            />
         </>
     );
 };

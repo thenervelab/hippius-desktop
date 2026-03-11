@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { invoke } from "@tauri-apps/api/core";
 
 interface FileRecord {
   id: number;
@@ -43,7 +43,9 @@ export const useFileNodes = (arionHash: string | null) => {
         throw new Error("Invalid Arion hash");
       }
 
-      const data = await indexerGet<FilesApiResponse>("/files", { cid: arionHash });
+      const data = await invoke<FilesApiResponse>("get_file_nodes", {
+        cid: arionHash,
+      });
 
       // Get the first file record
       const firstFile = data.files?.[0];

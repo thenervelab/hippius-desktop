@@ -3,12 +3,11 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { CloseCircle } from "@/components/ui/icons";
 import { P } from "@/components/ui/typography";
 import { toast } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
 import useSubscriptionData from "@/app/lib/hooks/useSubscriptionData";
 import ButtonCard from "../../ui/button/CardButton";
 import { Graphsheet } from "../../ui";
-import { getAuthHeaders } from "@/app/lib/services/authService";
 import { ensureBillingAuth } from "@/app/lib/hooks/api/useBillingAuth";
-import { API_CONFIG } from "@/app/lib/helpers/sessionStore";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface Plan {
@@ -74,25 +73,14 @@ const CancelSubscriptionDialog: FC<CancelSubscriptionDialogProps> = ({
                 return;
             }
 
-            const headers = await getAuthHeaders();
-            if (!headers) {
-                toast.error("Not authenticated");
-                return;
-            }
+            const data = await invoke<{ portal_url?: string }>(
+                "get_customer_portal_url",
+                {
+                    accountId: polkadotAddress,
+                    returnUrl: `${window.location.origin}/dashboard/billing`,
+                }
+            );
 
-            const response = await fetch(`${API_CONFIG.baseUrl}/api/billing/stripe/customer-portal/`, {
-                method: "POST",
-                headers,
-                body: JSON.stringify({
-                    return_url: `${window.location.origin}/dashboard/billing`,
-                }),
-            });
-
-            if (!response.ok) {
-                throw new Error("Failed to get customer portal link");
-            }
-
-            const data = await response.json();
             if (data.portal_url) {
                 handleDialogOpenChange(false);
                 window.open(data.portal_url, "_blank");

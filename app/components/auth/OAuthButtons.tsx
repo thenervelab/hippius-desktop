@@ -9,7 +9,8 @@
 
 import React, { useState } from "react";
 import { cn } from "@/lib/utils";
-import { oauthService } from "@/app/lib/services/oAuthService";
+import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { OAuthProvider } from "@/app/lib/types/oAuth";
 import { LucideLoader2 } from "lucide-react";
 import * as Icons from "@/components/ui/icons";
@@ -125,7 +126,19 @@ export function OAuthButton({
 
         try {
             setIsLoading(true);
-            await oauthService.initiateLogin(provider);
+
+            // Preserve redirect parameter if present
+            const urlParams = new URLSearchParams(window.location.search);
+            const redirectParam = urlParams.get("redirect");
+            if (redirectParam) {
+                sessionStorage.setItem("oauth_redirect", redirectParam);
+            }
+
+            const result = await invoke<{ url: string; provider: string }>(
+                "start_oauth_flow",
+                { provider }
+            );
+            await openUrl(result.url);
         } catch (error) {
             console.error(`Failed to initiate ${provider} login:`, error);
             setIsLoading(false);

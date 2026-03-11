@@ -10,6 +10,8 @@
 //! **Note**: `lib.rs` in this crate is a vestigial template file — this `main.rs`
 //! is the actual application entry point.
 
+mod api_client;
+mod auth_state;
 mod builder_blocks;
 mod commands;
 mod constants;
@@ -20,6 +22,7 @@ mod macos_bookmarks;
 mod substrate_client;
 mod sync_shared;
 mod user_profile_sync;
+mod block_subscription;
 mod utils;
 
 use crate::commands::syncing::{
@@ -37,9 +40,42 @@ use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::accounts::{
     export_app_data, get_all_subaccount_addresses, import_app_data, reset_app,
 };
+use commands::billing::{
+    create_subscription, get_active_subscription, get_add_credit_events,
+    get_balance_transfers, get_billing_transactions, get_customer_portal_url,
+    get_deposit_address, get_file_nodes, get_files_size, get_indexer_credits,
+    get_marketplace_credits, get_node_locations, get_subscription_plans,
+    get_system_balance_history, get_user_credits_balance,
+};
+use commands::notifications::{get_notification_settings, update_notification_settings};
+use commands::ssh_keys::{create_ssh_key, delete_ssh_key, list_ssh_keys};
+use commands::support::{
+    create_support_ticket, get_support_ticket_messages, list_support_tickets,
+    post_ticket_message, update_support_ticket,
+};
+use commands::vm::{
+    create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images,
+    list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
+};
+use commands::auth::{
+    auth_logout, generate_mnemonic, get_eth_address, get_polkadot_address, login_with_mnemonic,
+    refresh_auth_token, set_passcode, unlock_with_passcode, validate_mnemonic,
+};
+use commands::oauth::{complete_oauth_flow, start_oauth_flow};
+use commands::session::{
+    clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session,
+    get_wallet, has_wallet, is_token_valid, save_auth_session, save_wallet, update_logout_time,
+};
 use commands::file_commands::{add_file, add_folder, export_file, list_sync_folder, remove_file};
 use commands::objectstore_auth::{
     has_master_token_command, request_master_token_command, save_temp_auth_key_command,
+};
+use commands::blockchain::{
+    get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, stake_bond,
+    stake_claim_rewards, stake_unbond, stake_withdraw_unbonded, transfer_balance, validate_address,
+};
+use block_subscription::{
+    get_current_block_number, start_block_subscription, stop_block_subscription,
 };
 use commands::substrate_tx::{
     get_all_sync_paths, get_sync_path, get_wss_endpoint, remove_sync_path, set_sync_path,
@@ -196,6 +232,86 @@ fn main() {
             commands::migration::check_migration,
             commands::migration::start_migration,
             commands::migration::cancel_migration,
+            // Blockchain queries & transactions
+            get_account_balance,
+            get_staking_info,
+            get_block_timestamp,
+            stake_bond,
+            stake_unbond,
+            stake_withdraw_unbonded,
+            stake_claim_rewards,
+            transfer_balance,
+            validate_address,
+            get_referral_links,
+            // Block subscription
+            start_block_subscription,
+            stop_block_subscription,
+            get_current_block_number,
+            // VM management
+            list_vm_flavors,
+            list_vm_images,
+            list_vm_applications,
+            list_vm_instances,
+            get_vm_instance,
+            create_vm,
+            reboot_vm,
+            start_vm,
+            stop_vm,
+            terminate_vm,
+            // SSH keys
+            list_ssh_keys,
+            create_ssh_key,
+            delete_ssh_key,
+            // Billing & credits
+            get_user_credits_balance,
+            get_billing_transactions,
+            get_subscription_plans,
+            get_active_subscription,
+            create_subscription,
+            get_customer_portal_url,
+            get_indexer_credits,
+            get_marketplace_credits,
+            get_system_balance_history,
+            get_balance_transfers,
+            get_add_credit_events,
+            get_files_size,
+            get_file_nodes,
+            get_node_locations,
+            get_deposit_address,
+            // Notifications
+            get_notification_settings,
+            update_notification_settings,
+            // Support tickets
+            list_support_tickets,
+            get_support_ticket_messages,
+            create_support_ticket,
+            update_support_ticket,
+            post_ticket_message,
+            // OAuth
+            start_oauth_flow,
+            complete_oauth_flow,
+            // Authentication & crypto
+            login_with_mnemonic,
+            unlock_with_passcode,
+            set_passcode,
+            validate_mnemonic,
+            refresh_auth_token,
+            auth_logout,
+            get_polkadot_address,
+            get_eth_address,
+            generate_mnemonic,
+            // Session & wallet credential storage
+            save_wallet,
+            get_wallet,
+            has_wallet,
+            clear_wallet,
+            save_auth_session,
+            get_auth_session,
+            get_auth_token,
+            get_last_auth_session,
+            clear_auth_session,
+            is_token_valid,
+            update_logout_time,
         ]);
 
     let builder = setup(builder);

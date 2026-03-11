@@ -5,7 +5,7 @@ import {
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface VMInstanceDetailsResponse {
@@ -42,42 +42,23 @@ export default function useVMInstanceDetails(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<VMInstanceDetailsResponse, Error> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   return useQuery<VMInstanceDetailsResponse, Error, VMInstanceDetailsResponse>({
     queryKey: ["vm-instance-details", instanceId],
     queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.instance(
-        Number(instanceId)
-      )}`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
+      return invoke<VMInstanceDetailsResponse>("get_vm_instance", {
+        accountId: polkadotAddress,
+        instanceId: Number(instanceId),
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message =
-          errorData.error ||
-          errorData.message ||
-          errorData.detail ||
-          `Failed to fetch VM instance details`;
-        throw new Error(message);
-      }
-
-      return response.json() as Promise<VMInstanceDetailsResponse>;
     },
-    enabled: !!oauthSession?.token && !!instanceId,
+    enabled: !!polkadotAddress && !!instanceId,
     refetchOnWindowFocus: false,
-    staleTime: 30 * 1000, // 30 seconds
+    staleTime: 30 * 1000,
     ...options,
   });
 }

@@ -5,7 +5,7 @@ import {
   UseMutationOptions,
   UseMutationResult,
 } from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface StartVMResponse {
@@ -22,37 +22,18 @@ export default function useStartVM(
     "mutationFn"
   >
 ): UseMutationResult<StartVMResponse, Error, number> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   return useMutation<StartVMResponse, Error, number>({
     mutationFn: async (instanceId: number) => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.start(
-        instanceId
-      )}`;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
+      return invoke<StartVMResponse>("start_vm", {
+        accountId: polkadotAddress,
+        instanceId,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message =
-          errorData.error ||
-          errorData.message ||
-          errorData.detail ||
-          `Failed to start VM instance`;
-        throw new Error(message);
-      }
-
-      return response.json() as Promise<StartVMResponse>;
     },
     ...options,
   });

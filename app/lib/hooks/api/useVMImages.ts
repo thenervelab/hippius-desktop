@@ -5,7 +5,7 @@ import {
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { API_CONFIG } from "@/lib/config";
+import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 
 export interface VMImageResponse {
@@ -24,40 +24,22 @@ export default function useVMImages(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<VMImageResponse[], Error> {
-  const { oauthSession } = useWalletAuth();
+  const { polkadotAddress } = useWalletAuth();
 
   return useQuery<VMImageResponse[], Error, VMImageResponse[]>({
-    queryKey: ["vmImages", oauthSession?.token],
+    queryKey: ["vmImages"],
     queryFn: async () => {
-      if (!oauthSession?.token) {
-        throw new Error("No authentication token available");
+      if (!polkadotAddress) {
+        throw new Error("No wallet address available");
       }
 
-      const url = `${API_CONFIG.baseUrl}${API_CONFIG.infrastructure.vm.images}`;
-
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Token ${oauthSession.token}`,
-          "Content-Type": "application/json",
-        },
+      return invoke<VMImageResponse[]>("list_vm_images", {
+        accountId: polkadotAddress,
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message =
-          errorData.error ||
-          errorData.message ||
-          errorData.detail ||
-          `Failed to fetch VM images`;
-        throw new Error(message);
-      }
-
-      return response.json() as Promise<VMImageResponse[]>;
     },
-    enabled: !!oauthSession?.token,
+    enabled: !!polkadotAddress,
     refetchOnWindowFocus: false,
-    staleTime: 10 * 60 * 1000, // 10 minutes (images don't change often)
+    staleTime: 10 * 60 * 1000,
     ...options,
   });
 }

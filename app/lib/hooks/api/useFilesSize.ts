@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { indexerGet } from "@/lib/api/indexerClient";
+import { invoke } from "@tauri-apps/api/core";
 import { sciToFullString } from "../../utils/formatters/formatBalance";
 
 // Define types based on the indexer API response
@@ -87,9 +87,9 @@ export default function useFiles(
         throw new Error("No wallet address available");
       }
 
-      return indexerGet<FilesResponse>("/ipfs/user-total-files-size", {
+      return invoke<FilesResponse>("get_files_size", {
+        accountId: polkadotAddress,
         limit,
-        account_id: polkadotAddress,
       });
     },
     select: (data) => {
