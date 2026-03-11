@@ -455,6 +455,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
           >
             {syncFiles.map((file, index) => {
               const isFileCompleted = file.status === "uploaded";
+              const isFileDeleted = file.status === "deleted" || (isFileCompleted && file.deleted);
               const isFileInProgress = file.status === "uploading";
               const isFailed = file.status === "failed";
               const fileProgress = (file as any).progress as number | undefined;
@@ -499,21 +500,18 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   </div>
 
                     <div className="flex items-center flex-shrink-0">
-                      {isFileCompleted ? (
+                      {isFileDeleted ? (
                         <>
-                          <Icons.TickCircle
-                            className={cn(
-                              "w-5 h-5",
-                              file.deleted ? "text-error-50" : "text-success-50"
-                            )}
-                          />
-                          <span
-                            className={cn(
-                              "text-sm ml-1",
-                              file.deleted ? "text-error-50" : "text-success-50"
-                            )}
-                          >
-                            {file.deleted ? "Deleted" : "Synced"}
+                          <Icons.TickCircle className="w-5 h-5 text-error-50" />
+                          <span className="text-sm ml-1 text-error-50">
+                            Deleted
+                          </span>
+                        </>
+                      ) : isFileCompleted ? (
+                        <>
+                          <Icons.TickCircle className="w-5 h-5 text-success-50" />
+                          <span className="text-sm ml-1 text-success-50">
+                            Synced
                           </span>
                         </>
                       ) : isFailed ? (
