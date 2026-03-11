@@ -1,6 +1,6 @@
 // BalanceTrendsTooltip.tsx
 import { TooltipData } from "@visx/xychart";
-import { ChartPoint } from "@/app/lib/utils/getFormatDataForAccountsChart";
+import { ChartPoint } from "@/lib/types/chartTypes";
 
 const numberFmt = (val: number) => val.toFixed(10) || "0.00";
 
@@ -12,14 +12,15 @@ const BalanceTrendsTooltip: React.FC<{
   const { datum } = tooltipData.nearestDatum;
 
   // date line
+  const date = new Date(datum.x);
   const dateDisplay =
     datum.bandLabel ??
-    (datum.x instanceof Date
-      ? datum.x.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })
+    (!isNaN(date.getTime())
+      ? date.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })
       : "");
 
   return (

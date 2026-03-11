@@ -1,11 +1,9 @@
 import {
-  useQuery,
   UseQueryOptions,
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { invoke } from "@tauri-apps/api/core";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 // Define types based on the indexer API response
 export interface TransferEvent {
@@ -55,35 +53,30 @@ export default function useBalanceTransactions(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<TransactionObject[], Error> {
-  const { polkadotAddress } = useWalletAuth();
   const page = params?.page || 1;
   const limit = params?.limit || 10;
 
-  return useQuery<TransfersResponse, Error, TransactionObject[]>({
-    queryKey: ["transfers", polkadotAddress, page, limit],
-    queryFn: async () => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-
-      return invoke<TransfersResponse>("get_balance_transfers", {
-        accountId: polkadotAddress,
-        page,
-        limit,
-      });
+  return useInvokeQuery<TransfersResponse, TransactionObject[]>({
+    command: "get_balance_transfers",
+    queryKey: (addr) => ["transfers", addr, page, limit],
+    params: (polkadotAddress) => ({
+      accountId: polkadotAddress,
+      page,
+      limit,
+    }),
+    options: {
+      select: (data) => {
+        return data.data.map((transfer) => ({
+          id: `${transfer.block_number}-${transfer.event_index}`,
+          block: transfer.block_number,
+          amount: parseFloat(transfer.amount),
+          from: transfer.from_account,
+          to: transfer.to_account,
+          date: transfer.processed_timestamp,
+        }));
+      },
+      placeholderData: keepPreviousData,
+      ...options,
     },
-    select: (data) => {
-      return data.data.map((transfer) => ({
-        id: `${transfer.block_number}-${transfer.event_index}`,
-        block: transfer.block_number,
-        amount: parseFloat(transfer.amount),
-        from: transfer.from_account,
-        to: transfer.to_account,
-        date: transfer.processed_timestamp,
-      }));
-    },
-    placeholderData: keepPreviousData,
-    enabled: !!polkadotAddress,
-    ...options,
   });
 }

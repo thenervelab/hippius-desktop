@@ -1,13 +1,10 @@
 "use client";
 
 import {
-  useMutation,
   UseMutationOptions,
   UseMutationResult,
-  useQueryClient,
 } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useInvokeMutation } from "./useInvokeMutation";
 import { SSHKeyResponse } from "./useSSHKeys";
 
 // Request payload for creating an SSH key
@@ -25,26 +22,16 @@ export default function useCreateSSHKey(
     "mutationFn"
   >
 ): UseMutationResult<SSHKeyResponse, Error, CreateSSHKeyPayload> {
-  const { polkadotAddress } = useWalletAuth();
-  const queryClient = useQueryClient();
-
-  return useMutation<SSHKeyResponse, Error, CreateSSHKeyPayload>({
-    mutationFn: async (payload: CreateSSHKeyPayload) => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-
-      return invoke<SSHKeyResponse>("create_ssh_key", {
+  return useInvokeMutation<SSHKeyResponse, CreateSSHKeyPayload>(
+    {
+      command: "create_ssh_key",
+      params: (polkadotAddress, payload) => ({
         accountId: polkadotAddress,
         name: payload.name,
         publicKey: payload.public_key,
-      });
+      }),
+      invalidateKeys: [["sshKeys"]],
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["sshKeys"],
-      });
-    },
-    ...options,
-  });
+    options
+  );
 }

@@ -3,7 +3,6 @@ import React, { ReactNode, useState, useEffect, useCallback, useMemo } from "rea
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Icons } from "@/components/ui";
-import { toast } from "sonner";
 import { Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
@@ -13,7 +12,7 @@ import {
   getViewableFilePosition
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
+import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 
 export const ImageDialogTrigger: React.FC<{
   children: ReactNode;
@@ -84,9 +83,6 @@ const ImageDialog: React.FC<{
   const [nextFile, setNextFile] = useState<FormattedUserFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [resolvedUrl, setResolvedUrl] = useState<string>("");
-  const [isResolvingUrl, setIsResolvingUrl] = useState<boolean>(false);
-  const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
-  const [isFromS3, setIsFromS3] = useState<boolean>(false);
   const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
 
   // Track the current file to prevent race conditions
@@ -118,34 +114,9 @@ const ImageDialog: React.FC<{
     // Reset states immediately when file changes
     setImageLoaded(false);
     setImageError(null);
-    setResolvedUrl("");
-    setIsResolvingUrl(true);
 
-    const resolveUrl = async () => {
-      try {
-        const result = await getFileUrlAndSource(file);
-
-        // Only update state if this is still the current file (prevent race condition)
-        if (currentFileRef.current === file) {
-          setResolvedUrl(result.url);
-          setIsFromIpfs(result.isFromIpfs);
-          setIsFromS3(result.isFromS3 || false);
-          setIsResolvingUrl(false);
-        }
-      } catch (error) {
-        console.error('Failed to resolve URL:', error);
-        // Fallback to sync version - also check for current file
-        if (currentFileRef.current === file) {
-          const result = getFileUrlAndSourceSync(file);
-          setResolvedUrl(result.url);
-          setIsFromIpfs(result.isFromIpfs);
-          setIsFromS3(result.isFromS3 || false);
-          setIsResolvingUrl(false);
-        }
-      }
-    };
-
-    resolveUrl();
+    const result = getFileUrl(file);
+    setResolvedUrl(result.url);
   }, [file]);
 
   const handleNext = useCallback(() => {
@@ -245,22 +216,6 @@ const ImageDialog: React.FC<{
                               Download File
                             </span>
                           </button>
-                          {(isFromIpfs || isFromS3) && (
-                            <button
-                              onClick={() => {
-                                navigator.clipboard
-                                  .writeText(resolvedUrl)
-                                  .then(() => {
-                                    toast.success(
-                                      "Copied to clipboard successfully!"
-                                    );
-                                  });
-                              }}
-                              className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"
-                            >
-                              <Icons.Link className="size-5 [&>path]:stroke-2" />
-                            </button>
-                          )}
                           <button
                             className="duration-300"
                             onClick={onCloseClicked}
@@ -297,8 +252,8 @@ const ImageDialog: React.FC<{
                       onClick={onCloseClicked}
                       className="w-full h-full flex items-center justify-center"
                     >
-                      {/* Loading spinner - show when resolving URL or loading image */}
-                      {(isResolvingUrl || (!imageLoaded && !imageError && resolvedUrl)) && (
+                      {/* Loading spinner - show when loading image */}
+                      {(!imageLoaded && !imageError && resolvedUrl) && (
                         <div className="absolute top-0 left-0 h-full flex items-center justify-center w-full pointer-events-none">
                           <Loader2 className="size-6 text-primary-50 animate-spin" />
                         </div>

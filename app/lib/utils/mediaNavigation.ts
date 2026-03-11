@@ -1,7 +1,7 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "./getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "./getTileTypeFromExtension";
-import { isLocalFile } from "./ipfsUrlResolver";
+import { isLocalFile } from "./fileUrlResolver";
 
 export type ViewableFileType = "image" | "video" | "PDF";
 

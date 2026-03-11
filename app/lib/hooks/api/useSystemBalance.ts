@@ -1,11 +1,10 @@
 import {
-  useQuery,
   UseQueryOptions,
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { invoke } from "@tauri-apps/api/core";
+import { useInvokeQuery } from "./useInvokeQuery";
+import { normalizeIsoToMillis } from "@/lib/utils/dateUtils";
 
 /** Row as returned by the new API */
 export interface BalanceRow {
@@ -41,23 +40,6 @@ export interface UseBalanceParams {
   page?: number;
   limit?: number; // default to 20000
 }
-
-const normalizeIsoToMillis = (iso?: string): number | null => {
-  if (!iso) return null;
-  const s = iso.trim();
-
-  const direct = Date.parse(s);
-  if (!Number.isNaN(direct)) return direct;
-
-  // Normalize fraction to 3 digits (ms)
-  const m = s.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.(\d+))?Z$/);
-  if (!m) return null;
-  const base = m[1];
-  const frac = (m[3] ?? "").padEnd(3, "0").slice(0, 3);
-  const safeIso = frac ? `${base}.${frac}Z` : `${base}.000Z`;
-  const t = Date.parse(safeIso);
-  return Number.isNaN(t) ? null : t;
-};
 
 /** API sometimes sends seconds; make sure we are in ms */
 const unitSafeMs = (t: number): number => (t < 1e12 ? t * 1000 : t);
@@ -112,30 +94,25 @@ export default function useSystemBalance(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<BalanceObject[], Error> {
-  const { polkadotAddress } = useWalletAuth();
-
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 20000;
 
-  return useQuery<PagedResponse<BalanceRow>, Error, BalanceObject[]>({
-    queryKey: ["balance-daily", polkadotAddress, page, limit],
-    queryFn: async () => {
-      if (!polkadotAddress) throw new Error("No wallet address available");
-
-      return invoke<PagedResponse<BalanceRow>>("get_system_balance_history", {
-        accountId: polkadotAddress,
-        page,
-        limit,
-      });
+  return useInvokeQuery<PagedResponse<BalanceRow>, BalanceObject[]>({
+    command: "get_system_balance_history",
+    queryKey: (addr) => ["balance-daily", addr, page, limit],
+    params: (polkadotAddress) => ({
+      accountId: polkadotAddress,
+      page,
+      limit,
+    }),
+    options: {
+      select: (resp) => {
+        if (!resp?.data?.length) return [];
+        const filtered = latestPerLocalDay(resp.data);
+        return filtered.map(toBalanceObject);
+      },
+      placeholderData: keepPreviousData,
+      ...options,
     },
-    select: (resp) => {
-      if (!resp?.data?.length) return [];
-      const filtered = latestPerLocalDay(resp.data);
-      return filtered.map(toBalanceObject);
-    },
-
-    placeholderData: keepPreviousData,
-    enabled: !!polkadotAddress,
-    ...options,
   });
 }

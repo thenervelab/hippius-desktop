@@ -361,3 +361,15 @@ pub async fn update_logout_time(
 
     Ok(())
 }
+
+// ── API Token ─────────────────────────────────────────────────────────
+
+/// Save the API auth token for an account. Called by the frontend after login
+/// so that Rust subsystems (sync, VPN) can retrieve it via `get_api_token`.
+#[tauri::command]
+pub async fn save_api_token_command(
+    account_id: String,
+    token: String,
+) -> Result<(), String> {
+    crate::utils::auth_tokens::save_api_token(&account_id, &token).await
+}

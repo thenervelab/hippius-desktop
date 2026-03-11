@@ -1,13 +1,11 @@
 "use client";
 
 import {
-  useQuery,
   UseQueryOptions,
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 export interface SSHKeyResponse {
   id: number;
@@ -42,35 +40,22 @@ export default function useSSHKeys(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<SSHKeysResponse, Error> {
-  const { polkadotAddress } = useWalletAuth();
-
   const { page = 1, page_size = 10, search = "", ordering = "" } = params || {};
 
-  return useQuery<SSHKeysResponse, Error, SSHKeysResponse>({
-    queryKey: [
-      "sshKeys",
+  return useInvokeQuery<SSHKeysResponse>({
+    command: "list_ssh_keys",
+    queryKey: ["sshKeys", page, page_size, search, ordering],
+    params: (polkadotAddress) => ({
+      accountId: polkadotAddress,
       page,
-      page_size,
-      search,
-      ordering,
-    ],
-    queryFn: async () => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-
-      return invoke<SSHKeysResponse>("list_ssh_keys", {
-        accountId: polkadotAddress,
-        page,
-        pageSize: page_size,
-        search: search || null,
-        ordering: ordering || null,
-      });
+      pageSize: page_size,
+      search: search || null,
+      ordering: ordering || null,
+    }),
+    options: {
+      placeholderData: keepPreviousData,
+      staleTime: 5 * 60 * 1000,
+      ...options,
     },
-    enabled: !!polkadotAddress,
-    placeholderData: keepPreviousData,
-    refetchOnWindowFocus: false,
-    staleTime: 5 * 60 * 1000,
-    ...options,
   });
 }

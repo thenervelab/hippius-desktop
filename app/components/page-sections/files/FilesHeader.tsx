@@ -269,7 +269,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
           <RefreshButton
             refetching={isRefetching || isFetching}
             onClick={() => {
-              invoke("trigger_sync_now").catch(() => {});
+              invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FilesHeader] trigger_sync_now failed:", err));
               refetchUserFiles();
             }}
           />

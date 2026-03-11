@@ -151,7 +151,7 @@ export const RemoteFolderSelector: React.FC<RemoteFolderSelectorProps> = ({
         await invoke("persist_master_mnemonic", {
           accountId: polkadotAddress,
           mnemonic,
-        }).catch(() => {});
+        }).catch((err: unknown) => console.warn("[RemoteFolderSelector] persist_master_mnemonic failed:", err));
       }
       setShowHcfsSetup(false);
       await doRestore();

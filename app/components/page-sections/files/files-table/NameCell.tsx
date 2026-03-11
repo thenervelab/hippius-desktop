@@ -1,5 +1,4 @@
 import { FC } from "react";
-import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import Link from "next/link";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { getFileIcon } from "@/lib/utils/fileTypeUtils";
@@ -75,7 +74,7 @@ const NameCell: FC<NameCellProps> = ({
     pathname: "/files",
     query: {
       mainFolderCid: effectiveMainFolderHash ?? "",
-      folderCid: resolveArionHash(arionHash) ?? "",
+      folderCid: arionHash ?? "",
       folderName: rawName ?? "",
       folderActualName: actualName ?? "",
       mainFolderActualName: newMainFolder ?? "",

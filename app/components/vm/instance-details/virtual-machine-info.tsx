@@ -12,7 +12,7 @@ import { useDeleteInstance } from "../hooks/useDeleteInstance";
 import { useStartStopInstance } from "../hooks/useStartStopInstance";
 import { useRebootInstance } from "../hooks/useRebootInstance";
 import { Icons } from "../../ui";
-import ConfirmDialog2 from "../../ui/ConfirmDialog2";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import TableActionMenu from "../../ui/alt-table/TableActionMenu";
 import { VMInstanceDetailsResponse } from "@/app/lib/hooks/api/useVMInstanceDetails";
 import Skeleton from "@/components/ui/skeleton";
@@ -325,14 +325,15 @@ const VirtualMachineInfo: React.FC<VirtualMachineInfoProps> = ({
         onSubmit={handleChangeImage}
       />
 
-      <ConfirmDialog2
+      <ConfirmDialog
+        mode="branded"
         open={openChangeInstanceModal}
-        onClose={() => setOpenChangeInstanceModal(false)}
-        onConfirm={handleConfirmChangeInstance}
+        onCancel={() => setOpenChangeInstanceModal(false)}
         onBack={() => setOpenChangeInstanceModal(false)}
-        button="Change Instance"
-        text="Are you sure you want to change this instance? This action will overwrite the instance"
-        heading="Change Instance"
+        onConfirm={handleConfirmChangeInstance}
+        confirmText="Change Instance"
+        description="Are you sure you want to change this instance? This action will overwrite the instance"
+        title="Change Instance"
         icon={<Icons.Refresh2 className="size-6 text-grey-100" />}
         iconBgColor="bg-primary-50"
       />

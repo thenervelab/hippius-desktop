@@ -82,7 +82,7 @@ export default function FolderUploadDialog({
             });
 
             // Trigger sync to push changes
-            await invoke("trigger_sync_now").catch(() => { });
+            await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FolderUploadDialog] trigger_sync_now failed:", err));
 
             toast.dismiss(toastId);
             toast.success(`Folder uploaded successfully!`);

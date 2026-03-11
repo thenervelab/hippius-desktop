@@ -143,7 +143,7 @@ const UpdateSyncFolder: React.FC = () => {
 
         // Fire off stop + re-init in background (don't block UI)
         const mnemonic = (await getMnemonic()) ?? undefined;
-        invoke("stop_sync").catch(() => { }).then(() =>
+        invoke("stop_sync").catch((err: unknown) => console.warn("[UpdateSyncFolder] stop_sync failed:", err)).then(() =>
           tryInitializeSync(polkadotAddress!, "default", mnemonic ?? undefined).catch((err) =>
             console.error("[UpdateSyncFolder] Background sync init failed:", err)
           )

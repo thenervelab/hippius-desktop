@@ -1,6 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { invoke } from "@tauri-apps/api/core";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 // Define types based on the indexer API response
 export interface BillingTransferEvent {
@@ -50,50 +48,26 @@ export interface UseBillingTransfersParams {
 }
 
 export default function useBillingTransactions() {
-    const { polkadotAddress } = useWalletAuth();
-    const [data, setData] = useState<TransactionObject[] | null>(null);
-    const [isPending, setIsPending] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const query = useInvokeQuery<BillingTransactionsResponse, TransactionObject[]>({
+        command: "get_billing_transactions",
+        queryKey: (addr) => ["billing-transactions", addr],
+        options: {
+            select: (json) => {
+                return (json.results || []).map((t) => ({
+                    id: t.id,
+                    transaction_type: t.payment_type.toLowerCase().includes('stripe') ? 'card' : 'tao',
+                    amount: typeof t.amount === "string" ? parseFloat(t.amount) : Number(t.amount ?? 0),
+                    transaction_date: t.created_at,
+                    status: t.status,
+                }));
+            },
+        },
+    });
 
-    const fetchTransactions = useCallback(async () => {
-        if (!polkadotAddress) {
-            setData([]);
-            setError("Not authenticated");
-            setIsPending(false);
-            return;
-        }
-
-        try {
-            setIsPending(true);
-            setError(null);
-            setData(null);
-
-            const json = await invoke<BillingTransactionsResponse>("get_billing_transactions", {
-                accountId: polkadotAddress,
-            });
-
-            const mapped: TransactionObject[] = (json.results || []).map((t) => ({
-                id: t.id,
-                transaction_type: t.payment_type.toLowerCase().includes('stripe') ? 'card' : 'tao',
-                amount: typeof t.amount === "string" ? parseFloat(t.amount) : Number(t.amount ?? 0),
-                transaction_date: t.created_at,
-                status: t.status,
-            }));
-
-            setData(mapped);
-        } catch (e: unknown) {
-            setData([]);
-            setError(e instanceof Error ? e.message : "Unknown error");
-        } finally {
-            setIsPending(false);
-        }
-    }, [polkadotAddress]);
-
-    useEffect(() => {
-        if (polkadotAddress) {
-            fetchTransactions();
-        }
-    }, [polkadotAddress, fetchTransactions]);
-
-    return { data, isPending, error, refetch: fetchTransactions };
+    return {
+        data: query.data ?? null,
+        isPending: query.isPending,
+        error: query.error ? (query.error instanceof Error ? query.error.message : "Unknown error") : null,
+        refetch: query.refetch,
+    };
 }

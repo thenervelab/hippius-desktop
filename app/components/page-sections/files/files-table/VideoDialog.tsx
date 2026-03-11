@@ -2,7 +2,6 @@ import React, { ReactNode, useState, useEffect, useCallback, useMemo } from "rea
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Icons } from "@/components/ui";
-import { toast } from "sonner";
 import VideoPlayer from "./VideoPlayer";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import {
@@ -11,7 +10,7 @@ import {
   getViewableFilePosition
 } from "@/app/lib/utils/mediaNavigation";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
+import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 
 export const VideoDialogTrigger: React.FC<{
   children: ReactNode;
@@ -45,10 +44,6 @@ const VideoDialog: React.FC<{
   const [nextFile, setNextFile] = useState<FormattedUserFile | null>(null);
   const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [resolvedUrl, setResolvedUrl] = useState<string>("");
-  const [isResolvingUrl, setIsResolvingUrl] = useState<boolean>(false);
-  const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
-  const [isFromS3, setIsFromS3] = useState<boolean>(false);
-  const [isFromLocal, setIsFromLocal] = useState<boolean>(false);
   const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
   const { polkadotAddress } = useWalletAuth();
 
@@ -70,44 +65,15 @@ const VideoDialog: React.FC<{
     setPosition(pos);
   }, [file, allFiles, navigationOptions]);
 
-  // Resolve URL whenever file changes - with race condition protection
+  // Resolve URL whenever file changes
   useEffect(() => {
     if (!file) return;
 
-    // Update ref to track current file
     currentFileRef.current = file;
-
-    // Reset states immediately when file changes
     setResolvedUrl("");
-    setIsResolvingUrl(true);
 
-    const resolveUrl = async () => {
-      try {
-        const result = await getFileUrlAndSource(file);
-
-        // Only update state if this is still the current file (prevent race condition)
-        if (currentFileRef.current === file) {
-          setResolvedUrl(result.url);
-          setIsFromIpfs(result.isFromIpfs);
-          setIsFromS3(result.isFromS3 || false);
-          setIsFromLocal(result.isFromLocal || false);
-          setIsResolvingUrl(false);
-        }
-      } catch (error) {
-        console.error('VideoDialog - Failed to resolve URL:', error);
-        // Fallback to sync version - also check for current file
-        if (currentFileRef.current === file) {
-          const result = getFileUrlAndSourceSync(file);
-          setResolvedUrl(result.url);
-          setIsFromIpfs(result.isFromIpfs);
-          setIsFromS3(result.isFromS3 || false);
-          setIsFromLocal(result.isFromLocal || false);
-          setIsResolvingUrl(false);
-        }
-      }
-    };
-
-    resolveUrl();
+    const result = getFileUrl(file);
+    setResolvedUrl(result.url);
   }, [file]);
 
   const handleNext = useCallback(() => {
@@ -206,22 +172,6 @@ const VideoDialog: React.FC<{
                               Download File
                             </span>
                           </button>
-                          {(isFromIpfs || isFromS3) && (
-                            <button
-                              onClick={() => {
-                                navigator.clipboard
-                                  .writeText(resolvedUrl)
-                                  .then(() => {
-                                    toast.success(
-                                      "Copied to clipboard successfully!"
-                                    );
-                                  });
-                              }}
-                              className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"
-                            >
-                              <Icons.Link className="size-5 [&>path]:stroke-2" />
-                            </button>
-                          )}
                           <button
                             className="duration-300"
                             onClick={onCloseClicked}
@@ -253,12 +203,12 @@ const VideoDialog: React.FC<{
                     )}
 
                     <div className="animate-scale-in-95-0.4 shadow-dialo grow flex w-full h-full flex-col mt-12 rounded overflow-hidden relative data-[state=open]:animate-scale-in-95-0.4">
-                      {!isResolvingUrl && resolvedUrl ? (
+                      {resolvedUrl ? (
                         <VideoPlayer
                           key={resolvedUrl} // Force re-mount on URL change
                           videoUrl={resolvedUrl}
-                          isFromIpfs={isFromIpfs}
-                          isFromLocal={isFromLocal}
+                          isFromIpfs={false}
+                          isFromLocal={true}
                           fileFormat={fileFormat}
                           file={file}
                           handleFileDownload={handleFileDownload}

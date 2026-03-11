@@ -1,4 +1,4 @@
-import { ChartPoint } from "@/app/lib/utils/getFormatDataForCreditsUsageChart";
+import { ChartPoint } from "@/lib/types/chartTypes";
 import { TooltipData } from "@visx/xychart";
 
 const CreditUsedTooltip: React.FC<{
@@ -11,16 +11,17 @@ const CreditUsedTooltip: React.FC<{
 
   // Format date display
   let dateDisplay = "";
-  if (datum.x instanceof Date) {
+  const date = new Date(datum.x);
+  if (!isNaN(date.getTime())) {
     // Format based on time range
     if (timeRange === "last7days") {
-      dateDisplay = datum.x.toLocaleDateString("en-US", {
+      dateDisplay = date.toLocaleDateString("en-US", {
         weekday: "long",
         month: "short",
         day: "numeric",
       });
     } else {
-      dateDisplay = datum.x.toLocaleDateString("en-US", {
+      dateDisplay = date.toLocaleDateString("en-US", {
         month: "short",
         day: "numeric",
         year: "numeric",

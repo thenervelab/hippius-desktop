@@ -66,7 +66,7 @@ export function useStagedChanges() {
   useEffect(() => {
     return () => {
       if (reviewActiveRef.current) {
-        invoke("cancel_review").catch(() => {});
+        invoke("cancel_review").catch((err: unknown) => console.warn("[useStagedChanges] cancel_review failed on unmount:", err));
       }
     };
   }, []);

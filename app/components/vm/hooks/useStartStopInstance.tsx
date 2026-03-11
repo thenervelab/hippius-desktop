@@ -2,7 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { Instance } from "../instances-table";
-import ConfirmDialog2 from "../../ui/ConfirmDialog2";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { Icons } from "../../ui";
 import useStartVM from "@/app/lib/hooks/api/useStartVM";
 import useStopVM from "@/app/lib/hooks/api/useStopVM";
@@ -83,12 +83,13 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
   const isProcessing = isStarting || isStopping;
 
   const StartStopConfirmModal = () => (
-    <ConfirmDialog2
+    <ConfirmDialog
+      mode="branded"
       open={openConfirmModal}
-      onClose={isProcessing ? () => {} : handleCancel}
-      onConfirm={handleConfirm}
+      onCancel={isProcessing ? () => {} : handleCancel}
       onBack={isProcessing ? () => {} : handleCancel}
-      button={
+      onConfirm={handleConfirm}
+      confirmText={
         isProcessing
           ? action === "start"
             ? "Starting..."
@@ -97,8 +98,8 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
           ? "Start Instance"
           : "Stop Instance"
       }
-      text={`Are you sure you want to ${action} this instance?`}
-      heading={action === "start" ? "Start Instance" : "Stop Instance"}
+      description={`Are you sure you want to ${action} this instance?`}
+      title={action === "start" ? "Start Instance" : "Stop Instance"}
       icon={
         action === "start" ? (
           <Icons.PlayCircle className="size-6 text-grey-100" />
@@ -107,7 +108,7 @@ export const useStartStopInstance = (options?: UseStartStopInstanceOptions) => {
         )
       }
       iconBgColor="bg-primary-50"
-      disableButton={isProcessing}
+      isLoading={isProcessing}
     />
   );
 

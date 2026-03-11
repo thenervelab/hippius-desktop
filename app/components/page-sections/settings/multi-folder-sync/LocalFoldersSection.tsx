@@ -1,0 +1,230 @@
+"use client";
+
+import React from "react";
+import { Icons, RevealTextLine, IconButton } from "@/components/ui";
+import { cn } from "@/lib/utils";
+import SectionHeader from "../SectionHeader";
+import { InView } from "react-intersection-observer";
+import {
+  Folder,
+  Plus,
+  MoreVertical,
+  Trash2,
+  PauseCircle,
+  PlayCircle,
+  ServerCrash,
+} from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import type { SyncFolder } from "@/app/lib/types/sync-folder";
+
+interface LocalFoldersSectionProps {
+  syncFolders: SyncFolder[];
+  isLoading: boolean;
+  onAddFolder: () => void;
+  onPauseFolder: (folder: SyncFolder) => void;
+  onResumeFolder: (folder: SyncFolder) => void;
+  onRemoveFolder: (folder: SyncFolder) => void;
+  onDeleteFromServer: (folderName: string, folderId: string) => void;
+}
+
+function getStatusColor(status: SyncFolder["status"]) {
+  switch (status) {
+    case "syncing":
+      return "bg-success-95 text-success-50 border-success-80";
+    case "paused":
+      return "bg-grey-95 text-grey-50 border-grey-80";
+    case "error":
+      return "bg-error-95 text-error-50 border-error-80";
+  }
+}
+
+function getStatusText(status: SyncFolder["status"]) {
+  switch (status) {
+    case "syncing":
+      return "Syncing";
+    case "paused":
+      return "Paused";
+    case "error":
+      return "Error";
+  }
+}
+
+function formatLastSynced(timestamp?: number) {
+  if (!timestamp) return null;
+  const diff = Date.now() - timestamp;
+  if (diff < 60000) return "Just now";
+  if (diff < 3600000) {
+    const minutes = Math.floor(diff / 60000);
+    return `${minutes} minute${minutes !== 1 ? "s" : ""} ago`;
+  }
+  if (diff < 86400000) {
+    const hours = Math.floor(diff / 3600000);
+    return `${hours} hour${hours !== 1 ? "s" : ""} ago`;
+  }
+  return new Date(timestamp).toLocaleString();
+}
+
+export function LocalFoldersSection({
+  syncFolders,
+  isLoading,
+  onAddFolder,
+  onPauseFolder,
+  onResumeFolder,
+  onRemoveFolder,
+  onDeleteFromServer,
+}: LocalFoldersSectionProps) {
+  return (
+    <InView triggerOnce>
+      {({ inView, ref }) => (
+        <div
+          ref={ref}
+          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/folder-sync-bg-layer.png')] bg-repeat-round bg-cover"
+        >
+          <div className="w-full">
+            <RevealTextLine
+              rotate
+              reveal={inView}
+              parentClassName="w-full"
+              className="delay-300 w-full"
+            >
+              <div className="w-full flex justify-between gap-4">
+                <SectionHeader
+                  Icon={Icons.File2}
+                  title="Local Sync Folders"
+                  subtitle="Manage folders on this device that sync to the Hippius network. Changes are encrypted and synced automatically."
+                  info="Multi-folder sync allows you to keep different directories synchronized independently. Files are encrypted and synced to the Hippius network."
+                  learnMoreUrl="https://docs.hippius.com/use/desktop/settings#multi-folder-sync"
+                />
+                <IconButton
+                  className="w-[146px] h-[42px]"
+                  icon={Plus}
+                  text="Add Folder"
+                  onClick={onAddFolder}
+                />
+              </div>
+            </RevealTextLine>
+          </div>
+
+          <div className="w-full">
+            <div className="space-y-3 w-full">
+              {isLoading ? (
+                <div className="flex justify-center py-8">
+                  <Icons.Loader className="size-6 animate-spin text-primary-50" />
+                </div>
+              ) : syncFolders.length === 0 ? (
+                <div className="p-6 border border-dashed border-grey-80 rounded-lg text-center bg-white/60">
+                  <Folder className="size-8 mx-auto mb-2 text-grey-60" />
+                  <p className="text-sm text-grey-50 mb-1">
+                    No folders syncing yet
+                  </p>
+                  <p className="text-xs text-grey-60">
+                    Add a local folder to get started with encrypted sync
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2 w-full">
+                  {syncFolders.map((folder) => (
+                    <div
+                      key={folder.id}
+                      className="p-4 border border-grey-80 rounded-lg bg-white hover:bg-grey-98 transition-colors"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Folder className="size-4 text-grey-40 flex-shrink-0" />
+                            <span className="font-medium text-base text-grey-10 truncate">
+                              {folder.folderName}
+                            </span>
+                            <span
+                              className={cn(
+                                "text-xs font-medium px-2 py-0.5 rounded border",
+                                getStatusColor(folder.status)
+                              )}
+                            >
+                              {getStatusText(folder.status)}
+                            </span>
+                          </div>
+                          <p className="text-sm text-grey-60 truncate mb-1">
+                            {folder.localPath}
+                          </p>
+                          {(folder.fileCount !== undefined ||
+                            folder.lastSynced) && (
+                            <div className="flex items-center gap-3 text-xs text-grey-70">
+                              {folder.fileCount !== undefined && (
+                                <span>{folder.fileCount} files</span>
+                              )}
+                              {folder.lastSynced && (
+                                <span>
+                                  · Last synced{" "}
+                                  {formatLastSynced(folder.lastSynced)}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <DropdownMenu.Root>
+                          <DropdownMenu.Trigger asChild>
+                            <button className="p-2 hover:bg-grey-95 rounded transition-colors">
+                              <MoreVertical className="size-4 text-grey-40" />
+                            </button>
+                          </DropdownMenu.Trigger>
+                          <DropdownMenu.Portal>
+                            <DropdownMenu.Content
+                              className="bg-white border border-grey-80 rounded-lg shadow-lg p-1 min-w-[200px] z-[60]"
+                              sideOffset={5}
+                              align="end"
+                              avoidCollisions
+                            >
+                              {folder.status === "syncing" ? (
+                                <DropdownMenu.Item
+                                  className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
+                                  onSelect={() => onPauseFolder(folder)}
+                                >
+                                  <PauseCircle className="size-4" />
+                                  Pause Sync
+                                </DropdownMenu.Item>
+                              ) : (
+                                <DropdownMenu.Item
+                                  className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
+                                  onSelect={() => onResumeFolder(folder)}
+                                >
+                                  <PlayCircle className="size-4" />
+                                  Resume Sync
+                                </DropdownMenu.Item>
+                              )}
+                              <DropdownMenu.Separator className="h-px bg-grey-80 my-1" />
+                              <DropdownMenu.Item
+                                className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
+                                onSelect={() => onRemoveFolder(folder)}
+                              >
+                                <Trash2 className="size-4" />
+                                Remove Folder
+                              </DropdownMenu.Item>
+                              <DropdownMenu.Item
+                                className="flex items-center gap-2 px-3 py-2 text-sm text-error-50 hover:bg-error-95 rounded cursor-pointer outline-none"
+                                onSelect={() =>
+                                  onDeleteFromServer(
+                                    folder.folderName,
+                                    folder.id
+                                  )
+                                }
+                              >
+                                <ServerCrash className="size-4" />
+                                Delete from Server
+                              </DropdownMenu.Item>
+                            </DropdownMenu.Content>
+                          </DropdownMenu.Portal>
+                        </DropdownMenu.Root>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </InView>
+  );
+}

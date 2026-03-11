@@ -26,7 +26,10 @@ export default function OnBoardingGuard({
     if (isAuthenticated && !isLoading) {
       isOnboardingDone()
         .then((d) => setDone(d))
-        .catch(() => setDone(false))
+        .catch((err: unknown) => {
+          console.error("[OnBoardingGuard] Failed to check onboarding status:", err);
+          setDone(false);
+        })
         .finally(() => setChecking(false));
     }
   }, [isAuthenticated, isLoading]);

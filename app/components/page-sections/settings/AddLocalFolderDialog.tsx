@@ -135,7 +135,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
         await invoke("persist_master_mnemonic", {
           accountId: polkadotAddress,
           mnemonic,
-        }).catch(() => {});
+        }).catch((err: unknown) => console.warn("[AddLocalFolderDialog] persist_master_mnemonic failed:", err));
       }
       setShowHcfsSetup(false);
       await doAdd();

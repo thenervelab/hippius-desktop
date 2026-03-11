@@ -11,7 +11,7 @@
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Wry};
 
@@ -97,6 +97,51 @@ pub fn clear_cancel() {
 /// Check if cancellation has been requested.
 pub fn is_cancelled() -> bool {
     GLOBAL_CANCEL_TOKEN.load(Ordering::SeqCst)
+}
+
+// === Review Mode Timeout ===
+
+/// Timestamp (epoch millis) when review mode was entered, or 0 if not in review mode.
+/// Used to auto-exit review mode after a timeout so sync doesn't stall indefinitely.
+pub static REVIEW_MODE_ENTERED_AT: AtomicI64 = AtomicI64::new(0);
+
+/// Record that review mode was entered right now.
+pub fn set_review_entered() {
+    let now = chrono::Utc::now().timestamp_millis();
+    REVIEW_MODE_ENTERED_AT.store(now, Ordering::Release);
+}
+
+/// Clear the review mode timestamp.
+pub fn clear_review_entered() {
+    REVIEW_MODE_ENTERED_AT.store(0, Ordering::Release);
+}
+
+/// Check if review mode has been active longer than `timeout_secs`.
+pub fn is_review_timed_out(timeout_secs: i64) -> bool {
+    let entered = REVIEW_MODE_ENTERED_AT.load(Ordering::Acquire);
+    if entered == 0 {
+        return false;
+    }
+    let now = chrono::Utc::now().timestamp_millis();
+    (now - entered) > timeout_secs * 1000
+}
+
+// === Consecutive Sync Failures (for backoff) ===
+
+/// Number of consecutive sync failures across all drives.
+/// Reset to 0 on any successful sync. Used to compute backoff delay.
+pub static CONSECUTIVE_SYNC_FAILURES: AtomicI64 = AtomicI64::new(0);
+
+pub fn record_sync_failure() -> i64 {
+    CONSECUTIVE_SYNC_FAILURES.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+pub fn reset_sync_failures() {
+    CONSECUTIVE_SYNC_FAILURES.store(0, Ordering::SeqCst);
+}
+
+pub fn get_sync_failures() -> i64 {
+    CONSECUTIVE_SYNC_FAILURES.load(Ordering::SeqCst)
 }
 
 // === Sync State ===
@@ -195,6 +240,7 @@ pub fn add_pending_activity(item: SyncActivityItem) {
         existing.file_name == item.file_name
             && existing.action == item.action
             && existing.label == item.label
+            && existing.size_bytes == item.size_bytes
     });
     if !already_exists {
         pending.push(item);

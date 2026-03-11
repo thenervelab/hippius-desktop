@@ -16,12 +16,12 @@ use crate::hcfs_drive::{
     StagedChanges, start_sync_loop,
 };
 use crate::sync_shared::{
-    SyncActivityItem, add_pending_activity, clear_cancel, discard_all_pending_activity,
-    discard_pending_activity_for_label, remove_state, request_cancel, reset_all_states,
-    reset_health, update_state,
+    SyncActivityItem, add_pending_activity, clear_cancel, clear_review_entered,
+    discard_all_pending_activity, discard_pending_activity_for_label, remove_state,
+    request_cancel, reset_all_states, reset_health, reset_sync_failures, update_state,
 };
 use crate::utils::account_key::account_key;
-use crate::utils::objectstore_tokens::get_temp_auth_key;
+use crate::utils::auth_tokens::get_api_token;
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::sync::SyncProgress;
 use sha2::{Digest, Sha256};
@@ -108,7 +108,7 @@ pub async fn update_sync_bearer_token(
     bearer_token: String,
 ) -> Result<(), String> {
     // 1. Persist to DB so future initialize_sync calls use the fresh token
-    crate::utils::objectstore_tokens::save_temp_auth_key(&account_id, &bearer_token)
+    crate::utils::auth_tokens::save_api_token(&account_id, &bearer_token)
         .await
         .map_err(|e| format!("Failed to persist auth token: {e}"))?;
 
@@ -550,6 +550,7 @@ async fn initialize_sync_inner(
     }
     SYNC_IN_PROGRESS.store(false, Ordering::Release);
     SYNC_REVIEW_MODE.store(false, Ordering::Release);
+    clear_review_entered();
 
     // 1. Read sync path for the given label from database
     let sync_path = get_sync_path_for_label(&account_id, &label).await?;
@@ -566,7 +567,43 @@ async fn initialize_sync_inner(
     };
     println!("[Setup] Server URL: {}", server_url);
 
-    // 3. Ensure sync directory exists
+    // 3. Check if the sync directory was deleted by the user.
+    //    If the config dir has sync state (was previously syncing) but the sync
+    //    folder is completely gone, the user intentionally removed it. Do NOT
+    //    recreate it — that would create an empty folder + stale synced tree,
+    //    causing the three-tree algorithm to delete all remote files.
+    let sync_dir_existed = Path::new(&sync_path).exists();
+    {
+        let folder_dir_check = config_dir_for_folder(&account_id, &label)?;
+        let had_sync_state = folder_dir_check.join("sync_state.json").exists();
+        if !sync_dir_existed && had_sync_state {
+            println!(
+                "[Setup] Sync folder '{}' was deleted but config still exists for '{}'. \
+                 Removing stale sync path from DB to prevent remote file deletion.",
+                sync_path, label
+            );
+            // Remove the sync path so it doesn't auto-init on next startup
+            if let Err(e) = crate::commands::substrate_tx::remove_sync_path_internal(
+                &account_id, &label,
+            )
+            .await
+            {
+                println!(
+                    "[Setup] Warning: failed to remove stale sync path for '{}': {}",
+                    label, e
+                );
+            }
+            // Also wipe the stale sync state
+            let _ = std::fs::remove_file(folder_dir_check.join("sync_state.json"));
+            let _ = std::fs::remove_file(folder_dir_check.join("sync_state.json.bak"));
+            return Err(format!(
+                "Sync folder '{}' for '{}' was removed. It has been unregistered from sync. \
+                 Re-add it from Settings if this was unintentional.",
+                sync_path, label
+            ));
+        }
+    }
+
     std::fs::create_dir_all(&sync_path)
         .map_err(|e| format!("Failed to create sync directory: {}", e))?;
 
@@ -612,7 +649,7 @@ async fn initialize_sync_inner(
     let mut manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
 
     // 6. Retrieve the auth token BEFORE unlock so we can set account_ss58 first
-    let bearer_token = get_temp_auth_key(&account_id)
+    let bearer_token = get_api_token(&account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
@@ -815,15 +852,18 @@ async fn initialize_sync_inner(
         (uid, master_for_backup, generated_new_master)
     };
 
+    let expected_user_id = format!("{}_{}", account_id, folder_hash(&label));
     println!(
-        "[Setup] Drive user_id after unlock: {} (should match account_id)",
-        user_id
+        "[Setup] Drive user_id after unlock: {} (expected: {})",
+        user_id, expected_user_id
     );
-    if user_id != account_id {
-        println!(
-            "[Setup] WARNING: user_id ({}) != account_id ({}). This may cause 403 errors!",
-            user_id, account_id
-        );
+    if user_id != expected_user_id {
+        return Err(format!(
+            "Drive user_id mismatch: got '{}', expected '{}'. \
+             This indicates a corrupted config directory. \
+             Please remove the folder and re-add it.",
+            user_id, expected_user_id
+        ));
     }
 
     // 8. Test server connectivity
@@ -896,6 +936,7 @@ async fn initialize_sync_inner(
         let reg_server = server_url.clone();
         let reg_token = bearer_token.clone();
         let reg_label = label.clone();
+        let reg_ss58 = composite.clone();
         tokio::spawn(async move {
             let config = HcfsClientConfig {
                 base_url: reg_server,
@@ -903,7 +944,7 @@ async fn initialize_sync_inner(
                 bearer_token: reg_token,
                 accept_invalid_certs: true,
                 billing_bypass_token: None,
-                account_ss58: String::new(),
+                account_ss58: reg_ss58,
             };
             match hcfs_client::client::HcfsClient::new(config) {
                 Ok(client) => {
@@ -944,8 +985,10 @@ pub async fn stop_sync(app: AppHandle) -> Result<(), String> {
     let mut guard = HCFS_DRIVES.lock().await;
     guard.clear();
     SYNC_REVIEW_MODE.store(false, Ordering::Release);
+    clear_review_entered();
     reset_all_states();
     reset_health();
+    reset_sync_failures();
     discard_all_pending_activity();
 
     // Emit sync stopped event so frontend can reset UI state (tray icon, sync widget)
@@ -974,6 +1017,7 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
             prev.abort();
         }
         SYNC_REVIEW_MODE.store(false, Ordering::Release);
+        clear_review_entered();
         let _ = app.emit("hcfs_sync_stopped", ());
     } else {
         // Restart sync loop to update watchers (removed drive's path)
@@ -1293,15 +1337,18 @@ pub async fn stage_changes() -> Result<StagedChanges, String> {
             Ok(changes) => Ok(changes),
             Err(e) => {
                 SYNC_REVIEW_MODE.store(false, Ordering::Release);
+                clear_review_entered();
                 Err(e)
             }
         },
         Some(_) => {
             SYNC_REVIEW_MODE.store(false, Ordering::Release);
+            clear_review_entered();
             Err("Drive is not unlocked".to_string())
         }
         None => {
             SYNC_REVIEW_MODE.store(false, Ordering::Release);
+            clear_review_entered();
             Err("Drive not initialized".to_string())
         }
     }
@@ -1367,6 +1414,7 @@ pub async fn sync_with_conflict_resolutions(
 
     // Resume auto-sync
     SYNC_REVIEW_MODE.store(false, Ordering::Release);
+    clear_review_entered();
 
     // Update shared state
     update_state(&label, |s| {
@@ -1421,6 +1469,7 @@ pub async fn sync_with_conflict_resolutions(
 #[tauri::command]
 pub async fn cancel_review() -> Result<(), String> {
     SYNC_REVIEW_MODE.store(false, Ordering::Release);
+    clear_review_entered();
     println!("[Sync] Review cancelled, auto-sync resumed");
     Ok(())
 }
@@ -1488,7 +1537,7 @@ pub async fn get_remote_storage_stats(
         config.server_url
     };
 
-    let bearer_token = get_temp_auth_key(&account_id)
+    let bearer_token = get_api_token(&account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| {
@@ -1584,7 +1633,7 @@ pub async fn list_remote_folders(
         config.server_url
     };
 
-    let bearer_token = get_temp_auth_key(&account_id)
+    let bearer_token = get_api_token(&account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
@@ -1595,7 +1644,7 @@ pub async fn list_remote_folders(
         bearer_token,
         accept_invalid_certs: true,
         billing_bypass_token: None,
-        account_ss58: String::new(),
+        account_ss58: account_id.clone(),
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config)
@@ -1702,6 +1751,24 @@ pub async fn restore_remote_folders(
             continue;
         }
 
+        // Wipe stale sync state before restore so the three-tree algorithm
+        // treats all remote files as RemoteCreate (download), not LocalDelete
+        // (which would delete them from the server). This is critical: a leftover
+        // sync_state.json with a populated synced tree + empty local folder would
+        // cause the sync engine to propagate "local deletions" to the server.
+        if let Ok(fd) = config_dir_for_folder(&account_id, &folder.label) {
+            for name in &["sync_state.json", "sync_state.json.bak"] {
+                let p = fd.join(name);
+                if p.exists() {
+                    println!(
+                        "[Restore] Removing stale {} for '{}' to prevent remote deletions",
+                        name, folder.label
+                    );
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
+        }
+
         // Initialize sync without starting the loop (start_loop = false)
         match initialize_sync_inner(
             app.clone(),
@@ -1769,7 +1836,7 @@ pub async fn delete_remote_folder(
         config.server_url
     };
 
-    let bearer_token = get_temp_auth_key(&account_id)
+    let bearer_token = get_api_token(&account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
@@ -1782,7 +1849,7 @@ pub async fn delete_remote_folder(
         bearer_token,
         accept_invalid_certs: true,
         billing_bypass_token: None,
-        account_ss58: String::new(),
+        account_ss58: composite.clone(),
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config)

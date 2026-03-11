@@ -17,11 +17,10 @@ mod commands;
 mod constants;
 mod events;
 mod hcfs_drive;
-mod ipfs;
 mod macos_bookmarks;
 mod substrate_client;
+mod sync_progress;
 mod sync_shared;
-mod user_profile_sync;
 mod block_subscription;
 mod utils;
 
@@ -31,11 +30,15 @@ use crate::commands::syncing::{
     reset_sync_data, restore_remote_folders, set_device_name, stop_drive, stop_sync,
     trigger_sync_now,
 };
-use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
-use crate::sync_shared::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
-use crate::user_profile_sync::{
-    get_user_synced_files, get_user_total_file_size, list_folder_contents,
+use crate::sync_progress::{
+    sp_clear_all_data, sp_cleanup_expired_files, sp_complete_pending_files,
+    sp_complete_session, sp_get_overall_progress, sp_get_recent_files, sp_get_session_files,
+    sp_get_tray_menu_files, sp_has_any_sync_activity, sp_is_encrypted_file_id,
+    sp_mark_all_pending_files_as_failed, sp_mark_file_error, sp_mark_pending_files_as_failed,
+    sp_merge_into_session, sp_record_deleted_file, sp_should_hide_file, sp_start_session,
+    sp_stop_session, sp_update_file_progress,
 };
+use crate::sync_shared::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
 use builder_blocks::{on_window_event::on_window_event, setup::setup};
 use commands::accounts::{
     export_app_data, get_all_subaccount_addresses, import_app_data, reset_app,
@@ -64,16 +67,28 @@ use commands::auth::{
 use commands::oauth::{complete_oauth_flow, start_oauth_flow};
 use commands::session::{
     clear_auth_session, clear_wallet, get_auth_session, get_auth_token, get_last_auth_session,
-    get_wallet, has_wallet, is_token_valid, save_auth_session, save_wallet, update_logout_time,
+    get_wallet, has_wallet, is_token_valid, save_api_token_command, save_auth_session, save_wallet,
+    update_logout_time,
+};
+use commands::local_db::{
+    add_notification, list_notifications, mark_notification_read, mark_notification_unread,
+    mark_all_notifications_read, delete_notification, delete_all_notifications,
+    delete_system_notification_by_version, get_unread_count, credit_already_notified,
+    low_credit_subtype_exists, has_active_low_credit_notification,
+    get_last_deleted_low_credit_time, hippius_version_notification_exists,
+    clear_all_notifications, get_local_notification_preferences,
+    update_local_notification_preferences, get_local_enabled_notification_types,
+    is_first_time, mark_first_time_seen, get_is_above_half_credit, update_is_above_half_credit,
+    add_contact, get_contacts, update_contact, delete_contact,
+    is_onboarding_done, set_onboarding_done,
+    get_user_preference, save_user_preference,
 };
 use commands::file_commands::{add_file, add_folder, export_file, list_sync_folder, remove_file};
-use commands::objectstore_auth::{
-    has_master_token_command, request_master_token_command, save_temp_auth_key_command,
-};
 use commands::blockchain::{
     get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, stake_bond,
     stake_claim_rewards, stake_unbond, stake_withdraw_unbonded, transfer_balance, validate_address,
 };
+use commands::chart_formatting::{format_balance_chart, format_credits_chart, format_storage_chart};
 use block_subscription::{
     get_current_block_number, start_block_subscription, stop_block_subscription,
 };
@@ -172,14 +187,6 @@ fn main() {
             get_all_subaccount_addresses,
             import_app_data,
             export_app_data,
-            // User profile sync (blockchain)
-            get_user_synced_files,
-            get_user_total_file_size,
-            list_folder_contents,
-            // IPFS info
-            get_ipfs_node_info,
-            get_ipfs_bandwidth,
-            get_ipfs_peers,
             // VPN / Nebula
             utils::nebula::get_nebula_version,
             utils::nebula::check_nebula_update,
@@ -199,10 +206,8 @@ fn main() {
             utils::nebula::start_nebula,
             // Indexer
             commands::indexer::get_indexer_api_key,
-            // Object store auth
-            save_temp_auth_key_command,
-            has_master_token_command,
-            request_master_token_command,
+            // API token persistence
+            save_api_token_command,
             // HCFS mnemonic management
             get_drive_mnemonic,
             persist_master_mnemonic,
@@ -312,6 +317,61 @@ fn main() {
             clear_auth_session,
             is_token_valid,
             update_logout_time,
+            // Local DB (notifications, address book, onboarding, preferences, app state)
+            add_notification,
+            list_notifications,
+            mark_notification_read,
+            mark_notification_unread,
+            mark_all_notifications_read,
+            delete_notification,
+            delete_all_notifications,
+            delete_system_notification_by_version,
+            get_unread_count,
+            credit_already_notified,
+            low_credit_subtype_exists,
+            has_active_low_credit_notification,
+            get_last_deleted_low_credit_time,
+            hippius_version_notification_exists,
+            clear_all_notifications,
+            get_local_notification_preferences,
+            update_local_notification_preferences,
+            get_local_enabled_notification_types,
+            is_first_time,
+            mark_first_time_seen,
+            get_is_above_half_credit,
+            update_is_above_half_credit,
+            add_contact,
+            get_contacts,
+            update_contact,
+            delete_contact,
+            is_onboarding_done,
+            set_onboarding_done,
+            get_user_preference,
+            save_user_preference,
+            // Sync progress (in-memory tracking)
+            sp_start_session,
+            sp_merge_into_session,
+            sp_complete_session,
+            sp_stop_session,
+            sp_update_file_progress,
+            sp_complete_pending_files,
+            sp_mark_pending_files_as_failed,
+            sp_mark_all_pending_files_as_failed,
+            sp_mark_file_error,
+            sp_get_session_files,
+            sp_get_recent_files,
+            sp_get_tray_menu_files,
+            sp_get_overall_progress,
+            sp_has_any_sync_activity,
+            sp_cleanup_expired_files,
+            sp_record_deleted_file,
+            sp_clear_all_data,
+            sp_is_encrypted_file_id,
+            sp_should_hide_file,
+            // Chart data formatting
+            format_credits_chart,
+            format_storage_chart,
+            format_balance_chart,
         ]);
 
     let builder = setup(builder);

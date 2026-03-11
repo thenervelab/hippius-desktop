@@ -125,7 +125,7 @@ export function MnemonicBackupDialog({
       // Clear clipboard after 30 seconds for security
       if (clipboardTimerRef.current) clearTimeout(clipboardTimerRef.current);
       clipboardTimerRef.current = setTimeout(() => {
-        navigator.clipboard.writeText("").catch(() => { });
+        navigator.clipboard.writeText("").catch((err: unknown) => console.warn("[MnemonicBackupDialog] Failed to clear clipboard:", err));
         clipboardTimerRef.current = null;
       }, 30000);
     } catch (err) {

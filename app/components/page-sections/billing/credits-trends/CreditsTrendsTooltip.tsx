@@ -1,5 +1,5 @@
 import { TooltipData } from "@visx/xychart";
-import { ChartPoint } from "@/app/lib/utils/getFormatDataForAccountsChart";
+import { ChartPoint } from "@/lib/types/chartTypes";
 
 const numberFmt = (val: number) => val.toFixed(10) || "0.00";
 
@@ -13,16 +13,17 @@ const CreditsTrendsTooltip: React.FC<{
 
   // date line
   let dateDisplay = "";
-  if (datum.x instanceof Date) {
+  const date = new Date(datum.x);
+  if (!isNaN(date.getTime())) {
     // Format based on time range
     if (timeRange === "last7days") {
-      dateDisplay = datum.x.toLocaleDateString("en-US", {
+      dateDisplay = date.toLocaleDateString("en-US", {
         weekday: "long",
         month: "short",
         day: "numeric",
       });
     } else {
-      dateDisplay = datum.x.toLocaleDateString("en-US", {
+      dateDisplay = date.toLocaleDateString("en-US", {
         month: "short",
         day: "numeric",
         year: "numeric",
@@ -43,7 +44,7 @@ const CreditsTrendsTooltip: React.FC<{
         <span className="inline-block w-2 h-2 rounded-full mr-1.5 bg-primary-40" />
         <div className="font-medium text-[10px] text-grey-10">
           <span className="mr-1">Credits:</span>
-          <span>{numberFmt(datum.credit)}</span>
+          <span>{numberFmt(datum.credit ?? 0)}</span>
         </div>
       </div>
     </div>

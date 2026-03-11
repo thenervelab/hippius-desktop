@@ -76,7 +76,7 @@ const NotificationMenuItem: React.FC<NotificationItemProps> = ({
   useEffect(() => {
     getVersion()
       .then(setCurrentVersion)
-      .catch(() => {});
+      .catch((err: unknown) => console.warn("[NotificationMenuItem] Failed to get app version:", err));
   }, []);
 
   // For Hippius update notifications, hide button if already on this version or newer

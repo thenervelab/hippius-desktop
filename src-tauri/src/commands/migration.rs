@@ -325,7 +325,7 @@ async fn build_s3_client(
     account_id: &str,
 ) -> Result<S3Client, String> {
     let (access_key, secret) =
-        crate::utils::objectstore_tokens::get_master_token(account_id)
+        crate::utils::auth_tokens::get_s3_credentials(account_id)
             .await?
             .ok_or_else(|| "No S3 credentials found".to_string())?;
 
@@ -455,7 +455,7 @@ pub async fn start_migration(
     }
 
     // Ensure S3 credentials exist
-    crate::utils::objectstore_tokens::ensure_master_token_or_fetch(
+    crate::utils::auth_tokens::ensure_s3_credentials(
         &account_id,
     )
     .await?;

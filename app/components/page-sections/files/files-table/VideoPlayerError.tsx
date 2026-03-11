@@ -39,7 +39,6 @@ const VideoPlayerError: React.FC<VideoPlayerErrorProps> = ({
   const localPath = file?.source;
   const isLocalFile =
     localPath &&
-    !localPath.startsWith("s3://") &&
     (localPath.includes("/") || localPath.includes("\\"));
 
   return (

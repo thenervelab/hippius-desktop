@@ -1,5 +1,4 @@
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import { buildFolderPath } from "./folderPathUtils";
 
 type ParamGetter = (name: string, defaultValue?: string) => string;
@@ -31,7 +30,7 @@ export function generateFolderUrl(file: FormattedUserFile, getParam: ParamGetter
 
     const queryParams = {
         mainFolderCid: effectiveMainFolderCid ?? "",
-        folderCid: resolveArionHash(file.arionHash) ?? "",
+        folderCid: file.arionHash ?? "",
         folderName: file.name ?? "",
         folderActualName: file.actualFileName ?? "",
         mainFolderActualName: newMainFolder ?? "",

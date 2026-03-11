@@ -5,10 +5,6 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { toast } from "sonner";
-import { resolveArionHash } from "@/app/lib/utils/resolveArionHash";
-
 export interface FileViewSharedState {
   fileToDelete: FormattedUserFile | null;
   setFileToDelete: (file: FormattedUserFile | null) => void;
@@ -24,9 +20,6 @@ export interface FileViewSharedState {
   isDeleting: boolean;
   handleDelete: () => void;
 
-  handleCopyLink: (file: FormattedUserFile) => void;
-  handleOpenInExplorer: (file: FormattedUserFile) => Promise<void>;
-  handleOpenOnIpfs: (file: FormattedUserFile) => Promise<void>;
   handleShowFileDetails: (file: FormattedUserFile) => void;
   getFileType: (file: FormattedUserFile) => string | null;
   contextMenu: { x: number; y: number; file: FormattedUserFile } | null;
@@ -64,37 +57,6 @@ export function useFileViewShared(): FileViewSharedState {
   const handleDelete = () => {
     setOpenDeleteModal(true);
   };
-
-  const handleCopyLink = useCallback((file: FormattedUserFile) => {
-    navigator.clipboard
-      .writeText(`https://get.hippius.network/ipfs/${resolveArionHash(file.arionHash)}`)
-      .then(() => {
-        toast.success("Copied to clipboard successfully!");
-      });
-  }, []);
-
-  const handleOpenInExplorer = useCallback(
-    async (file: FormattedUserFile) => {
-      try {
-        await openUrl(
-          `https://hipstats.com/file-tracker/${resolveArionHash(file.arionHash)}`
-        );
-      } catch (error) {
-        console.error("Failed to open Explorer:", error);
-      }
-    },
-    []
-  );
-
-  const handleOpenOnIpfs = useCallback(async (file: FormattedUserFile) => {
-    try {
-      await openUrl(
-        `https://get.hippius.network/ipfs/${resolveArionHash(file.arionHash)}`
-      );
-    } catch (error) {
-      console.error("Failed to open on IPFS:", error);
-    }
-  }, []);
 
   const handleShowFileDetails = useCallback((file: FormattedUserFile) => {
     setFileDetailsFile(file);
@@ -136,9 +98,6 @@ export function useFileViewShared(): FileViewSharedState {
     deleteFile,
     isDeleting,
     handleDelete,
-    handleCopyLink,
-    handleOpenInExplorer,
-    handleOpenOnIpfs,
     handleShowFileDetails,
     getFileType,
     contextMenu,

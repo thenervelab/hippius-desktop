@@ -24,7 +24,7 @@ export default function ConflictsBanner() {
   useEffect(() => {
     return () => {
       if (reviewActiveRef.current) {
-        invoke("cancel_review").catch(() => {});
+        invoke("cancel_review").catch((err: unknown) => console.warn("[ConflictsBanner] cancel_review failed on unmount:", err));
       }
     };
   }, []);

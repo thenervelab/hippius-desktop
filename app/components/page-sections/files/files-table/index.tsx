@@ -26,7 +26,6 @@ import {
   MoreVertical,
   Folder,
 } from "lucide-react";
-import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
 import SelectionActionBar from "../SelectionActionBar";
@@ -611,7 +610,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             cell: ({ cell }) => {
               const file = cell.row.original;
               const { arionHash, name } = file;
-              const resolvedHash = resolveArionHash(arionHash);
+              const resolvedHash = arionHash;
               const { fileFormat } = getFilePartsFromFileName(name);
               const fileType = getFileTypeFromExtension(fileFormat || null);
               const menuItems = createTableItems(file, fileType, resolvedHash);

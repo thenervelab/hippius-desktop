@@ -2,7 +2,6 @@ import React, { ReactNode, useState, useEffect, useCallback, useMemo } from "rea
 import * as Dialog from "@radix-ui/react-dialog";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { Icons } from "@/components/ui";
-import { toast } from "sonner";
 import {
   getNextViewableFile,
   getPrevViewableFile,
@@ -11,7 +10,7 @@ import {
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getFileUrlAndSource, getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
+import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 
 export const PdfDialogTrigger: React.FC<{
   children: ReactNode;
@@ -46,9 +45,6 @@ const PdfDialog: React.FC<{
   const [prevFile, setPrevFile] = useState<FormattedUserFile | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [resolvedUrl, setResolvedUrl] = useState<string>("");
-  const [isResolvingUrl, setIsResolvingUrl] = useState<boolean>(false);
-  const [isFromIpfs, setIsFromIpfs] = useState<boolean>(false);
-  const [isFromS3, setIsFromS3] = useState<boolean>(false);
   const [position, setPosition] = useState<{ current: number; total: number } | null>(null);
   const { polkadotAddress } = useWalletAuth();
 
@@ -70,43 +66,15 @@ const PdfDialog: React.FC<{
     setPosition(pos);
   }, [file, allFiles, navigationOptions]);
 
-  // Resolve URL whenever file changes - with race condition protection
+  // Resolve URL whenever file changes
   useEffect(() => {
     if (!file) return;
 
-    // Update ref to track current file
     currentFileRef.current = file;
-
-    // Reset states immediately when file changes
     setLoaded(false);
-    setResolvedUrl("");
-    setIsResolvingUrl(true);
 
-    const resolveUrl = async () => {
-      try {
-        const result = await getFileUrlAndSource(file);
-
-        // Only update state if this is still the current file (prevent race condition)
-        if (currentFileRef.current === file) {
-          setResolvedUrl(result.url);
-          setIsFromIpfs(result.isFromIpfs);
-          setIsFromS3(result.isFromS3 || false);
-          setIsResolvingUrl(false);
-        }
-      } catch (error) {
-        console.error('Failed to resolve URL:', error);
-        // Fallback to sync version - also check for current file
-        if (currentFileRef.current === file) {
-          const result = getFileUrlAndSourceSync(file);
-          setResolvedUrl(result.url);
-          setIsFromIpfs(result.isFromIpfs);
-          setIsFromS3(result.isFromS3 || false);
-          setIsResolvingUrl(false);
-        }
-      }
-    };
-
-    resolveUrl();
+    const result = getFileUrl(file);
+    setResolvedUrl(result.url);
   }, [file]);
 
   const handleNext = useCallback(() => {
@@ -191,20 +159,7 @@ const PdfDialog: React.FC<{
                         </span>
                       </button>
 
-                      {(isFromIpfs || isFromS3) && (
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(resolvedUrl).then(() => {
-                              toast.success(
-                                "Copied to clipboard successfully!"
-                              );
-                            });
-                          }}
-                          className="size-9 border duration-300 border-grey-8 flex items-center justify-center rounded bg-white"
-                        >
-                          <Icons.Link className="size-5 [&>path]:stroke-2" />
-                        </button>
-                      )}
+
 
                       <button className="duration-300" onClick={onCloseClicked}>
                         <Icons.CloseCircle className="size-7 [&>path]:stroke-2 text-grey-100" />
@@ -241,13 +196,13 @@ const PdfDialog: React.FC<{
                   <div
                     className={cn(
                       "absolute top-0 left-0 h-full flex items-center justify-center w-full pointer-events-none",
-                      (loaded && !isResolvingUrl) && "opacity-0"
+                      loaded && "opacity-0"
                     )}
                   >
                     <Loader2 className="size-6 text-primary-50 animate-spin" />
                   </div>
 
-                  {!isResolvingUrl && resolvedUrl && (
+                  {resolvedUrl && (
                     <div
                       onClick={(e) => e.stopPropagation()}
                       className="relative shadow-dialog flex w-full h-full flex-col rounded overflow-hidden animate-scale-in-95-0.4"

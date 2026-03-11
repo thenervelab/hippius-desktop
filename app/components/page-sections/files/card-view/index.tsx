@@ -27,7 +27,6 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
@@ -148,7 +147,7 @@ const CardView: FC<CardViewProps> = ({
             {files.map((file, index) => {
               const { fileFormat } = getFilePartsFromFileName(file.name);
               const fileType = getFileTypeFromExtension(fileFormat || null);
-              const arionHash = resolveArionHash(file.arionHash);
+              const arionHash = file.arionHash;
 
               let cardState: "success" | "pending" | "error" = "success";
               if (file.tempData) {

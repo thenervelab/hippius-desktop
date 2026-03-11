@@ -1,13 +1,10 @@
 "use client";
 
 import {
-  useMutation,
   UseMutationOptions,
   UseMutationResult,
-  useQueryClient,
 } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useInvokeMutation } from "./useInvokeMutation";
 
 /**
  * Hook to delete an SSH key using react-query mutation
@@ -15,25 +12,15 @@ import { useWalletAuth } from "@/lib/wallet-auth-context";
 export default function useDeleteSSHKey(
   options?: Omit<UseMutationOptions<void, Error, number>, "mutationFn">
 ): UseMutationResult<void, Error, number> {
-  const { polkadotAddress } = useWalletAuth();
-  const queryClient = useQueryClient();
-
-  return useMutation<void, Error, number>({
-    mutationFn: async (id: number) => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-
-      await invoke("delete_ssh_key", {
+  return useInvokeMutation<void, number>(
+    {
+      command: "delete_ssh_key",
+      params: (polkadotAddress, id) => ({
         accountId: polkadotAddress,
         keyId: id,
-      });
+      }),
+      invalidateKeys: [["sshKeys"]],
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["sshKeys"],
-      });
-    },
-    ...options,
-  });
+    options
+  );
 }

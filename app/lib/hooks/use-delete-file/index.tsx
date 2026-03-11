@@ -107,7 +107,7 @@ export const useDeleteFile = ({
                     results.push({ file, success: true });
 
                     // Record in sync progress so widget shows delete immediately
-                    recordDeletedFile(fileName, file.size ?? 0);
+                    await recordDeletedFile(fileName, file.size ?? 0);
                 } catch (error) {
                     console.error(`Failed to delete ${file.isFolder ? 'folder' : 'file'}: ${fileName}`, error);
                     results.push({
@@ -125,7 +125,7 @@ export const useDeleteFile = ({
             }
 
             // Trigger sync so server picks up the deletion
-            await invoke("trigger_sync_now").catch(() => {});
+            await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[useDeleteFile] trigger_sync_now failed:", err));
 
             // Notify sync progress system so the widget refreshes immediately
             window.dispatchEvent(new CustomEvent("sync_progress_update"));

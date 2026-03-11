@@ -5,7 +5,6 @@ import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
-import { resolveArionHash } from "@/app/lib/utils/resolveArionHash";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -140,7 +139,7 @@ export default function FileContextMenu({
           </button>
 
           {!file.isFolder && (() => {
-            const resolvedHash = resolveArionHash(file.arionHash);
+            const resolvedHash = file.arionHash;
             return resolvedHash && resolvedHash !== "pending" ? (
               <button
                 className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"

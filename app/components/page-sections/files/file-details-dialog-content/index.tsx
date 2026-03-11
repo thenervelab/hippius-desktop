@@ -2,7 +2,6 @@ import React from "react";
 import { FormattedTimestamp, Icons } from "@/components/ui";
 import * as TableModule from "@/components/ui/alt-table";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
@@ -42,7 +41,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
   const isPrivateView = useIsPrivateView();
 
   // Get Arion Hash for display
-  const arionHash = file ? resolveArionHash(file.arionHash) : null;
+  const arionHash = file ? file.arionHash : null;
   const isHashValid = arionHash && arionHash !== "pending";
 
   if (!file) return null;

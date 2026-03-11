@@ -229,7 +229,7 @@ export default function FolderView({
     }
   }, [syncPathRefreshTrigger, isPrivateFolder, polkadotAddress]);
   const handleRefresh = () => {
-    invoke("trigger_sync_now").catch(() => {});
+    invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FilesFolder] trigger_sync_now failed:", err));
     loadFolderContents(false);
   };
 

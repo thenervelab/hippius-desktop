@@ -1,12 +1,10 @@
 "use client";
 
 import {
-  useQuery,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 export interface VMInstanceDetailsResponse {
   id: number;
@@ -42,23 +40,17 @@ export default function useVMInstanceDetails(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<VMInstanceDetailsResponse, Error> {
-  const { polkadotAddress } = useWalletAuth();
-
-  return useQuery<VMInstanceDetailsResponse, Error, VMInstanceDetailsResponse>({
+  return useInvokeQuery<VMInstanceDetailsResponse>({
+    command: "get_vm_instance",
     queryKey: ["vm-instance-details", instanceId],
-    queryFn: async () => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-
-      return invoke<VMInstanceDetailsResponse>("get_vm_instance", {
-        accountId: polkadotAddress,
-        instanceId: Number(instanceId),
-      });
+    params: (polkadotAddress) => ({
+      accountId: polkadotAddress,
+      instanceId: Number(instanceId),
+    }),
+    enabled: !!instanceId,
+    options: {
+      staleTime: 30 * 1000,
+      ...options,
     },
-    enabled: !!polkadotAddress && !!instanceId,
-    refetchOnWindowFocus: false,
-    staleTime: 30 * 1000,
-    ...options,
   });
 }

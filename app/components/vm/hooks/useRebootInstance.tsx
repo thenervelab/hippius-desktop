@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
-import ConfirmDialog2 from "../../ui/ConfirmDialog2";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { Icons } from "../../ui";
 import { Instance } from "../instances-table";
 import useRebootVM from "@/app/lib/hooks/api/useRebootVM";
@@ -61,17 +61,18 @@ export const useRebootInstance = (options?: UseRebootInstanceOptions) => {
   };
 
   const RebootConfirmModal = () => (
-    <ConfirmDialog2
+    <ConfirmDialog
+      mode="branded"
       open={openConfirmModal}
-      onClose={isRebooting ? () => {} : handleCancel}
-      onConfirm={handleConfirm}
+      onCancel={isRebooting ? () => {} : handleCancel}
       onBack={isRebooting ? () => {} : handleCancel}
-      button={isRebooting ? "Rebooting..." : "Reboot Instance"}
-      text="Are you sure you want to reboot this instance? This will restart the instance and may cause temporary downtime."
-      heading="Reboot Instance"
+      onConfirm={handleConfirm}
+      confirmText={isRebooting ? "Rebooting..." : "Reboot Instance"}
+      description="Are you sure you want to reboot this instance? This will restart the instance and may cause temporary downtime."
+      title="Reboot Instance"
       icon={<Icons.Refresh2 className="size-6 text-grey-100" />}
       iconBgColor="bg-primary-50"
-      disableButton={isRebooting}
+      isLoading={isRebooting}
     />
   );
 

@@ -10,6 +10,7 @@ import AddressSelect from "./AddressSelect";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import SendBalanceConfirmationDialog from "./SendBalanceConfirmationDialog";
+import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
 
 // Use string to preserve precision for very small values
 export const TRANSACTION_FEE = "0.000000000270233151"; // hALPHA
@@ -30,13 +31,20 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
   refetchBalance,
   polkadotAddress
 }) => {
-  const [address, setAddress] = useState("");
+  const {
+    address,
+    setAddress,
+    addressError,
+    handleAddressChange,
+    validateAddress,
+    clearAddressError,
+  } = useAddressValidation({
+    disallowedAddress: polkadotAddress,
+    disallowedAddressMessage: "Cannot send to your own address",
+  });
   const [amount, setAmount] = useState("");
   const [loading, setLoading] = useState(false);
-  const [errors, setErrors] = useState<{
-    address?: string;
-    amount?: string;
-  }>({});
+  const [amountError, setAmountError] = useState<string | undefined>();
   const [showConfirmation, setShowConfirmation] = useState(false);
   const balanceAfterFee =
     availableBalance !== undefined
@@ -47,57 +55,43 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     // Set the amount to the maximum transferable value (balance minus fee)
     setAmount(balanceAfterFee.toString()); // Use 6 decimal places for clarity
     // Clear any amount error when max is set
-    setErrors((prev) => ({ ...prev, amount: undefined }));
+    setAmountError(undefined);
   };
 
   const validateForm = async () => {
-    const newErrors: { address?: string; amount?: string } = {};
-    let isValid = true;
-
-    // Address validation
-    if (!address.trim()) {
-      newErrors.address = "Address is required";
-      isValid = false;
-    } else {
-      const valid = await invoke<boolean>("validate_address", { address });
-      if (!valid) {
-        newErrors.address = "Invalid address format";
-        isValid = false;
-      }
-    }
-    if (isValid && address.trim() === polkadotAddress) {
-      newErrors.address = "Cannot send to your own address";
-      isValid = false;
-    }
+    const addressValid = await validateAddress();
 
     // Amount validation
+    let amountValid = true;
+    let newAmountError: string | undefined;
+
     if (!amount.trim()) {
-      newErrors.amount = "Amount is required";
-      isValid = false;
+      newAmountError = "Amount is required";
+      amountValid = false;
     } else {
       const numAmount = parseFloat(amount);
       if (isNaN(numAmount)) {
-        newErrors.amount = "Amount must be a valid number";
-        isValid = false;
+        newAmountError = "Amount must be a valid number";
+        amountValid = false;
       } else if (numAmount <= 0) {
-        newErrors.amount = "Amount must be greater than zero";
-        isValid = false;
+        newAmountError = "Amount must be greater than zero";
+        amountValid = false;
       } else if (availableBalance !== undefined) {
         // First check if amount alone exceeds balance
         if (numAmount > availableBalance) {
-          newErrors.amount = "Amount exceeds your available balance";
-          isValid = false;
+          newAmountError = "Amount exceeds your available balance";
+          amountValid = false;
         }
         // Then check if amount plus fee exceeds balance
         else if (numAmount + parseFloat(TRANSACTION_FEE) > availableBalance) {
-          newErrors.amount = `Amount (incl. transaction fee) exceeds your balance`;
-          isValid = false;
+          newAmountError = `Amount (incl. transaction fee) exceeds your balance`;
+          amountValid = false;
         }
       }
     }
 
-    setErrors(newErrors);
-    return isValid;
+    setAmountError(newAmountError);
+    return addressValid && amountValid;
   };
 
   const handleOpenConfirmation = async () => {
@@ -140,7 +134,8 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
       onClose();
       setAddress("");
       setAmount("");
-      setErrors({});
+      clearAddressError();
+      setAmountError(undefined);
       setShowConfirmation(false);
     } catch (e: any) {
       toast.error("Transfer failed", {
@@ -152,14 +147,9 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
     }
   };
 
-  const handleAddressChange = (value: string) => {
-    setAddress(value);
-    if (errors.address) setErrors((prev) => ({ ...prev, address: undefined }));
-  };
-
   const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setAmount(e.target.value);
-    if (errors.amount) setErrors((prev) => ({ ...prev, amount: undefined }));
+    if (amountError) setAmountError(undefined);
   };
 
   return (
@@ -204,14 +194,14 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                 <AddressSelect
                   value={address}
                   onChange={handleAddressChange}
-                  error={errors.address}
+                  error={addressError}
                   disabled={loading}
                   placeholder="Enter or choose from address book"
                 />
-                {errors.address && (
+                {addressError && (
                   <div className="flex items-center gap-2 text-error-70 text-sm font-medium mt-1">
                     <AlertCircle className="size-4" />
-                    <span>{errors.address}</span>
+                    <span>{addressError}</span>
                   </div>
                 )}
               </div>
@@ -238,7 +228,7 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                         handleAmountChange(e);
                       }
                     }}
-                    className={`pr-24 border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${errors.amount ? "border-error-50" : ""
+                    className={`pr-24 border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${amountError ? "border-error-50" : ""
                       }`}
                     disabled={loading}
                   />
@@ -253,10 +243,10 @@ const SendBalanceDialog: React.FC<SendBalanceDialogProps> = ({
                     </button>
                   </div>
                 </div>
-                {errors.amount && (
+                {amountError && (
                   <div className="flex items-center gap-2 text-error-70 text-sm font-medium mt-1">
                     <AlertCircle className="size-4" />
-                    <span>{errors.amount}</span>
+                    <span>{amountError}</span>
                   </div>
                 )}
               </div>

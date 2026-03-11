@@ -17,7 +17,9 @@
 
 use crate::sync_shared::{
     ConnectivityStatus, SyncActivityItem, SyncEngineHealth, add_pending_activity,
-    commit_pending_activity_for_label, discard_pending_activity_for_label, get_health, is_cancelled,
+    clear_review_entered, commit_pending_activity_for_label,
+    discard_pending_activity_for_label, get_health, get_sync_failures, is_cancelled,
+    is_review_timed_out, record_sync_failure, reset_sync_failures, set_review_entered,
     update_state,
 };
 use hcfs_client::client::HcfsClientConfig;
@@ -640,7 +642,20 @@ pub async fn start_sync_loop(app: AppHandle) {
 
                 let mut interval = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
                 loop {
-                    interval.tick().await;
+                    // Apply exponential backoff on consecutive failures
+                    let failures = get_sync_failures();
+                    let backoff_secs = if failures > 0 {
+                        let backed_off = HEARTBEAT_SECS * (1u64 << failures.min(4) as u64);
+                        backed_off.min(300)
+                    } else {
+                        HEARTBEAT_SECS
+                    };
+                    if failures > 0 {
+                        // Override interval for backoff
+                        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                    } else {
+                        interval.tick().await;
+                    }
                     if is_cancelled() {
                         break;
                     }
@@ -651,6 +666,21 @@ pub async fn start_sync_loop(app: AppHandle) {
                             health_status
                         );
                     } else {
+                        // Proactive token refresh
+                        if let Ok(acct) = crate::utils::sync::current_account_id() {
+                            if crate::utils::auth_tokens::is_token_expiring(
+                                &acct,
+                                crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
+                            ).await {
+                                println!("[Sync] Token expiring soon, proactively refreshing");
+                                let app_clone = app.clone();
+                                if let Err(e) = crate::commands::auth::refresh_auth_token(
+                                    app_clone, acct,
+                                ).await {
+                                    println!("[Sync] Proactive token refresh failed: {}", e);
+                                }
+                            }
+                        }
                         trigger_sync(&app).await;
                     }
                 }
@@ -703,7 +733,17 @@ pub async fn start_sync_loop(app: AppHandle) {
                     has_changes = true;
                 }
                 _ = debounce.tick() => {
-                    let heartbeat_due = last_sync.elapsed() >= Duration::from_secs(HEARTBEAT_SECS);
+                    // Exponential backoff: after consecutive failures, extend the
+                    // heartbeat interval to avoid hammering the server.
+                    // 0 failures → 30s, 1 → 60s, 2 → 120s, capped at 5 min.
+                    let failures = get_sync_failures();
+                    let backoff_secs = if failures > 0 {
+                        let backed_off = HEARTBEAT_SECS * (1u64 << failures.min(4) as u64);
+                        backed_off.min(300) // cap at 5 minutes
+                    } else {
+                        HEARTBEAT_SECS
+                    };
+                    let heartbeat_due = last_sync.elapsed() >= Duration::from_secs(backoff_secs);
                     if has_changes || heartbeat_due {
                         // Run health check on heartbeat ticks
                         if heartbeat_due {
@@ -715,6 +755,26 @@ pub async fn start_sync_loop(app: AppHandle) {
                                 );
                                 last_sync = Instant::now();
                                 continue;
+                            }
+                        }
+
+                        // Proactively refresh the auth token if it's expiring
+                        // within the next hour, so the sync doesn't hit a 401.
+                        if heartbeat_due {
+                            if let Ok(acct) = crate::utils::sync::current_account_id() {
+                                if crate::utils::auth_tokens::is_token_expiring(
+                                    &acct,
+                                    crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
+                                ).await {
+                                    println!("[Sync] Token expiring soon, proactively refreshing");
+                                    let app_clone = app.clone();
+                                    let acct_clone = acct.clone();
+                                    if let Err(e) = crate::commands::auth::refresh_auth_token(
+                                        app_clone, acct_clone,
+                                    ).await {
+                                        println!("[Sync] Proactive token refresh failed: {}", e);
+                                    }
+                                }
                             }
                         }
 
@@ -770,11 +830,22 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if SYNC_REVIEW_MODE.load(Ordering::Acquire) {
-            println!(
-                "[Sync] Review mode active, skipping auto-sync for '{}'",
-                label
-            );
-            return false;
+            // Auto-exit review mode after 5 minutes to prevent indefinite stall
+            const REVIEW_TIMEOUT_SECS: i64 = 300;
+            if is_review_timed_out(REVIEW_TIMEOUT_SECS) {
+                println!(
+                    "[Sync] Review mode timed out after {}s for '{}', auto-skipping conflicts and resuming sync",
+                    REVIEW_TIMEOUT_SECS, label
+                );
+                SYNC_REVIEW_MODE.store(false, Ordering::Release);
+                clear_review_entered();
+            } else {
+                println!(
+                    "[Sync] Review mode active, skipping auto-sync for '{}'",
+                    label
+                );
+                return false;
+            }
         }
         if let Some(state) = states.get(label) {
             if state.is_syncing {
@@ -902,6 +973,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                                     match m.stage_with_paths().await {
                                         Ok(restaged) if !restaged.conflicts.is_empty() => {
                                             SYNC_REVIEW_MODE.store(true, Ordering::Release);
+                                            set_review_entered();
                                             let _ = app.emit(
                                                 "hcfs_conflicts_pending",
                                                 serde_json::json!({
@@ -941,6 +1013,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                         }));
                         emitted_sync_started = true;
                         SYNC_REVIEW_MODE.store(true, Ordering::Release);
+                        set_review_entered();
                         let _ = app.emit(
                             "hcfs_conflicts_pending",
                             serde_json::json!({
@@ -971,10 +1044,12 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         }
     };
 
-    // Re-enable file watcher after a short delay to ignore trailing FS events
+    // Re-enable file watcher after a brief delay to let the OS flush any
+    // trailing filesystem events generated by the sync (e.g. downloaded files).
+    // Kept short (200ms) to minimize the window where real user changes are missed.
     let flag = SYNC_IN_PROGRESS.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         flag.store(false, Ordering::Release);
     });
 
@@ -1010,6 +1085,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             staged_downloads,
             staged_uploads,
         } => {
+            reset_sync_failures();
             println!(
                 "[Sync] Sync completed for '{}': uploaded={}, downloaded={}, deleted_local={}, deleted_remote={}, conflicts_resolved={}, conflicts_skipped={}",
                 label_owned,
@@ -1148,17 +1224,34 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
         SyncResult::Synced {
             outcome: Err(e), ..
         } => {
+            let failures = record_sync_failure();
             discard_pending_activity_for_label(&label_owned);
             let err_str = e.to_string();
-            println!("[Sync] Sync failed for '{}' with error: {}", label_owned, err_str);
+            println!(
+                "[Sync] Sync failed for '{}' (consecutive failure #{}) with error: {}",
+                label_owned, failures, err_str
+            );
 
-            // Detect auth token expiration so the frontend can refresh
+            // Detect auth token expiration — attempt automatic refresh so
+            // the next sync cycle uses a valid token without frontend round-trip.
             if err_str.contains("401") || err_str.contains("Unauthorized") {
-                println!("[Sync] Auth token expired for '{}', requesting refresh", label_owned);
+                println!("[Sync] Auth token expired for '{}', attempting automatic refresh", label_owned);
                 let _ = app.emit(
                     "hcfs_auth_token_expired",
                     serde_json::json!({"label": label_owned}),
                 );
+
+                // Try to refresh the token automatically using the stored mnemonic.
+                // This avoids requiring the frontend to manually call refresh_auth_token.
+                if let Ok(acct) = crate::utils::sync::current_account_id() {
+                    let app_clone = app.clone();
+                    tokio::spawn(async move {
+                        match crate::commands::auth::refresh_auth_token(app_clone, acct).await {
+                            Ok(()) => println!("[Sync] Auto token refresh succeeded, next sync will use fresh token"),
+                            Err(e) => println!("[Sync] Auto token refresh failed: {}", e),
+                        }
+                    });
+                }
             }
 
             if emitted_sync_started {
@@ -1169,6 +1262,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             }
         }
         SyncResult::NoChanges => {
+            reset_sync_failures();
             discard_pending_activity_for_label(&label_owned);
         }
         SyncResult::ConflictsPending => {

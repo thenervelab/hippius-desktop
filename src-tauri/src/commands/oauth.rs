@@ -250,7 +250,7 @@ pub async fn complete_oauth_flow(
         .await
         .map_err(|e| format!("DB error: {e}"))?;
 
-        // Also persist temp auth key for object store
+        // Persist API auth token (used by sync engine, VPN, and API calls)
         sqlx::query(
             "INSERT INTO objectstore_auth_scoped (owner, temp_auth_key)
              VALUES (?, ?)

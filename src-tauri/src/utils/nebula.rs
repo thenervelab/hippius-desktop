@@ -1,4 +1,4 @@
-use crate::utils::objectstore_tokens::get_temp_auth_key;
+use crate::utils::auth_tokens::get_api_token;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
@@ -706,22 +706,22 @@ async fn get_api_auth_header() -> Result<(String, String)> {
     let account_id = get_current_account_id().await?;
     println!("[Nebula] Found account: {}", account_id);
 
-    let temp_key = get_temp_auth_key(&account_id)
+    let api_token = get_api_token(&account_id)
         .await
         .map_err(|e| {
-            println!("[Nebula] ❌ Failed to get temp auth key: {}", e);
+            println!("[Nebula] ❌ Failed to get API token: {}", e);
             anyhow!(e)
         })?
         .ok_or_else(|| {
             println!(
-                "[Nebula] ❌ No temp auth key found for account {}",
+                "[Nebula] ❌ No API token found for account {}",
                 account_id
             );
-            anyhow!("No temp auth key found for account {}", account_id)
+            anyhow!("No API token found for account {}", account_id)
         })?;
 
-    let auth_header = format!("Token {}", temp_key);
-    println!("[Nebula] ✅ Got temp auth key (length: {})", temp_key.len());
+    let auth_header = format!("Token {}", api_token);
+    println!("[Nebula] ✅ Got API token (length: {})", api_token.len());
     println!("[Nebula] 🔑 Auth header: {}", auth_header);
     Ok((auth_header, account_id))
 }
@@ -1599,7 +1599,7 @@ pub async fn get_nebula_ip_internal() -> Result<String> {
     let nebula_cert_binary = get_nebula_cert_binary_path()?;
 
     let output = tokio::process::Command::new(&nebula_cert_binary)
-        .args(&["print", "-json", "-path", crt_path.to_str().unwrap()])
+        .args(&["print", "-json", "-path", crt_path.to_str().ok_or_else(|| anyhow!("Certificate path contains invalid UTF-8"))?])
         .output()
         .await?;
 
@@ -1985,10 +1985,10 @@ pub async fn generate_node_certificate(
     println!("[Nebula] Generating node certificate: {}", name);
 
     let duration_str = format!("{}h", duration_days * 24);
-    let ca_crt_str = ca_crt.to_str().unwrap();
-    let ca_key_str = ca_key.to_str().unwrap();
-    let node_crt_str = node_crt.to_str().unwrap();
-    let node_key_str = node_key.to_str().unwrap();
+    let ca_crt_str = ca_crt.to_str().ok_or_else(|| anyhow!("CA certificate path contains invalid UTF-8"))?;
+    let ca_key_str = ca_key.to_str().ok_or_else(|| anyhow!("CA key path contains invalid UTF-8"))?;
+    let node_crt_str = node_crt.to_str().ok_or_else(|| anyhow!("Node certificate path contains invalid UTF-8"))?;
+    let node_key_str = node_key.to_str().ok_or_else(|| anyhow!("Node key path contains invalid UTF-8"))?;
 
     let mut cmd = tokio::process::Command::new(&nebula_cert_binary);
     let mut args: Vec<&str> = vec![

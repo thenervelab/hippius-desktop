@@ -10,41 +10,32 @@ import {
 import { UiNotification } from "@/components/page-sections/notifications/types";
 import { Icons } from "@/components/ui";
 import { iconMap } from "@/lib/helpers/notificationIcons";
+import { invoke } from "@tauri-apps/api/core";
 
 // Add debug helpers to window for testing
 if (typeof window !== 'undefined') {
   (window as any).__clearNotifications = async () => {
     const { clearAllNotifications } = await import('@/app/lib/helpers/notificationsDb');
     await clearAllNotifications();
-    console.log('✅ All notifications cleared from database!');
+    console.log('All notifications cleared from database!');
   };
 
   (window as any).__debugNotifications = async (userAddress?: string) => {
-    const { initHippiusDesktopDB } = await import('@/app/lib/helpers/hippiusDesktopDB');
-
-    const db = await initHippiusDesktopDB();
-    const query = userAddress
-      ? `SELECT * FROM notifications WHERE userAddress = ?`
-      : `SELECT * FROM notifications`;
-    const params = userAddress ? [userAddress] : [];
-
-    const result = db.exec(query, params);
-
-    console.log("=== NOTIFICATIONS DEBUG ===");
-    console.log(`Filter: ${userAddress || "ALL USERS"}`);
-    console.log(`Total notifications: ${result[0]?.values.length || 0}`);
-
-    if (result[0]?.values.length) {
-      const columns = result[0].columns;
-      result[0].values.forEach((row, idx) => {
-        const obj: any = {};
-        columns.forEach((col, i) => {
-          obj[col] = row[i];
-        });
-        console.log(`[${idx}]`, obj);
+    try {
+      const notifications = await invoke<any[]>("list_notifications", {
+        userAddress: userAddress || "system",
+        limit: 1000,
       });
+      console.log("=== NOTIFICATIONS DEBUG ===");
+      console.log(`Filter: ${userAddress || "ALL USERS"}`);
+      console.log(`Total notifications: ${notifications.length}`);
+      notifications.forEach((n: any, idx: number) => {
+        console.log(`[${idx}]`, n);
+      });
+      console.log("======================");
+    } catch (error) {
+      console.error("Failed to debug notifications:", error);
     }
-    console.log("======================");
   };
 }
 
@@ -62,7 +53,7 @@ export const refreshEnabledTypesAtom = atom(null, async (_, set) => {
   set(enabledNotificationTypesAtom, types);
 });
 
-// helper atom → fetch + update list in one call
+// helper atom — fetch + update list in one call
 export const refreshNotificationsAtom = atom(null, async (get, set) => {
   // Get the current user address
   const userAddress = get(userAddressAtom);
@@ -76,29 +67,24 @@ export const refreshNotificationsAtom = atom(null, async (get, set) => {
   // First get the enabled types so we can filter by them
   const enabledTypes = get(enabledNotificationTypesAtom);
 
-  // Fetch all notifications for this user
+  // Fetch all notifications for this user (Rust returns objects, not raw rows)
   const rows = await listNotifications(userAddress, 100);
 
-  const mapped = rows.map((r: any[]) => {
-    // Column indices with userAddress:
-    // 0: id, 1: userAddress, 2: notificationType, 3: notificationSubtype, 
-    // 4: notificationTitleText, 5: notificationDescription, 6: notificationLinkText,
-    // 7: notificationLink, 8: isUnread, 9: notificationCreationTime, 10: isDeleted, 11: deletedAt,
-    // 12: notificationReleaseNotes
-    const timestamp = Number(r[9]);
-    const releaseNotes = typeof r[12] === "string" ? r[12] : "";
+  const mapped = rows.map((r: any) => {
+    const timestamp = Number(r.notificationCreationTime);
+    const releaseNotes = typeof r.notificationReleaseNotes === "string" ? r.notificationReleaseNotes : "";
 
     return {
-      id: Number(r[0]),
-      icon: iconMap[r[2]] ?? Icons.Document,
-      type: r[2],
-      subType: r[3] || "",
-      title: r[4],
-      description: r[5],
-      buttonText: r[6],
-      buttonLink: r[7],
+      id: Number(r.id),
+      icon: iconMap[r.notificationType] ?? Icons.Document,
+      type: r.notificationType,
+      subType: r.notificationSubtype || "",
+      title: r.notificationTitleText,
+      description: r.notificationDescription,
+      buttonText: r.notificationLinkText,
+      buttonLink: r.notificationLink,
       releaseNotes,
-      unread: r[8] === 1,
+      unread: r.isUnread === true || r.isUnread === 1,
       // Keep original timestamp for TimeAgo component
       timestamp: timestamp,
       // Fallback time display in case TimeAgo fails

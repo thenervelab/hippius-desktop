@@ -3,7 +3,6 @@ import Image from "next/image";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { cn } from "@/lib/utils";
-import { resolveArionHash } from "@/lib/utils/resolveArionHash";
 import { FileTypeIcon } from "@/components/ui";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 // import { Graphsheet } from "@/components/ui";
@@ -22,7 +21,7 @@ async function toBlobUrl(url: string) {
   const blob = await res.blob();
   return URL.createObjectURL(blob);
 }
-import { getFileUrlAndSourceSync } from "@/app/lib/utils/ipfsUrlResolver";
+import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 import { buildFolderPath } from '@/app/utils/folderPathUtils';
 import { useFileSelection } from '@/app/contexts/FileSelectionContext';
 import * as Checkbox from "@radix-ui/react-checkbox";
@@ -138,7 +137,8 @@ const FileCard: React.FC<FileCardProps> = ({
 
     (async () => {
       try {
-        const { url: cidUrl, isFromIpfs, isFromLocal } = getFileUrlAndSourceSync(file);
+        const { url: cidUrl, isLocal: isFromLocal } = getFileUrl(file);
+        const isFromIpfs = false;
         let finalUrl = cidUrl;
 
         if (fileType === "image") {
@@ -302,7 +302,7 @@ const FileCard: React.FC<FileCardProps> = ({
                 {displayName}
               </span>
             ) : (
-              <Link href={`/files?folderCid=${resolveArionHash(file.arionHash)}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderHash)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
+              <Link href={`/files?folderCid=${file.arionHash}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderHash)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
                 <span
                   className={cn(
                     "text-sm text-grey-20 hover:text-primary-40 transition truncate"

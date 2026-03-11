@@ -141,16 +141,16 @@ export function WalletAuthProvider({
   // the user creates their first sync folder).
   const sessionMnemonicRef = useRef<string | null>(null);
 
-  const ensureTempAuthKey = useCallback(
+  const ensureApiToken = useCallback(
     async (accountId?: string | null, token?: string | null) => {
       if (!accountId || !token) return;
       try {
-        await invoke("save_temp_auth_key_command", {
+        await invoke("save_api_token_command", {
           accountId,
-          tempAuthKey: token,
+          token,
         });
       } catch (err) {
-        console.error("[WalletAuth] Failed to persist temp auth key:", err);
+        console.error("[WalletAuth] Failed to persist API token:", err);
       }
     },
     []
@@ -176,7 +176,7 @@ export function WalletAuthProvider({
     async (redirectPath?: string) => {
       try {
         console.log("[WalletAuth] Starting sync cleanup...");
-        await invoke("stop_sync").catch(() => { });
+        await invoke("stop_sync").catch((err: unknown) => console.warn("[WalletAuth] stop_sync failed:", err));
         console.log("[WalletAuth] Sync cleanup completed");
 
         // Clear auth session in Rust DB (preserves logout_time_minutes preference)
@@ -196,7 +196,7 @@ export function WalletAuthProvider({
 
         // Clear sync progress state to prevent stale data on next login
         console.log("[WalletAuth] Clearing sync progress state...");
-        clearSyncProgressData();
+        await clearSyncProgressData();
       } catch (error) {
         console.error("Failed to cleanup sync on logout:", error);
       }
@@ -291,7 +291,7 @@ export function WalletAuthProvider({
                 oauthSessionData.provider === "mnemonic" ? "mnemonic" : "oauth"
               );
               setIsAuthenticated(true);
-              await ensureTempAuthKey(
+              await ensureApiToken(
                 oauthSessionData.substrateAddress,
                 oauthSessionData.token
               );
@@ -307,7 +307,7 @@ export function WalletAuthProvider({
                 ) {
                   try {
                     syncInitialized.current = true;
-                    await invoke("stop_sync").catch(() => { });
+                    await invoke("stop_sync").catch((err: unknown) => console.warn("[WalletAuth] stop_sync failed:", err));
                     tryAutoInitSync(
                       oauthSessionData.substrateAddress
                     ).catch((err) =>
@@ -330,7 +330,7 @@ export function WalletAuthProvider({
               ) {
                 try {
                   syncInitialized.current = true;
-                  await invoke("stop_sync").catch(() => { });
+                  await invoke("stop_sync").catch((err: unknown) => console.warn("[WalletAuth] stop_sync failed:", err));
                   const mnemonic = await ensureSyncMnemonic(oauthSessionData.substrateAddress);
                   tryAutoInitSync(oauthSessionData.substrateAddress, mnemonic).catch((err) =>
                     console.error("[WalletAuth] Failed to start sync for OAuth restore:", err)
@@ -392,7 +392,7 @@ export function WalletAuthProvider({
       if (lastSession.tokenExpiry && lastSession.tokenExpiry < Date.now()) {
         console.log("[WalletAuth] Token expired for session, redirecting to login");
         if (lastSession.substrateAddress) {
-          await invoke("clear_auth_session", { accountId: lastSession.substrateAddress }).catch(() => {});
+          await invoke("clear_auth_session", { accountId: lastSession.substrateAddress }).catch((err: unknown) => console.warn("[WalletAuth] Failed to clear expired auth session:", err));
         }
         localStorage.removeItem("hippius_token");
         localStorage.removeItem("hippius_token_expiry");
@@ -428,53 +428,40 @@ export function WalletAuthProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [logout, router]);
 
-  // Silently refresh the auth token when the sync server returns 401.
-  // Only works for mnemonic-based auth (we have the mnemonic in the encrypted drive).
-  // Cooldown prevents retry storms when the auth API itself is down.
-  const refreshingTokenRef = useRef(false);
-  const lastRefreshAttemptRef = useRef(0);
-  const TOKEN_REFRESH_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+  // Listen for auth token events from the Rust sync engine.
+  // The backend automatically refreshes on 401 (and proactively before expiry),
+  // so we only log here. The auth_token_refreshed event confirms success.
   useEffect(() => {
     let cancelled = false;
-    let unlisten: (() => void) | null = null;
+    const unsubs: (() => void)[] = [];
 
-    listen<{ label: string }>("hcfs_auth_token_expired", async () => {
-      const now = Date.now();
-      const elapsed = now - lastRefreshAttemptRef.current;
-      if (
-        refreshingTokenRef.current ||
-        !isAuthenticated ||
-        !polkadotAddress ||
-        elapsed < TOKEN_REFRESH_COOLDOWN_MS
-      ) {
-        return;
-      }
-      refreshingTokenRef.current = true;
-      lastRefreshAttemptRef.current = now;
-      console.log("[WalletAuth] Auth token expired, attempting silent refresh via Rust");
-
-      try {
-        // Rust handles: fetch mnemonic from Drive → derive keys → challenge-response → update token
-        await invoke("refresh_auth_token", { accountId: polkadotAddress });
-        console.log("[WalletAuth] Auth token refreshed successfully");
-      } catch (err) {
-        console.error("[WalletAuth] Silent token refresh failed:", err);
-      } finally {
-        refreshingTokenRef.current = false;
-      }
-    }).then((u) => {
+    (async () => {
+      const results = await Promise.all([
+        listen<{ label: string }>("hcfs_auth_token_expired", (e) => {
+          console.log(
+            "[WalletAuth] Auth token expired for drive '%s' — Rust is auto-refreshing",
+            e.payload.label
+          );
+        }),
+        listen<{ substrateAddress: string }>("auth_token_refreshed", (e) => {
+          console.log(
+            "[WalletAuth] Auth token refreshed for %s",
+            e.payload.substrateAddress
+          );
+        }),
+      ]);
       if (cancelled) {
-        u();
+        results.forEach((u) => u());
       } else {
-        unlisten = u;
+        unsubs.push(...results);
       }
-    });
+    })();
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      unsubs.forEach((u) => u());
     };
-  }, [isAuthenticated, polkadotAddress]);
+  }, []);
 
   const unlockWithPasscode = async (
     passcode: string,
@@ -502,7 +489,7 @@ export function WalletAuthProvider({
 
       if (!syncInitialized.current) {
         syncInitialized.current = true;
-        await invoke("stop_sync").catch(() => { });
+        await invoke("stop_sync").catch((err: unknown) => console.warn("[WalletAuth] stop_sync failed:", err));
         tryAutoInitSync(result.substrateAddress).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from unlock:", err)
         );
@@ -558,7 +545,7 @@ export function WalletAuthProvider({
 
       if (!syncInitialized.current) {
         syncInitialized.current = true;
-        await invoke("stop_sync").catch(() => { });
+        await invoke("stop_sync").catch((err: unknown) => console.warn("[WalletAuth] stop_sync failed:", err));
         tryAutoInitSync(result.substrateAddress, inputMnemonic).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from setSession:", err)
         );
@@ -618,7 +605,7 @@ export function WalletAuthProvider({
       // Initialize sync with the mnemonic (only if sync path & HCFS config exist)
       if (!syncInitialized.current) {
         syncInitialized.current = true;
-        await invoke("stop_sync").catch(() => { });
+        await invoke("stop_sync").catch((err: unknown) => console.warn("[WalletAuth] stop_sync failed:", err));
         tryAutoInitSync(result.substrateAddress, inputMnemonic).catch((err) =>
           console.error("[WalletAuth] Failed to start sync from login:", err)
         );
@@ -652,7 +639,7 @@ export function WalletAuthProvider({
 
     // Persist auth token before setting authenticated state so that
     // components mounting after login can find the token in the DB.
-    await ensureTempAuthKey(session.substrateAddress, session.token);
+    await ensureApiToken(session.substrateAddress, session.token);
 
     // Persist auth session in Rust DB
     if (session.substrateAddress) {
@@ -678,7 +665,7 @@ export function WalletAuthProvider({
     // Kick off sync for OAuth login if not already started (only if sync path & config exist)
     if (session.substrateAddress && !syncInitialized.current) {
       syncInitialized.current = true;
-      await invoke("stop_sync").catch(() => { });
+      await invoke("stop_sync").catch((err: unknown) => console.warn("[WalletAuth] stop_sync failed:", err));
       const mnemonic = await ensureSyncMnemonic(session.substrateAddress);
       tryAutoInitSync(session.substrateAddress, mnemonic).catch((err) =>
         console.error("[WalletAuth] Failed to start sync from OAuth login:", err)

@@ -3,7 +3,16 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { invoke } from "@tauri-apps/api/core";
 import { getAllSyncPaths, SyncPathResult } from "@/lib/utils/syncPathUtils";
-import { isEncryptedFileId } from "@/lib/services/syncProgressService";
+/**
+ * Check if a filename looks like an encrypted file ID from the server.
+ * Local synchronous implementation (the service version is now async via invoke).
+ */
+function isEncryptedFileId(fileName: string): boolean {
+  if (/^file_[a-f0-9]+$/i.test(fileName)) return true;
+  if (/^[a-f0-9]{20,}$/i.test(fileName)) return true;
+  if (/^[a-f0-9]{8,}$/i.test(fileName) && fileName.length >= 16 && !fileName.includes('.')) return true;
+  return false;
+}
 
 export type FileDetail = {
   filename: string;

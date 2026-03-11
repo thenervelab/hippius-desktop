@@ -91,7 +91,6 @@ export { default as ToggleOff } from "./ToggleOff";
 export { default as SyncData } from "./SyncData";
 export { default as DocumentFile } from "./DocumentFile";
 export { default as CentralizedDataBase } from "./CentralizedDatabase";
-export { default as ConnectingNetwork } from "./ConnectingNetwork";
 export { default as StartingDaemon } from "./StartingDaemon";
 export { default as CheckingIPFS } from "./CheckingIpfs";
 export { default as SideBarLeft } from "./SideBarLeft";

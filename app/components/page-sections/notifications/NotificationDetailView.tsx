@@ -60,7 +60,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
   useEffect(() => {
     getVersion()
       .then(setCurrentVersion)
-      .catch(() => {});
+      .catch((err: unknown) => console.warn("[NotificationDetailView] Failed to get app version:", err));
   }, []);
 
   if (!selectedNotification) {

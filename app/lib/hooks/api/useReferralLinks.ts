@@ -1,8 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 export type ReferralLink = {
   code: string;
@@ -10,18 +8,10 @@ export type ReferralLink = {
 };
 
 export function useReferralLinks() {
-  const { polkadotAddress } = useWalletAuth();
-
-  const query = useQuery<ReferralLink[], Error>({
-    queryKey: ["referralLinks", polkadotAddress],
-    refetchOnWindowFocus: false,
-    queryFn: async () => {
-      if (!polkadotAddress) throw new Error("Wallet not ready");
-      return invoke<ReferralLink[]>("get_referral_links", {
-        address: polkadotAddress,
-      });
-    },
-    enabled: Boolean(polkadotAddress),
+  const query = useInvokeQuery<ReferralLink[]>({
+    command: "get_referral_links",
+    queryKey: (addr) => ["referralLinks", addr],
+    params: (polkadotAddress) => ({ address: polkadotAddress }),
   });
 
   return {

@@ -13,7 +13,7 @@ import { Icons } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { uploadToIpfsAndSubmitToBlockcahinRequestStateAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
 import { useAtomValue } from "jotai";
-import FolderFileUploadFlow from "./folder-file-upload-flow";
+import UploadFilesFlow from "./upload-files-flow";
 
 const HIPPIUS_DROP_EVENT = "hippius:folder-file-drop";
 
@@ -89,7 +89,8 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
         }, [isOpen]);
 
         const dialogContent = useMemo(() => (
-            <FolderFileUploadFlow
+            <UploadFilesFlow
+                mode="folder"
                 folderName={folderName}
                 isPrivateFolder={isPrivateFolder}
                 subfolder={subfolder}

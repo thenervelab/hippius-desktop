@@ -7,7 +7,7 @@ import { Trash2 } from "lucide-react";
 import TicketSelect from "./TicketSelect";
 import AttachSqaure from "../../ui/icons/AttachSquare";
 import PictureFrame from "../../ui/icons/PictureFrame";
-import { getFilePartsFromFileName } from "@/app/lib/utils/get-file-parts-from-file-name";
+import { getFilePartsFromFileName } from "@/app/lib/utils/getFilePartsFromFileName";
 import { selectFile } from "@/app/lib/utils/tauri";
 
 export interface CreateTicketData {

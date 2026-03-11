@@ -4,9 +4,9 @@ import { Label } from "@/components/ui/label";
 import DialogContainer from "@/components/ui/DialogContainer";
 import { AbstractIconWrapper, CardButton, Icons, Input } from "@/components/ui";
 import { AlertCircle } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { updateContact } from "@/app/lib/helpers/addressBookDb";
+import { useAddressValidation } from "@/lib/hooks/useAddressValidation";
 
 interface Contact {
   id: number;
@@ -28,12 +28,16 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
   onEditSuccess
 }) => {
   const [name, setName] = useState("");
-  const [address, setAddress] = useState("");
+  const {
+    address,
+    setAddress,
+    addressError,
+    handleAddressChange: onAddressChange,
+    validateAddress,
+    clearAddressError,
+  } = useAddressValidation();
   const [loading, setLoading] = useState(false);
-  const [errors, setErrors] = useState<{
-    name?: string;
-    address?: string;
-  }>({});
+  const [nameError, setNameError] = useState<string | undefined>();
 
   // Initialize form with contact data
   useEffect(() => {
@@ -44,43 +48,29 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
   }, [contact]);
 
   const validateForm = async () => {
-    const newErrors: { name?: string; address?: string } = {};
-    let isValid = true;
-
-    // Name validation
+    let nameValid = true;
     if (!name.trim()) {
-      newErrors.name = "Name is required";
-      isValid = false;
-    }
-
-    // Address validation
-    if (!address.trim()) {
-      newErrors.address = "Address is required";
-      isValid = false;
+      setNameError("Name is required");
+      nameValid = false;
     } else {
-      const valid = await invoke<boolean>("validate_address", { address });
-      if (!valid) {
-        newErrors.address = "Invalid address format";
-        isValid = false;
-      }
+      setNameError(undefined);
     }
 
-    setErrors(newErrors);
-    return isValid;
+    const addressValid = await validateAddress();
+    return nameValid && addressValid;
   };
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setName(e.target.value);
-    if (errors.name) setErrors((prev) => ({ ...prev, name: undefined }));
+    if (nameError) setNameError(undefined);
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setAddress(e.target.value);
-    if (errors.address) setErrors((prev) => ({ ...prev, address: undefined }));
+    onAddressChange(e.target.value);
   };
 
   const handleSave = async () => {
-    if (!validateForm()) return;
+    if (!(await validateForm())) return;
 
     setLoading(true);
     try {
@@ -102,7 +92,8 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
   };
 
   const handleClose = () => {
-    setErrors({});
+    setNameError(undefined);
+    clearAddressError();
     onClose();
   };
 
@@ -153,14 +144,14 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
                 type="text"
                 value={name}
                 onChange={handleNameChange}
-                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${errors.name ? "border-error-50" : ""
+                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${nameError ? "border-error-50" : ""
                   }`}
                 disabled={loading}
               />
-              {errors.name && (
+              {nameError && (
                 <div className="flex items-center gap-2 text-error-70 text-sm font-medium mt-1">
                   <AlertCircle className="size-4" />
-                  <span>{errors.name}</span>
+                  <span>{nameError}</span>
                 </div>
               )}
             </div>
@@ -179,14 +170,14 @@ const EditAddressDialog: React.FC<EditAddressDialogProps> = ({
                 type="text"
                 value={address}
                 onChange={handleAddressChange}
-                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${errors.address ? "border-error-50" : ""
+                className={`border-grey-80 h-14 text-grey-30 w-full bg-transparent py-4 font-medium text-base rounded-lg duration-300 outline-none hover:shadow-input-focus placeholder-grey-60 focus:ring-offset-transparent focus:!shadow-input-focus ${addressError ? "border-error-50" : ""
                   }`}
                 disabled={loading}
               />
-              {errors.address && (
+              {addressError && (
                 <div className="flex items-center gap-2 text-error-70 text-sm font-medium mt-1">
                   <AlertCircle className="size-4" />
-                  <span>{errors.address}</span>
+                  <span>{addressError}</span>
                 </div>
               )}
             </div>

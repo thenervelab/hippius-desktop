@@ -1,6 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { invoke } from "@tauri-apps/api/core";
+import { useInvokeQuery } from "./useInvokeQuery";
+import { useInvokeMutation } from "./useInvokeMutation";
 
 export interface NotificationSettings {
   email_enabled: boolean;
@@ -22,39 +23,36 @@ export const useNotificationSettings = () => {
     isLoading,
     error,
     refetch,
-  } = useQuery({
-    queryKey: [NOTIFICATION_SETTINGS_KEY, polkadotAddress],
-    queryFn: async () => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-      return invoke<NotificationSettings>("get_notification_settings", {
-        accountId: polkadotAddress,
-      });
+  } = useInvokeQuery<NotificationSettings>({
+    command: "get_notification_settings",
+    queryKey: (addr) => [NOTIFICATION_SETTINGS_KEY, addr],
+    options: {
+      staleTime: 300000,
+      retry: 1,
     },
-    enabled: !!polkadotAddress,
-    staleTime: 300000,
-    retry: 1,
   });
 
   // Mutation to update settings
-  const updateMutation = useMutation({
-    mutationFn: async (newSettings: Partial<NotificationSettings>) => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-      return invoke<NotificationSettings>("update_notification_settings", {
-        accountId: polkadotAddress,
+  const updateMutation = useInvokeMutation<
+    NotificationSettings,
+    Partial<NotificationSettings>
+  >(
+    {
+      command: "update_notification_settings",
+      params: (polkadotAddr, newSettings) => ({
+        accountId: polkadotAddr,
         settings: newSettings,
-      });
+      }),
     },
-    onSuccess: (data) => {
-      queryClient.setQueryData(
-        [NOTIFICATION_SETTINGS_KEY, polkadotAddress],
-        data
-      );
-    },
-  });
+    {
+      onSuccess: (data) => {
+        queryClient.setQueryData(
+          [NOTIFICATION_SETTINGS_KEY, polkadotAddress],
+          data
+        );
+      },
+    }
+  );
 
   return {
     settings,

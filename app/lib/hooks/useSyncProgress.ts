@@ -73,75 +73,89 @@ export function useSyncProgress() {
   const [overallProgress, setOverallProgress] = useAtom(overallProgressAtom);
   const [hasSyncActivity, setHasSyncActivity] = useAtom(hasSyncActivityAtom);
   const setLastUpdate = useSetAtom(lastProgressUpdateAtom);
-  
+
   // Track cleanup interval
   const cleanupIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /**
-   * Refresh all state from localStorage
+   * Refresh all state from Rust backend
    */
-  const refreshState = useCallback(() => {
-    setSessionFiles(getCurrentSessionFiles());
-    setRecentFiles(getRecentFiles());
-    setTrayMenuFiles(getTrayMenuFiles());
-    setOverallProgress(getOverallProgress());
-    setHasSyncActivity(hasAnySyncActivity());
-    setLastUpdate(Date.now());
+  const refreshState = useCallback(async () => {
+    try {
+      const [sf, rf, tmf, op, act] = await Promise.all([
+        getCurrentSessionFiles(),
+        getRecentFiles(),
+        getTrayMenuFiles(),
+        getOverallProgress(),
+        hasAnySyncActivity(),
+      ]);
+      setSessionFiles(sf);
+      setRecentFiles(rf);
+      setTrayMenuFiles(tmf);
+      setOverallProgress(op);
+      setHasSyncActivity(act);
+      setLastUpdate(Date.now());
+    } catch (err) {
+      console.error("[useSyncProgress] Failed to refresh state:", err);
+    }
   }, [setSessionFiles, setRecentFiles, setTrayMenuFiles, setOverallProgress, setHasSyncActivity, setLastUpdate]);
 
   /**
    * Start a new sync session
    */
-  const handleStartSession = useCallback((expectedUploads: number, expectedDownloads: number) => {
+  const handleStartSession = useCallback(async (expectedUploads: number, expectedDownloads: number) => {
     console.log('[useSyncProgress] Starting session with', expectedUploads, 'uploads,', expectedDownloads, 'downloads');
-    startSession(expectedUploads, expectedDownloads);
-    refreshState();
+    await startSession(expectedUploads, expectedDownloads);
+    await refreshState();
   }, [refreshState]);
 
   /**
    * Complete the current sync session
    */
-  const handleCompleteSession = useCallback((filesUploaded: number, filesDownloaded: number) => {
+  const handleCompleteSession = useCallback(async (filesUploaded: number, filesDownloaded: number) => {
     console.log('[useSyncProgress] Completing session with', filesUploaded, 'uploads,', filesDownloaded, 'downloads');
-    completeSession(filesUploaded, filesDownloaded);
-    refreshState();
+    await completeSession(filesUploaded, filesDownloaded);
+    await refreshState();
   }, [refreshState]);
 
   /**
    * Stop/cancel the current sync session
    */
-  const handleStopSession = useCallback(() => {
+  const handleStopSession = useCallback(async () => {
     console.log('[useSyncProgress] Stopping session');
-    stopSession();
-    refreshState();
+    await stopSession();
+    await refreshState();
   }, [refreshState]);
 
   /**
    * Update file progress
    */
-  const handleFileProgress = useCallback((
+  const handleFileProgress = useCallback(async (
     path: string,
     bytesTransferred: number,
     totalBytes: number,
     action: FileAction
   ) => {
-    updateFileProgress(path, bytesTransferred, totalBytes, action);
-    refreshState();
+    await updateFileProgress(path, bytesTransferred, totalBytes, action);
+    await refreshState();
   }, [refreshState]);
 
   // Setup cleanup interval (check every minute for expired files)
   useEffect(() => {
     // Initial refresh
     refreshState();
-    
+
     // Cleanup interval
     cleanupIntervalRef.current = setInterval(() => {
-      const removed = cleanupExpiredFiles();
-      if (removed > 0) {
-        refreshState();
-      }
+      cleanupExpiredFiles().then((removed) => {
+        if (removed > 0) {
+          refreshState();
+        }
+      }).catch((err) => {
+        console.error("[useSyncProgress] Cleanup failed:", err);
+      });
     }, 60 * 1000); // Check every minute
-    
+
     return () => {
       if (cleanupIntervalRef.current) {
         clearInterval(cleanupIntervalRef.current);
@@ -156,7 +170,7 @@ export function useSyncProgress() {
     trayMenuFiles,
     overallProgress,
     hasSyncActivity,
-    
+
     // Actions
     startSession: handleStartSession,
     completeSession: handleCompleteSession,

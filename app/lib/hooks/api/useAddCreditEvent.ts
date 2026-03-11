@@ -1,11 +1,9 @@
 import {
-  useQuery,
   UseQueryOptions,
   UseQueryResult,
   keepPreviousData,
 } from "@tanstack/react-query";
-import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { invoke } from "@tauri-apps/api/core";
+import { useInvokeQuery } from "./useInvokeQuery";
 
 // Define types based on the indexer API response for MintedAccountCredits events
 export interface EventData {
@@ -57,37 +55,32 @@ export default function useAddCreditEvent(
     "queryKey" | "queryFn"
   >
 ): UseQueryResult<CreditEventObject[], Error> {
-  const { polkadotAddress } = useWalletAuth();
   const page = params?.page || 1;
   const limit = params?.limit || 10;
 
-  return useQuery<CreditEventsResponse, Error, CreditEventObject[]>({
-    queryKey: ["creditEvents", polkadotAddress, page, limit],
-    refetchInterval: 30000,
-    refetchIntervalInBackground: true,
-    queryFn: async () => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-
-      return invoke<CreditEventsResponse>("get_add_credit_events", {
-        accountId: polkadotAddress,
-        page,
-        limit,
-      });
+  return useInvokeQuery<CreditEventsResponse, CreditEventObject[]>({
+    command: "get_add_credit_events",
+    queryKey: (addr) => ["creditEvents", addr, page, limit],
+    params: (polkadotAddress) => ({
+      accountId: polkadotAddress,
+      page,
+      limit,
+    }),
+    options: {
+      refetchInterval: 30000,
+      refetchIntervalInBackground: true,
+      select: (data) => {
+        return data.events.map((event) => ({
+          id: event.id,
+          blockNumber: event.block_number,
+          amount: event.event_data.amount,
+          accountId: event.account_id,
+          timestamp: event.processed_timestamp,
+          hash: event.extrinsic_hash,
+        }));
+      },
+      placeholderData: keepPreviousData,
+      ...options,
     },
-    select: (data) => {
-      return data.events.map((event) => ({
-        id: event.id,
-        blockNumber: event.block_number,
-        amount: event.event_data.amount,
-        accountId: event.account_id,
-        timestamp: event.processed_timestamp,
-        hash: event.extrinsic_hash,
-      }));
-    },
-    placeholderData: keepPreviousData,
-    enabled: !!polkadotAddress,
-    ...options,
   });
 }

@@ -1,12 +1,10 @@
 "use client";
 
 import {
-  useMutation,
   UseMutationOptions,
   UseMutationResult,
 } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { useInvokeMutation } from "./useInvokeMutation";
 
 export interface CreateVMRequest {
   flavor_id: number;
@@ -34,19 +32,14 @@ export default function useCreateVM(
     "mutationFn"
   >
 ): UseMutationResult<CreateVMResponse, Error, CreateVMRequest> {
-  const { polkadotAddress } = useWalletAuth();
-
-  return useMutation<CreateVMResponse, Error, CreateVMRequest>({
-    mutationFn: async (data: CreateVMRequest) => {
-      if (!polkadotAddress) {
-        throw new Error("No wallet address available");
-      }
-
-      return invoke<CreateVMResponse>("create_vm", {
+  return useInvokeMutation<CreateVMResponse, CreateVMRequest>(
+    {
+      command: "create_vm",
+      params: (polkadotAddress, data) => ({
         accountId: polkadotAddress,
         params: data,
-      });
+      }),
     },
-    ...options,
-  });
+    options
+  );
 }

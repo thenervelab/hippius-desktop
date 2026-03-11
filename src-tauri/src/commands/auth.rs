@@ -16,7 +16,7 @@ use zeroize::Zeroize;
 use crate::auth_state::AUTH_STATE;
 use crate::commands::syncing::get_mnemonic_for_account;
 use crate::utils::account_key::account_key;
-use crate::utils::objectstore_tokens::save_temp_auth_key;
+use crate::utils::auth_tokens::save_api_token;
 use crate::DB_POOL;
 use tauri::Emitter;
 
@@ -260,10 +260,10 @@ pub async fn login_with_mnemonic(
     )
     .await?;
 
-    // 5. Persist auth token for sync engine
-    save_temp_auth_key(&substrate_address, &token)
+    // 5. Persist API token for sync engine
+    save_api_token(&substrate_address, &token)
         .await
-        .map_err(|e| format!("Failed to persist temp auth key: {e}"))?;
+        .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
     Ok(LoginResult {
         substrate_address,
@@ -496,10 +496,10 @@ pub async fn unlock_with_passcode(
     )
     .await?;
 
-    // 9. Persist auth token for sync engine
-    save_temp_auth_key(&substrate_address, &token)
+    // 9. Persist API token for sync engine
+    save_api_token(&substrate_address, &token)
         .await
-        .map_err(|e| format!("Failed to persist temp auth key: {e}"))?;
+        .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
     Ok(LoginResult {
         substrate_address,
@@ -547,10 +547,10 @@ pub async fn refresh_auth_token(
     )
     .await?;
 
-    // 5. Update sync bearer token
-    save_temp_auth_key(&substrate_address, &token)
+    // 5. Persist API token for sync engine
+    save_api_token(&substrate_address, &token)
         .await
-        .map_err(|e| format!("Failed to persist temp auth key: {e}"))?;
+        .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
     // 6. Update live drive's bearer token
     if let Err(e) = crate::commands::syncing::update_sync_bearer_token(
