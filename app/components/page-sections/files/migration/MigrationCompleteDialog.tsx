@@ -22,8 +22,9 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
   totalCount,
   failedFiles = [],
 }) => {
-  const isFullSuccess = failedCount === 0;
-  const isPartialSuccess = successCount > 0 && failedCount > 0;
+  const effectiveFailedCount = Math.max(failedCount, failedFiles.length);
+  const isFullSuccess = effectiveFailedCount === 0;
+  const isPartialSuccess = successCount > 0 && effectiveFailedCount > 0;
 
   return (
     <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
@@ -87,15 +88,15 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
             </div>
             <div
               className={`rounded-lg p-3 text-center ${
-                failedCount > 0 ? "bg-error-50/10 border border-error-50/30" : "bg-grey-95 border border-grey-80"
+                effectiveFailedCount > 0 ? "bg-error-50/10 border border-error-50/30" : "bg-grey-95 border border-grey-80"
               }`}
             >
               <p
                 className={`text-2xl font-bold ${
-                  failedCount > 0 ? "text-error-50" : "text-grey-40"
+                  effectiveFailedCount > 0 ? "text-error-50" : "text-grey-40"
                 }`}
               >
-                {failedCount}
+                {effectiveFailedCount}
               </p>
               <p className="text-xs text-grey-50">Failed</p>
             </div>
@@ -126,7 +127,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
           </CardButton>
 
           {/* Help Text */}
-          {failedCount > 0 && (
+          {effectiveFailedCount > 0 && (
             <p className="text-xs text-grey-60 text-center">
               Failed files can still be accessed via their original IPFS links.
             </p>

@@ -241,7 +241,30 @@ pub async fn check_migration(
     if let Some((status, _total, _completed, sync_path, _server_url)) =
         get_migration_status_db(&account_id).await?
     {
-        if status == "complete" {
+        // Always verify with the server — local "complete" may be stale
+        // if the previous run reported completion prematurely.
+        let server_url = get_server_url(&account_id).await?;
+        let files =
+            fetch_migration_files(&server_url, &account_id).await?;
+        let pending: Vec<MigrationFile> = files
+            .into_iter()
+            .filter(|f| f.status == "Pending")
+            .collect();
+
+        if pending.is_empty() {
+            // Server confirms everything is migrated
+            if status != "complete" {
+                let _ = upsert_migration_status(
+                    &account_id,
+                    "complete",
+                    0,
+                    0,
+                    "[]",
+                    &sync_path,
+                    &server_url,
+                )
+                .await;
+            }
             return Ok(MigrationCheckResult {
                 needs_migration: false,
                 file_count: 0,
@@ -251,17 +274,11 @@ pub async fn check_migration(
                 is_resuming: false,
             });
         }
-        // In-progress -- check server for remaining files
-        let server_url = get_server_url(&account_id).await?;
-        let files =
-            fetch_migration_files(&server_url, &account_id).await?;
-        let pending: Vec<MigrationFile> = files
-            .into_iter()
-            .filter(|f| f.status == "Pending")
-            .collect();
+
+        // Server still has pending files — resume migration
         let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
         return Ok(MigrationCheckResult {
-            needs_migration: !pending.is_empty(),
+            needs_migration: true,
             file_count: pending.len() as u64,
             total_size,
             files: pending,
@@ -425,8 +442,17 @@ pub async fn start_migration(
     app: AppHandle,
     account_id: String,
     sync_path: String,
+    mnemonic: Option<String>,
 ) -> Result<(), String> {
     MIGRATION_CANCEL.store(false, Ordering::SeqCst);
+
+    // Verify HCFS config exists — the frontend must prompt for a password first
+    if crate::commands::syncing::get_drive_password(&account_id)
+        .await
+        .is_err()
+    {
+        return Err("NEEDS_SYNC_SETUP".to_string());
+    }
 
     // Ensure S3 credentials exist
     crate::utils::objectstore_tokens::ensure_master_token_or_fetch(
@@ -477,6 +503,7 @@ pub async fn start_migration(
     let account_clone = account_id.clone();
     let path_clone = sync_path.clone();
     let server_clone = server_url.clone();
+    let mnemonic_clone = mnemonic.clone();
 
     let handle = tokio::spawn(async move {
         if let Err(e) = run_migration_download(
@@ -486,6 +513,7 @@ pub async fn start_migration(
             &path_clone,
             &server_clone,
             &pending,
+            mnemonic_clone,
         )
         .await
         {
@@ -515,6 +543,7 @@ async fn run_migration_download(
     sync_path: &str,
     server_url: &str,
     files: &[MigrationFile],
+    mnemonic: Option<String>,
 ) -> Result<(), String> {
     let total = files.len() as u64;
     let mut completed: u64 = 0;
@@ -558,7 +587,10 @@ async fn run_migration_download(
                 let _ = app.emit(
                     "migration_file_error",
                     MigrationFileError {
-                        file_name: file.key.clone(),
+                        file_name: format!(
+                            "{}/{}",
+                            file.bucket_name, file.key
+                        ),
                         bucket: file.bucket_name.clone(),
                         error: "Path traversal detected".to_string(),
                     },
@@ -574,7 +606,10 @@ async fn run_migration_download(
                 "migration_progress",
                 MigrationProgress {
                     phase: "downloading".to_string(),
-                    current_file: file.key.clone(),
+                    current_file: format!(
+                        "{}/{}",
+                        file.bucket_name, file.key
+                    ),
                     completed,
                     total,
                     failed,
@@ -611,7 +646,10 @@ async fn run_migration_download(
                 let _ = app.emit(
                     "migration_file_error",
                     MigrationFileError {
-                        file_name: file.key.clone(),
+                        file_name: format!(
+                            "{}/{}",
+                            file.bucket_name, file.key
+                        ),
                         bucket: file.bucket_name.clone(),
                         error: e,
                     },
@@ -664,21 +702,16 @@ async fn run_migration_download(
         .await;
     }
 
-    // Verify HCFS config exists — migration requires sync to be set up first
-    if let Err(_) = crate::commands::syncing::get_drive_password(account_id).await {
-        return Err(
-            "Please set up sync before migrating. \
-             Go to Files and configure your sync folder first."
-                .to_string(),
-        );
-    }
+    // Ensure the active account is set so the sync loop can report
+    // migrated files after a successful sync cycle.
+    crate::utils::sync::set_active_account(account_id);
 
     // Initialize the migration drive
     match crate::commands::syncing::initialize_sync(
         app.clone(),
         account_id.to_string(),
         "migration".to_string(),
-        None,
+        mnemonic,
     )
     .await
     {
@@ -868,4 +901,297 @@ pub async fn report_migrated_files(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // should_skip_key
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn skip_manifest_prefix_exact() {
+        assert!(should_skip_key(MANIFEST_PREFIX));
+    }
+
+    #[test]
+    fn skip_manifest_prefix_subdirectory() {
+        assert!(should_skip_key(&format!("{MANIFEST_PREFIX}/some_file")));
+    }
+
+    #[test]
+    fn do_not_skip_normal_key() {
+        assert!(!should_skip_key("photos/vacation.jpg"));
+    }
+
+    #[test]
+    fn do_not_skip_key_containing_manifest_substring() {
+        assert!(!should_skip_key("backup_hippius_manifest_v1_old"));
+    }
+
+    #[test]
+    fn do_not_skip_empty_key() {
+        assert!(!should_skip_key(""));
+    }
+
+    // -----------------------------------------------------------------------
+    // Path traversal detection (logic from run_migration_download)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn path_traversal_detected_for_dotdot_key() {
+        // Create two sibling directories to simulate traversal
+        let parent_dir =
+            tempfile::tempdir().expect("create temp dir");
+        let parent = parent_dir.path().canonicalize().unwrap();
+        let sync_dir = parent.join("sync_root");
+        let escape_target = parent.join("secret");
+        std::fs::create_dir_all(sync_dir.join("files")).unwrap();
+        std::fs::create_dir_all(&escape_target).unwrap();
+
+        // Key traverses out of sync_root into sibling "secret"
+        let malicious_key = "../../secret/stolen";
+        let dest = sync_dir.join("files").join(malicious_key);
+
+        // Canonicalize parent, same as run_migration_download
+        let dest_parent = dest.parent().unwrap();
+        let canonical = dest_parent
+            .canonicalize()
+            .map(|p| {
+                p.join(dest.file_name().unwrap_or_default())
+            })
+            .unwrap();
+
+        assert!(
+            !canonical.starts_with(&sync_dir),
+            "path {canonical:?} should escape {sync_dir:?}"
+        );
+    }
+
+    #[test]
+    fn normal_key_stays_within_sync_dir() {
+        let sync_dir =
+            tempfile::tempdir().expect("create temp dir");
+        let base = sync_dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(base.join("files/documents"))
+            .unwrap();
+
+        let dest = base.join("files").join("documents/report.pdf");
+        let parent = dest.parent().unwrap();
+        let canonical = parent
+            .canonicalize()
+            .map(|p| p.join(dest.file_name().unwrap_or_default()))
+            .unwrap();
+
+        assert!(
+            canonical.starts_with(&base),
+            "path {canonical:?} should stay within {base:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Cancellation flag
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cancel_flag_defaults_to_false() {
+        MIGRATION_CANCEL.store(false, Ordering::SeqCst);
+        assert!(!MIGRATION_CANCEL.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn cancel_flag_can_be_toggled() {
+        MIGRATION_CANCEL.store(true, Ordering::SeqCst);
+        assert!(MIGRATION_CANCEL.load(Ordering::SeqCst));
+        MIGRATION_CANCEL.store(false, Ordering::SeqCst);
+    }
+
+    // -----------------------------------------------------------------------
+    // MigrationFile filtering (simulates fetch_migration_files logic)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn filter_skips_manifest_files() {
+        let files = vec![
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "b1".into(),
+                key: "photo.jpg".into(),
+                size_bytes: 1000,
+                is_public: false,
+                status: "Pending".into(),
+            },
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "b1".into(),
+                key: MANIFEST_PREFIX.into(),
+                size_bytes: 500,
+                is_public: false,
+                status: "Pending".into(),
+            },
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "b1".into(),
+                key: format!("{MANIFEST_PREFIX}/chunk_0"),
+                size_bytes: 200,
+                is_public: false,
+                status: "Pending".into(),
+            },
+        ];
+
+        let filtered: Vec<MigrationFile> = files
+            .into_iter()
+            .filter(|f| !should_skip_key(&f.key))
+            .collect();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].key, "photo.jpg");
+    }
+
+    #[test]
+    fn filter_pending_files_only() {
+        let files = vec![
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "b1".into(),
+                key: "a.txt".into(),
+                size_bytes: 100,
+                is_public: false,
+                status: "Pending".into(),
+            },
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "b1".into(),
+                key: "b.txt".into(),
+                size_bytes: 200,
+                is_public: false,
+                status: "Migrated".into(),
+            },
+        ];
+
+        let pending: Vec<MigrationFile> = files
+            .into_iter()
+            .filter(|f| f.status == "Pending")
+            .collect();
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].key, "a.txt");
+    }
+
+    // -----------------------------------------------------------------------
+    // check_disk_space (Unix only)
+    // -----------------------------------------------------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn disk_space_check_passes_for_small_requirement() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        assert!(check_disk_space(dir.path(), 1).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn disk_space_check_fails_for_huge_requirement() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        assert!(check_disk_space(dir.path(), u64::MAX).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Type serialization round-trips
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn migration_check_result_serializes() {
+        let result = MigrationCheckResult {
+            needs_migration: true,
+            file_count: 3,
+            total_size: 1024,
+            files: vec![MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "bucket".into(),
+                key: "file.txt".into(),
+                size_bytes: 1024,
+                is_public: false,
+                status: "Pending".into(),
+            }],
+            sync_path: Some("/tmp/sync".into()),
+            is_resuming: false,
+        };
+
+        let json = serde_json::to_string(&result)
+            .expect("serialization failed");
+        assert!(json.contains("\"needs_migration\":true"));
+        assert!(json.contains("\"file_count\":3"));
+    }
+
+    #[test]
+    fn migration_progress_serializes() {
+        let progress = MigrationProgress {
+            phase: "downloading".into(),
+            current_file: "test.txt".into(),
+            completed: 5,
+            total: 10,
+            failed: 1,
+        };
+
+        let json = serde_json::to_string(&progress)
+            .expect("serialization failed");
+        assert!(json.contains("\"phase\":\"downloading\""));
+        assert!(json.contains("\"completed\":5"));
+    }
+
+    #[test]
+    fn migration_file_deserializes_from_server_format() {
+        let json = r#"{
+            "user_id": "5GrwvaEF...",
+            "bucket_name": "files",
+            "key": "docs/readme.txt",
+            "size_bytes": 2048,
+            "is_public": false,
+            "status": "Pending"
+        }"#;
+
+        let file: MigrationFile =
+            serde_json::from_str(json).expect("deserialization failed");
+        assert_eq!(file.bucket_name, "files");
+        assert_eq!(file.key, "docs/readme.txt");
+        assert_eq!(file.size_bytes, 2048);
+        assert_eq!(file.status, "Pending");
+    }
+
+    #[test]
+    fn server_migration_response_deserializes() {
+        let json = r#"{
+            "needs_migration": true,
+            "file_count": 2,
+            "total_size": 3072,
+            "files": [
+                {
+                    "user_id": "user1",
+                    "bucket_name": "files",
+                    "key": "a.txt",
+                    "size_bytes": 1024,
+                    "is_public": false,
+                    "status": "Pending"
+                },
+                {
+                    "user_id": "user1",
+                    "bucket_name": "files",
+                    "key": "b.txt",
+                    "size_bytes": 2048,
+                    "is_public": true,
+                    "status": "Migrated"
+                }
+            ]
+        }"#;
+
+        let resp: ServerMigrationResponse =
+            serde_json::from_str(json).expect("deserialization failed");
+        assert!(resp.needs_migration);
+        assert_eq!(resp.files.len(), 2);
+        assert_eq!(resp.files[0].status, "Pending");
+        assert_eq!(resp.files[1].status, "Migrated");
+    }
 }

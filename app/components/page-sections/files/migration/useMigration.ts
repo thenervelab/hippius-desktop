@@ -5,8 +5,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { MigrationFile } from "./MigrationProgressDialog";
+import { getHcfsConfig, saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
+import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { appStore } from "@/lib/store/jotaiStore";
 
-export type MigrationStep = "prompt" | "skip-confirm" | "progress" | "complete";
+export type MigrationStep = "prompt" | "skip-confirm" | "setup" | "progress" | "complete";
 
 interface MigrationCheckResult {
   needs_migration: boolean;
@@ -55,12 +58,16 @@ export interface UseMigrationReturn {
   currentUploadFile: string;
   checkMigration: (accountId: string) => Promise<boolean>;
   startMigration: (accountId: string) => Promise<void>;
+  onSetupComplete: (result: { serverUrl: string; password: string }) => Promise<void>;
+  isSettingUp: boolean;
   cancelMigration: () => Promise<void>;
   confirmSkip: () => void;
   closeMigration: () => void;
 }
 
-export function useMigration(): UseMigrationReturn {
+export function useMigration(
+  getMnemonic?: () => Promise<string | null>
+): UseMigrationReturn {
   const [currentStep, setCurrentStep] = useState<MigrationStep | null>(null);
   const [files, setFiles] = useState<MigrationFile[]>([]);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
@@ -75,6 +82,9 @@ export function useMigration(): UseMigrationReturn {
   const [currentUploadFile, setCurrentUploadFile] = useState("");
   const uploadedFilesRef = useRef(new Set<string>());
   const totalFilesRef = useRef(0);
+
+  const [pendingAccountId, setPendingAccountId] = useState<string | null>(null);
+  const [isSettingUp, setIsSettingUp] = useState(false);
 
   const [successCount, setSuccessCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
@@ -180,7 +190,7 @@ export function useMigration(): UseMigrationReturn {
         if (result.needs_migration) {
           const migrationFiles: MigrationFile[] = result.files.map((f) => ({
             arionHash: "",
-            name: f.key,
+            name: `${f.bucket_name}/${f.key}`,
             size: f.size_bytes,
             status: "pending" as const,
           }));
@@ -200,20 +210,8 @@ export function useMigration(): UseMigrationReturn {
     []
   );
 
-  const startMigration = useCallback(
-    async (accountId: string) => {
-      let syncPath = resumeSyncPath;
-
-      if (!syncPath) {
-        const selected = await open({
-          directory: true,
-          multiple: false,
-          title: "Choose Migration Folder",
-        });
-        if (!selected) return;
-        syncPath = selected as string;
-      }
-
+  const launchMigration = useCallback(
+    async (accountId: string, syncPath: string) => {
       setCurrentStep("progress");
       setOverallProgress(0);
       setSuccessCount(0);
@@ -226,12 +224,88 @@ export function useMigration(): UseMigrationReturn {
       uploadedFilesRef.current.clear();
 
       try {
-        await invoke("start_migration", { accountId, syncPath });
+        const mnemonic = getMnemonic ? await getMnemonic() : null;
+        await invoke("start_migration", {
+          accountId,
+          syncPath,
+          mnemonic: mnemonic ?? null,
+        });
+        // Migration drive started syncing — mark engine as active
+        appStore.set(isSyncConfiguredAtom, true);
+        appStore.set(syncEngineStatusAtom, "active");
       } catch (err) {
         console.error("[Migration] Start failed:", err);
       }
     },
-    [resumeSyncPath]
+    [getMnemonic]
+  );
+
+  const startMigration = useCallback(
+    async (accountId: string) => {
+      // Check if HCFS config (encryption password) exists
+      try {
+        const config = await getHcfsConfig(accountId);
+        if (!config.has_password) {
+          setPendingAccountId(accountId);
+          setCurrentStep("setup");
+          return;
+        }
+      } catch {
+        setPendingAccountId(accountId);
+        setCurrentStep("setup");
+        return;
+      }
+
+      let syncPath = resumeSyncPath;
+
+      if (!syncPath) {
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          title: "Choose Migration Folder",
+        });
+        if (!selected) return;
+        syncPath = selected as string;
+      }
+
+      await launchMigration(accountId, syncPath);
+    },
+    [resumeSyncPath, launchMigration]
+  );
+
+  const onSetupComplete = useCallback(
+    async (result: { serverUrl: string; password: string }) => {
+      if (!pendingAccountId) return;
+      setIsSettingUp(true);
+
+      try {
+        await saveHcfsConfig(pendingAccountId, result.serverUrl, result.password);
+
+        let syncPath = resumeSyncPath;
+
+        if (!syncPath) {
+          const selected = await open({
+            directory: true,
+            multiple: false,
+            title: "Choose Migration Folder",
+          });
+          if (!selected) {
+            setCurrentStep("prompt");
+            setIsSettingUp(false);
+            return;
+          }
+          syncPath = selected as string;
+        }
+
+        setIsSettingUp(false);
+        await launchMigration(pendingAccountId, syncPath);
+      } catch (err) {
+        console.error("[Migration] Setup failed:", err);
+        setIsSettingUp(false);
+        setCurrentStep("prompt");
+      }
+    },
+    [pendingAccountId, resumeSyncPath, launchMigration]
   );
 
   const cancelMigration = useCallback(async () => {
@@ -260,6 +334,8 @@ export function useMigration(): UseMigrationReturn {
     setTotalSize(0);
     setIsResuming(false);
     setResumeSyncPath(null);
+    setPendingAccountId(null);
+    setIsSettingUp(false);
     setPhase("downloading");
     setUploadedCount(0);
     setCurrentUploadFile("");
@@ -283,6 +359,8 @@ export function useMigration(): UseMigrationReturn {
     currentUploadFile,
     checkMigration,
     startMigration,
+    onSetupComplete,
+    isSettingUp,
     cancelMigration,
     confirmSkip,
     closeMigration,

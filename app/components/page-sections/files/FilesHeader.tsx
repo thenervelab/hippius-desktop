@@ -29,6 +29,7 @@ import {
   MigrationCompleteDialog,
 } from "./migration";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
+import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 
 
 interface FilesHeaderProps {
@@ -102,8 +103,8 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
   const migrationCheck = useAtomValue(migrationCheckAtom);
-  const migration = useMigration();
-  const { polkadotAddress } = useWalletAuth();
+  const { polkadotAddress, getMnemonic } = useWalletAuth();
+  const migration = useMigration(getMnemonic);
 
   useEffect(() => {
     if (
@@ -228,6 +229,14 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               onClose={() => migration.setCurrentStep("prompt")}
               onConfirm={migration.confirmSkip}
               fileCount={migration.files.length}
+            />
+          )}
+          {migration.currentStep === "setup" && (
+            <HcfsSetupDialog
+              open
+              onClose={() => migration.setCurrentStep("prompt")}
+              onComplete={migration.onSetupComplete}
+              loading={migration.isSettingUp}
             />
           )}
           {migration.currentStep === "progress" && (

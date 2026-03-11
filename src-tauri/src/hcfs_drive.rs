@@ -1123,7 +1123,8 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             }
 
             // After a successful migration drive sync, report migrated files
-            if label_owned == "migration" {
+            // Only report when files were actually uploaded to avoid premature completion
+            if label_owned == "migration" && outcome.files_uploaded > 0 {
                 match crate::utils::sync::current_account_id() {
                     Ok(active_account) => {
                         let app_clone = app.clone();
