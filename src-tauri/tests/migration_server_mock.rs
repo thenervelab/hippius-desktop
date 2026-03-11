@@ -168,11 +168,80 @@ async fn migration_report(
     StatusCode::OK.into_response()
 }
 
+async fn internal_server_error() -> impl IntoResponse {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Something went wrong on the server",
+    )
+        .into_response()
+}
+
+async fn html_error_page() -> impl IntoResponse {
+    (
+        StatusCode::BAD_GATEWAY,
+        axum::response::Html(
+            "<html><body><h1>502 Bad Gateway</h1></body></html>",
+        ),
+    )
+        .into_response()
+}
+
+async fn malformed_json() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        axum::response::Json(serde_json::json!({"unexpected": true})),
+    )
+        .into_response()
+}
+
 fn mock_router(state: MockState) -> Router {
     Router::new()
         .route("/migration/{user_id}", get(get_migration_status))
         .route("/migration", post(migration_report))
         .with_state(state)
+}
+
+/// Router that always returns 500 for GET /migration/{user_id}.
+fn error_500_router() -> Router {
+    Router::new()
+        .route(
+            "/migration/{user_id}",
+            get(internal_server_error),
+        )
+        .route("/migration", post(internal_server_error))
+}
+
+/// Router that returns HTML instead of JSON.
+fn html_error_router() -> Router {
+    Router::new().route(
+        "/migration/{user_id}",
+        get(html_error_page),
+    )
+}
+
+/// Router that returns 200 OK with unexpected JSON shape.
+fn malformed_json_router() -> Router {
+    Router::new().route(
+        "/migration/{user_id}",
+        get(malformed_json),
+    )
+}
+
+/// Start a router (without state) and return its base URL.
+async fn start_stateless_server(router: Router) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind to ephemeral port");
+    let addr = listener.local_addr().expect("get local addr");
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .expect("mock server crashed");
+    });
+    format!("http://{addr}")
 }
 
 /// Start the mock server and return its base URL.
@@ -910,4 +979,371 @@ async fn user_isolation() {
 
     assert!(u1.iter().all(|f| f.status == "Migrated"));
     assert!(u2.iter().all(|f| f.status == "Pending"));
+}
+
+// =========================================================================
+// Error path tests
+// =========================================================================
+
+#[tokio::test]
+async fn server_500_returns_error() {
+    let url = start_stateless_server(error_500_router()).await;
+
+    let result = fetch_migration_files(&url, "user1").await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("500"),
+        "error should mention status 500, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn server_html_error_returns_error() {
+    let url = start_stateless_server(html_error_router()).await;
+
+    let result = fetch_migration_files(&url, "user1").await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("502") || err.contains("Bad Gateway"),
+        "error should mention 502 or Bad Gateway, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn malformed_json_returns_parse_error() {
+    let url = start_stateless_server(malformed_json_router()).await;
+
+    let result = fetch_migration_files(&url, "user1").await;
+    // Server returns 200 with wrong JSON shape — should fail to parse
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("Parse failed"),
+        "should be a parse error, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn connection_refused_returns_error() {
+    // Use a URL that nothing is listening on
+    let result =
+        fetch_migration_files("http://127.0.0.1:1", "user1").await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("Request failed"),
+        "should be a connection error, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn report_to_500_server_returns_error() {
+    let url = start_stateless_server(error_500_router()).await;
+
+    let result =
+        report_migrated(&url, "user1", "files", vec!["a.txt".into()])
+            .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn report_with_empty_keys_succeeds() {
+    let state = MockState::new();
+    state.seed_user(
+        "user1",
+        vec![MigrationFile {
+            user_id: "user1".into(),
+            bucket_name: "files".into(),
+            key: "a.txt".into(),
+            size_bytes: 100,
+            is_public: false,
+            status: "Pending".into(),
+        }],
+    );
+    let url = start_mock_server(state).await;
+
+    // Report with empty keys — should succeed but change nothing
+    let result =
+        report_migrated(&url, "user1", "files", vec![]).await;
+    assert!(result.is_ok());
+
+    // File should still be Pending
+    let files = fetch_migration_files(&url, "user1").await.unwrap();
+    assert_eq!(files[0].status, "Pending");
+}
+
+#[tokio::test]
+async fn fetch_empty_user_id_returns_error() {
+    let state = MockState::new();
+    let url = start_mock_server(state).await;
+
+    // Empty user_id produces an invalid URL path — server returns 404
+    let result = fetch_migration_files(&url, "").await;
+    assert!(result.is_err(), "empty user_id should fail: {result:?}");
+}
+
+#[tokio::test]
+async fn report_with_special_characters_in_key() {
+    let state = MockState::new();
+    let special_key = "path/with spaces/file (1).txt";
+    state.seed_user(
+        "user1",
+        vec![MigrationFile {
+            user_id: "user1".into(),
+            bucket_name: "files".into(),
+            key: special_key.into(),
+            size_bytes: 100,
+            is_public: false,
+            status: "Pending".into(),
+        }],
+    );
+    let url = start_mock_server(state).await;
+
+    report_migrated(
+        &url,
+        "user1",
+        "files",
+        vec![special_key.into()],
+    )
+    .await
+    .unwrap();
+
+    let files = fetch_migration_files(&url, "user1").await.unwrap();
+    let file = files.iter().find(|f| f.key == special_key).unwrap();
+    assert_eq!(file.status, "Migrated");
+}
+
+#[tokio::test]
+async fn user_id_with_special_characters() {
+    let state = MockState::new();
+    let user_id = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+    state.seed_user(
+        user_id,
+        vec![MigrationFile {
+            user_id: user_id.into(),
+            bucket_name: "files".into(),
+            key: "a.txt".into(),
+            size_bytes: 100,
+            is_public: false,
+            status: "Pending".into(),
+        }],
+    );
+    let url = start_mock_server(state).await;
+
+    let files = fetch_migration_files(&url, user_id).await.unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].user_id, user_id);
+}
+
+#[tokio::test]
+async fn needs_migration_false_when_all_already_migrated() {
+    let state = MockState::new();
+    state.seed_user(
+        "user1",
+        vec![
+            MigrationFile {
+                user_id: "user1".into(),
+                bucket_name: "files".into(),
+                key: "a.txt".into(),
+                size_bytes: 100,
+                is_public: false,
+                status: "Migrated".into(),
+            },
+            MigrationFile {
+                user_id: "user1".into(),
+                bucket_name: "files".into(),
+                key: "b.txt".into(),
+                size_bytes: 200,
+                is_public: false,
+                status: "Migrated".into(),
+            },
+        ],
+    );
+    let url = start_mock_server(state).await;
+
+    let resp: MigrationStatusResponse = test_client()
+        .get(format!("{url}/migration/user1"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(!resp.needs_migration);
+    assert_eq!(resp.file_count, 2);
+}
+
+#[tokio::test]
+async fn zero_byte_files_handled_correctly() {
+    let state = MockState::new();
+    state.seed_user(
+        "user1",
+        vec![MigrationFile {
+            user_id: "user1".into(),
+            bucket_name: "files".into(),
+            key: "empty.txt".into(),
+            size_bytes: 0,
+            is_public: false,
+            status: "Pending".into(),
+        }],
+    );
+    let url = start_mock_server(state).await;
+
+    let resp: MigrationStatusResponse = test_client()
+        .get(format!("{url}/migration/user1"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(resp.needs_migration);
+    assert_eq!(resp.total_size, 0);
+    assert_eq!(resp.file_count, 1);
+
+    // Report it as migrated — zero-byte files should work the same
+    report_migrated(
+        &url,
+        "user1",
+        "files",
+        vec!["empty.txt".into()],
+    )
+    .await
+    .unwrap();
+
+    let files = fetch_migration_files(&url, "user1").await.unwrap();
+    assert_eq!(files[0].status, "Migrated");
+}
+
+#[tokio::test]
+async fn manifest_only_user_has_no_client_visible_files() {
+    let state = MockState::new();
+    state.seed_user(
+        "user1",
+        vec![
+            MigrationFile {
+                user_id: "user1".into(),
+                bucket_name: "files".into(),
+                key: ".hippius_manifest_v1".into(),
+                size_bytes: 50,
+                is_public: false,
+                status: "Pending".into(),
+            },
+            MigrationFile {
+                user_id: "user1".into(),
+                bucket_name: "files".into(),
+                key: ".hippius_manifest_v1/shard_0".into(),
+                size_bytes: 30,
+                is_public: false,
+                status: "Pending".into(),
+            },
+        ],
+    );
+    let url = start_mock_server(state).await;
+
+    // Server says needs_migration=true, but client filters everything
+    let files = fetch_migration_files(&url, "user1").await.unwrap();
+    assert!(
+        files.is_empty(),
+        "client should see zero files when only manifests exist"
+    );
+}
+
+#[tokio::test]
+async fn partial_batch_report_leaves_unreported_pending() {
+    let state = MockState::new();
+    let file_count = 10;
+    let files: Vec<MigrationFile> = (0..file_count)
+        .map(|i| MigrationFile {
+            user_id: "user1".into(),
+            bucket_name: "files".into(),
+            key: format!("file_{i}.dat"),
+            size_bytes: 100,
+            is_public: false,
+            status: "Pending".into(),
+        })
+        .collect();
+    state.seed_user("user1", files);
+    let url = start_mock_server(state).await;
+
+    // Report only the first 5
+    let keys: Vec<String> =
+        (0..5).map(|i| format!("file_{i}.dat")).collect();
+    report_migrated(&url, "user1", "files", keys).await.unwrap();
+
+    let resp: MigrationStatusResponse = test_client()
+        .get(format!("{url}/migration/user1"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    assert!(resp.needs_migration);
+    let migrated = resp
+        .files
+        .iter()
+        .filter(|f| f.status == "Migrated")
+        .count();
+    let pending = resp
+        .files
+        .iter()
+        .filter(|f| f.status == "Pending")
+        .count();
+    assert_eq!(migrated, 5);
+    assert_eq!(pending, 5);
+}
+
+#[tokio::test]
+async fn report_cross_bucket_key_does_not_affect_other_bucket() {
+    let state = MockState::new();
+    state.seed_user(
+        "user1",
+        vec![
+            MigrationFile {
+                user_id: "user1".into(),
+                bucket_name: "bucket_a".into(),
+                key: "same_name.txt".into(),
+                size_bytes: 100,
+                is_public: false,
+                status: "Pending".into(),
+            },
+            MigrationFile {
+                user_id: "user1".into(),
+                bucket_name: "bucket_b".into(),
+                key: "same_name.txt".into(),
+                size_bytes: 200,
+                is_public: false,
+                status: "Pending".into(),
+            },
+        ],
+    );
+    let url = start_mock_server(state).await;
+
+    // Report same_name.txt only for bucket_a
+    report_migrated(
+        &url,
+        "user1",
+        "bucket_a",
+        vec!["same_name.txt".into()],
+    )
+    .await
+    .unwrap();
+
+    let files = fetch_migration_files(&url, "user1").await.unwrap();
+    let a = files
+        .iter()
+        .find(|f| f.bucket_name == "bucket_a")
+        .unwrap();
+    let b = files
+        .iter()
+        .find(|f| f.bucket_name == "bucket_b")
+        .unwrap();
+    assert_eq!(a.status, "Migrated");
+    assert_eq!(b.status, "Pending");
 }

@@ -105,8 +105,14 @@ export default function MultiFolderSyncManager() {
       setIsLoading(true);
 
       const [syncPaths, remoteList] = await Promise.all([
-        getAllSyncPaths(polkadotAddress).catch(() => []),
-        listRemoteFolders(polkadotAddress).catch(() => []),
+        getAllSyncPaths(polkadotAddress).catch((err) => {
+          console.error("[MultiFolderSync] Failed to get sync paths:", err);
+          return [];
+        }),
+        listRemoteFolders(polkadotAddress).catch((err) => {
+          console.error("[MultiFolderSync] Failed to list remote folders:", err);
+          return [];
+        }),
       ]);
 
       const localFolders: SyncFolder[] = await Promise.all(

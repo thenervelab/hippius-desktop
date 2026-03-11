@@ -653,6 +653,11 @@ export function WalletAuthProvider({
 
       console.log("[WalletAuth] Mnemonic login successful");
 
+      // Persist auth token before setting authenticated state so that
+      // components mounting after login (e.g. remote folder list) can
+      // find the token in the DB immediately.
+      await ensureTempAuthKey(polkadotAddr, session.token);
+
       // Update state
       setPolkadotAddress(polkadotAddr);
       setWalletManager({ polkadotPair });
@@ -672,9 +677,6 @@ export function WalletAuthProvider({
           console.error("[WalletAuth] Migration check error:", err)
         );
       }
-
-      // Ensure temp auth key is stored for S3 access if no master token yet
-      await ensureTempAuthKey(polkadotAddr, session.token);
     } catch (error) {
       console.error("[WalletAuth] Login failed:", error);
       // Clear sensitive data on error
@@ -700,15 +702,16 @@ export function WalletAuthProvider({
       throw new Error("Token is invalid or expired");
     }
 
+    // Persist auth token before setting authenticated state so that
+    // components mounting after login can find the token in the DB.
+    await ensureTempAuthKey(session.substrateAddress, session.token);
+
     setOAuthSessionState(session);
     setPolkadotAddress(session.substrateAddress || null);
     setAuthType("oauth");
     setIsAuthenticated(true);
 
     console.log("[WalletAuth] OAuth session persisted and state updated");
-
-    // Ensure temp auth key is stored for S3 access if no master token yet
-    await ensureTempAuthKey(session.substrateAddress, session.token);
 
     // Kick off sync for OAuth login if not already started (only if sync path & config exist)
     if (session.substrateAddress && !syncInitialized.current) {

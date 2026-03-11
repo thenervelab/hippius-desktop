@@ -936,6 +936,24 @@ mod tests {
         assert!(!should_skip_key(""));
     }
 
+    #[test]
+    fn skip_manifest_with_trailing_slash() {
+        assert!(should_skip_key(&format!("{MANIFEST_PREFIX}/")));
+    }
+
+    #[test]
+    fn do_not_skip_near_miss_suffix() {
+        // ".hippius_manifest_v1x" is NOT the manifest prefix
+        assert!(!should_skip_key(&format!("{MANIFEST_PREFIX}x")));
+    }
+
+    #[test]
+    fn do_not_skip_manifest_embedded_in_path() {
+        assert!(!should_skip_key(&format!(
+            "data/{MANIFEST_PREFIX}/file"
+        )));
+    }
+
     // -----------------------------------------------------------------------
     // Path traversal detection (logic from run_migration_download)
     // -----------------------------------------------------------------------
@@ -967,6 +985,46 @@ mod tests {
         assert!(
             !canonical.starts_with(&sync_dir),
             "path {canonical:?} should escape {sync_dir:?}"
+        );
+    }
+
+    #[test]
+    fn path_traversal_detected_for_absolute_key() {
+        let sync_dir = tempfile::tempdir().expect("create temp dir");
+        let base = sync_dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(base.join("files")).unwrap();
+
+        // An absolute path as the S3 key should escape the sync dir
+        let malicious_key = "/etc/passwd";
+        let dest = base.join("files").join(malicious_key);
+        // On macOS/Linux, joining an absolute path replaces the base
+        assert!(
+            !dest.starts_with(&base),
+            "joining absolute path should escape base: {dest:?}"
+        );
+    }
+
+    #[test]
+    fn path_traversal_detected_for_dotdot_in_bucket() {
+        let parent_dir = tempfile::tempdir().expect("create temp dir");
+        let parent = parent_dir.path().canonicalize().unwrap();
+        let sync_dir = parent.join("sync_root");
+        std::fs::create_dir_all(sync_dir.join("legit_bucket"))
+            .unwrap();
+        std::fs::create_dir_all(parent.join("escaped")).unwrap();
+
+        // bucket_name itself contains traversal
+        let dest = sync_dir.join("../escaped").join("secret.txt");
+        let canonical = dest
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .map(|p| p.join(dest.file_name().unwrap_or_default()))
+            .unwrap();
+
+        assert!(
+            !canonical.starts_with(&sync_dir),
+            "traversal via bucket should escape: {canonical:?}"
         );
     }
 
@@ -1159,6 +1217,78 @@ mod tests {
         assert_eq!(file.key, "docs/readme.txt");
         assert_eq!(file.size_bytes, 2048);
         assert_eq!(file.status, "Pending");
+    }
+
+    #[test]
+    fn filter_all_migrated_yields_empty() {
+        let files = vec![
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "b1".into(),
+                key: "a.txt".into(),
+                size_bytes: 100,
+                is_public: false,
+                status: "Migrated".into(),
+            },
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "b1".into(),
+                key: "b.txt".into(),
+                size_bytes: 200,
+                is_public: false,
+                status: "Migrated".into(),
+            },
+        ];
+
+        let pending: Vec<MigrationFile> = files
+            .into_iter()
+            .filter(|f| f.status == "Pending")
+            .collect();
+
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn filter_empty_input_yields_empty() {
+        let files: Vec<MigrationFile> = vec![];
+        let pending: Vec<MigrationFile> = files
+            .into_iter()
+            .filter(|f| f.status == "Pending")
+            .collect();
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn total_size_with_zero_byte_files() {
+        let files = vec![
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "b1".into(),
+                key: "empty.txt".into(),
+                size_bytes: 0,
+                is_public: false,
+                status: "Pending".into(),
+            },
+            MigrationFile {
+                user_id: "u1".into(),
+                bucket_name: "b1".into(),
+                key: "real.txt".into(),
+                size_bytes: 500,
+                is_public: false,
+                status: "Pending".into(),
+            },
+        ];
+
+        let total: u64 = files.iter().map(|f| f.size_bytes).sum();
+        assert_eq!(total, 500);
+    }
+
+    #[test]
+    fn migration_file_rejects_missing_fields() {
+        let json = r#"{"user_id": "u1", "bucket_name": "b1"}"#;
+        let result: Result<MigrationFile, _> =
+            serde_json::from_str(json);
+        assert!(result.is_err());
     }
 
     #[test]
