@@ -89,6 +89,26 @@ const useRecentFiles = () => {
           }
         }
 
+        // Fetch arion hashes from list_sync_folder for each sync path
+        const arionHashMap = new Map<string, string>();
+        for (const { path: syncPath, label } of syncPaths) {
+          if (!syncPath) continue;
+          try {
+            const entries = await invoke<{ name: string; arion_hash: string }[]>("list_sync_folder", {
+              syncPath,
+              subfolder: null,
+              label,
+            });
+            for (const entry of entries) {
+              if (entry.arion_hash) {
+                arionHashMap.set(`${entry.name}::${label}`, entry.arion_hash);
+              }
+            }
+          } catch {
+            // Ignore - arion hash is supplementary
+          }
+        }
+
         // Collect names of files that have been deleted — these should
         // not appear in recent files even if an older "uploaded" entry
         // exists. The Rust remove_file command records "deleted" entries
@@ -123,7 +143,7 @@ const useRecentFiles = () => {
               actualFileName: item.file_name,
               size: item.size_bytes,
               createdAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
-              arionHash: "",
+              arionHash: arionHashMap.get(`${item.file_name}::${item.label}`) || "",
               source,
               minerIds: [],
               isAssigned: true,
