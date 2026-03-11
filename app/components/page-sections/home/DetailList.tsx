@@ -166,7 +166,7 @@ export default function DetailList() {
       value: getTotalFiles(),
       showRefresh: false,
       isLoading: isRemoteStatsLoading,
-      info: "Total number of files stored across all your sync folders on the Hippius network.",
+      info: "Total number of files stored on the Hippius network.",
     },
     {
       id: "total-credits-used",
@@ -184,7 +184,7 @@ export default function DetailList() {
       value: getTotalStorageUsed,
       showRefresh: false,
       isLoading: isRemoteStatsLoading,
-      info: "Total storage space used across all your sync folders on the Hippius network.",
+      info: "Total storage space used on the Hippius network.",
     },
   ];
 

@@ -23,9 +23,10 @@ mod user_profile_sync;
 mod utils;
 
 use crate::commands::syncing::{
-    delete_remote_folder, get_device_name, get_drive_mnemonic, initialize_sync, is_drive_active,
-    list_remote_folders, persist_master_mnemonic, reset_sync_data, restore_remote_folders,
-    set_device_name, stop_drive, stop_sync, trigger_sync_now,
+    delete_remote_folder, get_device_name, get_drive_mnemonic, get_remote_storage_stats,
+    initialize_sync, is_drive_active, list_remote_folders, persist_master_mnemonic,
+    reset_sync_data, restore_remote_folders, set_device_name, stop_drive, stop_sync,
+    trigger_sync_now,
 };
 use crate::ipfs::{get_ipfs_bandwidth, get_ipfs_node_info, get_ipfs_peers};
 use crate::sync_shared::{app_close, get_sync_activity, get_sync_engine_health, get_sync_status};
@@ -182,6 +183,8 @@ fn main() {
             commands::syncing::cancel_review,
             // Encrypted backup
             commands::syncing::create_encrypted_backup,
+            // Remote storage stats (all files)
+            get_remote_storage_stats,
             // Remote folder discovery
             list_remote_folders,
             restore_remote_folders,

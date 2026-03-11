@@ -1,8 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { listRemoteFolders } from "@/lib/utils/restoreUtils";
+import { invoke } from "@tauri-apps/api/core";
 
 export const REMOTE_STORAGE_STATS_QUERY_KEY = "remote-storage-stats";
+
+interface RemoteStorageStats {
+  total_bytes: number;
+  file_count: number;
+}
 
 export function useRemoteStorageStats() {
   const { polkadotAddress } = useWalletAuth();
@@ -14,16 +19,15 @@ export function useRemoteStorageStats() {
         throw new Error("Wallet not connected");
       }
 
-      const folders = await listRemoteFolders(polkadotAddress);
+      const stats = await invoke<RemoteStorageStats>(
+        "get_remote_storage_stats",
+        { accountId: polkadotAddress },
+      );
 
-      let totalFiles = 0;
-      let totalBytes = 0;
-      for (const folder of folders) {
-        totalFiles += folder.file_count;
-        totalBytes += folder.total_bytes;
-      }
-
-      return { totalFiles, totalBytes };
+      return {
+        totalFiles: stats.file_count,
+        totalBytes: stats.total_bytes,
+      };
     },
     enabled: !!polkadotAddress,
     staleTime: 60_000,
