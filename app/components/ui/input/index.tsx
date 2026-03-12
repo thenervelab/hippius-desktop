@@ -5,6 +5,8 @@ const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({
   ...rest
 }) => (
   <input
+    autoCapitalize="off"
+    autoCorrect="off"
     className={cn("border border-grey-80 rounded-lg py-3 px-4", className)}
     {...rest}
   />
