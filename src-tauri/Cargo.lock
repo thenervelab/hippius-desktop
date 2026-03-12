@@ -1808,7 +1808,7 @@ version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
 dependencies = [
- "bitcoin_hashes 0.14.1",
+ "bitcoin_hashes",
  "rand 0.8.5",
  "rand_core 0.6.4",
  "serde",
@@ -1843,16 +1843,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1930a4dabfebb8d7d9992db18ebe3ae2876f0a305fab206fd168df931ede293b"
 dependencies = [
  "bitcoin-internals",
- "hex-conservative 0.1.2",
-]
-
-[[package]]
-name = "bitcoin_hashes"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26ec84b80c482df901772e931a9a681e26a1b9ee2302edeff23cb30328745c8b"
-dependencies = [
- "hex-conservative 0.2.2",
+ "hex-conservative",
 ]
 
 [[package]]
@@ -5627,7 +5618,7 @@ dependencies = [
 [[package]]
 name = "hcfs-client"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=e403cb9#e403cb90827aab2f44dface1d1beada9d8a43fef"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=98ea3c4#98ea3c4251cc9eed8a73929b8e3e2f6a1d53473f"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -5654,7 +5645,7 @@ dependencies = [
 [[package]]
 name = "hcfs-shared"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=e403cb9#e403cb90827aab2f44dface1d1beada9d8a43fef"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=98ea3c4#98ea3c4251cc9eed8a73929b8e3e2f6a1d53473f"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -5702,15 +5693,6 @@ name = "hex-conservative"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "212ab92002354b4819390025006c897e8140934349e8635c9b077f47b4dcbd20"
-
-[[package]]
-name = "hex-conservative"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fda06d18ac606267c40c04e41b9947729bf8b9efe74bd4e82b61a5f26a510b9f"
-dependencies = [
- "arrayvec 0.7.6",
-]
 
 [[package]]
 name = "hex-literal"
@@ -9989,7 +9971,7 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e69bf016dc406eff7d53a7d3f7cf1c2e72c82b9088aac1118591e36dd2cd3e9"
 dependencies = [
- "bitcoin_hashes 0.13.0",
+ "bitcoin_hashes",
  "rand 0.8.5",
  "rand_core 0.6.4",
  "serde",

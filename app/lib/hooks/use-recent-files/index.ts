@@ -89,19 +89,24 @@ const useRecentFiles = () => {
           }
         }
 
-        // Fetch arion hashes from list_sync_folder for each sync path
+        // Fetch arion hashes and CIDs from list_sync_folder for each sync path
         const arionHashMap = new Map<string, string>();
+        const arionCidMap = new Map<string, string>();
         for (const { path: syncPath, label } of syncPaths) {
           if (!syncPath) continue;
           try {
-            const entries = await invoke<{ name: string; arion_hash: string }[]>("list_sync_folder", {
+            const entries = await invoke<{ name: string; arion_hash: string; arion_cid: string }[]>("list_sync_folder", {
               syncPath,
               subfolder: null,
               label,
             });
             for (const entry of entries) {
+              const key = `${entry.name}::${label}`;
               if (entry.arion_hash) {
-                arionHashMap.set(`${entry.name}::${label}`, entry.arion_hash);
+                arionHashMap.set(key, entry.arion_hash);
+              }
+              if (entry.arion_cid) {
+                arionCidMap.set(key, entry.arion_cid);
               }
             }
           } catch {
@@ -144,7 +149,7 @@ const useRecentFiles = () => {
               size: item.size_bytes,
               createdAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
               arionHash: arionHashMap.get(`${item.file_name}::${item.label}`) || "",
-              arionCid: "",
+              arionCid: arionCidMap.get(`${item.file_name}::${item.label}`) || "",
               source,
               minerIds: [],
               isAssigned: true,
