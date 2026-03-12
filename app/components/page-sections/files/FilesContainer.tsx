@@ -50,6 +50,8 @@ import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
+const SKIP_ONBOARDING_KEY = "hippius_files_onboarding_skipped";
+
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
 
@@ -422,9 +424,11 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
         const syncPath = selectedPrivateFolderPath;
 
-        // Sync path is configured if it exists (even if empty string - means user skipped)
-        // Only show selector if sync path is null/undefined (not set at all)
-        setIsSyncPathConfigured(syncPath !== null && syncPath !== undefined);
+        // Sync path is configured if it exists, OR if user previously skipped onboarding
+        const skipped = localStorage.getItem(SKIP_ONBOARDING_KEY) === "true";
+        setIsSyncPathConfigured(
+          (syncPath !== null && syncPath !== undefined) || skipped
+        );
       } catch (error) {
         console.error(
           `Failed to check private sync path:`,
@@ -451,8 +455,9 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     refetchRecentFiles();
   }, [refetchRecentFiles]);
 
-  // Handle skipping sync folder setup — UI-only, no backend calls
+  // Handle skipping sync folder setup — UI-only, persisted so it survives navigation
   const handleSkipSyncFolder = useCallback(() => {
+    localStorage.setItem(SKIP_ONBOARDING_KEY, "true");
     setIsSyncPathConfigured(true);
     setShowPrivateStartSyncingSelector(false);
   }, []);
@@ -467,6 +472,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     } catch {
       // Ignore — we still want to mark as configured
     }
+    // Clear skip flag — user has a real sync folder now
+    localStorage.removeItem(SKIP_ONBOARDING_KEY);
     setIsSyncPathConfigured(true);
     setShowPrivateStartSyncingSelector(false);
     triggerSyncPathRefresh((prev) => prev + 1);
