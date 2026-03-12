@@ -5618,7 +5618,7 @@ dependencies = [
 [[package]]
 name = "hcfs-client"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=98ea3c4#98ea3c4251cc9eed8a73929b8e3e2f6a1d53473f"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=061be71#061be71176d9ca7439b51a7df9ac9638bd00b098"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -5645,7 +5645,7 @@ dependencies = [
 [[package]]
 name = "hcfs-shared"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=98ea3c4#98ea3c4251cc9eed8a73929b8e3e2f6a1d53473f"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=061be71#061be71176d9ca7439b51a7df9ac9638bd00b098"
 dependencies = [
  "ed25519-dalek",
  "hex",

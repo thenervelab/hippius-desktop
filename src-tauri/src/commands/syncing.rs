@@ -648,7 +648,7 @@ async fn initialize_sync_inner(
     // 5. Create HcfsDriveManager with per-folder config directory
     let mut manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
 
-    // 6. Retrieve the auth token BEFORE unlock so we can set account_ss58 first
+    // 6. Retrieve the auth token BEFORE unlock so we can set ss58_address first
     let bearer_token = get_api_token(&account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
@@ -660,22 +660,23 @@ async fn initialize_sync_inner(
     );
     println!("[Setup] This account_id will be used as user_id for sync requests.");
 
-    // Set HCFS client config BEFORE unlock so account_ss58 is available
+    // Set HCFS client config BEFORE unlock so ss58_address is available
+    let fhash = folder_hash(&label);
     manager.set_config(HcfsClientConfig {
         base_url: server_url.clone(),
         api_key: "Arion".to_string(),
         bearer_token: bearer_token.clone(),
         accept_invalid_certs: true,
         billing_bypass_token: None,
-        account_ss58: format!("{}_{}", account_id, folder_hash(&label)),
+        ss58_address: account_id.to_string(),
+        folder_hash: fhash.clone(),
     })?;
-    let fhash = folder_hash(&label);
     println!(
-        "[Setup] HCFS config set with account_ss58: {}_{} (before unlock). folder_hash('{}')={}",
-        account_id, fhash, label, fhash
+        "[Setup] HCFS config set with ss58_address: {}, folder_hash: {} (before unlock)",
+        account_id, fhash
     );
 
-    // 7. Init or unlock the drive (now account_ss58 is set, so user_id will be correct)
+    // 7. Init or unlock the drive (now ss58_address is set, so identity will be correct)
     let (user_id, mnemonic, is_new_setup) = if manager.is_initialized() {
         // Existing folder — just unlock
         println!(
@@ -731,7 +732,8 @@ async fn initialize_sync_inner(
                     bearer_token: bearer_token.clone(),
                     accept_invalid_certs: true,
                     billing_bypass_token: None,
-                    account_ss58: format!("{}_{}", account_id, folder_hash(&label)),
+                    ss58_address: account_id.to_string(),
+                    folder_hash: fhash.clone(),
                 })?;
 
                 println!("[Setup] Creating fresh drive after recovery...");
@@ -852,7 +854,7 @@ async fn initialize_sync_inner(
         (uid, master_for_backup, generated_new_master)
     };
 
-    let expected_user_id = format!("{}_{}", account_id, folder_hash(&label));
+    let expected_user_id = format!("{}_{}", account_id, fhash);
     println!(
         "[Setup] Drive user_id after unlock: {} (expected: {})",
         user_id, expected_user_id
@@ -932,11 +934,11 @@ async fn initialize_sync_inner(
 
     // Register folder with server for cross-device discovery (best-effort)
     {
-        let composite = format!("{}_{}", account_id, folder_hash(&label));
         let reg_server = server_url.clone();
         let reg_token = bearer_token.clone();
         let reg_label = label.clone();
-        let reg_ss58 = composite.clone();
+        let reg_ss58 = account_id.to_string();
+        let reg_fhash = fhash.clone();
         tokio::spawn(async move {
             let config = HcfsClientConfig {
                 base_url: reg_server,
@@ -944,12 +946,13 @@ async fn initialize_sync_inner(
                 bearer_token: reg_token,
                 accept_invalid_certs: true,
                 billing_bypass_token: None,
-                account_ss58: reg_ss58,
+                ss58_address: reg_ss58.clone(),
+                folder_hash: reg_fhash.clone(),
             };
             match hcfs_client::client::HcfsClient::new(config) {
                 Ok(client) => {
                     let dev_name = get_device_name_internal().await.ok();
-                    if let Err(e) = client.register_folder(&composite, &reg_label, dev_name.as_deref()).await {
+                    if let Err(e) = client.register_folder(&reg_ss58, &reg_fhash, &reg_label, dev_name.as_deref()).await {
                         println!("[Setup] Warning: folder registration failed: {}", e);
                     } else {
                         println!("[Setup] Folder '{}' registered with server", reg_label);
@@ -1644,7 +1647,8 @@ pub async fn list_remote_folders(
         bearer_token,
         accept_invalid_certs: true,
         billing_bypass_token: None,
-        account_ss58: account_id.clone(),
+        ss58_address: account_id.clone(),
+        folder_hash: String::new(),
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config)
@@ -1841,7 +1845,7 @@ pub async fn delete_remote_folder(
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
 
-    let composite = format!("{}_{}", account_id, folder_hash(&label));
+    let fhash = folder_hash(&label);
 
     let client_config = HcfsClientConfig {
         base_url: server_url,
@@ -1849,14 +1853,15 @@ pub async fn delete_remote_folder(
         bearer_token,
         accept_invalid_certs: true,
         billing_bypass_token: None,
-        account_ss58: composite.clone(),
+        ss58_address: account_id.to_string(),
+        folder_hash: fhash.clone(),
     };
 
     let client = hcfs_client::client::HcfsClient::new(client_config)
         .map_err(|e| format!("Failed to create HCFS client: {e}"))?;
 
     let result = client
-        .unregister_folder(&composite)
+        .unregister_folder(&account_id, &fhash)
         .await
         .map_err(|e| format!("Failed to delete remote folder: {e}"))?;
 

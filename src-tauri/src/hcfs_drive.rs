@@ -115,15 +115,15 @@ impl HcfsDriveManager {
         self.drive.is_initialized()
     }
     #[allow(dead_code)]
-    pub fn user_id(&self) -> Option<&str> {
+    pub fn user_id(&self) -> Option<String> {
         self.drive.user_id()
     }
     /// Override the user_id to use substrate address instead of derived ed25519 hex.
-    /// This is now done via the HcfsClientConfig.account_ss58 field.
-    /// Deprecated: set account_ss58 in the config instead.
+    /// This is now done via the HcfsClientConfig.ss58_address field.
+    /// Deprecated: set ss58_address in the config instead.
     pub fn set_user_id(&mut self, _user_id: String) {
-        // No-op: user_id is now set via config.account_ss58
-        // The Drive will use account_ss58 if set, otherwise derives from mnemonic
+        // No-op: user_id is now set via config.ss58_address
+        // The Drive will use ss58_address if set, otherwise derives from mnemonic
     }
     pub fn sync_path(&self) -> &Path {
         &self.sync_path
@@ -298,9 +298,10 @@ impl HcfsDriveManager {
             }
         };
         println!(
-            "[Diag] Drive '{}': user_id='{}', local={}, remote={}, synced={}, path_index={}",
+            "[Diag] Drive '{}': ss58='{}', folder_hash='{}', local={}, remote={}, synced={}, path_index={}",
             label,
-            state.user_id,
+            state.ss58_address,
+            state.folder_hash,
             state.local.files.len(),
             state.remote.files.len(),
             state.synced.files.len(),
