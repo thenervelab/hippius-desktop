@@ -30,7 +30,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   getHcfsConfig,
   saveHcfsConfig,
-  initializeSync,
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
 import {

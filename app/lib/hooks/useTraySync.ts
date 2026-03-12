@@ -974,7 +974,7 @@ function startSyncActivityWatcher() {
       await removeAllSyncActivityRows(menu);
 
       // Read progress directly from localStorage (no atom dependency)
-      const progress = getOverallProgress();
+      const progress = await getOverallProgress();
       const isActive = progress.isActive ||
         progress.inProgressFiles > 0 ||
         (progress.totalFiles > 0 && progress.completedFiles < progress.totalFiles && progress.failedFiles === 0);
@@ -999,7 +999,7 @@ function startSyncActivityWatcher() {
 
       // Update the header label with byte-based percentage directly from localStorage
       const percent = progress.overallPercent;
-      void updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
+      await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
 
       // Build progress text: "23 of 50 files synced"
       const progressText = progress.totalFiles > 0

@@ -180,8 +180,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   // HCFS sync integration
   const {
     setupAndInitialize,
-    tryInitializeSync,
-    checkConfig,
     isInitializing,
     mnemonicToBackup,
     clearMnemonicBackup,
