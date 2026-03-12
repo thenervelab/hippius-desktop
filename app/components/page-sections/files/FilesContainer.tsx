@@ -39,6 +39,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
   triggerSyncPathRefreshAtom,
   syncEngineStatusAtom,
+  isSyncConfiguredAtom,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
@@ -124,6 +125,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
   const syncEngineStatus = useAtomValue(syncEngineStatusAtom);
   const setSyncEngineStatus = useSetAtom(syncEngineStatusAtom);
+  const isSyncConfigured = useAtomValue(isSyncConfiguredAtom);
 
   // Ref to track current status without creating effect dependencies
   const syncStatusRef = useRef(syncEngineStatus);
@@ -386,23 +388,62 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
     [updateFilters]
   );
 
-  // Load private sync path
+  // Load private sync path (with stale-request cancellation)
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
       try {
         setIsLoadingPrivatePath(true);
         const result = await getPrivateSyncPath(
           polkadotAddress || undefined
         );
-        setSelectedPrivateFolderPath(result?.path ?? null);
+        if (!cancelled) {
+          setSelectedPrivateFolderPath(result?.path ?? null);
+        }
       } catch (err) {
         console.error("Failed to load private sync folder:", err);
-        setSelectedPrivateFolderPath(null);
+        if (!cancelled) {
+          setSelectedPrivateFolderPath(null);
+        }
       } finally {
-        setIsLoadingPrivatePath(false);
+        if (!cancelled) {
+          setIsLoadingPrivatePath(false);
+        }
       }
     })();
+
+    return () => { cancelled = true; };
   }, [polkadotAddress]);
+
+  // Reload sync path when sync is configured from another component/page
+  // (e.g., user sets up sync on Files page, then navigates to Home)
+  useEffect(() => {
+    if (!isSyncConfigured || !polkadotAddress) return;
+    // Only reload if we don't already have a path (avoids redundant fetches)
+    if (selectedPrivateFolderPath) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setIsLoadingPrivatePath(true);
+        const result = await getPrivateSyncPath(polkadotAddress);
+        if (!cancelled) {
+          setSelectedPrivateFolderPath(result?.path ?? null);
+        }
+      } catch {
+        // Ignore — initial load will handle errors
+      } finally {
+        if (!cancelled) {
+          setIsLoadingPrivatePath(false);
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSyncConfigured, polkadotAddress]);
 
   // Check if sync path is configured
   useEffect(() => {
@@ -498,6 +539,13 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
         // Mark sync path as configured and hide selectors so files view shows
         setIsSyncPathConfigured(true);
         setShowPrivateStartSyncingSelector(false);
+        // Directly reload path so local state updates immediately
+        try {
+          const pathResult = await getPrivateSyncPath(polkadotAddress);
+          setSelectedPrivateFolderPath(pathResult?.path ?? null);
+        } catch {
+          // Will be retried by triggerSyncPathRefresh effect
+        }
         // Refresh file list to show the synced files
         refetchUserFiles();
         // Signal other components about the change
@@ -602,6 +650,8 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   // Reload sync paths when settings are updated
   useEffect(() => {
     if (syncPathRefreshTrigger > 0) {
+      let cancelled = false;
+
       // Reload private sync path
       (async () => {
         try {
@@ -609,15 +659,21 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
           const result = await getPrivateSyncPath(
             polkadotAddress || undefined
           );
-          setSelectedPrivateFolderPath(result?.path ?? null);
-          // Refetch file list so it reads from the new sync folder
-          refetchUserFiles();
+          if (!cancelled) {
+            setSelectedPrivateFolderPath(result?.path ?? null);
+            // Refetch file list so it reads from the new sync folder
+            refetchUserFiles();
+          }
         } catch (err) {
           console.error("Failed to reload private sync folder:", err);
         } finally {
-          setIsLoadingPrivatePath(false);
+          if (!cancelled) {
+            setIsLoadingPrivatePath(false);
+          }
         }
       })();
+
+      return () => { cancelled = true; };
     }
   }, [syncPathRefreshTrigger, polkadotAddress, refetchUserFiles]);
 
@@ -626,24 +682,29 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
   const isCurrentSyncPathEmpty = !currentSyncPath;
   const showCurrentStartSyncingSelector = showPrivateStartSyncingSelector;
 
-  // Recent files specific logic - check if private path is available
+  // Recent files specific logic - check if private path is available.
+  // While path is still loading, treat as "has paths" to avoid flashing
+  // the Start Syncing button before the async load completes.
   const hasNoSyncPaths = useMemo(() => {
     if (!isRecentFiles) return false;
+    if (isLoadingPrivatePath) return false;
     return (
       selectedPrivateFolderPath === null ||
       selectedPrivateFolderPath === undefined
     );
-  }, [isRecentFiles, selectedPrivateFolderPath]);
+  }, [isRecentFiles, selectedPrivateFolderPath, isLoadingPrivatePath]);
 
-  // For recent files, check if sync path is available (not empty)
+  // For recent files, check if sync path is available (not empty).
+  // While loading, optimistically assume path exists to prevent button flash.
   const hasAnySyncPath = useMemo(() => {
     if (!isRecentFiles) return false;
+    if (isLoadingPrivatePath) return true;
     const hasPrivate =
       selectedPrivateFolderPath !== null &&
       selectedPrivateFolderPath !== undefined &&
       selectedPrivateFolderPath !== "";
     return hasPrivate;
-  }, [isRecentFiles, selectedPrivateFolderPath]);
+  }, [isRecentFiles, selectedPrivateFolderPath, isLoadingPrivatePath]);
 
   // Effective is private view (always true for private-only)
   const effectiveIsPrivateView = useMemo(() => {
