@@ -90,7 +90,7 @@ export const useUserFiles = () => {
   // Refetch file list after sync completes so sync_status updates
   useEffect(() => {
     const handler = () => {
-      queryClient.invalidateQueries({ queryKey });
+      queryClient.refetchQueries({ queryKey });
     };
     window.addEventListener("sync_files_completed_changed", handler);
     return () => window.removeEventListener("sync_files_completed_changed", handler);

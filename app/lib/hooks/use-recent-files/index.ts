@@ -193,7 +193,7 @@ const useRecentFiles = () => {
       return newData;
     },
     refetchOnWindowFocus: false,
-    staleTime: 30000, // 30 seconds - allow periodic refresh
+    staleTime: 0, // Always refetch - updates driven by sync_files_completed_changed event
     enabled: !!polkadotAddress,
     notifyOnChangeProps: ["data", "dataUpdatedAt"],
     structuralSharing: false,
