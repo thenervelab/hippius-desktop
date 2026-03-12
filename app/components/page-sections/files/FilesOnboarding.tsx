@@ -32,6 +32,7 @@ import {
   saveHcfsConfig,
 } from "@/app/lib/utils/hcfsConfigUtils";
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
+import { SyncDestinationDialog } from "@/components/page-sections/settings/multi-folder-sync/SyncDestinationDialog";
 import {
   syncEngineStatusAtom,
   isSyncConfiguredAtom,
@@ -509,94 +510,21 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
         onComplete={handleHcfsSetupComplete}
       />
 
-      {/* Sync destination dialog */}
-      <Dialog.Root
+      {/* Sync destination dialog — uses shared component from settings */}
+      <SyncDestinationDialog
         open={syncDialog.open}
-        onOpenChange={(open) => {
-          if (!open && !isSyncing) {
+        folder={syncDialog.folder}
+        syncLocalPath={syncLocalPath}
+        isSyncing={isSyncing}
+        onClose={() => {
+          if (!isSyncing) {
             setSyncDialog({ open: false, folder: null });
             setSyncLocalPath("");
           }
         }}
-      >
-        <DialogContainer
-          className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[428px] h-fit"
-          preventClose={isSyncing}
-        >
-          <Dialog.Title className="sr-only">Sync Remote Folder</Dialog.Title>
-          <div className="px-4 py-6 flex flex-col gap-5">
-            <div className="flex flex-col items-center text-center gap-3">
-              <div className="h-8 w-8 bg-primary-50 rounded-lg flex items-center justify-center">
-                <CloudDownload className="size-5 text-grey-100" />
-              </div>
-              <div className="flex flex-col gap-1">
-                <h2 className="text-xl font-semibold text-grey-10">
-                  Sync &quot;{syncDialog.folder?.folderName}&quot;
-                </h2>
-                <p className="text-sm text-grey-50 max-w-sm">
-                  Choose a local folder to download and sync these files to this
-                  device.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-grey-30">
-                Local Destination
-              </label>
-              {syncLocalPath ? (
-                <div className="p-3 border border-grey-80 rounded-lg bg-grey-98">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="text-xs text-grey-60 break-all font-mono bg-white px-2 py-1.5 rounded border border-grey-90 flex-1 min-w-0">
-                      {syncLocalPath}
-                    </p>
-                    <button
-                      className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-primary-50 bg-white border border-primary-50 rounded hover:bg-primary-50 hover:text-white transition-colors"
-                      onClick={handleSelectSyncDestination}
-                      disabled={isSyncing}
-                    >
-                      Change
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  className="w-full p-4 border-2 border-dashed border-grey-80 rounded-lg text-center hover:border-primary-50 hover:bg-primary-100 transition-colors"
-                  onClick={handleSelectSyncDestination}
-                >
-                  <Folder className="size-6 mx-auto mb-1 text-grey-60" />
-                  <p className="text-sm text-grey-50">
-                    Click to select destination folder
-                  </p>
-                </button>
-              )}
-            </div>
-
-            <div className="flex gap-3">
-              <CardButton
-                className="w-full"
-                variant="secondary"
-                onClick={() => {
-                  setSyncDialog({ open: false, folder: null });
-                  setSyncLocalPath("");
-                }}
-                disabled={isSyncing}
-              >
-                Cancel
-              </CardButton>
-              <CardButton
-                className="w-full"
-                variant="dialog"
-                onClick={handleStartSync}
-                disabled={isSyncing || !syncLocalPath}
-                loading={isSyncing}
-              >
-                {isSyncing ? "Syncing..." : "Start Sync"}
-              </CardButton>
-            </div>
-          </div>
-        </DialogContainer>
-      </Dialog.Root>
+        onSelectDestination={handleSelectSyncDestination}
+        onStartSync={handleStartSync}
+      />
 
       {/* Delete from server dialog */}
       <Dialog.Root
