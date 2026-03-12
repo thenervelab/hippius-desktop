@@ -25,6 +25,7 @@ import {
   Download,
   MoreVertical,
   Folder,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import NameCell from "./NameCell";
@@ -46,7 +47,7 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -318,6 +319,21 @@ const FilesTable: FC<FilesTableProps> = memo(
             ]
             : []),
 
+          ...(file.source
+            ? [
+              {
+                icon: <FolderOpen className="size-4" />,
+                itemTitle: "Reveal in Finder",
+                onItemClick: async () => {
+                  try {
+                    await revealItemInDir(file.source!);
+                  } catch (error) {
+                    console.error("Failed to reveal file in Finder:", error);
+                  }
+                },
+              },
+            ]
+            : []),
           {
             icon: <Icons.InfoCircle className="size-4" />,
             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,

@@ -5,7 +5,7 @@ import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Link from "next/link";
@@ -14,6 +14,7 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import {
   Folder
 } from "@/components/ui/icons";
+import { FolderOpen } from "lucide-react";
 import cn from "@/app/lib/utils/cn";
 
 interface ContextMenuProps {
@@ -129,6 +130,23 @@ export default function FileContextMenu({
             )}
 
 
+
+          {file.source && (
+            <button
+              className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
+              onClick={async () => {
+                try {
+                  await revealItemInDir(file.source!);
+                } catch (error) {
+                  console.error("Failed to reveal file in Finder:", error);
+                }
+                onClose();
+              }}
+            >
+              <FolderOpen className="size-4" />
+              <span>Reveal in Finder</span>
+            </button>
+          )}
 
           <button
             className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"

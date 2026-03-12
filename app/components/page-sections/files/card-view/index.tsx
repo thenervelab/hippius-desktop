@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import {
   MoreVertical,
   Download,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,7 +27,7 @@ import { Folder } from "@/app/components/ui/icons";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
@@ -236,6 +237,26 @@ const CardView: FC<CardViewProps> = ({
                             }]
                             : []),
 
+                          ...(file.source
+                            ? [
+                              {
+                                icon: <FolderOpen className="size-4" />,
+                                itemTitle: "Reveal in Finder",
+                                onItemClick: async (e?: React.MouseEvent) => {
+                                  if (e) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                  }
+                                  setOpenMenuIndex(null);
+                                  try {
+                                    await revealItemInDir(file.source!);
+                                  } catch (error) {
+                                    console.error("Failed to reveal file in Finder:", error);
+                                  }
+                                },
+                              },
+                            ]
+                            : []),
                           {
                             icon: <Icons.InfoCircle className="size-4" />,
                             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,

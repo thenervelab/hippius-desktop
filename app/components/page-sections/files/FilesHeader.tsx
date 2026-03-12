@@ -10,9 +10,7 @@ import { ActiveFilter } from "@/lib/utils/fileFilterUtils";
 import FilterChips from "./filter-chips";
 import FolderUploadDialog from "./FolderUploadDialog";
 import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
-import { toast } from "sonner";
-import { useLocalStorage } from "@/lib/hooks/useLocalStorage";
-import { openPath } from "@tauri-apps/plugin-opener";
+
 import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
 import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
@@ -52,7 +50,6 @@ interface FilesHeaderProps {
   } | null>;
   privateFileCount?: number;
   publicFileCount?: number;
-  syncFolderPath?: string;
   isSyncPathEmpty?: boolean;
   onStartSyncing?: () => void;
   hasNoSyncPaths?: boolean;
@@ -82,7 +79,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   handleRemoveFilter,
   refetchUserFiles,
   addButtonRef,
-  syncFolderPath,
   isSyncPathEmpty = false,
   onStartSyncing,
   hasNoSyncPaths = false,
@@ -98,8 +94,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
   defaultFolderLabel,
 }) => {
   const [isFolderUploadOpen, setIsFolderUploadOpen] = useState(false);
-  const [syncFolderPermissionGranted, setSyncFolderPermissionGranted] =
-    useLocalStorage("hippius-sync-folder-permission", false);
+
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
   const migrationCheck = useAtomValue(migrationCheckAtom);
@@ -121,35 +116,7 @@ const FilesHeader: FC<FilesHeaderProps> = ({
     push("/files");
   };
 
-  const handleOpenSyncFolder = async () => {
-    try {
-      if (!syncFolderPath) {
-        toast.error("Sync folder not configured");
-        return;
-      }
 
-      await openPath(syncFolderPath);
-
-      if (!syncFolderPermissionGranted) {
-        setSyncFolderPermissionGranted(true);
-      }
-    } catch (e) {
-      console.error("Failed to open sync folder:", e);
-
-      const errorMessage = e instanceof Error ? e.message : String(e);
-      if (
-        errorMessage.includes("permission") ||
-        errorMessage.includes("denied")
-      ) {
-        toast.error(
-          "Permission to open folders was denied. Please try again and allow folder access."
-        );
-        setSyncFolderPermissionGranted(false);
-      } else {
-        toast.error(`Failed to open folder: ${errorMessage}`);
-      }
-    }
-  };
 
   return (
     <>
@@ -339,16 +306,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
               </button>
             )}
 
-            {/* Open Sync Folder button - disabled for recent files with no sync paths */}
-            <button
-              onClick={isRecentFiles && hasNoSyncPaths ? onNavigateToSettings : handleOpenSyncFolder}
-              disabled={isRecentFiles && hasNoSyncPaths ? false : (!syncFolderPath || isSyncPathEmpty)}
-              className="flex items-center justify-between gap-1 h-9 px-2 py-2 bg-grey-100 text-sm font-meidum text-grey-10 border border-grey-80 rounded disabled:opacity-50 hover:bg-primary-50 hover:text-white active:bg-primary-70 active:text-white font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary-50 disabled:hover:bg-grey-100 disabled:hover:text-grey-10"
-              title={isRecentFiles && hasNoSyncPaths ? "Configure sync folders" : (syncFolderPath || "Sync folder not configured")}
-            >
-              <Icons.Folder className="size-4" />
-              <span className="ml-1">Open Sync Folder</span>
-            </button>
 
             {/* Add File button - disabled for recent files with no sync paths or when sync is paused */}
             {isRecentFiles && hasNoSyncPaths ? (

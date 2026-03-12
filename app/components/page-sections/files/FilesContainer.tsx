@@ -735,24 +735,12 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
       />
     );
   } else {
-    // Compute active sync folder path
-    let syncFolderPath = "";
+    // Compute whether sync path is effectively empty
     let effectiveSyncPathEmpty = false;
 
     if (isRecentFiles) {
-      // For recent files, use private path
-      const privatePath =
-        selectedPrivateFolderPath !== null &&
-          selectedPrivateFolderPath !== undefined &&
-          selectedPrivateFolderPath !== ""
-          ? selectedPrivateFolderPath
-          : null;
-
-      syncFolderPath = privatePath || "";
       effectiveSyncPathEmpty = !hasAnySyncPath;
     } else {
-      // For regular files view, use the private path
-      syncFolderPath = selectedPrivateFolderPath || "";
       effectiveSyncPathEmpty = isCurrentSyncPathEmpty;
     }
 
@@ -801,7 +789,6 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
                 : refreshUserFilesCallback
             }
             addButtonRef={addButtonRef}
-            syncFolderPath={syncFolderPath}
             privateFileCount={privateFileCount}
             isSyncPathEmpty={effectiveSyncPathEmpty}
             onStartSyncing={handleStartSyncing}
