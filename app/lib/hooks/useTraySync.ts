@@ -273,7 +273,7 @@ export function useTrayInit() {
       if (overallProgress.failedFiles > 0) {
         labelText = `⚠ ${overallProgress.failedFiles} file${overallProgress.failedFiles > 1 ? 's' : ''} failed`;
       } else {
-        labelText = `✓ Sync complete: ${overallProgress.completedFiles} files`;
+        labelText = `✓ Sync complete: ${overallProgress.completedFiles} file${overallProgress.completedFiles > 1 ? 's' : ''} synced`;
       }
     } else if (hasSyncActivity && !isSyncingFromEvents && !hasActiveUpload && !hasActiveDownload) {
       // Show recent activity status ONLY if not currently syncing or transferring
