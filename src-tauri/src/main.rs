@@ -98,7 +98,7 @@ use commands::substrate_tx::{
 };
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
-use tauri::{Builder, Manager};
+use tauri::{Builder, Emitter, Manager};
 
 /// Global SQLite connection pool. Set once during `setup()` and read by all
 /// command handlers. Access with `DB_POOL.get().ok_or("Database not initialized")?`.
@@ -151,6 +151,17 @@ fn main() {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
+            }
+            // On macOS, a URL-forwarder helper sends deep link URLs
+            // via the single-instance socket as argv entries.
+            // Detect and re-emit them so the frontend deep-link
+            // handler picks them up.
+            for arg in &argv {
+                if arg.starts_with("hippiusapp://") {
+                    println!("[SingleInstance] Deep link URL detected: {}", arg);
+                    let _ = app.emit("deep-link://new-url", vec![arg]);
+                    break;
+                }
             }
         }))
         .plugin(tauri_plugin_deep_link::init())

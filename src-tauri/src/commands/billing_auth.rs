@@ -150,7 +150,7 @@ async fn attempt(
     let sig = eth_signer
         .sign_message_sync(cr.message.as_bytes())
         .map_err(|e| format!("Signing failed: {e}"))?;
-    let formatted_sig = format!("0x{sig}");
+    let formatted_sig = format!("{sig}");
 
     // Verify signature
     let verify_res = client

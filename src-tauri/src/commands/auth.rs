@@ -118,7 +118,7 @@ async fn challenge_response(
     let sig = eth_signer
         .sign_message_sync(cr.message.as_bytes())
         .map_err(|e| format!("Signing failed: {e}"))?;
-    let formatted_sig = format!("0x{sig}");
+    let formatted_sig = format!("{sig}");
 
     // 3. Verify signature with backend
     let verify_res = client
