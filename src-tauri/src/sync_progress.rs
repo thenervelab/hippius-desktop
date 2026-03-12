@@ -228,6 +228,9 @@ fn register_files(session: &mut SyncSession, file_list: &SessionFileList) {
 }
 
 /// Move completed files from a session to the recent files list.
+/// Only adds files that are not already present in recent_files
+/// (identified by path + session_id) to prevent duplicates when
+/// this function is called multiple times for the same session.
 fn move_completed_to_recent(state: &mut SyncProgressState) {
     let session = match &state.current_session {
         Some(s) => s,
@@ -236,10 +239,18 @@ fn move_completed_to_recent(state: &mut SyncProgressState) {
     let session_id = session.session_id.clone();
     let now = now_ms();
 
-    let completed: Vec<RecentFile> = session
+    // Build a set of (path, session_id) already in recent to avoid duplicates
+    let existing: std::collections::HashSet<(&str, &str)> = state
+        .recent_files
+        .iter()
+        .map(|r| (r.path.as_str(), r.session_id.as_str()))
+        .collect();
+
+    let new_completed: Vec<RecentFile> = session
         .files
         .values()
         .filter(|f| f.status == FileStatus::Completed)
+        .filter(|f| !existing.contains(&(f.path.as_str(), session_id.as_str())))
         .map(|f| RecentFile {
             id: f.id.clone(),
             path: f.path.clone(),
@@ -251,7 +262,7 @@ fn move_completed_to_recent(state: &mut SyncProgressState) {
         })
         .collect();
 
-    state.recent_files.extend(completed);
+    state.recent_files.extend(new_completed);
     clean_expired(state);
 }
 

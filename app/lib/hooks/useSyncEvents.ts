@@ -222,11 +222,11 @@ export function useSyncEvents() {
 
             if (totalExpected === 0) {
               // No staged changes detected upfront, but the real sync may
-              // still discover remote files to download. Mark as syncing so
-              // the UI shows activity; an ad-hoc session will be created
+              // still discover remote files to download. Don't mark as syncing
+              // for 0-file cycles — this prevents the tray icon from flashing
+              // red during idle no-op sync rounds. If the real sync later
+              // discovers files, ensureSession() will create an ad-hoc session
               // when progress events arrive.
-              setIsSyncing(true);
-              setIsSyncingAtom(true);
               return;
             }
 
@@ -288,6 +288,14 @@ export function useSyncEvents() {
             // Check if we have fewer completions than expected (failures occurred).
             const expected = expectedCountsRef.current;
             const hasExpectedWork = expected.uploads > 0 || expected.downloads > 0;
+
+            // Skip processing for no-op sync cycles (no work expected or completed).
+            // This avoids unnecessary backend calls that can duplicate recent files
+            // and disrupt the completed state display.
+            if (totalCompleted === 0 && !hasExpectedWork) {
+              return;
+            }
+
             const hasFailed = hasExpectedWork &&
               (e.payload.files_uploaded < expected.uploads ||
                e.payload.files_downloaded < expected.downloads);

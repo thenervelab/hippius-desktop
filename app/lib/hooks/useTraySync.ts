@@ -101,30 +101,66 @@ let creditsCache: {
   error?: string;
 } | null = null;
 
-// Helper to check if user is logged in
+// Cache for async login check
+let loginStatusCache: { loggedIn: boolean; timestamp: number } | null = null;
+const LOGIN_STATUS_CACHE_DURATION = 5000; // 5 seconds
+
+// Helper to check if user is logged in (synchronous, uses cache)
 function isUserLoggedIn(): boolean {
   if (typeof window === "undefined") return false;
+
+  // Use cache if fresh
+  if (loginStatusCache && Date.now() - loginStatusCache.timestamp < LOGIN_STATUS_CACHE_DURATION) {
+    return loginStatusCache.loggedIn;
+  }
+
   try {
+    // Check localStorage for OAuth session
     const storedSession = localStorage.getItem(OAUTH_SESSION_KEY);
     const storedExpiry = localStorage.getItem("hippius_oauth_session_expiry");
 
-    if (!storedSession || !storedExpiry) return false;
-
-    // Check if session is expired
-    const expiryTime = new Date(storedExpiry).getTime();
-    const now = Date.now();
-
-    if (now >= expiryTime) {
-      console.log("[Tray] Session expired");
-      return false;
+    if (storedSession && storedExpiry) {
+      const expiryTime = new Date(storedExpiry).getTime();
+      if (Date.now() < expiryTime) {
+        const session: OAuthSession = JSON.parse(storedSession);
+        if (session.token) {
+          loginStatusCache = { loggedIn: true, timestamp: Date.now() };
+          return true;
+        }
+      } else {
+        console.log("[Tray] Session expired");
+      }
     }
 
-    const session: OAuthSession = JSON.parse(storedSession);
-    return !!session.token;
+    // Fall back to cached result while async check runs
+    if (loginStatusCache) return loginStatusCache.loggedIn;
+    return false;
   } catch (error) {
     console.error("[Tray] Failed to check login status:", error);
     return false;
   }
+}
+
+// Async login check that also queries Rust backend (for mnemonic logins
+// that don't store an OAuth session in localStorage).
+async function refreshLoginStatus(): Promise<boolean> {
+  // First check localStorage (fast path)
+  if (isUserLoggedIn()) return true;
+
+  // Fall back to Rust backend session check
+  try {
+    const session = await invoke<{ authToken?: string | null; tokenExpiry?: number | null } | null>("get_last_auth_session");
+    if (session?.authToken) {
+      const isValid = !session.tokenExpiry || session.tokenExpiry > Date.now();
+      loginStatusCache = { loggedIn: isValid, timestamp: Date.now() };
+      return isValid;
+    }
+  } catch {
+    // DB not ready yet — ignore
+  }
+
+  loginStatusCache = { loggedIn: false, timestamp: Date.now() };
+  return false;
 }
 
 // Helper to fetch credits via Rust backend with caching
@@ -268,23 +304,28 @@ export function useTrayInit() {
       const percent = overallProgress.overallPercent;
       labelText = `⟳ Syncing: ${percent}%`;
     } else if (isSyncComplete) {
-      // Show completed files and/or failed files
-      // When there are failures, only show the failure count (don't mix with success count)
+      // Show completed header — detail rows (file count + size) are managed by the watcher
       if (overallProgress.failedFiles > 0) {
-        labelText = `⚠ ${overallProgress.failedFiles} file${overallProgress.failedFiles > 1 ? 's' : ''} failed`;
+        labelText = `⚠ Sync Failed`;
       } else {
-        labelText = `✓ Sync complete: ${overallProgress.completedFiles} file${overallProgress.completedFiles > 1 ? 's' : ''} synced`;
+        labelText = `✓ Sync Complete`;
       }
     } else if (hasSyncActivity && !isSyncingFromEvents && !hasActiveUpload && !hasActiveDownload) {
       // Show recent activity status ONLY if not currently syncing or transferring
-      labelText = `✓ Files synced`;
+      labelText = `✓ Sync Complete`;
     }
     
     // Update tray menu text
     void updateTraySyncLabel(labelText);
     
+    // Determine if there are failures to show the error icon
+    const hasFailed = overallProgress.failedFiles > 0;
+    
     // Update icon state
     if (isCurrentlySyncing) {
+      void setTrayIconSyncing(true, false);
+    } else if (hasFailed) {
+      // Show syncing (red) icon for failed state
       void setTrayIconSyncing(true, false);
     } else if (isSyncComplete || hasSyncActivity) {
       // Show green "completed" icon when sync done or when there are recent files
@@ -351,12 +392,15 @@ export function useTrayInit() {
         },
       });
 
+      // Check login status asynchronously (covers both OAuth and mnemonic logins)
+      const loggedIn = await refreshLoginStatus();
+
       const openFilesMenuItem = await MenuItem.new({
         id: OPEN_FILES_ID,
         text: "Open Files",
-        enabled: isUserLoggedIn(),
+        enabled: loggedIn,
         action: async () => {
-          if (!isUserLoggedIn()) return;
+          if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
           await openFilesPage();
         },
       });
@@ -365,9 +409,9 @@ export function useTrayInit() {
       const openVmMenuItem = await MenuItem.new({
         id: OPEN_VM_ID,
         text: "Open Virtual Machines",
-        enabled: isUserLoggedIn(),
+        enabled: loggedIn,
         action: async () => {
-          if (!isUserLoggedIn()) return;
+          if (!isUserLoggedIn() && !(await refreshLoginStatus())) return;
           await openVirtualMachinesPage();
         },
       });
@@ -477,7 +521,8 @@ function logTrayAction(action: string, details?: unknown) {
 async function updateOpenFilesMenuItem() {
   if (!openFilesItem) return;
   try {
-    await openFilesItem.setEnabled(isUserLoggedIn());
+    const loggedIn = await refreshLoginStatus();
+    await openFilesItem.setEnabled(loggedIn);
   } catch (error) {
     console.error("[Tray] Failed to update Open Files item:", error);
   }
@@ -486,7 +531,8 @@ async function updateOpenFilesMenuItem() {
 async function updateOpenVmMenuItem() {
   if (!openVmItem) return;
   try {
-    await openVmItem.setEnabled(isUserLoggedIn());
+    const loggedIn = await refreshLoginStatus();
+    await openVmItem.setEnabled(loggedIn);
   } catch (error) {
     console.error("[Tray] Failed to update Open Virtual Machines item:", error);
   }
@@ -906,7 +952,8 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
   let lastKnownStatus: boolean | null = null;
 
   const tick = async () => {
-    const currentLoginStatus = isUserLoggedIn();
+    // Use async check so mnemonic-only logins (not in localStorage) are detected
+    const currentLoginStatus = await refreshLoginStatus();
 
     // If login status changed, update menu immediately
     if (lastLoginStatus !== currentLoginStatus) {
@@ -973,19 +1020,21 @@ function startSyncActivityWatcher() {
       // Clean up any legacy per-file rows from old implementation
       await removeAllSyncActivityRows(menu);
 
-      // Read progress directly from localStorage (no atom dependency)
+      // Read progress directly from Rust backend (no atom dependency)
       const progress = await getOverallProgress();
       const isActive = progress.isActive ||
         progress.inProgressFiles > 0 ||
         (progress.totalFiles > 0 && progress.completedFiles < progress.totalFiles && progress.failedFiles === 0);
+      const hasFailed = progress.failedFiles > 0;
+      const isCompleted = !isActive && (progress.completedFiles > 0 || hasFailed);
 
       // Build signature to avoid redundant updates
-      const signature = `${isActive}:${progress.completedFiles}/${progress.totalFiles}:${progress.overallPercent}:${progress.totalBytesTransferred}`;
+      const signature = `${isActive}:${isCompleted}:${hasFailed}:${progress.completedFiles}/${progress.totalFiles}:${progress.failedFiles}:${progress.overallPercent}:${progress.totalBytesTransferred}`;
       if (signature === lastSyncSummarySignature) return;
       lastSyncSummarySignature = signature;
 
-      if (!isActive) {
-        // Not syncing — remove summary rows if they exist
+      if (!isActive && !isCompleted) {
+        // No sync activity at all — remove summary rows if they exist
         if (syncProgressItem) {
           try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
           syncProgressItem = null;
@@ -997,19 +1046,49 @@ function startSyncActivityWatcher() {
         return;
       }
 
-      // Update the header label with byte-based percentage directly from localStorage
-      const percent = progress.overallPercent;
-      await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
+      // Update the header label to reflect the watcher's view
+      if (isActive) {
+        const percent = progress.overallPercent;
+        if (progress.totalFiles > 0 && percent === 0 && progress.completedFiles === 0 && progress.totalBytesTransferred === 0) {
+          await updateTraySyncLabel(`⟳ Preparing sync…`);
+        } else {
+          await updateTraySyncLabel(`⟳ Syncing: ${percent}%`);
+        }
+      } else if (hasFailed) {
+        await updateTraySyncLabel(`⚠ Sync Failed`);
+      }
+      // Completed without failures is already handled by the useEffect
 
-      // Build progress text: "23 of 50 files synced"
-      const progressText = progress.totalFiles > 0
-        ? `${progress.completedFiles} of ${progress.totalFiles} files synced`
-        : "Preparing files…";
-
-      // Build size text: "208.85 MB / 1 GB"
+      // Build progress text and size text depending on state
+      let progressText: string;
       let sizeText: string | null = null;
-      if (progress.totalBytesExpected > 0) {
-        sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
+
+      if (isActive) {
+        // In-progress: show current progress
+        if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.totalBytesTransferred === 0) {
+          progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} pending`;
+        } else {
+          progressText = progress.totalFiles > 0
+            ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} synced`
+            : "Preparing files…";
+        }
+        if (progress.totalBytesExpected > 0) {
+          sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
+        }
+      } else if (hasFailed) {
+        // Failed: show failure counts
+        const totalFiles = progress.completedFiles + progress.failedFiles;
+        progressText = `${progress.failedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} failed`;
+        if (progress.totalBytesExpected > 0) {
+          sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
+        }
+      } else {
+        // Completed successfully: show final counts
+        const totalFiles = progress.completedFiles + progress.failedFiles;
+        progressText = `${progress.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
+        if (progress.totalBytesExpected > 0) {
+          sizeText = `${formatBytes(progress.totalBytesExpected)} / ${formatBytes(progress.totalBytesExpected)}`;
+        }
       }
 
       // Find insert position: right after the sync header (SYNC_ID)
