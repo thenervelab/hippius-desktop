@@ -144,6 +144,7 @@ const useRecentFiles = () => {
               size: item.size_bytes,
               createdAt: item.timestamp ? item.timestamp * 1000 : Date.now(),
               arionHash: arionHashMap.get(`${item.file_name}::${item.label}`) || "",
+              arionCid: "",
               source,
               minerIds: [],
               isAssigned: true,

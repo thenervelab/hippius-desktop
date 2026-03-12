@@ -25,6 +25,7 @@ export type FormattedUserFile = {
   size?: number;
   createdAt: number;
   arionHash: string;
+  arionCid: string;
   minerIds: string | string[];
   isAssigned: boolean;
   lastChargedAt: number;
@@ -52,6 +53,7 @@ type FileEntry = {
   modified: number | null;
   sync_status: "synced" | "pending" | "unknown";
   arion_hash: string;
+  arion_cid: string;
 };
 
 export const GET_USER_IPFS_FILES_QUERY_KEY = "get-user-ipfs-files";
@@ -149,6 +151,7 @@ export const useUserFiles = () => {
                 size: entry.size,
                 createdAt: modifiedMs,
                 arionHash: entry.arion_hash || "",
+                arionCid: entry.arion_cid || "",
                 source: `${syncPath}/${entry.name}`,
                 minerIds: [],
                 isAssigned: true,

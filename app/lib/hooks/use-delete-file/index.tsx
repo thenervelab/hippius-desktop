@@ -1,6 +1,7 @@
 import {
     GET_USER_IPFS_FILES_QUERY_KEY,
 } from "@/app/lib/hooks/use-user-files";
+import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import { useMutation } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { queryClientAtom } from "jotai-tanstack-query";
@@ -140,6 +141,9 @@ export const useDeleteFile = ({
                 }),
                 queryClient.refetchQueries({
                     queryKey: ["recent-files"],
+                }),
+                queryClient.invalidateQueries({
+                    queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
                 }),
             ]);
 

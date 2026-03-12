@@ -3,8 +3,10 @@ import { FC, useState, useEffect, useCallback } from "react";
 import useFilesUpload from "@/lib/hooks/useFilesUpload";
 import { Icons, CardButton } from "@/components/ui";
 import FileDropzone from "./FileDropzone";
-import { useSetAtom } from "jotai";
+import { useSetAtom, useAtomValue } from "jotai";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { queryClientAtom } from "jotai-tanstack-query";
+import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { basename } from "@tauri-apps/api/path";
@@ -68,6 +70,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
   const [selectedSyncPath, setSelectedSyncPath] = useState<string | null>(null);
 
   // Root-mode hooks
+  const queryClient = useAtomValue(queryClientAtom);
   const setInsufficient = useSetAtom(insufficientCreditsDialogOpenAtom);
   const resetFn = !isFolder ? props.reset : undefined;
   const { upload } = useFilesUpload({
@@ -334,6 +337,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         { id: toastId, duration: 2000, closeButton: true }
       );
 
+      queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
       props.onSuccess();
     } catch (error) {
       console.error(

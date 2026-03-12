@@ -14,6 +14,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { getFullPath } from "@/app/utils/folderPathUtils";
+import { useAtomValue } from "jotai";
+import { queryClientAtom } from "jotai-tanstack-query";
+import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
 
 type Props = {
     open: boolean;
@@ -37,6 +40,7 @@ export default function FolderToFolderUploadDialog({
     subFolderPath,
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
+    const queryClient = useAtomValue(queryClientAtom);
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
@@ -92,6 +96,8 @@ export default function FolderToFolderUploadDialog({
 
             toast.dismiss(toastId);
             toast.success(`Folder uploaded successfully!`);
+
+            queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
 
             if (onRefresh) {
                 onRefresh();

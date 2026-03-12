@@ -41,14 +41,13 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
   const isPrivateView = useIsPrivateView();
 
   // Get Arion Hash for display
-  const arionHash = file ? file.arionHash : null;
-  const isHashValid = arionHash && arionHash !== "pending";
+  const arionCid = file ? file.arionCid : null;
+  const hasCid = arionCid && arionCid.length > 0;
 
   if (!file) return null;
 
   const { fileFormat } = getFilePartsFromFileName(file.name);
   const fileType = getFileTypeFromExtension(fileFormat || null);
-  // arionHash is already defined above
   const { icon: Icon, color } = getFileIcon(
     fileType ?? undefined,
     !!file.isFolder
@@ -61,11 +60,11 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
 
   const handleViewOnExplorer = async () => {
     try {
-      if (!arionHash) {
+      if (!arionCid) {
         console.error("No Arion Hash available");
         return;
       }
-      await openUrl(`https://hipstats.com/file-tracker/${arionHash}`);
+      await openUrl(`https://hipstats.com/file-tracker/${arionCid}`);
     } catch (error) {
       console.error("Failed to open Explorer:", error);
     }
@@ -107,12 +106,12 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
         </DetailRow>
 
         <DetailRow label="Arion Hash" lastChild>
-          {isHashValid ? (
+          {hasCid ? (
             <>
               <TableModule.CopyableCell
                 title="Copy Arion Hash"
                 toastMessage="Arion Hash Copied Successfully!"
-                copyAbleText={arionHash || ""}
+                copyAbleText={arionCid || ""}
                 isTable={true}
                 className="max-sm:[200px] max-w-[400px] h-full"
               />
@@ -125,7 +124,7 @@ const FileDetailsDialogContent: React.FC<FileDetailsDialogContentProps> = ({
               </div>
             </>
           ) : (
-            <span className="text-grey-50">No Arion Hash available</span>
+            <span className="text-grey-50">Not yet synced</span>
           )}
         </DetailRow>
       </div>

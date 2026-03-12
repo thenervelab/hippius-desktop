@@ -46,7 +46,8 @@ pub async fn save_api_token(account_id: &str, token: &str) -> Result<(), String>
 /// Retrieve the API auth token for this account.
 ///
 /// Returns the bearer token string or `None` if no token is stored.
-/// Falls back to the legacy `objectstore_auth` table and auto-migrates.
+/// Falls back to the legacy `objectstore_auth` table (auto-migrates),
+/// then to the `auth_session` table (auto-migrates).
 pub async fn get_api_token(account_id: &str) -> Result<Option<String>, String> {
     if let Some(pool) = DB_POOL.get() {
         // Prefer scoped record
@@ -58,7 +59,9 @@ pub async fn get_api_token(account_id: &str) -> Result<Option<String>, String> {
                 .map_err(|e| format!("DB error fetching API token: {}", e))?;
 
         if let Some(row) = scoped {
-            return Ok(row.get::<Option<String>, _>("temp_auth_key"));
+            if let Some(token) = row.get::<Option<String>, _>("temp_auth_key") {
+                return Ok(Some(token));
+            }
         }
 
         // Legacy single-row fallback — auto-migrate
@@ -77,6 +80,24 @@ pub async fn get_api_token(account_id: &str) -> Result<Option<String>, String> {
                 return Ok(Some(token));
             }
         }
+
+        // Fall back to auth_session table (session restored from DB
+        // without populating objectstore_auth_scoped)
+        let owner = crate::utils::account_key::account_key(account_id);
+        let session = sqlx::query(
+            "SELECT auth_token FROM auth_session WHERE owner = ? AND auth_token IS NOT NULL",
+        )
+        .bind(&owner)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("DB error fetching auth_session token: {}", e))?;
+        if let Some(row) = session {
+            if let Some(token) = row.get::<Option<String>, _>("auth_token") {
+                let _ = save_api_token(account_id, &token).await;
+                return Ok(Some(token));
+            }
+        }
+
         Ok(None)
     } else {
         Err("DB_POOL not initialized".to_string())

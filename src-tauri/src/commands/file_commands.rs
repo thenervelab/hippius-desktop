@@ -23,6 +23,8 @@ pub struct FileEntry {
     pub sync_status: String,
     /// Hex-encoded path_hash from the synced state (empty if not synced yet)
     pub arion_hash: String,
+    /// Arion CID from storage backend (empty if not available)
+    pub arion_cid: String,
 }
 
 /// Verify that `child` is contained within `parent` after canonicalization.
@@ -150,11 +152,19 @@ pub async fn remove_file(sync_path: String, name: String, label: Option<String>)
     Ok(())
 }
 
-/// Build a map of relative paths → hex-encoded path_hash for files whose
+/// Sync info for a single file: path_hash (hex) and optional Arion CID.
+struct SyncedFileInfo {
+    path_hash_hex: String,
+    arion_cid: String,
+}
+
+/// Build a map of relative paths → sync info for files whose
 /// `path_hash` appears in the drive's persisted `synced` tree.
 /// Returns `None` when the drive isn't available (e.g. logged out)
 /// so the caller can fall back to "unknown".
-async fn synced_paths_for_label(label: &str) -> Option<HashMap<String, String>> {
+async fn synced_paths_for_label(
+    label: &str,
+) -> Option<HashMap<String, SyncedFileInfo>> {
     let guard = HCFS_DRIVES.lock().await;
     let manager = guard.get(label)?;
     let state = manager.load_sync_state().ok()?;
@@ -162,9 +172,17 @@ async fn synced_paths_for_label(label: &str) -> Option<HashMap<String, String>> 
     let mut paths = HashMap::new();
     for (hash, rel_path) in &state.path_index {
         if state.synced.files.contains_key(hash) {
+            let arion_cid = state
+                .remote_arion_cids
+                .get(hash)
+                .cloned()
+                .unwrap_or_default();
             paths.insert(
                 rel_path.to_string_lossy().to_string(),
-                hex::encode(hash),
+                SyncedFileInfo {
+                    path_hash_hex: hex::encode(hash),
+                    arion_cid,
+                },
             );
         }
     }
@@ -224,15 +242,27 @@ pub async fn list_sync_folder(
         };
 
         // Folders don't have server-side entries — their children do
-        let (sync_status, arion_hash) = if is_folder {
-            ("synced".to_string(), String::new())
+        let (sync_status, arion_hash, arion_cid) = if is_folder {
+            ("synced".to_string(), String::new(), String::new())
         } else {
             match &synced_set {
                 Some(map) => match map.get(&relative_path) {
-                    Some(hash) => ("synced".to_string(), hash.clone()),
-                    None => ("pending".to_string(), String::new()),
+                    Some(info) => (
+                        "synced".to_string(),
+                        info.path_hash_hex.clone(),
+                        info.arion_cid.clone(),
+                    ),
+                    None => (
+                        "pending".to_string(),
+                        String::new(),
+                        String::new(),
+                    ),
                 },
-                None => ("unknown".to_string(), String::new()),
+                None => (
+                    "unknown".to_string(),
+                    String::new(),
+                    String::new(),
+                ),
             }
         };
 
@@ -247,6 +277,7 @@ pub async fn list_sync_folder(
                 .map(|d| d.as_secs()),
             sync_status,
             arion_hash,
+            arion_cid,
         });
     }
 

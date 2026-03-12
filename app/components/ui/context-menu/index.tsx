@@ -139,13 +139,13 @@ export default function FileContextMenu({
           </button>
 
           {!file.isFolder && (() => {
-            const resolvedHash = file.arionHash;
-            return resolvedHash && resolvedHash !== "pending" ? (
+            const cid = file.arionCid;
+            return cid && cid.length > 0 ? (
               <button
                 className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
                 onClick={async () => {
                   try {
-                    await openUrl(`https://hipstats.com/file-tracker/${resolvedHash}`);
+                    await openUrl(`https://hipstats.com/file-tracker/${cid}`);
                   } catch (error) {
                     console.error("Failed to open Explorer:", error);
                   }

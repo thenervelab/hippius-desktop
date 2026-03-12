@@ -47,6 +47,9 @@ import {
   hasAnySyncActivity,
 } from "../services/syncProgressService";
 import { isSyncConfiguredAtom } from "../global-atoms/unpinAtoms";
+import { queryClientAtom } from "jotai-tanstack-query";
+import { useAtomValue } from "jotai";
+import { REMOTE_STORAGE_STATS_QUERY_KEY } from "./api/useRemoteStorageStats";
 
 interface SyncOutcome {
   files_uploaded: number;
@@ -88,6 +91,8 @@ export function useSyncEvents() {
     useState<ProgressPayload | null>(null);
   const [lastOutcome, setLastOutcome] = useState<SyncOutcome | null>(null);
   const [lastError, setLastError] = useState<SyncError | null>(null);
+
+  const queryClient = useAtomValue(queryClientAtom);
 
   // Track completed files using a Set to avoid counting duplicates
   const completedFilesRef = useRef<Set<string>>(new Set());
@@ -306,6 +311,11 @@ export function useSyncEvents() {
               window.dispatchEvent(new CustomEvent("sync_files_completed_changed", {
                 detail: { filesCompleted: totalCompleted }
               }));
+
+              // Refresh storage stats (Total Files / Total Storage) on Home page
+              queryClient.invalidateQueries({
+                queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
+              });
             }
 
             // Check if session is still active (other drives pending)
@@ -477,7 +487,7 @@ export function useSyncEvents() {
         cleanupIntervalRef.current = null;
       }
     };
-  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setHasSyncErrorAtom, setSyncPercentAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, setSyncActionCountsAtom, setIsSyncConfiguredAtom, setSyncEngineHealthAtom, refreshProgressState]);
+  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setHasSyncErrorAtom, setSyncPercentAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, setSyncActionCountsAtom, setIsSyncConfiguredAtom, setSyncEngineHealthAtom, refreshProgressState, queryClient]);
 
   return {
     isSyncing,

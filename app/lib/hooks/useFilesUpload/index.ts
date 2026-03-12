@@ -3,8 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import { useUserFiles } from "@/app/lib/hooks/use-user-files";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { useSetAtom } from "jotai";
+import { useSetAtom, useAtomValue } from "jotai";
 import { uploadProgressAtom } from "@/app/components/page-sections/files/atoms/query-atoms";
+import { queryClientAtom } from "jotai-tanstack-query";
+import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import { toast } from "sonner";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
@@ -37,6 +39,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
   const { data: credits } = useUserCredits();
   const { refetch: refetchUserFiles } = useUserFiles();
   const { polkadotAddress } = useWalletAuth();
+  const queryClient = useAtomValue(queryClientAtom);
 
   const [requestState, setRequestState] = useState<
     "idle" | "uploading" | "submitting"
@@ -144,6 +147,7 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       // Refetch immediately so the file list shows the new files
       refetchUserFiles();
+      queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
       onSuccess?.();
     } catch (err) {
       setRequestState("idle");

@@ -53,6 +53,7 @@ interface SyncFileEntry {
   is_folder: boolean;
   size: number;
   modified: number | null;
+  arion_cid?: string;
 }
 
 interface FolderViewProps {
@@ -158,6 +159,7 @@ export default function FolderView({
             size: entry.size,
             createdAt: modifiedMs,
             arionHash: "",
+            arionCid: entry.arion_cid || "",
             source: filePath,
             minerIds: [],
             isAssigned: true,
