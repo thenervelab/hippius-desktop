@@ -60,7 +60,7 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
       const mnemonic = (await getMnemonic()) ?? undefined;
 
       // Deduplicate label: if "Documents" exists, try "Documents-2", "Documents-3", etc.
-      const existingPaths = await getAllSyncPaths(polkadotAddress).catch(() => []);
+      const existingPaths = await getAllSyncPaths(polkadotAddress).catch((err: unknown) => { console.warn("getAllSyncPaths failed:", err); return []; });
       const existingLabels = new Set(existingPaths.map((p) => p.label));
       let label = folderName;
       let suffix = 2;

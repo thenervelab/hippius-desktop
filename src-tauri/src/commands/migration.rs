@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tracing::info;
 
 #[derive(Debug, Clone, Serialize)]
 struct MigrationError {
@@ -523,7 +524,7 @@ pub async fn start_migration(
                     error: e.clone(),
                 },
             );
-            println!("[Migration] Background task failed: {e}");
+            info!("[Migration] Background task failed: {e}");
         }
     });
 
@@ -552,7 +553,7 @@ async fn run_migration_download(
 
     for file in files {
         if MIGRATION_CANCEL.load(Ordering::SeqCst) {
-            println!("[Migration] Cancelled by user");
+            info!("[Migration] Cancelled by user");
             break;
         }
 
@@ -566,8 +567,8 @@ async fn run_migration_download(
             .join(&file.bucket_name)
             .join(&file.key);
 
-        // Prevent path traversal via malicious S3 keys
-        if let Ok(canonical) = dest.canonicalize().or_else(|_| {
+        // Prevent path traversal via malicious S3 keys (fail-closed)
+        let canonical = dest.canonicalize().or_else(|_| {
             // File doesn't exist yet — canonicalize parent
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).ok();
@@ -580,8 +581,12 @@ async fn run_migration_download(
                     "no parent",
                 ))
             }
-        }) {
-            if !canonical.starts_with(sync_dir) {
+        });
+        match canonical {
+            Ok(canonical) if canonical.starts_with(sync_dir) => {
+                // Path is within sync directory — proceed
+            }
+            Ok(_) => {
                 failed += 1;
                 failed_keys.push(file.key.clone());
                 let _ = app.emit(
@@ -593,6 +598,23 @@ async fn run_migration_download(
                         ),
                         bucket: file.bucket_name.clone(),
                         error: "Path traversal detected".to_string(),
+                    },
+                );
+                continue;
+            }
+            Err(e) => {
+                // Cannot verify path safety — fail closed
+                failed += 1;
+                failed_keys.push(file.key.clone());
+                let _ = app.emit(
+                    "migration_file_error",
+                    MigrationFileError {
+                        file_name: format!(
+                            "{}/{}",
+                            file.bucket_name, file.key
+                        ),
+                        bucket: file.bucket_name.clone(),
+                        error: format!("Path verification failed: {e}"),
                     },
                 );
                 continue;

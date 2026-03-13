@@ -14,6 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Wry};
+use tracing::{info, warn};
 
 // === Connectivity Health ===
 
@@ -56,7 +57,10 @@ pub static SYNC_ENGINE_HEALTH: Lazy<Arc<Mutex<SyncEngineHealth>>> =
 pub fn get_health() -> SyncEngineHealth {
     SYNC_ENGINE_HEALTH
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in get_health");
+            poisoned.into_inner()
+        })
         .clone()
 }
 
@@ -66,14 +70,20 @@ where
 {
     let mut health = SYNC_ENGINE_HEALTH
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in update_health");
+            poisoned.into_inner()
+        });
     f(&mut health);
 }
 
 pub fn reset_health() {
     let mut health = SYNC_ENGINE_HEALTH
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in reset_health");
+            poisoned.into_inner()
+        });
     *health = SyncEngineHealth::default();
 }
 
@@ -124,6 +134,34 @@ pub fn is_review_timed_out(timeout_secs: i64) -> bool {
     }
     let now = chrono::Utc::now().timestamp_millis();
     (now - entered) > timeout_secs * 1000
+}
+
+// === Token Refresh In Progress ===
+
+/// Flag to block sync during token refresh to avoid 401 races.
+pub static TOKEN_REFRESH_IN_PROGRESS: Lazy<Arc<AtomicBool>> =
+    Lazy::new(|| Arc::new(AtomicBool::new(false)));
+
+/// Check if a token refresh is currently in progress.
+pub fn is_token_refreshing() -> bool {
+    TOKEN_REFRESH_IN_PROGRESS.load(Ordering::SeqCst)
+}
+
+/// RAII guard that sets TOKEN_REFRESH_IN_PROGRESS to true on creation
+/// and false on drop (including panics).
+pub struct TokenRefreshGuard;
+
+impl TokenRefreshGuard {
+    pub fn new() -> Self {
+        TOKEN_REFRESH_IN_PROGRESS.store(true, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for TokenRefreshGuard {
+    fn drop(&mut self) {
+        TOKEN_REFRESH_IN_PROGRESS.store(false, Ordering::SeqCst);
+    }
 }
 
 // === Consecutive Sync Failures (for backoff) ===
@@ -185,7 +223,10 @@ impl HcfsSyncState {
 pub fn get_or_create_state(label: &str) -> HcfsSyncState {
     let states = HCFS_SYNC_STATES
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in get_or_create_state");
+            poisoned.into_inner()
+        });
     states.get(label).cloned().unwrap_or_default()
 }
 
@@ -196,7 +237,10 @@ where
 {
     let mut states = HCFS_SYNC_STATES
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in update_state");
+            poisoned.into_inner()
+        });
     let state = states.entry(label.to_string()).or_default();
     f(state);
 }
@@ -205,7 +249,10 @@ where
 pub fn reset_all_states() {
     let mut states = HCFS_SYNC_STATES
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in reset_all_states");
+            poisoned.into_inner()
+        });
     states.clear();
 }
 
@@ -213,7 +260,10 @@ pub fn reset_all_states() {
 pub fn remove_state(label: &str) {
     let mut states = HCFS_SYNC_STATES
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in remove_state");
+            poisoned.into_inner()
+        });
     states.remove(label);
 }
 
@@ -235,7 +285,10 @@ pub static PENDING_ACTIVITY: Lazy<Arc<Mutex<Vec<SyncActivityItem>>>> =
 pub fn add_pending_activity(item: SyncActivityItem) {
     let mut pending = PENDING_ACTIVITY
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in add_pending_activity");
+            poisoned.into_inner()
+        });
     let already_exists = pending.iter().any(|existing| {
         existing.file_name == item.file_name
             && existing.action == item.action
@@ -253,21 +306,24 @@ pub fn commit_pending_activity_for_label(label: &str) {
     let items: Vec<SyncActivityItem> = {
         let mut pending = PENDING_ACTIVITY
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(|poisoned| {
+                warn!("Poisoned mutex recovered in commit_pending_activity_for_label");
+                poisoned.into_inner()
+            });
         let (matching, remaining): (Vec<_>, Vec<_>) =
             pending.drain(..).partition(|item| item.label == label);
         *pending = remaining;
         matching
     };
     if !items.is_empty() {
-        println!(
+        info!(
             "[Sync] Committing {} activity items for label '{}' to recent files",
             items.len(),
             label
         );
         update_state(label, |state| {
             for item in &items {
-                println!("[Sync] -> {} ({})", item.file_name, item.action);
+                info!("[Sync] -> {} ({})", item.file_name, item.action);
             }
             for item in items {
                 state.add_activity(item);
@@ -281,12 +337,15 @@ pub fn commit_pending_activity_for_label(label: &str) {
 pub fn discard_pending_activity_for_label(label: &str) {
     let mut pending = PENDING_ACTIVITY
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in discard_pending_activity_for_label");
+            poisoned.into_inner()
+        });
     let before = pending.len();
     pending.retain(|item| item.label != label);
     let removed = before - pending.len();
     if removed > 0 {
-        println!(
+        info!(
             "[Sync] Discarding {} pending activity items for label '{}' (sync failed or no real transfers)",
             removed, label
         );
@@ -297,9 +356,12 @@ pub fn discard_pending_activity_for_label(label: &str) {
 pub fn discard_all_pending_activity() {
     let mut pending = PENDING_ACTIVITY
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in discard_all_pending_activity");
+            poisoned.into_inner()
+        });
     if !pending.is_empty() {
-        println!(
+        info!(
             "[Sync] Discarding all {} pending activity items",
             pending.len()
         );
@@ -321,7 +383,10 @@ pub struct CombinedSyncState {
 pub fn get_sync_status() -> CombinedSyncState {
     let states = HCFS_SYNC_STATES
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in get_sync_status");
+            poisoned.into_inner()
+        });
 
     let is_syncing = states.values().any(|s| s.is_syncing);
     let last_sync_time = states.values().filter_map(|s| s.last_sync_time).max();
@@ -344,7 +409,10 @@ pub fn get_sync_status() -> CombinedSyncState {
 pub fn get_sync_activity(limit: Option<usize>, label: Option<String>) -> Vec<SyncActivityItem> {
     let states = HCFS_SYNC_STATES
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in get_sync_activity");
+            poisoned.into_inner()
+        });
     let max = limit.unwrap_or(50);
 
     if let Some(lbl) = label {

@@ -12,18 +12,20 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
 use subxt::{OnlineClient, PolkadotConfig};
-use tokio::time::sleep; // Add this import
+use tokio::time::sleep;
+use tracing::{info, warn};
 
 static SUBSTRATE_CLIENT: Lazy<RwLock<Option<Arc<OnlineClient<PolkadotConfig>>>>> =
     Lazy::new(|| RwLock::new(None));
 
 const MAX_RETRIES: usize = 10;
-const RETRY_DELAY_SECS: u64 = 5;
 
 pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
     // Check if we have an existing client
     let existing_client = {
-        let client = SUBSTRATE_CLIENT.read().unwrap();
+        let client = SUBSTRATE_CLIENT
+            .read()
+            .map_err(|e| format!("Substrate client lock failed: {e}"))?;
         client.clone()
     };
 
@@ -42,18 +44,23 @@ pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>,
         match OnlineClient::<PolkadotConfig>::from_url(&wss_endpoint).await {
             Ok(client) => {
                 let arc = Arc::new(client);
-                let mut client_lock = SUBSTRATE_CLIENT.write().unwrap();
+                let mut client_lock = SUBSTRATE_CLIENT
+                    .write()
+                    .map_err(|e| format!("Substrate client lock failed: {e}"))?;
                 *client_lock = Some(arc.clone());
-                println!(
-                    "[Substrate] Connected to node on attempt {} using endpoint: {}",
-                    attempt, wss_endpoint
+                info!(
+                    attempt,
+                    endpoint = %wss_endpoint,
+                    "Connected to Substrate node"
                 );
                 return Ok(arc);
             }
             Err(e) => {
-                eprintln!(
-                    "[Substrate] Failed to connect to node (attempt {}) using endpoint {}: {}",
-                    attempt, wss_endpoint, e
+                warn!(
+                    attempt,
+                    endpoint = %wss_endpoint,
+                    error = %e,
+                    "Failed to connect to Substrate node"
                 );
                 if attempt >= MAX_RETRIES {
                     return Err(format!(
@@ -61,16 +68,23 @@ pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>,
                         MAX_RETRIES, e
                     ));
                 }
-                sleep(Duration::from_secs(RETRY_DELAY_SECS)).await;
+                // Exponential backoff: 2^min(attempt,5) seconds + random jitter (0-1s)
+                let base_delay = 2u64.pow(attempt.min(5) as u32);
+                let jitter_ms = rand::random::<u64>() % 1000;
+                let delay = Duration::from_millis(base_delay * 1000 + jitter_ms);
+                sleep(delay).await;
             }
         }
     }
 }
 
 pub fn clear_substrate_client() {
-    let mut client = SUBSTRATE_CLIENT.write().unwrap();
-    *client = None;
-    println!("[Substrate] Cleared substrate client");
+    if let Ok(mut client) = SUBSTRATE_CLIENT.write() {
+        *client = None;
+        info!("Cleared substrate client");
+    } else {
+        warn!("Failed to acquire write lock to clear substrate client");
+    }
 }
 
 // Get the current WSS endpoint from database
@@ -112,7 +126,7 @@ pub async fn update_wss_endpoint(new_endpoint: String) -> Result<(), String> {
     if result.rows_affected() > 0 {
         // Clear the current client so it will reconnect with new endpoint
         clear_substrate_client();
-        println!("[Substrate] WSS endpoint updated to: {}", new_endpoint);
+        info!("WSS endpoint updated to: {}", new_endpoint);
         Ok(())
     } else {
         Err("Failed to update WSS endpoint".to_string())

@@ -401,4 +401,4 @@ const FileCard: React.FC<FileCardProps> = ({
   );
 };
 
-export default FileCard;
+export default React.memo(FileCard);

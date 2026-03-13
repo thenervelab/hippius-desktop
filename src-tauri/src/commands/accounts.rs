@@ -4,6 +4,7 @@ use sp_core::Pair;
 use sp_core::crypto::Ss58Codec;
 use sp_core::sr25519;
 use sqlx::Row;
+use tracing::{info, warn, error};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct SyncPathExport {
@@ -32,7 +33,7 @@ pub struct SubAccountExport {
 
 #[tauri::command]
 pub async fn import_app_data(params: ImportDataParams) -> Result<String, String> {
-    println!("[Import] Starting app data import...");
+    info!("[Import] Starting app data import...");
 
     let pool = match crate::DB_POOL.get() {
         Some(p) => p,
@@ -155,13 +156,13 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
     } else {
         message_parts.join("; ")
     };
-    println!("[Import] {}", success_message);
+    info!("[Import] {}", success_message);
     Ok(success_message)
 }
 
 #[tauri::command]
 pub async fn export_app_data() -> Result<ExportDataResult, String> {
-    println!("[Export] Starting app data export...");
+    info!("[Export] Starting app data export...");
 
     let pool = match crate::DB_POOL.get() {
         Some(p) => p,
@@ -219,37 +220,34 @@ pub async fn export_app_data() -> Result<ExportDataResult, String> {
 
 #[tauri::command]
 pub async fn reset_app() -> Result<(), String> {
-    println!("[Reset App] Starting app reset...");
+    info!("[Reset App] Starting app reset...");
 
     let pool = match crate::DB_POOL.get() {
         Some(p) => p,
         None => return Err("Database pool not initialized".to_string()),
     };
 
-    let tables_to_clear = vec!["sync_paths", "wss_endpoint", "sub_accounts"];
-
-    for table in tables_to_clear {
-        println!("[Reset App] Clearing table: {}", table);
-        if let Err(e) = sqlx::query(&format!("DELETE FROM {}", table))
-            .execute(pool)
-            .await
-        {
-            let error_message = format!("Failed to clear table {}: {}", table, e);
-            eprintln!("[Reset App] {}", error_message);
+    // Use explicit SQL per table to avoid dynamic table name injection
+    for (table, query) in [
+        ("sync_paths", "DELETE FROM sync_paths"),
+        ("wss_endpoint", "DELETE FROM wss_endpoint"),
+        ("sub_accounts", "DELETE FROM sub_accounts"),
+    ] {
+        if let Err(e) = sqlx::query(query).execute(pool).await {
+            error!("[Reset App] Failed to clear table {}: {}", table, e);
         }
     }
-    println!("[Reset App] All tables cleared.");
 
-    println!("[Reset App] Restoring default WSS endpoint...");
+    info!("[Reset App] Restoring default WSS endpoint...");
     if let Err(e) = sqlx::query("INSERT OR REPLACE INTO wss_endpoint (id, endpoint) VALUES (1, ?)")
         .bind(WSS_ENDPOINT)
         .execute(pool)
         .await
     {
-        eprintln!("[Reset App] Failed to restore default WSS endpoint: {}", e);
+        error!("[Reset App] Failed to restore default WSS endpoint: {}", e);
     }
 
-    println!("[Reset App] App reset completed.");
+    info!("[Reset App] App reset completed.");
     Ok(())
 }
 
@@ -278,7 +276,7 @@ pub async fn get_all_subaccount_addresses() -> Result<Vec<(String, String)>, Str
             let ss58 = pair.public().to_ss58check();
             result.push((account_id, ss58));
         } else {
-            eprintln!(
+            warn!(
                 "Failed to create keypair from phrase for account_id: {}",
                 account_id
             );

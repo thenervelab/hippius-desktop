@@ -81,6 +81,20 @@ export default function MultiFolderSyncManager() {
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
   const [pendingAction, setPendingAction] = useState<"sync" | null>(null);
 
+  /** Check remaining sync folders; if none left, reset onboarding state. */
+  const checkAndResetIfNoFolders = useCallback(async () => {
+    if (!polkadotAddress) return;
+    const remainingPaths = await getAllSyncPaths(polkadotAddress).catch((err: unknown) => {
+      console.warn("getAllSyncPaths failed:", err);
+      return [];
+    });
+    if (remainingPaths.length === 0) {
+      localStorage.removeItem(FILES_ONBOARDING_SKIPPED_KEY);
+      appStore.set(isSyncConfiguredAtom, false);
+    }
+    appStore.set(triggerSyncPathRefreshAtom, (prev) => prev + 1);
+  }, [polkadotAddress]);
+
   // ── Data loading ──────────────────────────────────────────────────────
 
   const loadFolders = useCallback(async () => {
@@ -178,16 +192,7 @@ export default function MultiFolderSyncManager() {
       toast.success("Folder removed from sync");
       refreshFoldersAndStats();
 
-      // Check if there are any remaining local sync folders
-      const remainingPaths = await getAllSyncPaths(polkadotAddress).catch(() => []);
-      if (remainingPaths.length === 0) {
-        // No more local sync folders — reset sync state so Files page
-        // shows the "Start Syncing" onboarding screen
-        localStorage.removeItem(FILES_ONBOARDING_SKIPPED_KEY);
-        appStore.set(isSyncConfiguredAtom, false);
-      }
-      // Signal FilesContainer to re-fetch its sync path state
-      appStore.set(triggerSyncPathRefreshAtom, (prev) => prev + 1);
+      await checkAndResetIfNoFolders();
     } catch (error) {
       console.error("Failed to remove folder:", error);
       toast.error("Failed to remove folder");
@@ -386,13 +391,7 @@ export default function MultiFolderSyncManager() {
       // server's user_summary to reflect the deleted files.
       refreshFoldersAndStats(2000);
 
-      // Check if there are any remaining local sync folders
-      const remainingPaths = await getAllSyncPaths(polkadotAddress).catch(() => []);
-      if (remainingPaths.length === 0) {
-        localStorage.removeItem(FILES_ONBOARDING_SKIPPED_KEY);
-        appStore.set(isSyncConfiguredAtom, false);
-      }
-      appStore.set(triggerSyncPathRefreshAtom, (prev) => prev + 1);
+      await checkAndResetIfNoFolders();
     } catch (error) {
       console.error("Failed to delete folder:", error);
       toast.error("Failed to delete folder from server");

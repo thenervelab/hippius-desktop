@@ -95,8 +95,14 @@ const UpdateSyncFolder: React.FC = () => {
 
     let cancelled = false;
     const poll = async () => {
+      const start = Date.now();
       while (!cancelled) {
         await new Promise((r) => setTimeout(r, 1000));
+        if (Date.now() - start > 30_000) {
+          toast.error("Timed out waiting for sync to stop");
+          setSyncEngineStatus("stopped");
+          break;
+        }
         try {
           const active = await invoke<boolean>("is_drive_active");
           if (!active && !cancelled) {

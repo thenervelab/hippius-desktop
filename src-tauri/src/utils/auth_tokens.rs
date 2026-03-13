@@ -218,25 +218,11 @@ pub async fn get_s3_credentials(account_id: &str) -> Result<Option<(String, Stri
     }
 }
 
-/// Set AWS_* env vars from stored S3 credentials (migration use only).
-pub async fn load_s3_credentials_into_env(account_id: &str) -> Result<(), String> {
-    clear_s3_env();
-    if let Some((access, secret)) = get_s3_credentials(account_id).await? {
-        unsafe {
-            std::env::set_var("AWS_ACCESS_KEY_ID", &access);
-            std::env::set_var("AWS_SECRET_ACCESS_KEY", &secret);
-            std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
-        }
-        Ok(())
-    } else {
-        Err("No stored S3 credentials".to_string())
-    }
-}
-
-/// Ensure S3 env vars are set, fetching new credentials via the API token if needed
-/// (migration use only).
+/// Ensure S3 credentials are stored in the DB, fetching from API if needed
+/// (migration use only). Does NOT set environment variables.
 pub async fn ensure_s3_credentials(account_id: &str) -> Result<(), String> {
-    if load_s3_credentials_into_env(account_id).await.is_ok() {
+    // Check if we already have credentials in the DB
+    if get_s3_credentials(account_id).await?.is_some() {
         return Ok(());
     }
 
@@ -294,13 +280,5 @@ pub async fn ensure_s3_credentials(account_id: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to parse S3 credentials response: {}", e))?;
 
-    save_s3_credentials(account_id, &parsed.access_key_id, &parsed.secret).await?;
-    load_s3_credentials_into_env(account_id).await
-}
-
-fn clear_s3_env() {
-    unsafe {
-        std::env::remove_var("AWS_ACCESS_KEY_ID");
-        std::env::remove_var("AWS_SECRET_ACCESS_KEY");
-    }
+    save_s3_credentials(account_id, &parsed.access_key_id, &parsed.secret).await
 }

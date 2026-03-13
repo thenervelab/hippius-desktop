@@ -6,6 +6,7 @@ import {
   PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
 import { useEffect } from "react";
+import { logger } from "@/lib/utils/logger";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveResource } from "@tauri-apps/api/path";
 import {
@@ -137,7 +138,7 @@ function isUserLoggedIn(): boolean {
           return true;
         }
       } else {
-        console.log("[Tray] Session expired");
+        logger.debug("[Tray] Session expired");
       }
     }
 
@@ -779,7 +780,7 @@ async function setTrayIconSyncing(
 async function updateTraySyncPercent(percent: number | null) {
   // Use the same mutex as updateTraySyncLabel
   if (isUpdatingTrayLabel) {
-    console.log("[TraySync] Skipping percent update - already in progress");
+    logger.debug("[TraySync] Skipping percent update - already in progress");
     return;
   }
   isUpdatingTrayLabel = true;

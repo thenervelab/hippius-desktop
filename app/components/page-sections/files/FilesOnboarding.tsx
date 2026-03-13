@@ -88,8 +88,8 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
       setIsLoading(true);
 
       const [syncPaths, remoteList] = await Promise.all([
-        getAllSyncPaths(polkadotAddress).catch(() => []),
-        listRemoteFolders(polkadotAddress).catch(() => []),
+        getAllSyncPaths(polkadotAddress).catch((err: unknown) => { console.warn("getAllSyncPaths failed:", err); return []; }),
+        listRemoteFolders(polkadotAddress).catch((err: unknown) => { console.warn("listRemoteFolders failed:", err); return []; }),
       ]);
 
       const localFolders: SyncFolder[] = await Promise.all(

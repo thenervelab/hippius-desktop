@@ -9,6 +9,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use tracing::warn;
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -278,7 +279,10 @@ pub fn sp_start_session(
 ) -> Result<SyncSession, String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_start_session");
+            poisoned.into_inner()
+        });
 
     // If there's an existing active session, move its completed files to recent
     if state
@@ -323,7 +327,10 @@ pub fn sp_merge_into_session(
 ) -> Result<(), String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_merge_into_session");
+            poisoned.into_inner()
+        });
 
     let now = now_ms();
 
@@ -366,7 +373,10 @@ pub fn sp_merge_into_session(
 pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result<(), String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_complete_session");
+            poisoned.into_inner()
+        });
 
     let now = now_ms();
 
@@ -427,7 +437,10 @@ pub fn sp_complete_session(files_uploaded: u32, files_downloaded: u32) -> Result
 pub fn sp_stop_session() -> Result<(), String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_stop_session");
+            poisoned.into_inner()
+        });
 
     if let Some(session) = state.current_session.as_mut() {
         session.is_active = false;
@@ -447,7 +460,10 @@ pub fn sp_update_file_progress(
 ) -> Result<Option<SyncFile>, String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_update_file_progress");
+            poisoned.into_inner()
+        });
 
     let now = now_ms();
 
@@ -500,7 +516,10 @@ pub fn sp_update_file_progress(
 pub fn sp_complete_pending_files() -> Result<(), String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_complete_pending_files");
+            poisoned.into_inner()
+        });
 
     let now = now_ms();
 
@@ -529,7 +548,10 @@ pub fn sp_mark_pending_files_as_failed(
 ) -> Result<(), String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_mark_pending_files_as_failed");
+            poisoned.into_inner()
+        });
 
     let now = now_ms();
 
@@ -598,7 +620,10 @@ pub fn sp_mark_pending_files_as_failed(
 pub fn sp_mark_all_pending_files_as_failed(error_message: String) -> Result<(), String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_mark_all_pending_files_as_failed");
+            poisoned.into_inner()
+        });
 
     let now = now_ms();
 
@@ -624,7 +649,10 @@ pub fn sp_mark_all_pending_files_as_failed(error_message: String) -> Result<(), 
 pub fn sp_mark_file_error(path: String, error: String) -> Result<(), String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_mark_file_error");
+            poisoned.into_inner()
+        });
 
     let now = now_ms();
 
@@ -644,7 +672,10 @@ pub fn sp_mark_file_error(path: String, error: String) -> Result<(), String> {
 pub fn sp_get_session_files() -> Result<Vec<SyncFile>, String> {
     let state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_get_session_files");
+            poisoned.into_inner()
+        });
 
     let files = match &state.current_session {
         Some(session) => session
@@ -663,7 +694,10 @@ pub fn sp_get_session_files() -> Result<Vec<SyncFile>, String> {
 pub fn sp_get_recent_files() -> Result<Vec<RecentFile>, String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_get_recent_files");
+            poisoned.into_inner()
+        });
 
     clean_expired(&mut state);
 
@@ -681,7 +715,10 @@ pub fn sp_get_recent_files() -> Result<Vec<RecentFile>, String> {
 pub fn sp_get_tray_menu_files() -> Result<Vec<serde_json::Value>, String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_get_tray_menu_files");
+            poisoned.into_inner()
+        });
 
     clean_expired(&mut state);
 
@@ -739,7 +776,10 @@ pub fn sp_get_tray_menu_files() -> Result<Vec<serde_json::Value>, String> {
 pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
     let state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_get_overall_progress");
+            poisoned.into_inner()
+        });
 
     let session = match &state.current_session {
         Some(s) => s,
@@ -831,7 +871,10 @@ pub fn sp_get_overall_progress() -> Result<OverallProgress, String> {
 pub fn sp_has_any_sync_activity() -> Result<bool, String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_has_any_sync_activity");
+            poisoned.into_inner()
+        });
 
     clean_expired(&mut state);
 
@@ -849,7 +892,10 @@ pub fn sp_has_any_sync_activity() -> Result<bool, String> {
 pub fn sp_cleanup_expired_files() -> Result<u32, String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_cleanup_expired_files");
+            poisoned.into_inner()
+        });
 
     let before = state.recent_files.len();
     clean_expired(&mut state);
@@ -862,7 +908,10 @@ pub fn sp_cleanup_expired_files() -> Result<u32, String> {
 pub fn sp_record_deleted_file(file_name: String, size_bytes: u64) -> Result<(), String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_record_deleted_file");
+            poisoned.into_inner()
+        });
 
     let now = now_ms();
     let session_id = state
@@ -898,7 +947,10 @@ pub fn sp_record_deleted_file(file_name: String, size_bytes: u64) -> Result<(), 
 pub fn sp_clear_all_data() -> Result<(), String> {
     let mut state = SYNC_PROGRESS
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| {
+            warn!("Poisoned mutex recovered in sp_clear_all_data");
+            poisoned.into_inner()
+        });
 
     state.current_session = None;
     state.recent_files.clear();

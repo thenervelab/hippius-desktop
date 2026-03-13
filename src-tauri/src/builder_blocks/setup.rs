@@ -443,6 +443,82 @@ async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
+/// Migrate account keys from the legacy 8-char format to the new 16-char format.
+///
+/// Scans `auth_session` for rows where `owner` matches the legacy hash of
+/// `substrate_address`, then updates `owner` across all tables in a transaction.
+/// No-op if already migrated or if no sessions exist.
+async fn migrate_account_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    use crate::utils::account_key::{account_key, account_key_legacy};
+
+    // Find sessions that still use the legacy 8-char owner format
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT owner, substrate_address FROM auth_session WHERE substrate_address IS NOT NULL AND substrate_address != ''"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (owner, substrate_address) in &rows {
+        let legacy = account_key_legacy(substrate_address);
+        let new_key = account_key(substrate_address);
+
+        // Only migrate if owner matches legacy format and differs from new
+        if owner == &legacy && owner != &new_key {
+            println!(
+                "[Setup] Migrating account key for {}: {} -> {}",
+                &substrate_address[..8.min(substrate_address.len())],
+                legacy,
+                new_key
+            );
+
+            let mut tx = pool.begin().await?;
+
+            // Update owner in all tables that use it
+            let tables = [
+                "auth_session",
+                "objectstore_auth_scoped",
+                "sync_paths",
+                "user_preferences",
+                "address_book",
+                "notifications",
+                "wallet_store",
+                "hcfs_config",
+            ];
+
+            for table in tables {
+                // Use explicit per-table queries to avoid SQL injection
+                let query = format!("UPDATE {} SET owner = ? WHERE owner = ?", table);
+                let result = sqlx::query(&query)
+                    .bind(&new_key)
+                    .bind(&legacy)
+                    .execute(&mut *tx)
+                    .await;
+                match result {
+                    Ok(r) if r.rows_affected() > 0 => {
+                        println!(
+                            "[Setup]   Updated {} row(s) in {}",
+                            r.rows_affected(),
+                            table
+                        );
+                    }
+                    Ok(_) => {} // No rows to update in this table
+                    Err(e) => {
+                        // Table may not exist yet — non-fatal
+                        eprintln!(
+                            "[Setup]   Warning: could not update {}: {}",
+                            table, e
+                        );
+                    }
+                }
+            }
+
+            tx.commit().await?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
             println!("[Setup] .setup() closure called in setup.rs");
@@ -502,6 +578,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 if let Err(e) = ensure_table_schema(&pool).await {
                     eprintln!("[Setup] Failed to ensure table schema: {}", e);
                     return;
+                }
+
+                // Migrate account keys from 8-char to 16-char format
+                if let Err(e) = migrate_account_keys(&pool).await {
+                    eprintln!("[Setup] Account key migration failed (non-fatal): {}", e);
                 }
 
                 // Initialize WSS endpoint if it doesn't exist

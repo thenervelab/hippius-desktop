@@ -11,7 +11,8 @@ use alloy_signer_local::{MnemonicBuilder, PrivateKeySigner};
 use sha2::{Digest, Sha256};
 use sp_core::crypto::Ss58Codec;
 use sp_core::Pair as _;
-use zeroize::Zeroize;
+use tracing::warn;
+use zeroize::Zeroizing;
 
 use crate::auth_state::AUTH_STATE;
 use crate::commands::syncing::get_mnemonic_for_account;
@@ -221,12 +222,10 @@ pub async fn login_with_mnemonic(
     referral_code: Option<String>,
     logout_time_minutes: Option<i64>,
 ) -> Result<LoginResult, String> {
-    let mut mnemonic = mnemonic;
+    let mnemonic = Zeroizing::new(mnemonic);
 
-    // 1. Derive keys, then zeroize mnemonic
-    let derive_result = derive_keys(&mnemonic);
-    mnemonic.zeroize();
-    let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_result?;
+    // 1. Derive keys (mnemonic auto-zeroized on drop)
+    let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     // 2. Challenge-response auth
     let client = reqwest::Client::new();
@@ -241,7 +240,9 @@ pub async fn login_with_mnemonic(
 
     // 3. Store keypair in AUTH_STATE
     {
-        let mut state = AUTH_STATE.lock().unwrap();
+        let mut state = AUTH_STATE
+            .lock()
+            .map_err(|e| format!("Auth state lock failed: {e}"))?;
         state.sr25519_pair = Some(sr25519_pair);
         state.substrate_address = Some(substrate_address.clone());
         state.eth_address = Some(eth_address.clone());
@@ -309,7 +310,7 @@ pub async fn set_passcode(
     passcode: String,
     mnemonic: String,
 ) -> Result<(), String> {
-    let mut mnemonic = mnemonic;
+    let mnemonic = Zeroizing::new(mnemonic);
 
     let passcode_hash = hash_passcode(&passcode);
 
@@ -320,7 +321,6 @@ pub async fn set_passcode(
     // we use a simpler approach: just store the encrypted data.
     let encrypted = {
         use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
-        use sha2::Sha256 as Sha256Hasher;
 
         // CryptoJS key derivation: single MD5 of passphrase → key + IV
         // For forward-compatibility, use SHA-256 and a random salt
@@ -346,7 +346,7 @@ pub async fn set_passcode(
         base64::engine::general_purpose::STANDARD.encode(&output)
     };
 
-    mnemonic.zeroize();
+    // mnemonic is auto-zeroized on drop via Zeroizing wrapper
 
     // Store in wallet_store
     let pool = DB_POOL.get().ok_or("Database not initialized")?;
@@ -456,19 +456,16 @@ pub async fn unlock_with_passcode(
         return Err("Incorrect passcode".to_string());
     }
 
-    // 3. Decrypt mnemonic
-    let mut mnemonic = decrypt_mnemonic_aes(&encrypted_mnemonic, &passcode)?;
+    // 3. Decrypt mnemonic (auto-zeroized on drop)
+    let mnemonic = Zeroizing::new(decrypt_mnemonic_aes(&encrypted_mnemonic, &passcode)?);
 
     // 4. Validate mnemonic
     if bip39::Mnemonic::parse_in_normalized(bip39::Language::English, &mnemonic).is_err() {
-        mnemonic.zeroize();
         return Err("Decrypted mnemonic is invalid".to_string());
     }
 
-    // 5. Derive keys, then zeroize mnemonic
-    let derive_result = derive_keys(&mnemonic);
-    mnemonic.zeroize();
-    let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_result?;
+    // 5. Derive keys (mnemonic auto-zeroized on drop)
+    let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     // 6. Challenge-response auth to get a fresh token
     let client = reqwest::Client::new();
@@ -477,7 +474,9 @@ pub async fn unlock_with_passcode(
 
     // 7. Store keypair in AUTH_STATE
     {
-        let mut state = AUTH_STATE.lock().unwrap();
+        let mut state = AUTH_STATE
+            .lock()
+            .map_err(|e| format!("Auth state lock failed: {e}"))?;
         state.sr25519_pair = Some(sr25519_pair);
         state.substrate_address = Some(substrate_address.clone());
         state.eth_address = Some(eth_address.clone());
@@ -522,13 +521,14 @@ pub async fn refresh_auth_token(
     app: tauri::AppHandle,
     account_id: String,
 ) -> Result<(), String> {
-    // 1. Get mnemonic from Drive
-    let mut mnemonic = get_mnemonic_for_account(&account_id).await?;
+    // Block sync during token refresh to avoid 401 races
+    let _guard = crate::sync_shared::TokenRefreshGuard::new();
 
-    // 2. Derive keys, then zeroize
-    let derive_result = derive_keys(&mnemonic);
-    mnemonic.zeroize();
-    let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_result?;
+    // 1. Get mnemonic from Drive (auto-zeroized on drop)
+    let mnemonic = Zeroizing::new(get_mnemonic_for_account(&account_id).await?);
+
+    // 2. Derive keys
+    let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
 
     // 3. Challenge-response
     let client = reqwest::Client::new();
@@ -559,13 +559,15 @@ pub async fn refresh_auth_token(
     )
     .await
     {
-        println!("[Auth] Warning: could not update live drive token: {e}");
+        warn!("Could not update live drive token: {e}");
     }
 
     // 7. Emit event to frontend
-    let _ = app.emit("auth_token_refreshed", serde_json::json!({
+    if let Err(e) = app.emit("auth_token_refreshed", serde_json::json!({
         "substrateAddress": substrate_address,
-    }));
+    })) {
+        warn!(error = %e, "Failed to emit auth_token_refreshed");
+    }
 
     Ok(())
 }
@@ -577,7 +579,9 @@ pub async fn refresh_auth_token(
 pub async fn auth_logout(account_id: String) -> Result<(), String> {
     // 1. Clear AUTH_STATE
     {
-        let mut state = AUTH_STATE.lock().unwrap();
+        let mut state = AUTH_STATE
+            .lock()
+            .map_err(|e| format!("Auth state lock failed: {e}"))?;
         state.sr25519_pair = None;
         state.substrate_address = None;
         state.eth_address = None;

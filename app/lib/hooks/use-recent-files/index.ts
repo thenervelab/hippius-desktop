@@ -74,7 +74,7 @@ const useRecentFiles = () => {
         // Fetch sync paths and activity items in parallel
         const [items, syncPaths] = await Promise.all([
           invoke<SyncActivityItem[]>("get_sync_activity", { limit: 50 }),
-          getAllSyncPaths(polkadotAddress).catch(() => [] as SyncPathResult[]),
+          getAllSyncPaths(polkadotAddress).catch((err: unknown) => { console.warn("getAllSyncPaths failed:", err); return [] as SyncPathResult[]; }),
         ]);
 
         if (!items || items.length === 0) {

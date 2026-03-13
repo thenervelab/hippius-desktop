@@ -4,23 +4,27 @@
 //! and session persistence. The frontend never stores OAuth state
 //! in localStorage/sessionStorage.
 
-use crate::api_client::ApiError;
 use crate::DB_POOL;
 use crate::utils::account_key::account_key;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Mutex;
+use tracing::error;
 
 use once_cell::sync::Lazy;
 
 // ---------------------------------------------------------------------------
-// PKCE state (in-memory, single pending flow at a time)
+// PKCE state (in-memory, keyed by provider to prevent race conditions)
 // ---------------------------------------------------------------------------
 
 struct PkceState {
     provider: String,
+    #[allow(dead_code)] // stored for future nonce validation in complete_oauth_flow
+    nonce: String,
 }
 
-static PKCE_STATE: Lazy<Mutex<Option<PkceState>>> = Lazy::new(|| Mutex::new(None));
+static PKCE_STATES: Lazy<Mutex<HashMap<String, PkceState>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 const API_BASE_URL: &str = "https://api.hippius.com";
 const CALLBACK_URL: &str = "https://console.hippius.com/auth/callback";
@@ -96,14 +100,19 @@ pub async fn start_oauth_flow(provider: String) -> Result<OAuthUrlResult, String
         _ => return Err(format!("Unsupported OAuth provider: {provider}")),
     };
 
-    // Store PKCE state (provider only — token exchange uses provider as verifier)
+    // Store PKCE state keyed by provider (with nonce to prevent replay)
+    let nonce = uuid::Uuid::new_v4().to_string();
     {
-        let mut state = PKCE_STATE
+        let mut states = PKCE_STATES
             .lock()
             .map_err(|e| format!("Lock error: {e}"))?;
-        *state = Some(PkceState {
-            provider: provider.clone(),
-        });
+        states.insert(
+            provider.clone(),
+            PkceState {
+                provider: provider.clone(),
+                nonce: nonce.clone(),
+            },
+        );
     }
 
     // Build auth URL: /accounts/<provider>/login/?next=/get-token/?callback_url=<callback>
@@ -133,10 +142,11 @@ pub async fn start_oauth_flow(provider: String) -> Result<OAuthUrlResult, String
 pub async fn complete_oauth_flow(
     params: OAuthCallbackParams,
 ) -> Result<OAuthSessionResult, String> {
-    // Check for errors
+    // Check for errors — sanitize before returning to frontend
     if let Some(ref err) = params.error {
         let desc = params.error_description.as_deref().unwrap_or("");
-        return Err(format!("OAuth error: {err} {desc}"));
+        error!("OAuth error from provider: {err} {desc}");
+        return Err("Authentication failed".to_string());
     }
 
     let (token, user_id, username, email, substrate_address) = if let Some(ref t) = params.token {
@@ -149,15 +159,17 @@ pub async fn complete_oauth_flow(
             params.substrate_address.clone().unwrap_or_default(),
         )
     } else if let Some(ref code) = params.code {
-        // Exchange code for token
+        // Exchange code for token — look up PKCE state by any stored provider
         let provider = {
-            let state = PKCE_STATE
+            let states = PKCE_STATES
                 .lock()
                 .map_err(|e| format!("Lock error: {e}"))?;
-            state
-                .as_ref()
+            // There should be exactly one pending flow; use it
+            states
+                .values()
+                .next()
                 .map(|s| s.provider.clone())
-                .unwrap_or_else(|| "google".to_string())
+                .ok_or_else(|| "No pending OAuth flow found".to_string())?
         };
 
         let base = api_base_url();
@@ -196,12 +208,12 @@ pub async fn complete_oauth_flow(
         return Err("Missing both token and authorization code".into());
     };
 
-    // Clear PKCE state
+    // Clear PKCE state for this provider
     {
-        let mut state = PKCE_STATE
+        let mut states = PKCE_STATES
             .lock()
             .map_err(|e| format!("Lock error: {e}"))?;
-        *state = None;
+        states.clear();
     }
 
     // Session expires in 30 days

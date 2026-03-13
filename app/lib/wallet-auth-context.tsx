@@ -13,6 +13,7 @@ import {
 } from "./helpers/hippiusDesktopDB";
 
 import { useRouter } from "next/navigation";
+import { logger } from "@/lib/utils/logger";
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -52,6 +53,22 @@ interface ApiAuth {
   tokenExpiry: number;
   userId: number | null;
   username: string | null;
+}
+
+/** Build an OAuthSession-compatible object from a login/unlock result. */
+function buildOAuthSession(
+  result: LoginResult,
+  providerOverride?: string
+): import("@/app/lib/types/oAuth").OAuthSession {
+  return {
+    token: result.token,
+    userId: typeof result.userId === "number" ? result.userId : 0,
+    username: result.username,
+    provider: (providerOverride ?? result.provider ?? "mnemonic") as import("@/app/lib/types/oAuth").OAuthSession["provider"],
+    expiresAt: new Date(result.tokenExpiry).toISOString(),
+    substrateAddress: result.substrateAddress,
+    isNew: result.isNew,
+  };
 }
 
 async function checkMigrationAfterLogin(accountId: string) {
@@ -153,9 +170,9 @@ export function WalletAuthProvider({
   const logout = useCallback(
     async (redirectPath?: string) => {
       try {
-        console.log("[WalletAuth] Starting sync cleanup...");
+        logger.debug("[WalletAuth] Starting sync cleanup...");
         await invoke("stop_sync").catch(() => { });
-        console.log("[WalletAuth] Sync cleanup completed");
+        logger.debug("[WalletAuth] Sync cleanup completed");
 
         // Read from ref so timer callbacks get the current address
         const currentAddress = polkadotAddressRef.current;
@@ -272,7 +289,7 @@ export function WalletAuthProvider({
                   { accountId: oauthSessionData.substrateAddress }
                 );
                 if (!apiAuth) {
-                  console.log("[WalletAuth] Token expired in DB, clearing session");
+                  logger.debug("[WalletAuth] Token expired in DB, clearing session");
                   localStorage.removeItem("hippius_oauth_session");
                   localStorage.removeItem("hippius_oauth_session_expiry");
                   await logout("/login");
@@ -308,7 +325,7 @@ export function WalletAuthProvider({
                 }
               }
 
-              console.log("[WalletAuth] OAuth session restored");
+              logger.debug("[WalletAuth] OAuth session restored");
               return;
             } catch (error) {
               console.error(
@@ -319,7 +336,7 @@ export function WalletAuthProvider({
               localStorage.removeItem("hippius_oauth_session_expiry");
             }
           } else {
-            console.log("[WalletAuth] OAuth session expired, clearing");
+            logger.debug("[WalletAuth] OAuth session expired, clearing");
             localStorage.removeItem("hippius_oauth_session");
             localStorage.removeItem("hippius_oauth_session_expiry");
           }
@@ -335,14 +352,12 @@ export function WalletAuthProvider({
 
       // Validate token expiry via Rust
       if (lastSession.tokenExpiry && lastSession.tokenExpiry < Date.now()) {
-        console.log("[WalletAuth] Token expired for session, redirecting to login");
+        logger.debug("[WalletAuth] Token expired for session, redirecting to login");
         if (lastSession.substrateAddress) {
           await invoke("clear_auth_session", { accountId: lastSession.substrateAddress }).catch((err: unknown) =>
             console.warn("[WalletAuth] Failed to clear expired auth session:", err)
           );
         }
-        localStorage.removeItem("hippius_token");
-        localStorage.removeItem("hippius_token_expiry");
         await logout("/login");
         return;
       }
@@ -410,12 +425,12 @@ export function WalletAuthProvider({
         return;
       }
       refreshingTokenRef.current = true;
-      lastRefreshAttemptRef.current = now;
-      console.log("[WalletAuth] Auth token expired, attempting silent refresh");
+      logger.debug("[WalletAuth] Auth token expired, attempting silent refresh");
 
       try {
         await invoke("refresh_auth_token", { accountId: polkadotAddress });
-        console.log("[WalletAuth] Auth token refreshed successfully");
+        lastRefreshAttemptRef.current = Date.now();
+        logger.debug("[WalletAuth] Auth token refreshed successfully");
       } catch (err) {
         console.error("[WalletAuth] Silent token refresh failed:", err);
       } finally {
@@ -453,17 +468,8 @@ export function WalletAuthProvider({
       setAuthType("mnemonic");
       setIsAuthenticated(true);
 
-      // Build OAuthSession so API Token settings tab can display the token
       if (result.token) {
-        setOAuthSessionState({
-          token: result.token,
-          userId: typeof result.userId === "number" ? result.userId : 0,
-          username: result.username,
-          provider: "mnemonic",
-          expiresAt: new Date(result.tokenExpiry).toISOString(),
-          substrateAddress: result.substrateAddress,
-          isNew: false,
-        });
+        setOAuthSessionState(buildOAuthSession(result, "mnemonic"));
       }
 
       const effMinutes = logoutTimeInMinutes ?? 1440;
@@ -507,17 +513,8 @@ export function WalletAuthProvider({
       setAuthType("mnemonic");
       setIsAuthenticated(true);
 
-      // Build OAuthSession so API Token settings tab can display the token
       if (result.token) {
-        setOAuthSessionState({
-          token: result.token,
-          userId: typeof result.userId === "number" ? result.userId : 0,
-          username: result.username,
-          provider: "mnemonic",
-          expiresAt: new Date(result.tokenExpiry).toISOString(),
-          substrateAddress: result.substrateAddress,
-          isNew: false,
-        });
+        setOAuthSessionState(buildOAuthSession(result, "mnemonic"));
       }
 
       if (logoutTimerRef.current) {
@@ -546,7 +543,7 @@ export function WalletAuthProvider({
     setIsLoading(true);
     sessionMnemonicRef.current = inputMnemonic;
     try {
-      console.log("[WalletAuth] Starting mnemonic login via Rust");
+      logger.debug("[WalletAuth] Starting mnemonic login via Rust");
 
       const result = await invoke<LoginResult>("login_with_mnemonic", {
         mnemonic: inputMnemonic,
@@ -554,21 +551,12 @@ export function WalletAuthProvider({
         logoutTimeMinutes: -1,
       });
 
-      console.log("[WalletAuth] Mnemonic login successful:", {
+      logger.debug("[WalletAuth] Mnemonic login successful:", {
         substrate: result.substrateAddress,
         eth: result.ethAddress,
       });
 
-      // Build an OAuthSession-compatible object for state consumers
-      const session: import("@/app/lib/types/oAuth").OAuthSession = {
-        token: result.token,
-        userId: typeof result.userId === "number" ? result.userId : 0,
-        username: result.username,
-        provider: "mnemonic",
-        expiresAt: new Date(result.tokenExpiry).toISOString(),
-        substrateAddress: result.substrateAddress,
-        isNew: result.isNew,
-      };
+      const session = buildOAuthSession(result, "mnemonic");
 
       setPolkadotAddress(result.substrateAddress);
       setOAuthSessionState(session);
@@ -591,7 +579,7 @@ export function WalletAuthProvider({
   const setOAuthSession = async (
     session: import("@/app/lib/types/oAuth").OAuthSession
   ) => {
-    console.log("[WalletAuth] Setting OAuth session");
+    logger.debug("[WalletAuth] Setting OAuth session");
 
     // Validate token
     if (!session.token || session.token.trim() === "") {
@@ -610,7 +598,7 @@ export function WalletAuthProvider({
     setAuthType("oauth");
     setIsAuthenticated(true);
 
-    console.log("[WalletAuth] OAuth session persisted and state updated");
+    logger.debug("[WalletAuth] OAuth session persisted and state updated");
 
     if (session.substrateAddress && !syncInitialized.current) {
       const mnemonic = await ensureSyncMnemonic(session.substrateAddress);

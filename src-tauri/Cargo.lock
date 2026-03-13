@@ -36,7 +36,6 @@ dependencies = [
  "parity-scale-codec",
  "rand 0.10.0",
  "rand 0.8.5",
- "rayon",
  "reqwest 0.13.2",
  "serde",
  "serde_json",
