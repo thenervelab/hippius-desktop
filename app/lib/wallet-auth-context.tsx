@@ -351,6 +351,19 @@ export function WalletAuthProvider({
       }
       setAuthType(lastSession.provider === "oauth" ? "oauth" : "mnemonic");
 
+      // Build OAuthSession so the API Token settings tab can display the token
+      if (lastSession.authToken) {
+        setOAuthSessionState({
+          token: lastSession.authToken,
+          userId: lastSession.userId ?? 0,
+          username: lastSession.username ?? "",
+          provider: (lastSession.provider as import("@/app/lib/types/oAuth").OAuthSession["provider"]) ?? "mnemonic",
+          expiresAt: lastSession.tokenExpiry ? new Date(lastSession.tokenExpiry).toISOString() : "",
+          substrateAddress: lastSession.substrateAddress ?? undefined,
+          isNew: false,
+        });
+      }
+
       const effMinutes = lastSession.logoutTimeMinutes ?? 1440;
       const timeRemaining = effMinutes === -1 ? Infinity : effMinutes * 60_000;
       setSessionTimeRemaining(timeRemaining === Infinity ? null : timeRemaining);
@@ -435,6 +448,19 @@ export function WalletAuthProvider({
       setAuthType("mnemonic");
       setIsAuthenticated(true);
 
+      // Build OAuthSession so API Token settings tab can display the token
+      if (result.token) {
+        setOAuthSessionState({
+          token: result.token,
+          userId: typeof result.userId === "number" ? result.userId : 0,
+          username: result.username,
+          provider: "mnemonic",
+          expiresAt: new Date(result.tokenExpiry).toISOString(),
+          substrateAddress: result.substrateAddress,
+          isNew: false,
+        });
+      }
+
       const effMinutes = logoutTimeInMinutes ?? 1440;
       const timeRemaining = effMinutes === -1 ? Infinity : effMinutes * 60_000;
       setSessionTimeRemaining(timeRemaining === Infinity ? null : timeRemaining);
@@ -475,6 +501,19 @@ export function WalletAuthProvider({
       setPolkadotAddress(result.substrateAddress);
       setAuthType("mnemonic");
       setIsAuthenticated(true);
+
+      // Build OAuthSession so API Token settings tab can display the token
+      if (result.token) {
+        setOAuthSessionState({
+          token: result.token,
+          userId: typeof result.userId === "number" ? result.userId : 0,
+          username: result.username,
+          provider: "mnemonic",
+          expiresAt: new Date(result.tokenExpiry).toISOString(),
+          substrateAddress: result.substrateAddress,
+          isNew: false,
+        });
+      }
 
       if (logoutTimerRef.current) {
         clearTimeout(logoutTimerRef.current);

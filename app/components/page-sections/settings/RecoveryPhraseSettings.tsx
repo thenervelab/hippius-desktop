@@ -42,7 +42,7 @@ const RecoveryPhraseSettings: React.FC = () => {
 
   return (
     <>
-      <div className="flex flex-col w-full">
+      <div className="flex flex-col w-full border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover">
         <SectionHeader
           Icon={Icons.KeySquare}
           title="Recovery Phrase"

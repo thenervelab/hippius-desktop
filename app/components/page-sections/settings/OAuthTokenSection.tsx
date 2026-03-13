@@ -1,13 +1,14 @@
 "use client";
 
 import React, { useState } from "react";
-import AbstractIconWrapper from "@/components/ui/abstract-icon-wrapper";
-import { Copy, Check, Eye, EyeOff, HelpCircle } from "lucide-react";
+import { Copy, Check, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Key } from "@/components/ui/icons";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import SectionHeader from "./SectionHeader";
+import { RevealTextLine } from "@/components/ui";
+import { InView } from "react-intersection-observer";
 
 const API_TOKEN_DOCS_URL =
   "https://docs.hippius.com/use/desktop/settings#api-token";
@@ -56,167 +57,142 @@ const OAuthTokenSection: React.FC = () => {
 
   if (!token) {
     return (
-      <div className="w-full space-y-6">
-        <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center flex-wrap gap-2">
-          <div className="flex items-start gap-2">
-            <AbstractIconWrapper className="size-8 sm:size-10 bg-grey-10 relative">
-              <Key className="absolute size-5 sm:size-6 text-primary-50" />
-            </AbstractIconWrapper>
-            <div className="flex flex-col gap-2">
-              <h2 className="text-lg sm:text-[22px] font-medium">API Token</h2>
-              <p className="text-base leading-[22px] text-grey-60 font-medium">
-                No authentication token available. Please log in to view your
-                master token.
-              </p>
-            </div>
+      <InView triggerOnce>
+        {({ inView, ref }) => (
+          <div
+            ref={ref}
+            className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover"
+          >
+            <RevealTextLine rotate reveal={inView} className="delay-300 w-full" parentClassName="w-full">
+              <SectionHeader
+                Icon={Key}
+                title="API Token"
+                subtitle="No authentication token available. Please log in to view your master token."
+              />
+            </RevealTextLine>
           </div>
-        </div>
-      </div>
+        )}
+      </InView>
     );
   }
 
   return (
-    <div className="w-full space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center flex-wrap gap-2">
-        <div className="flex items-start gap-2">
-          <AbstractIconWrapper className="size-8 sm:size-10 bg-grey-10 relative">
-            <Key className="absolute size-5 sm:size-6 text-primary-50" />
-          </AbstractIconWrapper>
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg sm:text-[22px] font-medium">API Token</h2>
-              <button
-                onClick={() => openUrl(API_TOKEN_DOCS_URL)}
-                aria-label="API token documentation"
-                title="API token documentation"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-grey-80 bg-white text-grey-50 transition-colors hover:bg-grey-90 hover:text-primary-50"
-              >
-                <HelpCircle className="size-4" />
-              </button>
-            </div>
-            <p className="text-base leading-[22px] text-grey-60 font-medium ">
-              Your master authentication token for API access
-            </p>
-          </div>
-        </div>
-      </div>
+    <InView triggerOnce>
+      {({ inView, ref }) => (
+        <div
+          ref={ref}
+          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover"
+        >
+          <div className="w-full flex flex-col">
+            <RevealTextLine rotate reveal={inView} parentClassName="w-full" className="delay-300 w-full">
+              <SectionHeader
+                Icon={Key}
+                title="API Token"
+                subtitle="Your master authentication token for API access"
+                info="Your API token allows you to authenticate requests to the Hippius platform. Keep it secure and never share it with anyone."
+                learnMoreUrl={API_TOKEN_DOCS_URL}
+              />
+            </RevealTextLine>
 
-      {/* Token Display */}
-      <div className="space-y-2">
-        <h3 className="text-sm font-medium text-grey-70">Token</h3>
-        <div className="text-sm text-grey-60">
-          <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base relative group">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-grey-60 font-medium break-all flex-1">
-                {showToken ? token : maskToken(token)}
+            {/* Token Display */}
+            <RevealTextLine rotate reveal={inView} parentClassName="w-full" className="delay-300 w-full mt-4">
+              <div className="space-y-1 w-full">
+                <h3 className="text-sm font-medium text-grey-70">Token</h3>
+                <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base bg-white">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-grey-60 font-medium break-all flex-1">
+                      {showToken ? token : maskToken(token)}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => setShowToken(!showToken)}
+                        className="rounded transition text-grey-60 hover:text-grey-70"
+                        title={showToken ? "Hide token" : "Show token"}
+                      >
+                        {showToken ? <EyeOff className="size-6" /> : <Eye className="size-6" />}
+                      </button>
+                      <button
+                        onClick={copyTokenToClipboard}
+                        className={cn(
+                          "rounded transition",
+                          copiedToken ? "text-success-50" : "text-grey-60 hover:text-grey-70"
+                        )}
+                        title="Copy token"
+                      >
+                        {copiedToken ? <Check className="size-5" /> : <Copy className="size-5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <button
-                  onClick={() => setShowToken(!showToken)}
-                  className="rounded transition text-grey-60 hover:text-grey-70"
-                  title={showToken ? "Hide token" : "Show token"}
-                >
-                  {showToken ? (
-                    <EyeOff className="size-6" />
-                  ) : (
-                    <Eye className="size-6" />
-                  )}
-                </button>
-                <button
-                  onClick={copyTokenToClipboard}
-                  className={cn(
-                    "rounded transition",
-                    copiedToken
-                      ? "text-success-50"
-                      : "text-grey-60 hover:text-grey-70"
-                  )}
-                  title="Copy token"
-                >
-                  {copiedToken ? (
-                    <Check className="size-5" />
-                  ) : (
-                    <Copy className="size-5" />
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+            </RevealTextLine>
 
-      {/* Token Usage Section */}
-      <div className="space-y-2">
-        <h3 className="text-lg font-medium text-grey-10">
-          API Token Usage Example
-        </h3>
-        <p className="text-base text-grey-60 font-medium">
-          Use this token to authenticate API requests to the Hippius platform:
-        </p>
-        <h3 className="!mt-4 text-sm font-medium text-grey-70">Token</h3>
-        <div className="text-sm text-grey-60">
-          <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base relative group">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-base text-grey-60 font-medium break-all flex-1">
-                Authorization: Token{" "}
-                {showHeaderToken ? token : maskToken(token)}
+            {/* Usage Example */}
+            <RevealTextLine rotate reveal={inView} parentClassName="w-full" className="delay-500 w-full mt-6">
+              <div className="space-y-2 w-full">
+                <h3 className="text-lg font-medium text-grey-10">API Token Usage Example</h3>
+                <p className="text-base text-grey-60 font-medium">
+                  Use this token to authenticate API requests to the Hippius platform:
+                </p>
+                <h3 className="!mt-4 text-sm font-medium text-grey-70">Token</h3>
+                <div className="border border-grey-80 rounded-lg p-3 sm:p-4 font-mono text-xs sm:text-base bg-white">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-base text-grey-60 font-medium break-all flex-1">
+                      Authorization: Token {showHeaderToken ? token : maskToken(token)}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => setShowHeaderToken(!showHeaderToken)}
+                        className="rounded transition text-grey-60 hover:text-grey-70"
+                        title={showHeaderToken ? "Hide token" : "Show token"}
+                      >
+                        {showHeaderToken ? <EyeOff className="size-6" /> : <Eye className="size-6" />}
+                      </button>
+                      <button
+                        onClick={copyHeaderToClipboard}
+                        className={cn(
+                          "rounded transition",
+                          copiedHeader ? "text-success-50" : "text-grey-60 hover:text-grey-70"
+                        )}
+                        title="Copy authorization header"
+                      >
+                        {copiedHeader ? <Check className="size-5" /> : <Copy className="size-5" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p className="text-xs text-grey-60">
+                  Include this header in your API requests to access storage control,
+                  file upload, and other authenticated endpoints.
+                </p>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <button
-                  onClick={() => setShowHeaderToken(!showHeaderToken)}
-                  className="rounded transition text-grey-60 hover:text-grey-70"
-                  title={showHeaderToken ? "Hide token" : "Show token"}
-                >
-                  {showHeaderToken ? (
-                    <EyeOff className="size-6" />
-                  ) : (
-                    <Eye className="size-6" />
-                  )}
-                </button>
-                <button
-                  onClick={copyHeaderToClipboard}
-                  className={cn(
-                    "rounded transition",
-                    copiedHeader
-                      ? "text-success-50"
-                      : "text-grey-60 hover:text-grey-70"
-                  )}
-                  title="Copy authorization header"
-                >
-                  {copiedHeader ? (
-                    <Check className="size-5" />
-                  ) : (
-                    <Copy className="size-5" />
-                  )}
-                </button>
+            </RevealTextLine>
+
+            {/* Security Warning */}
+            <RevealTextLine rotate reveal={inView} parentClassName="w-full" className="delay-500 w-full mt-4">
+              <div className="bg-warning-90/20 border border-warning-80 rounded-lg p-3">
+                <div className="flex gap-2">
+                  <div className="mt-0.5">
+                    <div className="size-5 rounded-full bg-warning-50/20 flex items-center justify-center">
+                      <span className="text-warning-50 text-xs font-bold">!</span>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-medium text-warning-10">
+                      Keep your master token secure
+                    </p>
+                    <p className="text-xs text-warning-30">
+                      Never share your master token with anyone. It provides full
+                      access to your account and should be treated like a password.
+                    </p>
+                  </div>
+                </div>
               </div>
-            </div>
+            </RevealTextLine>
           </div>
         </div>
-        <p className="text-xs">
-          Include this header in your API requests to access storage control,
-          file upload, and other authenticated endpoints.
-        </p>
-        <div className="bg-warning-90/20 border border-warning-80 rounded p-3 mt-4">
-          <div className="flex gap-2">
-            <div className="mt-0.5">
-              <div className="size-5 rounded-full bg-warning-50/20 flex items-center justify-center">
-                <span className="text-warning-50 text-xs font-bold">!</span>
-              </div>
-            </div>
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-warning-10">
-                Keep your master token secure
-              </p>
-              <p className="text-xs text-warning-30">
-                Never share your master token with anyone. It provides full
-                access to your account and should be treated like a password.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+      )}
+    </InView>
   );
 };
 

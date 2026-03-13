@@ -98,7 +98,7 @@ const SettingsDialogContent: React.FC = () => {
             )}
 
             {activeTab === "Recovery Phrase" && (
-              <div className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover">
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
                   rotate
                   reveal={inView}
@@ -112,12 +112,16 @@ const SettingsDialogContent: React.FC = () => {
 
             {activeTab === "File Settings" && (
               <div className="flex flex-col gap-4 w-full">
-                <DeviceNameSetting />
-                <MultiFolderSyncManager />
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                  <DeviceNameSetting />
+                </div>
+                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+                  <MultiFolderSyncManager />
+                </div>
               </div>
             )}
             {activeTab === "API Token" && (
-              <div className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/balance-bg-layer.png')] bg-repeat-round bg-cover">
+              <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                 <RevealTextLine
                   rotate
                   reveal={inView}
