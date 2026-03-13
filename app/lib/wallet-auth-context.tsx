@@ -222,6 +222,11 @@ export function WalletAuthProvider({
   function initSync(accountId: string, mnemonic?: string) {
     if (syncInitialized.current) return;
     syncInitialized.current = true;
+    // Store the mnemonic so getMnemonic() can return it later
+    // (e.g. when migration needs it for OAuth users)
+    if (mnemonic && !sessionMnemonicRef.current) {
+      sessionMnemonicRef.current = mnemonic;
+    }
     invoke("stop_sync").catch(() => { });
     tryAutoInitSync(accountId, mnemonic).catch((err) =>
       console.error("[WalletAuth] Failed to start sync:", err)

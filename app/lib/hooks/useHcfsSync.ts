@@ -219,10 +219,11 @@ export async function tryAutoInitSync(
       return false;
     }
 
-    // Initialize sync for each configured path
-    console.log(`[AutoSync] Auto-initializing ${syncPaths.length} sync path(s)...`);
+    // Initialize sync for each configured path (skip "migration" — it has its own init flow)
+    const regularPaths = syncPaths.filter((sp) => sp.label !== "migration");
+    console.log(`[AutoSync] Auto-initializing ${regularPaths.length} sync path(s)...`);
     let anyInitialized = false;
-    for (const sp of syncPaths) {
+    for (const sp of regularPaths) {
       try {
         const result = await initializeSync(accountId, sp.label, mnemonic);
         console.log(`[AutoSync] Sync initialized for '${sp.label}':`, result.user_id);

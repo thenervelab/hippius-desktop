@@ -148,6 +148,26 @@ export function useSyncEvents() {
     }
   }, [setSessionFilesAtom, setRecentFilesAtom, setTrayMenuFilesAtom, setOverallProgressAtom, setHasSyncActivityAtom, setLastProgressUpdateAtom]);
 
+  // Throttle refreshProgressState so it fires at most once per 500ms
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshPendingRef = useRef(false);
+
+  const throttledRefreshProgressState = useCallback(() => {
+    if (refreshTimerRef.current) {
+      // A refresh is already scheduled — just mark that another was requested
+      refreshPendingRef.current = true;
+      return;
+    }
+    refreshProgressState();
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      if (refreshPendingRef.current) {
+        refreshPendingRef.current = false;
+        refreshProgressState();
+      }
+    }, 500);
+  }, [refreshProgressState]);
+
   // Cleanup interval ref
   const cleanupIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -193,7 +213,6 @@ export function useSyncEvents() {
       if (adHocSessionCreated) return;
       const progress = await getOverallProgress();
       if (!progress.isActive) {
-        console.log("[SyncEvents] Creating ad-hoc session for unexpected", action);
         const uploads = action === 'upload' ? 1 : 0;
         const downloads = action === 'download' ? 1 : 0;
         await startSession(uploads, downloads, 0, 0);
@@ -215,7 +234,6 @@ export function useSyncEvents() {
             const localDeletes = payload.local_deletes || 0;
             const remoteDeletes = payload.remote_deletes || 0;
             const totalExpected = uploads + downloads + localDeletes + remoteDeletes;
-            console.log("[SyncEvents] Sync started, expecting", totalExpected, "files. Payload:", payload);
 
             // Mark sync as configured - this enables SyncStoppedAlert to show when user stops sync
             setIsSyncConfiguredAtom(true);
@@ -246,7 +264,6 @@ export function useSyncEvents() {
 
             if (hasActiveSession) {
               // Another drive is already syncing — merge into the existing session
-              console.log("[SyncEvents] Merging into active session (multi-drive)");
               expectedCountsRef.current.uploads += uploads;
               expectedCountsRef.current.downloads += downloads;
               setSyncActionCountsAtom((prev) => ({
@@ -281,7 +298,6 @@ export function useSyncEvents() {
             setLastSyncErrorAtom(null);
           }),
           listen<SyncOutcome>("hcfs_sync_completed", async (e) => {
-            console.log("[SyncEvents] Sync completed:", e.payload);
             const totalCompleted = e.payload.files_uploaded + e.payload.files_downloaded +
                                    e.payload.files_deleted_locally + e.payload.files_deleted_remotely;
 
@@ -301,9 +317,6 @@ export function useSyncEvents() {
                e.payload.files_downloaded < expected.downloads);
 
             if (hasFailed) {
-              console.log("[SyncEvents] Some files failed:",
-                `expected ${expected.uploads} uploads got ${e.payload.files_uploaded},`,
-                `expected ${expected.downloads} downloads got ${e.payload.files_downloaded}`);
               await markPendingFilesAsFailed(e.payload.files_uploaded, e.payload.files_downloaded);
             } else {
               await completePendingFiles();
@@ -330,7 +343,6 @@ export function useSyncEvents() {
             const progress = await getOverallProgress();
             if (progress.isActive) {
               // Other drives still syncing — update counts but keep syncing state
-              console.log("[SyncEvents] Drive completed but session still active (multi-drive)");
               setCompletedFilesCountAtom((prev) => prev + totalCompleted);
               setLastOutcome(e.payload);
               setUploadProgress(null);
@@ -376,31 +388,26 @@ export function useSyncEvents() {
             setDownloadProgressAtom(null);
           }),
           listen<ProgressPayload>("hcfs_upload_progress", (e) => {
-            console.log("[SyncEvents] Upload progress:", e.payload);
             const percent = e.payload.total > 0
               ? Math.round((e.payload.bytes / e.payload.total) * 100)
               : 0;
-            console.log("[SyncEvents] Setting sync percent:", percent, "path:", e.payload.path);
 
             // Update Rust backend with progress (fire-and-forget for high-frequency calls)
             if (e.payload.path) {
               ensureSession('upload')
                 .then(() => updateFileProgress(e.payload.path!, e.payload.bytes, e.payload.total, 'upload'))
-                .then(() => refreshProgressState())
+                .then(() => throttledRefreshProgressState())
                 .catch((err) => console.error("[SyncEvents] updateFileProgress failed:", err));
             }
 
             // When a file reaches 100%, track it as completed
             if (percent >= 100 && e.payload.path) {
-              // Only count if we haven't already counted this file
               if (!completedFilesRef.current.has(e.payload.path)) {
                 completedFilesRef.current.add(e.payload.path);
                 setCompletedFilesCountAtom(completedFilesRef.current.size);
-                console.log("[SyncEvents] File completed:", e.payload.path, "total:", completedFilesRef.current.size);
               }
               setUploadProgress(e.payload);
               setUploadProgressAtom(e.payload as SyncProgressPayload);
-              // Clear after 500ms to show completion briefly
               setTimeout(() => {
                 setUploadProgress(null);
                 setUploadProgressAtom(null);
@@ -411,7 +418,6 @@ export function useSyncEvents() {
             }
           }),
           listen<ProgressPayload>("hcfs_download_progress", (e) => {
-            console.log("[SyncEvents] Download progress:", e.payload);
             const percent = e.payload.total > 0
               ? Math.round((e.payload.bytes / e.payload.total) * 100)
               : 0;
@@ -420,7 +426,7 @@ export function useSyncEvents() {
             if (e.payload.path) {
               ensureSession('download')
                 .then(() => updateFileProgress(e.payload.path!, e.payload.bytes, e.payload.total, 'download'))
-                .then(() => refreshProgressState())
+                .then(() => throttledRefreshProgressState())
                 .catch((err) => console.error("[SyncEvents] updateFileProgress failed:", err));
             }
 
@@ -429,7 +435,6 @@ export function useSyncEvents() {
               if (!completedFilesRef.current.has(e.payload.path)) {
                 completedFilesRef.current.add(e.payload.path);
                 setCompletedFilesCountAtom(completedFilesRef.current.size);
-                console.log("[SyncEvents] File downloaded:", e.payload.path, "total:", completedFilesRef.current.size);
               }
               setDownloadProgress(e.payload);
               setDownloadProgressAtom(e.payload as SyncProgressPayload);
@@ -443,11 +448,9 @@ export function useSyncEvents() {
             }
           }),
           listen<SyncEngineHealthState>("hcfs_connectivity_changed", (e) => {
-            console.log("[SyncEvents] Connectivity changed:", e.payload);
             setSyncEngineHealthAtom(e.payload);
           }),
           listen("hcfs_sync_stopped", async () => {
-            console.log("[SyncEvents] Sync stopped - resetting all state");
 
             // Stop session in Rust backend
             await stopSession().catch((err) =>
@@ -494,8 +497,13 @@ export function useSyncEvents() {
         clearInterval(cleanupIntervalRef.current);
         cleanupIntervalRef.current = null;
       }
+      // Cleanup throttle timer
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
     };
-  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setHasSyncErrorAtom, setSyncPercentAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, setSyncActionCountsAtom, setIsSyncConfiguredAtom, setSyncEngineHealthAtom, refreshProgressState, queryClient]);
+  }, [setIsSyncingAtom, setUploadProgressAtom, setDownloadProgressAtom, setLastSyncErrorAtom, setHasSyncErrorAtom, setSyncPercentAtom, setCompletedFilesCountAtom, setTotalFilesToSyncAtom, setSyncActionCountsAtom, setIsSyncConfiguredAtom, setSyncEngineHealthAtom, refreshProgressState, throttledRefreshProgressState, queryClient]);
 
   return {
     isSyncing,

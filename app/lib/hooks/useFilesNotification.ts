@@ -134,7 +134,7 @@ export function useFilesNotification() {
 
     if (!areFilesNotificationsEnabled || !polkadotAddress) return;
 
-    const intervalId = setInterval(getSyncStatus, 1000);
+    const intervalId = setInterval(getSyncStatus, 15000);
 
     return () => clearInterval(intervalId);
   }, [

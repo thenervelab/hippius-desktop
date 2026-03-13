@@ -153,16 +153,7 @@ const SyncStatusHandler: React.FC = () => {
     return files;
   }, [sessionFiles, recentFiles]);
 
-  const calculateSyncMetrics = () => {
-    // Debug log for troubleshooting
-    console.log('[SyncStatusHandler] calculateSyncMetrics - overallProgress:', {
-      isActive: overallProgress.isActive,
-      totalFiles: overallProgress.totalFiles,
-      completedFiles: overallProgress.completedFiles,
-      failedFiles: overallProgress.failedFiles,
-      overallPercent: overallProgress.overallPercent,
-    });
-    
+  const syncMetrics = useMemo(() => {
     // Priority 1: Active sync in progress
     // isActive now correctly includes hidden encrypted downloads
     const hasPendingWork = overallProgress.inProgressFiles > 0 || 
@@ -264,23 +255,9 @@ const SyncStatusHandler: React.FC = () => {
       isCompleted,
       currentFile: null,
     };
-  };
+  }, [overallProgress, isSyncingFromEvents, totalFilesToSync, completedFilesCount, currentSyncFile, syncPercentFromAtom, syncFiles]);
 
-  const syncMetrics = calculateSyncMetrics();
   const { isInProgress, isCompleted, uploadingFiles, filesFailed } = syncMetrics;
-
-  // Log calculated sync metrics for debugging
-  console.log(
-    `[SyncStatusHandler] Metrics: percent=${syncMetrics.syncPercent}%, ` +
-    `total=${syncMetrics.totalFiles}, synced=${syncMetrics.syncedFiles}, ` +
-    `uploading=${uploadingFiles}, failed=${filesFailed}, ` +
-    `inProgress=${isInProgress}, completed=${isCompleted}`
-  );
-  console.log(
-    `[SyncStatusHandler] Input state: isSyncingFromEvents=${isSyncingFromEvents}, ` +
-    `uploadProgress=${uploadProgress ? JSON.stringify(uploadProgress) : null}, ` +
-    `syncFiles.length=${syncFiles?.length ?? 0}`
-  );
 
   useEffect(() => {
     const hasSyncFiles = (syncFiles && syncFiles.length > 0) || displayFiles.length > 0;
@@ -364,7 +341,6 @@ const SyncStatusHandler: React.FC = () => {
     let unsub: (() => void) | null = null;
 
     listen("hcfs_sync_stopped", () => {
-      console.log("[SyncStatusHandler] Sync stopped event received - closing widget");
       if (!cancelled) {
         setIsSyncOpen(false);
         // Don't set permanently closed - allow reopening if sync restarts

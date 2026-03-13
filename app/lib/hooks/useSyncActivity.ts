@@ -105,9 +105,9 @@ const useSyncActivity = () => {
         return [];
       }
     },
-    refetchInterval: 3000,
+    refetchInterval: 30000,
     refetchOnWindowFocus: true,
-    staleTime: 2000,
+    staleTime: 15000,
     enabled: !!polkadotAddress,
     notifyOnChangeProps: ["data", "dataUpdatedAt"],
   });

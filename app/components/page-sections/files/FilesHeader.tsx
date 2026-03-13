@@ -1,6 +1,6 @@
 "use client";
 
-import { FC, useState, useEffect } from "react";
+import { FC, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Icons, RefreshButton, SearchInput } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -17,17 +17,6 @@ import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
 import { FileTypes } from "@/lib/types/fileTypes";
 import { IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
-import { useAtomValue } from "jotai";
-import { migrationCheckAtom } from "@/lib/global-atoms/migrationAtoms";
-import {
-  useMigration,
-  MigrationPromptDialog,
-  MigrationConfirmSkipDialog,
-  MigrationProgressDialog,
-  MigrationCompleteDialog,
-} from "./migration";
-import { useWalletAuth } from "@/lib/wallet-auth-context";
-import { HcfsSetupDialog } from "../settings/HcfsSetupDialog";
 
 
 interface FilesHeaderProps {
@@ -97,19 +86,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
 
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
-  const migrationCheck = useAtomValue(migrationCheckAtom);
-  const { polkadotAddress, getMnemonic } = useWalletAuth();
-  const migration = useMigration(getMnemonic);
-
-  useEffect(() => {
-    if (
-      migrationCheck.needsMigration &&
-      !migration.currentStep &&
-      polkadotAddress
-    ) {
-      migration.checkMigration(polkadotAddress);
-    }
-  }, [migrationCheck.needsMigration, polkadotAddress]);
 
   const handleViewAllFiles = () => {
     navigateToFilesView();
@@ -177,62 +153,6 @@ const FilesHeader: FC<FilesHeaderProps> = ({
         )}
 
         <div className="flex items-center gap-3 flex-wrap">
-          {migration.currentStep === "prompt" && (
-            <MigrationPromptDialog
-              open
-              onClose={() => migration.setCurrentStep(null)}
-              onMigrate={() =>
-                polkadotAddress &&
-                migration.startMigration(polkadotAddress)
-              }
-              onSkip={() => migration.setCurrentStep("skip-confirm")}
-              fileCount={migration.files.length}
-              totalSize={migration.totalSize}
-            />
-          )}
-          {migration.currentStep === "skip-confirm" && (
-            <MigrationConfirmSkipDialog
-              open
-              onClose={() => migration.setCurrentStep("prompt")}
-              onConfirm={migration.confirmSkip}
-              fileCount={migration.files.length}
-            />
-          )}
-          {migration.currentStep === "setup" && (
-            <HcfsSetupDialog
-              open
-              onClose={() => migration.setCurrentStep("prompt")}
-              onComplete={migration.onSetupComplete}
-              loading={migration.isSettingUp}
-            />
-          )}
-          {migration.currentStep === "progress" && (
-            <MigrationProgressDialog
-              open
-              onCancel={migration.cancelMigration}
-              files={migration.files}
-              currentFileIndex={migration.currentFileIndex}
-              overallProgress={migration.overallProgress}
-              currentFileName={
-                migration.files[migration.currentFileIndex]?.name || ""
-              }
-              isCancelling={migration.isCancelling}
-              phase={migration.phase}
-              uploadedCount={migration.uploadedCount}
-              currentUploadFile={migration.currentUploadFile}
-            />
-          )}
-          {migration.currentStep === "complete" && (
-            <MigrationCompleteDialog
-              open
-              onClose={migration.closeMigration}
-              successCount={migration.successCount}
-              failedCount={migration.failedCount}
-              totalCount={migration.files.length}
-              failedFiles={migration.failedFiles}
-            />
-          )}
-
           <RefreshButton
             refetching={isRefetching || isFetching}
             onClick={() => {

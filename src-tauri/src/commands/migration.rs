@@ -248,7 +248,7 @@ pub async fn check_migration(
             fetch_migration_files(&server_url, &account_id).await?;
         let pending: Vec<MigrationFile> = files
             .into_iter()
-            .filter(|f| f.status == "Pending")
+            .filter(|f| f.status.eq_ignore_ascii_case("pending"))
             .collect();
 
         if pending.is_empty() {
@@ -293,7 +293,7 @@ pub async fn check_migration(
         fetch_migration_files(&server_url, &account_id).await?;
     let pending: Vec<MigrationFile> = files
         .into_iter()
-        .filter(|f| f.status == "Pending")
+        .filter(|f| f.status.eq_ignore_ascii_case("pending"))
         .collect();
     let total_size: u64 = pending.iter().map(|f| f.size_bytes).sum();
 
@@ -466,7 +466,7 @@ pub async fn start_migration(
         fetch_migration_files(&server_url, &account_id).await?;
     let pending: Vec<MigrationFile> = all_files
         .into_iter()
-        .filter(|f| f.status == "Pending")
+        .filter(|f| f.status.eq_ignore_ascii_case("pending"))
         .collect();
 
     if pending.is_empty() {
@@ -757,7 +757,7 @@ pub async fn report_migrated_files(
     let files =
         fetch_migration_files(&server_url, account_id).await?;
     let pending: Vec<&MigrationFile> =
-        files.iter().filter(|f| f.status == "Pending").collect();
+        files.iter().filter(|f| f.status.eq_ignore_ascii_case("pending")).collect();
 
     if pending.is_empty() {
         // All files migrated
@@ -863,11 +863,11 @@ pub async fn report_migrated_files(
         fetch_migration_files(&server_url, account_id).await?;
     let still_pending = files_after
         .iter()
-        .filter(|f| f.status == "Pending")
+        .filter(|f| f.status.eq_ignore_ascii_case("pending"))
         .count() as u64;
     let migrated = files_after
         .iter()
-        .filter(|f| f.status == "Migrated")
+        .filter(|f| f.status.eq_ignore_ascii_case("migrated"))
         .count() as u64;
 
     if still_pending == 0 {
