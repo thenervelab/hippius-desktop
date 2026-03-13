@@ -175,7 +175,7 @@ async fn synced_paths_for_label(
     for (hash, rel_path) in &state.path_index {
         if state.synced.files.contains_key(hash) {
             let arion_cid = state
-                .remote_arion_cids
+                .remote_arion_hashes
                 .get(hash)
                 .cloned()
                 .unwrap_or_default();
@@ -237,7 +237,7 @@ pub async fn list_sync_folder(
         let is_folder = meta.is_dir();
 
         // Build relative path matching hcfs-client convention:
-        // SHA256 is computed over relative_path.to_string_lossy()
+        // BLAKE3 is computed over relative_path.to_string_lossy()
         let relative_path = match subfolder {
             Some(ref sub) => format!("{}/{}", sub, name),
             None => name.clone(),
