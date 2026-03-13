@@ -48,6 +48,7 @@ import { FormattedTimestamp } from "@/app/components/ui"; // Add this import
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -319,21 +320,28 @@ const FilesTable: FC<FilesTableProps> = memo(
             ]
             : []),
 
-          ...(file.source
-            ? [
-              {
-                icon: <FolderOpen className="size-4" />,
-                itemTitle: "Reveal in Finder",
-                onItemClick: async () => {
-                  try {
-                    await revealItemInDir(file.source!);
-                  } catch (error) {
-                    console.error("Failed to reveal file in Finder:", error);
-                  }
-                },
-              },
-            ]
-            : []),
+          {
+            icon: <FolderOpen className="size-4" />,
+            itemTitle: "Reveal in Finder",
+            onItemClick: async () => {
+              try {
+                let filePath = file.source;
+                if (!filePath && file.label && polkadotAddress) {
+                  const fileName = file.actualFileName || file.name;
+                  filePath = await invoke<string>("resolve_file_path", {
+                    accountId: polkadotAddress,
+                    label: file.label,
+                    fileName,
+                  });
+                }
+                if (filePath) {
+                  await revealItemInDir(filePath);
+                }
+              } catch (error) {
+                console.error("Failed to reveal file in Finder:", error);
+              }
+            },
+          },
           {
             icon: <Icons.InfoCircle className="size-4" />,
             itemTitle: `${file?.isFolder ? "Folder" : "File"} Details`,
@@ -380,6 +388,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         handleDeleteFile,
         getParam,
         router,
+        polkadotAddress,
       ]
     );
 

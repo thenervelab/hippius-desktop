@@ -36,18 +36,18 @@ const TabItem: React.FC<TabItemProps> = ({
       {isActive && <ActiveTabBg mainGroup={true} />}
       <div
         className={cn(
-          "relative z-10 flex items-center justify-center gap-2 w-full",
+          "relative z-10 flex items-center justify-center gap-2 w-full min-w-0",
           isActive ? "text-primary-50" : "text-grey-70 hover:text-primary-50",
           isJustifyStart ? "justify-start" : "justify-center"
         )}
       >
-        <span>
+        <span className="flex-shrink-0">
           {icon &&
             React.cloneElement(icon as React.ReactElement<any>, {
               className: "size-[18px]",
             })}
         </span>
-        <span className="font-medium text-[14px]">{label}</span>
+        <span className="font-medium text-[14px] truncate" title={label}>{label}</span>
       </div>
     </div>
   );

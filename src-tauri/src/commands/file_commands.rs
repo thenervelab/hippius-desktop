@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use crate::hcfs_drive::HCFS_DRIVES;
 use crate::sync_shared::{update_state, SyncActivityItem};
+use crate::DB_POOL;
+use crate::utils::account_key::account_key;
 
 #[derive(Serialize)]
 pub struct FileEntry {
@@ -303,6 +305,53 @@ pub async fn export_file(
             .map_err(|e| format!("Export failed: {e}"))?;
     }
     Ok(())
+}
+
+/// Resolve the local file system path for a file given its label and name.
+///
+/// Looks up the sync folder path from the database for the specified label
+/// and account, then combines it with the file name. Returns an error if
+/// the sync path is not configured or the file does not exist on disk.
+#[tauri::command]
+pub async fn resolve_file_path(
+    account_id: String,
+    label: String,
+    file_name: String,
+) -> Result<String, String> {
+    // Reject file names containing traversal components
+    if file_name.contains("..") || file_name.contains('/') || file_name.contains('\\') {
+        return Err("Invalid file name".to_string());
+    }
+
+    let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let owner = account_key(&account_id);
+
+    let result: Option<(String,)> =
+        sqlx::query_as("SELECT path FROM sync_paths WHERE owner = ? AND label = ?")
+            .bind(&owner)
+            .bind(&label)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| format!("Failed to look up sync path: {e}"))?;
+
+    let sync_path = result
+        .map(|(p,)| p)
+        .ok_or_else(|| format!("No sync path configured for label '{label}'"))?;
+
+    let full_path = Path::new(&sync_path).join(&file_name);
+
+    // Validate the resolved path stays within the sync folder
+    let canonical_parent = Path::new(&sync_path)
+        .canonicalize()
+        .map_err(|e| format!("Invalid sync path: {e}"))?;
+    let canonical_file = full_path
+        .canonicalize()
+        .map_err(|_| format!("File not found: {file_name}"))?;
+    if !canonical_file.starts_with(&canonical_parent) {
+        return Err("Path escapes sync folder".to_string());
+    }
+
+    Ok(canonical_file.to_string_lossy().to_string())
 }
 
 /// Maximum recursion depth for directory copies to prevent symlink loops

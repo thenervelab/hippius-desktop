@@ -6,6 +6,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { getFileTypeFromExtension } from "@/lib/utils/getTileTypeFromExtension";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Link from "next/link";
@@ -131,22 +132,31 @@ export default function FileContextMenu({
 
 
 
-          {file.source && (
-            <button
-              className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
-              onClick={async () => {
-                try {
-                  await revealItemInDir(file.source!);
-                } catch (error) {
-                  console.error("Failed to reveal file in Finder:", error);
+          <button
+            className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"
+            onClick={async () => {
+              try {
+                let filePath = file.source;
+                if (!filePath && file.label && polkadotAddress) {
+                  const fileName = file.actualFileName || file.name;
+                  filePath = await invoke<string>("resolve_file_path", {
+                    accountId: polkadotAddress,
+                    label: file.label,
+                    fileName,
+                  });
                 }
-                onClose();
-              }}
-            >
-              <FolderOpen className="size-4" />
-              <span>Reveal in Finder</span>
-            </button>
-          )}
+                if (filePath) {
+                  await revealItemInDir(filePath);
+                }
+              } catch (error) {
+                console.error("Failed to reveal file in Finder:", error);
+              }
+              onClose();
+            }}
+          >
+            <FolderOpen className="size-4" />
+            <span>Reveal in Finder</span>
+          </button>
 
           <button
             className="flex items-center gap-2 p-2 text-xs font-medium text-grey-40 hover:text-grey-50 hover:bg-grey-90 border-b border-grey-80"

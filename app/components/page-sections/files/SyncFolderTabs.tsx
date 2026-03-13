@@ -1,5 +1,6 @@
-import { FC } from "react";
-import { cn } from "@/lib/utils";
+import { FC, useMemo } from "react";
+import TabList, { TabOption } from "@/components/ui/tabs/TabList";
+import { Icons } from "@/components/ui";
 
 interface SyncFolderTabsProps {
   labels: string[];
@@ -7,45 +8,44 @@ interface SyncFolderTabsProps {
   onTabChange: (tab: string | null) => void;
 }
 
+const ALL_TAB = "All";
+
 const SyncFolderTabs: FC<SyncFolderTabsProps> = ({
   labels,
   selectedTab,
   onTabChange,
 }) => {
-  if (labels.length < 2) return null;
-
-  const baseStyles = cn(
-    "px-4 py-2.5 rounded-lg border text-sm font-medium leading-5 transition-all shadow-sm",
-    "focus:outline-none focus:ring-2 focus:ring-primary-50 focus:ring-offset-2"
+  const tabs: TabOption[] = useMemo(
+    () => [
+      { tabName: ALL_TAB, icon: <Icons.Folder2 /> },
+      ...labels.map((label) => ({
+        tabName: label,
+        icon: <Icons.FolderCloud />,
+      })),
+    ],
+    [labels]
   );
 
-  const activeStyles = "bg-primary-50 text-white border-primary-50 shadow-md";
-  const inactiveStyles =
-    "bg-white text-grey-40 border-grey-80 hover:bg-grey-95 hover:border-grey-70";
+  if (labels.length < 2) return null;
+
+  const activeTab = selectedTab ?? ALL_TAB;
+
+  const handleTabChange = (tabName: string) => {
+    onTabChange(tabName === ALL_TAB ? null : tabName);
+  };
 
   return (
-    <div className="flex items-center gap-2 mt-6 mb-5 flex-wrap">
-      <button
-        onClick={() => onTabChange(null)}
-        className={cn(
-          baseStyles,
-          selectedTab === null ? activeStyles : inactiveStyles
-        )}
-      >
-        All
-      </button>
-      {labels.map((label) => (
-        <button
-          key={label}
-          onClick={() => onTabChange(label)}
-          className={cn(
-            baseStyles,
-            selectedTab === label ? activeStyles : inactiveStyles
-          )}
-        >
-          {label}
-        </button>
-      ))}
+    <div className="mt-6 mb-5">
+      <div className="border border-grey-80 rounded p-1 bg-grey-100 inline-flex flex-wrap">
+        <TabList
+          tabs={tabs}
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          gap="gap-1"
+          width="w-auto sm:min-w-[100px] max-w-[240px]"
+          className="flex-wrap"
+        />
+      </div>
     </div>
   );
 };
