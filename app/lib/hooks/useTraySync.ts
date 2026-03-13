@@ -105,6 +105,15 @@ let creditsCache: {
 let loginStatusCache: { loggedIn: boolean; timestamp: number } | null = null;
 const LOGIN_STATUS_CACHE_DURATION = 5000; // 5 seconds
 
+/**
+ * Immediately invalidate the login status cache so the next
+ * `isUserLoggedIn()` / `refreshLoginStatus()` call re-checks.
+ * Call this on logout so the VPN watcher picks up the change instantly.
+ */
+export function clearLoginStatusCache() {
+  loginStatusCache = null;
+}
+
 // Helper to check if user is logged in (synchronous, uses cache)
 function isUserLoggedIn(): boolean {
   if (typeof window === "undefined") return false;
@@ -253,7 +262,7 @@ async function checkUserCredits(): Promise<{
 // Track timer for clearing sync label after completion
 let syncLabelClearTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function useTrayInit() {
+export function useTrayInit(isAuthenticated: boolean) {
   // Use atom to watch for sync percentage changes
   const [lastUpdatedPercent, setLastUpdatedPercent] = useAtom(
     lastUpdatedPercentAtom,
@@ -282,6 +291,16 @@ export function useTrayInit() {
       syncLabelClearTimer = null;
     }
     
+    // When logged out, force default icon and clear sync label
+    if (!isAuthenticated) {
+      void setTrayIconSyncing(false, false);
+      void updateTraySyncLabel(null);
+      if (lastUpdatedPercent !== null) {
+        setLastUpdatedPercent(null);
+      }
+      return;
+    }
+
     // Determine sync state - use BOTH localStorage tracking AND event-based atoms
     // isSyncingFromEvents is set immediately when hcfs_sync_started fires
     // hasActiveUpload/hasActiveDownload catch cases where files are still transferring
@@ -348,7 +367,7 @@ export function useTrayInit() {
       // The cleanup happens automatically when files expire from localStorage
     }
     
-  }, [overallProgress, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent, isSyncingFromEvents, uploadProgress, downloadProgress]);
+  }, [isAuthenticated, overallProgress, hasSyncActivity, lastUpdatedPercent, setLastUpdatedPercent, isSyncingFromEvents, uploadProgress, downloadProgress]);
 
   useEffect(() => {
     if (menuPromise) return;
@@ -957,17 +976,21 @@ function startVpnStatusWatcher(setVpnState?: (enabled: boolean) => void) {
 
     // If login status changed, update menu immediately
     if (lastLoginStatus !== currentLoginStatus) {
+      const wasLoggedIn = lastLoginStatus;
       lastLoginStatus = currentLoginStatus;
       await updateVpnMenuItem();
       await updateOpenFilesMenuItem();
       await updateOpenVmMenuItem();
 
-      // If user logged out, turn off VPN
-      if (!currentLoginStatus && lastKnownStatus) {
+      // If user logged out, turn off VPN and reset tray icon to default
+      if (!currentLoginStatus && wasLoggedIn) {
         if (vpnStateSetter) {
           vpnStateSetter(false);
         }
         lastKnownStatus = false;
+        // Reset tray icon to default on logout
+        void setTrayIconSyncing(false, false);
+        void updateTraySyncLabel(null);
       }
       return;
     }
@@ -1016,6 +1039,21 @@ function startSyncActivityWatcher() {
     try {
       const menu = await (menuPromise ?? Promise.resolve<Menu | null>(null));
       if (!menu) return;
+
+      // When logged out, clear sync rows and skip updates.
+      // The data stays in the Rust backend so it can be shown after re-login.
+      if (!isUserLoggedIn()) {
+        if (syncProgressItem) {
+          try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
+          syncProgressItem = null;
+        }
+        if (syncSizeItem) {
+          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          syncSizeItem = null;
+        }
+        lastSyncSummarySignature = "";
+        return;
+      }
 
       // Clean up any legacy per-file rows from old implementation
       await removeAllSyncActivityRows(menu);

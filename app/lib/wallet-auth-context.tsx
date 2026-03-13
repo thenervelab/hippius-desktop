@@ -11,13 +11,12 @@ import React, {
 import {
   clearHippiusDesktopDB,
 } from "./helpers/hippiusDesktopDB";
-import { clearAllData as clearSyncProgressData } from "./services/syncProgressService";
 
 import { useRouter } from "next/navigation";
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useTrayInit } from "./hooks/useTraySync";
+import { useTrayInit, clearLoginStatusCache } from "./hooks/useTraySync";
 import { tryAutoInitSync } from "./hooks/useHcfsSync";
 import { ensureSyncMnemonic } from "./helpers/ensureSyncMnemonic";
 import { appStore } from "./store/jotaiStore";
@@ -173,9 +172,14 @@ export function WalletAuthProvider({
           localStorage.removeItem("hippius_oauth_provider");
         }
 
-        // Clear sync progress state to prevent stale data on next login
-        console.log("[WalletAuth] Clearing sync progress state...");
-        clearSyncProgressData();
+        // NOTE: We intentionally do NOT clear sync progress data on logout.
+        // The data is preserved in the Rust backend so the tray and sync
+        // widget show the last-known state immediately after re-login.
+        // New sync sessions naturally replace stale data.
+
+        // Immediately invalidate login status cache so the tray watcher
+        // picks up the logged-out state on its next 2-second tick.
+        clearLoginStatusCache();
       } catch (error) {
         console.error("Failed to cleanup sync on logout:", error);
       }
@@ -576,7 +580,7 @@ export function WalletAuthProvider({
     await logout();
   };
 
-  useTrayInit();
+  useTrayInit(isAuthenticated);
 
   return (
     <WalletContext.Provider
