@@ -40,6 +40,7 @@ import {
   triggerSyncPathRefreshAtom,
   syncEngineStatusAtom,
   isSyncConfiguredAtom,
+  FILES_ONBOARDING_SKIPPED_KEY,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { FileSelectionProvider } from "@/app/contexts/FileSelectionContext";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
@@ -51,7 +52,7 @@ import { useHcfsSync } from "@/app/lib/hooks/useHcfsSync";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
-const SKIP_ONBOARDING_KEY = "hippius_files_onboarding_skipped";
+const SKIP_ONBOARDING_KEY = FILES_ONBOARDING_SKIPPED_KEY;
 
 const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();

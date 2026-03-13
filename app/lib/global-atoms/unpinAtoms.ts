@@ -17,6 +17,9 @@ export type SyncEngineStatus = "active" | "stopping" | "stopped";
 /** localStorage key used to persist the user's explicit "stop sync" choice across app restarts. */
 export const SYNC_STOPPED_STORAGE_KEY = "hippius_sync_stopped";
 
+/** localStorage key used to persist the user's choice to skip files onboarding. */
+export const FILES_ONBOARDING_SKIPPED_KEY = "hippius_files_onboarding_skipped";
+
 // Read persisted state: if the user explicitly stopped sync before quitting,
 // start in "stopped" so auto-init is skipped.
 const initialSyncStatus: SyncEngineStatus =
