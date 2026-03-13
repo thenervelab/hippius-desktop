@@ -14,7 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Helps when nested actions run Cargo and need private git deps
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
@@ -27,12 +26,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ✅ SSH setup (Fix B) for private Rust git deps (passphrase-protected key)
-      - name: Setup SSH (private Rust deps)
+      - name: Setup SSH for private Rust git deps
         shell: bash
         env:
-          ARION_DEPLOY_KEY_B64: ${{ secrets.ARION_DEPLOY_KEY_B64 }}
-          ARION_DEPLOY_KEY_PASSPHRASE: ${{ secrets.ARION_DEPLOY_KEY_PASSPHRASE }}
+          PRIVATE_GIT_DEPLOY_KEY_B64: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
         run: |
           set -euo pipefail
 
@@ -40,34 +37,36 @@ jobs:
           chmod 700 ~/.ssh
 
           # Decode private key from base64
-          python3 - <<'PY' > ~/.ssh/arion_key
+          python3 - <<'PY' > ~/.ssh/private_git_key
           import os, base64, sys
-          b64 = os.environ["ARION_DEPLOY_KEY_B64"].strip()
+          b64 = os.environ["PRIVATE_GIT_DEPLOY_KEY_B64"].strip()
           sys.stdout.buffer.write(base64.b64decode(b64))
           PY
-          chmod 600 ~/.ssh/arion_key
+          chmod 600 ~/.ssh/private_git_key
 
           # Trust GitHub host key
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-          # Start ssh-agent and persist env vars for later steps/actions
+          # SSH config
+          cat > ~/.ssh/config <<'EOF'
+          Host github.com
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/private_git_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            BatchMode yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+          # Start ssh-agent
           eval "$(ssh-agent -s)"
           echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
           echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
 
-          # Askpass helper for passphrase (no prompts)
-          cat > /tmp/ssh-askpass.sh <<'EOF'
-          #!/bin/bash
-          echo "$ARION_DEPLOY_KEY_PASSPHRASE"
-          EOF
-          chmod 700 /tmp/ssh-askpass.sh
-
-          export SSH_ASKPASS=/tmp/ssh-askpass.sh
-          export SSH_ASKPASS_REQUIRE=force
-          export DISPLAY=1
-
-          ssh-add ~/.ssh/arion_key </dev/null
+          # Add key (no passphrase)
+          ssh-add ~/.ssh/private_git_key
           ssh-add -l
 
       - name: Force Cargo to use git CLI
@@ -79,6 +78,18 @@ jobs:
           [net]
           git-fetch-with-cli = true
           EOF
+
+      - name: Verify SSH access to hcfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote ssh://git@github.com/thenervelab/hcfs.git HEAD
+
+      - name: Verify pinned hcfs commit exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep 061be71176d9ca7439b51a7df9ac9638bd00b098
 
       - name: Get release notes
         id: release_notes
@@ -147,7 +158,7 @@ jobs:
         run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - name: PNPM cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -156,7 +167,6 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      # ✅ Pattern B: Create src-tauri/.env from a single secret (TAURI_ENV_FILE)
       - name: Create src-tauri/.env
         shell: bash
         run: |
