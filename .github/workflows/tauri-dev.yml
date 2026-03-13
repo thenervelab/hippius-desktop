@@ -93,9 +93,13 @@ jobs:
           set -euo pipefail
           REV=$(grep -m1 'thenervelab/hcfs.git' src-tauri/Cargo.toml | sed 's/.*rev *= *"\([^"]*\)".*/\1/')
           echo "Pinned hcfs rev: $REV"
-          git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep "$REV" \
-            || git clone --bare --filter=blob:none ssh://git@github.com/thenervelab/hcfs.git /tmp/hcfs-verify \
-            && git -C /tmp/hcfs-verify cat-file -t "$REV"
+          if git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep -q "$REV"; then
+            echo "Commit $REV found at remote ref"
+          else
+            echo "Commit not at a ref tip, verifying via shallow clone..."
+            git clone --bare --filter=blob:none ssh://git@github.com/thenervelab/hcfs.git /tmp/hcfs-verify
+            git -C /tmp/hcfs-verify cat-file -t "$REV"
+          fi
 
       - name: Get release notes
         id: release_notes
