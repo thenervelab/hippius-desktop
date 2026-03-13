@@ -81,7 +81,7 @@ export const SyncStoppedAlert: React.FC<SyncStoppedAlertProps> = ({
         <p className={cn("text-xs mt-1", isStopping ? "text-amber-700" : "text-orange-700")}>
           {isStopping
             ? "The sync engine is finishing its current operation. This may take a moment."
-            : "Your files are not being synced. Any changes you make won\u2019t be uploaded until you resume syncing from Settings \u2192 File Settings."}
+            : "Your files are not being synced. Any changes you make won\u2019t be uploaded until you resume syncing from Settings \u2192 Sync & Storage."}
         </p>
       </div>
     </div>

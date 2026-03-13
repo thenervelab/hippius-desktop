@@ -36,9 +36,11 @@ import { SyncDestinationDialog } from "@/components/page-sections/settings/multi
 import {
   syncEngineStatusAtom,
   isSyncConfiguredAtom,
+  triggerSyncPathRefreshAtom,
   SYNC_STOPPED_STORAGE_KEY,
 } from "@/app/lib/global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
+import { useAtomValue } from "jotai";
 import * as Dialog from "@radix-ui/react-dialog";
 import DialogContainer from "@/components/ui/DialogContainer";
 
@@ -52,6 +54,7 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
   onSyncStarted,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
+  const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const [syncFolders, setSyncFolders] = useState<SyncFolder[]>([]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -134,6 +137,13 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
   useEffect(() => {
     loadFolders();
   }, [loadFolders]);
+
+  // Refresh when sync path state changes (e.g., Settings dialog closed)
+  useEffect(() => {
+    if (syncPathRefreshTrigger > 0) {
+      loadFolders();
+    }
+  }, [syncPathRefreshTrigger, loadFolders]);
 
   // After a successful add, refresh folders + signal parent
   const handleAddSuccess = useCallback(() => {

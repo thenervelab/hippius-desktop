@@ -17,7 +17,8 @@ import FooterNavItem from "./FooterNavItems";
 import SettingsWidthDialog from "@/components/page-sections/settings/SettingsDialog";
 import SettingsDialogContent from "@/components/page-sections/settings/SettingsDialogContent";
 import CheckForUpdateDialog from "../updater/CheckForUpdateDialog";
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
 const Sidebar: React.FC = () => {
   const pathname = usePathname();
@@ -27,6 +28,7 @@ const Sidebar: React.FC = () => {
     settingsDialogOpenAtom
   );
   const setActiveSettingsTab = useSetAtom(activeSettingsTabAtom);
+  const triggerSyncPathRefresh = useSetAtom(triggerSyncPathRefreshAtom);
 
   const toggleSidebar = () => {
     setCollapsed(!collapsed);
@@ -37,11 +39,22 @@ const Sidebar: React.FC = () => {
     setSettingsDialogOpen(true);
   };
 
+  const handleSettingsOpenChange = useCallback(
+    (isOpen: boolean) => {
+      setSettingsDialogOpen(isOpen);
+      if (!isOpen) {
+        // Refresh Files page data when Settings dialog closes
+        triggerSyncPathRefresh((prev) => prev + 1);
+      }
+    },
+    [setSettingsDialogOpen, triggerSyncPathRefresh]
+  );
+
   return (
     <>
       <SettingsWidthDialog
         open={settingsDialogOpen}
-        onOpenChange={setSettingsDialogOpen}
+        onOpenChange={handleSettingsOpenChange}
         heading="Settings"
       >
         <SettingsDialogContent />
