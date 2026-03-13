@@ -28,8 +28,8 @@ const SettingsDialogContent: React.FC = () => {
 
   const tabs: TabOption[] = [
     {
-      tabName: "File Settings",
-      icon: <Icons.File2 className="size-4" />,
+      tabName: "Sync & Storage",
+      icon: <Icons.Folder className="size-4" />,
     },
     {
       tabName: "Recovery Phrase",
@@ -55,7 +55,7 @@ const SettingsDialogContent: React.FC = () => {
 
   return (
     <div className="flex h-full w-full">
-      <div className="mt-[18px] mr-8">
+      <div className="pt-[18px] mr-8 shrink-0 sticky top-0 self-start">
         <TabList
           tabs={tabs}
           activeTab={activeTab}
@@ -66,12 +66,13 @@ const SettingsDialogContent: React.FC = () => {
         />
       </div>
 
-      <InView triggerOnce>
-        {({ inView, ref }) => (
-          <div
-            className="flex flex-col animate-in fade-in duration-300 gap-8 w-full h-max mb-4 pt-[18px]"
-            ref={ref}
-          >
+      <div className="flex-1 min-w-0">
+        <InView triggerOnce>
+          {({ inView, ref }) => (
+            <div
+              className="flex flex-col animate-in fade-in duration-300 gap-8 w-full h-max mb-4 pt-[18px]"
+              ref={ref}
+            >
             {activeTab === "Notifications" && (
               <div className="flex flex-col gap-4 w-full">
                 <div className="shadow-menu rounded-lg bg-white p-4 w-full">
@@ -110,14 +111,12 @@ const SettingsDialogContent: React.FC = () => {
               </div>
             )}
 
-            {activeTab === "File Settings" && (
+            {activeTab === "Sync & Storage" && (
               <div className="flex flex-col gap-4 w-full">
                 <div className="shadow-menu rounded-lg bg-white p-4 w-full">
                   <DeviceNameSetting />
                 </div>
-                <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                  <MultiFolderSyncManager />
-                </div>
+                <MultiFolderSyncManager />
               </div>
             )}
             {activeTab === "API Token" && (
@@ -161,6 +160,7 @@ const SettingsDialogContent: React.FC = () => {
           </div>
         )}
       </InView>
+      </div>
     </div>
   );
 };

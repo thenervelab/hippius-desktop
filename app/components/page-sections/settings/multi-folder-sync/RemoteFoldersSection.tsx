@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState, useMemo } from "react";
 import { Icons, RevealTextLine } from "@/components/ui";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import SectionHeader from "../SectionHeader";
@@ -15,6 +15,9 @@ import {
 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import type { RemoteFolder } from "@/app/lib/types/sync-folder";
+import { Pagination } from "@/components/ui/alt-table";
+
+const FOLDERS_PER_PAGE = 6;
 
 interface RemoteFoldersSectionProps {
   remoteFolders: RemoteFolder[];
@@ -39,6 +42,15 @@ export function RemoteFoldersSection({
   onSyncFolder,
   onDeleteFromServer,
 }: RemoteFoldersSectionProps) {
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const totalPages = Math.max(1, Math.ceil(remoteFolders.length / FOLDERS_PER_PAGE));
+  const paginatedFolders = useMemo(() => {
+    const validPage = Math.min(currentPage, totalPages);
+    const start = (validPage - 1) * FOLDERS_PER_PAGE;
+    return remoteFolders.slice(start, start + FOLDERS_PER_PAGE);
+  }, [remoteFolders, currentPage, totalPages]);
+
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
@@ -68,8 +80,8 @@ export function RemoteFoldersSection({
                   <Icons.Loader className="size-6 animate-spin text-primary-50" />
                 </div>
               ) : remoteFolders.length > 0 ? (
-                <div className="space-y-2 w-full">
-                  {remoteFolders.map((folder) => (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 w-full">
+                  {paginatedFolders.map((folder) => (
                     <div
                       key={folder.folderName}
                       className="p-4 border border-grey-80 rounded-lg bg-white hover:bg-grey-98 transition-colors"
@@ -155,6 +167,14 @@ export function RemoteFoldersSection({
                     Folders synced from your other devices will appear here
                   </p>
                 </div>
+              )}
+              {remoteFolders.length > FOLDERS_PER_PAGE && (
+                <Pagination
+                  currentPage={Math.min(currentPage, totalPages)}
+                  totalPages={totalPages}
+                  setPage={setCurrentPage}
+                  className="mt-3"
+                />
               )}
             </div>
           </div>

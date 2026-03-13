@@ -33,7 +33,7 @@ const Sidebar: React.FC = () => {
   };
 
   const openSettingsWithDefaultTab = () => {
-    setActiveSettingsTab("File Settings");
+    setActiveSettingsTab("Sync & Storage");
     setSettingsDialogOpen(true);
   };
 

@@ -568,7 +568,7 @@ const FilesContainer: FC<{ isRecentFiles?: boolean }> = ({ isRecentFiles = false
 
   // Navigation to settings
   const handleNavigateToSettings = useCallback(() => {
-    setActiveSettingsTab("File Settings");
+    setActiveSettingsTab("Sync & Storage");
     setSettingsDialogOpen(true);
   }, [setActiveSettingsTab, setSettingsDialogOpen]);
 

@@ -376,30 +376,36 @@ export default function MultiFolderSyncManager() {
 
   return (
     <>
-      <LocalFoldersSection
-        syncFolders={syncFolders}
-        isLoading={isLoading}
-        onAddFolder={() => setShowAddDialog(true)}
-        onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
-        onResumeFolder={handleResumeSync}
-        onRemoveFolder={(folder) =>
-          setRemoveDialog({
-            open: true,
-            folderId: folder.id,
-            folderName: folder.folderName,
-          })
-        }
-        onDeleteFromServer={openDeleteServerDialog}
-      />
+      <div className="flex flex-col gap-4 w-full">
+        <div className="shadow-menu rounded-lg bg-white p-4 w-full">
+          <LocalFoldersSection
+            syncFolders={syncFolders}
+            isLoading={isLoading}
+            onAddFolder={() => setShowAddDialog(true)}
+            onPauseFolder={(folder) => setPauseDialog({ open: true, folder })}
+            onResumeFolder={handleResumeSync}
+            onRemoveFolder={(folder) =>
+              setRemoveDialog({
+                open: true,
+                folderId: folder.id,
+                folderName: folder.folderName,
+              })
+            }
+            onDeleteFromServer={openDeleteServerDialog}
+          />
+        </div>
 
-      <RemoteFoldersSection
-        remoteFolders={remoteFolders}
-        isLoading={isLoading}
-        onSyncFolder={handleSyncRemoteFolder}
-        onDeleteFromServer={(folderName) =>
-          openDeleteServerDialog(folderName)
-        }
-      />
+        <div className="shadow-menu rounded-lg bg-white p-4 w-full mb-4">
+          <RemoteFoldersSection
+            remoteFolders={remoteFolders}
+            isLoading={isLoading}
+            onSyncFolder={handleSyncRemoteFolder}
+            onDeleteFromServer={(folderName) =>
+              openDeleteServerDialog(folderName)
+            }
+          />
+        </div>
+      </div>
 
       {/* Dialogs */}
 

@@ -1,12 +1,13 @@
 "use client";
 
-import React from "react";
+import React, { useState, useMemo } from "react";
 import { Icons, RevealTextLine, IconButton } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import SectionHeader from "../SectionHeader";
 import { InView } from "react-intersection-observer";
 import {
   Folder,
+  FolderOpen,
   Plus,
   MoreVertical,
   Trash2,
@@ -15,7 +16,12 @@ import {
   ServerCrash,
 } from "lucide-react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import type { SyncFolder } from "@/app/lib/types/sync-folder";
+import { Pagination } from "@/components/ui/alt-table";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+
+const FOLDERS_PER_PAGE = 6;
 
 interface LocalFoldersSectionProps {
   syncFolders: SyncFolder[];
@@ -73,6 +79,15 @@ export function LocalFoldersSection({
   onRemoveFolder,
   onDeleteFromServer,
 }: LocalFoldersSectionProps) {
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const totalPages = Math.max(1, Math.ceil(syncFolders.length / FOLDERS_PER_PAGE));
+  const paginatedFolders = useMemo(() => {
+    const validPage = Math.min(currentPage, totalPages);
+    const start = (validPage - 1) * FOLDERS_PER_PAGE;
+    return syncFolders.slice(start, start + FOLDERS_PER_PAGE);
+  }, [syncFolders, currentPage, totalPages]);
+
   return (
     <InView triggerOnce>
       {({ inView, ref }) => (
@@ -89,7 +104,7 @@ export function LocalFoldersSection({
             >
               <div className="w-full flex justify-between gap-4">
                 <SectionHeader
-                  Icon={Icons.File2}
+                  Icon={Icons.Folder}
                   title="Local Sync Folders"
                   subtitle="Manage folders on this device that sync to the Hippius network. Changes are encrypted and synced automatically."
                   info="Multi-folder sync allows you to keep different directories synchronized independently. Files are encrypted and synced to the Hippius network."
@@ -122,8 +137,8 @@ export function LocalFoldersSection({
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2 w-full">
-                  {syncFolders.map((folder) => (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 w-full">
+                  {paginatedFolders.map((folder) => (
                     <div
                       key={folder.id}
                       className="p-4 border border-grey-80 rounded-lg bg-white hover:bg-grey-98 transition-colors"
@@ -144,9 +159,26 @@ export function LocalFoldersSection({
                               {getStatusText(folder.status)}
                             </span>
                           </div>
-                          <p className="text-sm text-grey-60 truncate mb-1">
-                            {folder.localPath}
-                          </p>
+                          <Tooltip.Provider delayDuration={200}>
+                            <Tooltip.Root>
+                              <Tooltip.Trigger asChild>
+                                <p className="text-sm text-grey-60 truncate mb-1 cursor-default">
+                                  {folder.localPath}
+                                </p>
+                              </Tooltip.Trigger>
+                              <Tooltip.Portal>
+                                <Tooltip.Content
+                                  side="bottom"
+                                  align="start"
+                                  sideOffset={4}
+                                  className="z-[9999] max-w-[400px] bg-white border border-grey-80 rounded-lg px-3 py-2 text-xs font-medium text-grey-40 shadow-lg break-all animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95"
+                                >
+                                  {folder.localPath}
+                                  <Tooltip.Arrow className="fill-white" width={12} height={6} />
+                                </Tooltip.Content>
+                              </Tooltip.Portal>
+                            </Tooltip.Root>
+                          </Tooltip.Provider>
                           {(folder.fileCount !== undefined ||
                             folder.lastSynced) && (
                             <div className="flex items-center gap-3 text-xs text-grey-70">
@@ -196,10 +228,24 @@ export function LocalFoldersSection({
                               <DropdownMenu.Separator className="h-px bg-grey-80 my-1" />
                               <DropdownMenu.Item
                                 className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
+                                onSelect={async () => {
+                                  try {
+                                    await revealItemInDir(folder.localPath);
+                                  } catch (error) {
+                                    console.error("Failed to open in Finder:", error);
+                                  }
+                                }}
+                              >
+                                <FolderOpen className="size-4" />
+                                Open in Finder
+                              </DropdownMenu.Item>
+                              <DropdownMenu.Separator className="h-px bg-grey-80 my-1" />
+                              <DropdownMenu.Item
+                                className="flex items-center gap-2 px-3 py-2 text-sm text-grey-10 hover:bg-grey-95 rounded cursor-pointer outline-none"
                                 onSelect={() => onRemoveFolder(folder)}
                               >
                                 <Trash2 className="size-4" />
-                                Remove Folder
+                                Remove from Sync
                               </DropdownMenu.Item>
                               <DropdownMenu.Item
                                 className="flex items-center gap-2 px-3 py-2 text-sm text-error-50 hover:bg-error-95 rounded cursor-pointer outline-none"
@@ -220,6 +266,14 @@ export function LocalFoldersSection({
                     </div>
                   ))}
                 </div>
+              )}
+              {syncFolders.length > FOLDERS_PER_PAGE && (
+                <Pagination
+                  currentPage={Math.min(currentPage, totalPages)}
+                  totalPages={totalPages}
+                  setPage={setCurrentPage}
+                  className="mt-3"
+                />
               )}
             </div>
           </div>
