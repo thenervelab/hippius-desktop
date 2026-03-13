@@ -85,11 +85,17 @@ jobs:
           set -euo pipefail
           git ls-remote ssh://git@github.com/thenervelab/hcfs.git HEAD
 
-      - name: Verify pinned hcfs commit exists
+      - name: Verify pinned hcfs commit is fetchable
         shell: bash
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           set -euo pipefail
-          git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep 061be71176d9ca7439b51a7df9ac9638bd00b098
+          REV=$(grep -m1 'thenervelab/hcfs.git' src-tauri/Cargo.toml | sed 's/.*rev *= *"\([^"]*\)".*/\1/')
+          echo "Pinned hcfs rev: $REV"
+          git ls-remote ssh://git@github.com/thenervelab/hcfs.git | grep "$REV" \
+            || git clone --bare --filter=blob:none ssh://git@github.com/thenervelab/hcfs.git /tmp/hcfs-verify \
+            && git -C /tmp/hcfs-verify cat-file -t "$REV"
 
       - name: Get release notes
         id: release_notes
