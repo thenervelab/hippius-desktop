@@ -148,14 +148,20 @@ export default function MultiFolderSyncManager() {
     loadFolders();
   }, [loadFolders]);
 
-  const refreshFoldersAndStats = useCallback(() => {
-    loadFolders();
-    queryClient.invalidateQueries({
-      queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
-    });
-    queryClient.invalidateQueries({
-      queryKey: [GET_USER_IPFS_FILES_QUERY_KEY],
-    });
+  const refreshFoldersAndStats = useCallback((delayMs = 0) => {
+    const refresh = () => {
+      loadFolders();
+      queryClient.invalidateQueries({
+        queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [GET_USER_IPFS_FILES_QUERY_KEY],
+      });
+    };
+    refresh();
+    if (delayMs > 0) {
+      setTimeout(refresh, delayMs);
+    }
   }, [loadFolders, queryClient]);
 
   // ── Local folder actions ──────────────────────────────────────────────
@@ -363,7 +369,9 @@ export default function MultiFolderSyncManager() {
       );
       setDeleteDialog({ open: false, folderName: "", folderId: null });
       setDeleteConfirmInput("");
-      refreshFoldersAndStats();
+      // Refresh immediately and again after a delay to allow the
+      // server's user_summary to reflect the deleted files.
+      refreshFoldersAndStats(2000);
     } catch (error) {
       console.error("Failed to delete folder:", error);
       toast.error("Failed to delete folder from server");

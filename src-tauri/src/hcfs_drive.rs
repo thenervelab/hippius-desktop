@@ -194,6 +194,44 @@ impl HcfsDriveManager {
             .scan_local_files(&mut state)
             .map_err(|e| e.to_string())?;
 
+        // Diagnostic: log the staging plan summary and any conflicts
+        println!(
+            "[Stage] Plan: uploads={}, downloads={}, local_deletes={}, remote_deletes={}, conflicts={}, unchanged={}",
+            plan.uploads.len(),
+            plan.downloads.len(),
+            plan.local_deletes.len(),
+            plan.remote_deletes.len(),
+            plan.conflicts.len(),
+            plan.unchanged.len(),
+        );
+        println!(
+            "[Stage] Trees: local={}, remote={}, synced={}, ss58='{}'",
+            state.local.files.len(),
+            state.remote.files.len(),
+            state.synced.files.len(),
+            state.ss58_address,
+        );
+        for c in &plan.conflicts {
+            let conflict_type = match c.conflict_type {
+                SyncConflictType::ModifyModify => "ModifyModify",
+                SyncConflictType::ModifyDelete => "ModifyDelete",
+                SyncConflictType::DeleteModify => "DeleteModify",
+                SyncConflictType::CreateCreate => "CreateCreate",
+            };
+            let path = state
+                .path_index
+                .get(&c.path_hash)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| hex::encode(c.path_hash));
+            println!(
+                "[Stage] Conflict: type={}, path='{}', has_local={}, has_remote={}",
+                conflict_type,
+                path,
+                c.local_hash.is_some(),
+                c.remote_hash.is_some(),
+            );
+        }
+
         let resolve_path = |file_id: &[u8; 32]| -> String {
             state
                 .path_index
@@ -894,105 +932,83 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 m.log_sync_diagnostics(label);
                 match m.stage_with_paths().await {
                     Ok(staged) if staged.conflicts.is_empty() => {
-                        // Check if there are any actual changes to sync
-                        let has_changes = !staged.uploads.is_empty()
-                            || !staged.downloads.is_empty()
-                            || !staged.local_deletes.is_empty()
-                            || !staged.remote_deletes.is_empty();
+                        // Staging uses cached remote state (no network
+                        // fetch), so its upload/download counts can be
+                        // stale — e.g. a file uploaded by another device
+                        // appears as a LocalCreate here because the
+                        // cached remote tree hasn't seen it yet. Emitting
+                        // those stale counts causes phantom "pending
+                        // upload" notifications on the frontend.
+                        //
+                        // Instead we always emit zero counts and let the
+                        // real sync (which fetches live remote state)
+                        // drive the UI via progress callbacks. The
+                        // frontend's ensureSession() creates ad-hoc
+                        // sessions when upload/download progress events
+                        // arrive unexpectedly.
+                        println!(
+                            "[Sync] Staged for '{}': uploads={}, downloads={}, local_deletes={}, remote_deletes={} (cached; running real sync)",
+                            label,
+                            staged.uploads.len(),
+                            staged.downloads.len(),
+                            staged.local_deletes.len(),
+                            staged.remote_deletes.len(),
+                        );
+                        let empty: Vec<String> = Vec::new();
+                        let _ = app.emit("hcfs_sync_started", serde_json::json!({
+                            "label": label,
+                            "uploads": 0, "downloads": 0,
+                            "local_deletes": 0, "remote_deletes": 0,
+                            "upload_files": empty,
+                            "download_files": empty,
+                            "local_delete_files": empty,
+                            "remote_delete_files": empty,
+                        }));
+                        emitted_sync_started = true;
 
-                        if !has_changes {
-                            // Stage uses cached remote state — always run
-                            // the real sync so it can fetch fresh remote
-                            // data and discover files uploaded by other
-                            // devices.
-                            println!(
-                                "[Sync] No staged changes for '{}', running sync to check remote",
-                                label
-                            );
-                            let empty: Vec<String> = Vec::new();
-                            let _ = app.emit("hcfs_sync_started", serde_json::json!({
-                                "label": label,
-                                "uploads": 0, "downloads": 0,
-                                "local_deletes": 0, "remote_deletes": 0,
-                                "upload_files": empty,
-                                "download_files": empty,
-                                "local_delete_files": empty,
-                                "remote_delete_files": empty,
-                            }));
-                            emitted_sync_started = true;
+                        let outcome = m.sync_with_resolutions(HashMap::new()).await;
 
-                            let outcome = m.sync_with_resolutions(HashMap::new()).await;
-                            SyncResult::Synced {
+                        match &outcome {
+                            Ok(o) if o.conflicts_skipped > 0 => {
+                                println!(
+                                    "[Sync] {} conflict(s) skipped during auto-sync for '{}', re-staging for review",
+                                    o.conflicts_skipped, label
+                                );
+
+                                let _ = app.emit(
+                                    "hcfs_sync_completed",
+                                    serde_json::json!({
+                                        "label": label,
+                                        "files_uploaded": o.files_uploaded,
+                                        "files_downloaded": o.files_downloaded,
+                                        "files_deleted_locally": o.files_deleted_locally,
+                                        "files_deleted_remotely": o.files_deleted_remotely,
+                                        "conflicts_resolved": o.conflicts_resolved,
+                                        "conflicts_skipped": o.conflicts_skipped,
+                                    }),
+                                );
+
+                                match m.stage_with_paths().await {
+                                    Ok(restaged) if !restaged.conflicts.is_empty() => {
+                                        SYNC_REVIEW_MODE.store(true, Ordering::Release);
+                                        set_review_entered();
+                                        let _ = app.emit(
+                                            "hcfs_conflicts_pending",
+                                            serde_json::json!({
+                                                "label": label,
+                                                "staged": restaged,
+                                            }),
+                                        );
+                                        SyncResult::ConflictsPending
+                                    }
+                                    _ => SyncResult::ConflictsPending,
+                                }
+                            }
+                            _ => SyncResult::Synced {
                                 outcome,
                                 staged_downloads: Vec::new(),
                                 staged_uploads: Vec::new(),
-                            }
-                        } else {
-                            println!(
-                                "[Sync] Changes detected for '{}' — syncing (uploads={}, downloads={}, local_deletes={}, remote_deletes={})",
-                                label,
-                                staged.uploads.len(),
-                                staged.downloads.len(),
-                                staged.local_deletes.len(),
-                                staged.remote_deletes.len(),
-                            );
-                            let _ = app.emit("hcfs_sync_started", serde_json::json!({
-                                "label": label,
-                                "uploads": staged.uploads.len(),
-                                "downloads": staged.downloads.len(),
-                                "local_deletes": staged.local_deletes.len(),
-                                "remote_deletes": staged.remote_deletes.len(),
-                                "upload_files": staged.uploads.iter().map(|f| &f.path).collect::<Vec<_>>(),
-                                "download_files": staged.downloads.iter().map(|f| &f.path).collect::<Vec<_>>(),
-                                "local_delete_files": staged.local_deletes.iter().map(|f| &f.path).collect::<Vec<_>>(),
-                                "remote_delete_files": staged.remote_deletes.iter().map(|f| &f.path).collect::<Vec<_>>(),
-                            }));
-                            emitted_sync_started = true;
-
-                            let outcome = m.sync_with_resolutions(HashMap::new()).await;
-
-                            match &outcome {
-                                Ok(o) if o.conflicts_skipped > 0 => {
-                                    println!(
-                                        "[Sync] {} conflict(s) skipped during auto-sync for '{}', re-staging for review",
-                                        o.conflicts_skipped, label
-                                    );
-
-                                    let _ = app.emit(
-                                        "hcfs_sync_completed",
-                                        serde_json::json!({
-                                            "label": label,
-                                            "files_uploaded": o.files_uploaded,
-                                            "files_downloaded": o.files_downloaded,
-                                            "files_deleted_locally": o.files_deleted_locally,
-                                            "files_deleted_remotely": o.files_deleted_remotely,
-                                            "conflicts_resolved": o.conflicts_resolved,
-                                            "conflicts_skipped": o.conflicts_skipped,
-                                        }),
-                                    );
-
-                                    match m.stage_with_paths().await {
-                                        Ok(restaged) if !restaged.conflicts.is_empty() => {
-                                            SYNC_REVIEW_MODE.store(true, Ordering::Release);
-                                            set_review_entered();
-                                            let _ = app.emit(
-                                                "hcfs_conflicts_pending",
-                                                serde_json::json!({
-                                                    "label": label,
-                                                    "staged": restaged,
-                                                }),
-                                            );
-                                            SyncResult::ConflictsPending
-                                        }
-                                        _ => SyncResult::ConflictsPending,
-                                    }
-                                }
-                                _ => SyncResult::Synced {
-                                    outcome,
-                                    staged_downloads: staged.downloads,
-                                    staged_uploads: staged.uploads,
-                                },
-                            }
+                            },
                         }
                     }
                     Ok(staged) => {

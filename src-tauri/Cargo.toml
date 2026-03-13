@@ -47,7 +47,9 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "rustls",
 ] }
 aws-sdk-s3 = { version = "1.125.0", features = ["behavior-version-latest"] }
-aws-credential-types = { version = "1.2.14", features = ["hardcoded-credentials"] }
+aws-credential-types = { version = "1.2.14", features = [
+    "hardcoded-credentials",
+] }
 zip = "4.2.0"
 dotenvy = "0.15"
 base64 = "0.21"
@@ -76,9 +78,11 @@ hostname = "0.4"
 zeroize = "1"
 bip39 = { version = "2.2", features = ["rand"] }
 alloy-signer = { version = "0.8", default-features = false }
-alloy-signer-local = { version = "0.8", default-features = false, features = ["mnemonic"] }
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e40c304de6423cb6da21c67015b588c5ca960783" }
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "e40c304de6423cb6da21c67015b588c5ca960783" }
+alloy-signer-local = { version = "0.8", default-features = false, features = [
+    "mnemonic",
+] }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "7a3d50d" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "7a3d50d" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
