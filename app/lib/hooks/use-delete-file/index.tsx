@@ -99,16 +99,26 @@ export const useDeleteFile = ({
                     (file.label ? pathByLabel.get(file.label) : null) ??
                     defaultSyncPath;
 
+                // For files inside subfolders, derive the relative path from source.
+                // source = "/path/to/syncRoot/subfolder/file.txt" → relativeName = "subfolder/file.txt"
+                let relativeName = fileName;
+                if (file.source && syncPath) {
+                    const prefix = syncPath.endsWith("/") ? syncPath : syncPath + "/";
+                    if (file.source.startsWith(prefix)) {
+                        relativeName = file.source.slice(prefix.length);
+                    }
+                }
+
                 try {
                     await invoke("remove_file", {
                         syncPath,
-                        name: fileName,
+                        name: relativeName,
                         label: file.label ?? null,
                     });
                     results.push({ file, success: true });
 
                     // Record in sync progress so widget shows delete immediately
-                    await recordDeletedFile(fileName, file.size ?? 0);
+                    await recordDeletedFile(relativeName, file.size ?? 0);
                 } catch (error) {
                     console.error(`Failed to delete ${file.isFolder ? 'folder' : 'file'}: ${fileName}`, error);
                     results.push({
