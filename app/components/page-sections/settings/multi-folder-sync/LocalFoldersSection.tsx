@@ -93,7 +93,7 @@ export function LocalFoldersSection({
       {({ inView, ref }) => (
         <div
           ref={ref}
-          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/folder-sync-bg-layer.png')] bg-repeat-round bg-cover"
+          className="flex gap-6 w-full flex-col border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
         >
           <div className="w-full">
             <RevealTextLine

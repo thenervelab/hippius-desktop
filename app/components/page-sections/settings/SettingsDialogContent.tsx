@@ -70,6 +70,7 @@ const SettingsDialogContent: React.FC = () => {
         <InView triggerOnce>
           {({ inView, ref }) => (
             <div
+              key={activeTab}
               className="flex flex-col animate-in fade-in duration-300 gap-8 w-full h-max mb-4 pt-[18px]"
               ref={ref}
             >
@@ -114,9 +115,23 @@ const SettingsDialogContent: React.FC = () => {
             {activeTab === "Sync & Storage" && (
               <div className="flex flex-col gap-4 w-full">
                 <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                  <DeviceNameSetting />
+                  <RevealTextLine
+                    rotate
+                    reveal={inView}
+                    className="delay-300 w-full"
+                    parentClassName="w-full"
+                  >
+                    <DeviceNameSetting />
+                  </RevealTextLine>
                 </div>
-                <MultiFolderSyncManager />
+                <RevealTextLine
+                  rotate
+                  reveal={inView}
+                  className="delay-500 w-full"
+                  parentClassName="w-full overflow-visible"
+                >
+                  <MultiFolderSyncManager />
+                </RevealTextLine>
               </div>
             )}
             {activeTab === "API Token" && (
