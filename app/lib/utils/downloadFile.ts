@@ -16,6 +16,25 @@ async function resolveSyncPath(
   return (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
 }
 
+/**
+ * Derive the file name relative to the sync root.
+ * Prefers computing from `file.source` (full filesystem path) so that
+ * files / folders inside subfolders resolve correctly even when
+ * `actualFileName` only contains the basename.
+ */
+function resolveRelativeName(
+  file: FormattedUserFile,
+  syncPath: string,
+): string {
+  if (file.source && syncPath) {
+    const prefix = syncPath.endsWith("/") ? syncPath : syncPath + "/";
+    if (file.source.startsWith(prefix)) {
+      return file.source.slice(prefix.length);
+    }
+  }
+  return file.actualFileName || file.name;
+}
+
 const getFileSavePath = async (name: string) => {
   const fileExtension = name.split(".").pop() || "";
   return await save({
@@ -59,9 +78,10 @@ const downloadFileExport = async (
 
     toast.loading(`Exporting: ${name}`, { id: toastId });
 
+    const fileName = resolveRelativeName(file, syncPath);
     await invoke("export_file", {
       syncPath,
-      fileName: file.actualFileName || name,
+      fileName,
       outputPath: filePath,
     });
 
@@ -70,7 +90,7 @@ const downloadFileExport = async (
   } catch (err) {
     console.error("Download failed:", err);
     toast.error(
-      `Download failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+      `Download failed: ${err instanceof Error ? err.message : String(err)}`,
       { id: toastId }
     );
     return { success: false, error: "DOWNLOAD_FAILED", message: String(err) };
@@ -99,9 +119,10 @@ const downloadFolderExport = async (
 
     toast.loading(`Exporting folder: ${name}`, { id: toastId });
 
+    const fileName = resolveRelativeName(file, syncPath);
     await invoke("export_file", {
       syncPath,
-      fileName: file.actualFileName || name,
+      fileName,
       outputPath: `${selectedDir}/${name}`,
     });
 
@@ -111,7 +132,7 @@ const downloadFolderExport = async (
     toast.dismiss(toastId);
     console.error("Folder download failed:", err);
     toast.error(
-      `Download failed: ${err instanceof Error ? err.message : "Unknown error"}`
+      `Download failed: ${err instanceof Error ? err.message : String(err)}`
     );
     return { success: false, error: "DOWNLOAD_FAILED", message: String(err) };
   }

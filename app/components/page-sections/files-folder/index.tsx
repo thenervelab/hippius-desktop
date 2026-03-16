@@ -155,7 +155,7 @@ export default function FolderView({
             : `${syncPath}/${entry.name}`;
           return {
             name: entry.name,
-            actualFileName: entry.name,
+            actualFileName: (subfolder && !entry.is_folder) ? `${subfolder}/${entry.name}` : entry.name,
             size: entry.size,
             createdAt: modifiedMs,
             arionHash: "",
@@ -251,20 +251,24 @@ export default function FolderView({
         return; // User canceled directory selection
       }
 
-      // Download folder
+      // Download folder — build a minimal file object so downloadFolder
+      // resolves the correct sync path (via label) and uses the actual
+      // subfolder path relative to the sync root as the fileName.
+      const actualFolderPath = getFullPath(mainFolderActualName, subFolderPath) || folderName;
       setIsDownloading(true);
       const result = await downloadFolder({
         folderName,
         polkadotAddress: polkadotAddress ?? "",
         outputDir,
+        file: {
+          actualFileName: actualFolderPath,
+        } as FormattedUserFile,
       });
 
       if (result && !result.success) {
         toast.error(
           `Failed to download folder: ${result.message || "Unknown error"}`
         );
-      } else if (result && result.success) {
-        toast.success(`Folder downloaded successfully to ${outputDir}`);
       }
     } catch (error) {
       console.error("Error downloading folder:", error);

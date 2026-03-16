@@ -39,7 +39,14 @@ export const downloadFolder = async ({
         } else {
             syncPath = (await getPrivateSyncPath(polkadotAddress))?.path ?? "";
         }
-        const fileName = file?.actualFileName || folderName;
+        const fileName = file?.source && syncPath
+            ? (() => {
+                const prefix = syncPath.endsWith("/") ? syncPath : syncPath + "/";
+                return file.source!.startsWith(prefix)
+                    ? file.source!.slice(prefix.length)
+                    : (file?.actualFileName || folderName);
+            })()
+            : (file?.actualFileName || folderName);
 
         await invoke("export_file", {
             syncPath,
