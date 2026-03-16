@@ -16,6 +16,7 @@ import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { useAtomValue } from "jotai";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { REMOTE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useRemoteStorageStats";
+import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
 import { SyncPausedAlert, IS_SYNC_PAUSED } from "@/components/ui/SyncPausedAlert";
 import SyncFolderSelect from "@/components/ui/SyncFolderSelect";
 
@@ -73,8 +74,8 @@ export default function FolderUploadDialog({
         // Close the dialog immediately after clicking submit
         handleClose();
 
-        // Show toast to indicate upload has started
-        const toastId = toast.loading("Uploading folder...");
+        // Show success toast immediately
+        toast.success("Folder added. Your sync will start soon.", { duration: 4000, closeButton: true });
 
         try {
             // Get sync path — use selected path or fall back to default
@@ -88,11 +89,9 @@ export default function FolderUploadDialog({
             // Trigger sync to push changes
             await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FolderUploadDialog] trigger_sync_now failed:", err));
 
-            toast.dismiss(toastId);
-            toast.success(`Folder uploaded successfully!`);
-
+            // Refresh file list AFTER backend has added the folder so list_sync_folder sees it
             queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
-
+            queryClient.invalidateQueries({ queryKey: [GET_USER_IPFS_FILES_QUERY_KEY] });
             if (onRefresh) {
                 onRefresh();
             }
@@ -102,7 +101,6 @@ export default function FolderUploadDialog({
             }
         } catch (error) {
             console.error("Error uploading folder:", error);
-            toast.dismiss(toastId);
             toast.error(`Failed to upload folder: ${error instanceof Error ? error.message : String(error)}`);
         }
     };

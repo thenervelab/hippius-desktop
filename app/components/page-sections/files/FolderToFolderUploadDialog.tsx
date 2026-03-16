@@ -73,8 +73,8 @@ export default function FolderToFolderUploadDialog({
         // Close the dialog immediately after clicking submit
         handleClose();
 
-        // Show toast to indicate upload has started
-        const toastId = toast.loading("Uploading folder...");
+        // Show success toast immediately
+        toast.success("Folder added. Your sync will start soon.", { duration: 4000, closeButton: true });
 
         try {
             // Get sync path and build target directory (current subfolder)
@@ -94,11 +94,8 @@ export default function FolderToFolderUploadDialog({
             // Trigger sync to push changes
             await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FolderToFolderUploadDialog] trigger_sync_now failed:", err));
 
-            toast.dismiss(toastId);
-            toast.success(`Folder uploaded successfully!`);
-
+            // Refresh file list AFTER backend has added the folder so list_sync_folder sees it
             queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
-
             if (onRefresh) {
                 onRefresh();
             }
@@ -108,7 +105,6 @@ export default function FolderToFolderUploadDialog({
             }
         } catch (error) {
             console.error("Error uploading folder:", error);
-            toast.dismiss(toastId);
             toast.error(`Failed to upload folder: ${error instanceof Error ? error.message : String(error)}`);
         }
     };

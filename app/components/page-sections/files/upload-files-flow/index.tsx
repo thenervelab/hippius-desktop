@@ -276,16 +276,19 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
     setIsUploading(true);
     setUploadProgress(0);
 
-    const toastId = toast.loading(
-      files.length > 1
-        ? `Adding ${files.length} files to folder: 0%`
-        : "Adding file to folder: 0%"
+    const fileCount = files.length;
+
+    // Show success toast immediately before backend work
+    toast.success(
+      fileCount === 1
+        ? "File added. Your sync will start soon."
+        : `${fileCount} files added. Your sync will start soon.`,
+      { duration: 4000, closeButton: true }
     );
 
     try {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const percent = Math.round(((i + 1) / files.length) * 100);
 
         let filePath = file.path;
 
@@ -318,25 +321,14 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
           filePath,
         });
 
-        setUploadProgress(percent);
-        const msg =
-          files.length > 1
-            ? `Adding ${files.length} files to folder: ${percent}%`
-            : `Adding file to folder: ${percent}%`;
-        toast.loading(msg, { id: toastId });
+        setUploadProgress(Math.round(((i + 1) / files.length) * 100));
 
         if (files.length > 1) await new Promise((r) => setTimeout(r, 300));
       }
 
       await invoke("trigger_sync_now").catch((err: unknown) => console.warn("[UploadFilesFlow] trigger_sync_now failed:", err));
 
-      toast.success(
-        files.length > 1
-          ? `${files.length} files added. Syncing started.`
-          : `File added. Syncing started.`,
-        { id: toastId, duration: 2000, closeButton: true }
-      );
-
+      // Refresh file list AFTER backend has added the files so list_sync_folder sees them
       queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
       props.onSuccess();
     } catch (error) {
@@ -347,10 +339,9 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
         props.folderName
       );
       toast.error(
-        `Failed to add files: ${
+        `Failed to add ${fileCount === 1 ? "file" : "files"}: ${
           error instanceof Error ? error.message : String(error)
-        }`,
-        { id: toastId }
+        }`
       );
     } finally {
       setIsUploading(false);

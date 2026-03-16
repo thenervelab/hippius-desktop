@@ -76,9 +76,9 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
     // If a toastId is given, update that toast; otherwise create a new one
     let localToastId = options?.toastId;
     if (localToastId !== undefined) {
-      toast.loading(startText, { id: localToastId });
+      toast.loading(startText, { id: localToastId, closeButton: true });
     } else {
-      localToastId = toast.loading(startText);
+      localToastId = toast.loading(startText, { closeButton: true });
     }
 
     setRequestState("uploading");
@@ -100,12 +100,23 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         throw new Error("Sync path not configured. Please set a sync folder first.");
       }
 
+      // Dismiss the loading toast — we'll show a success toast immediately
+      toast.dismiss(localToastId);
+
+      // Show "added" confirmation right away
+      const addedText =
+        filePaths.length === 1
+          ? `${firstFileName} added. Your sync will start soon.`
+          : `${filePaths.length} files added. Your sync will start soon.`;
+      toast.success(addedText, { duration: 4000, closeButton: true });
+
+      // Refetch immediately so the file list shows the new files
+      refetchUserFiles();
+      queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
+
       // Add each file to sync folder (hcfs-client will handle upload/encryption)
       for (let i = 0; i < filePaths.length; i++) {
         const filePath = filePaths[i];
-        const fileName = fileNames[i]
-          ? formatDisplayName(fileNames[i])
-          : `file ${i + 1}`;
 
         const name = await invoke<string>("add_file", {
           syncPath,
@@ -116,27 +127,11 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         // update progress
         const percent = Math.round(((i + 1) / filePaths.length) * 100);
         setProgress(percent);
-
-        const uploadingText =
-          filePaths.length > 1
-            ? msgs?.uploadingMultiple?.(filePaths.length, percent) ??
-            `Adding ${filePaths.length} files: ${percent}%`
-            : msgs?.uploadingSingle?.(percent) ??
-            `Adding ${fileName}: ${percent}%`;
-
-        // Always update the same toast id
-        toast.loading(uploadingText, { id: localToastId });
       }
-
-      // Show "added" confirmation
-      const addedText =
-        filePaths.length > 1
-          ? `${filePaths.length} files added. Syncing started`
-          : `${firstFileName} added. Syncing started`;
-      toast.success(addedText, { id: localToastId, duration: 2000, closeButton: true });
 
       // finish up
       setRequestState("idle");
+      setProgress(0);
 
       // Fire-and-forget: trigger sync without awaiting (it may block if a
       // sync cycle is already running). The file watcher will also pick up
@@ -145,9 +140,6 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
         console.error("[Upload] trigger_sync_now failed:", err);
       });
 
-      // Refetch immediately so the file list shows the new files
-      refetchUserFiles();
-      queryClient.invalidateQueries({ queryKey: [REMOTE_STORAGE_STATS_QUERY_KEY] });
       onSuccess?.();
     } catch (err) {
       setRequestState("idle");
@@ -155,13 +147,12 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
       onError?.(err);
 
       const errorText =
-        filePaths.length > 1
-          ? msgs?.errorMultiple?.(filePaths.length) ??
-          `Failed to add ${filePaths.length} files`
-          : msgs?.errorSingle ?? `Failed to add ${firstFileName}`;
+        filePaths.length === 1
+          ? msgs?.errorSingle ?? `Failed to add ${firstFileName}`
+          : msgs?.errorMultiple?.(filePaths.length) ??
+          `Failed to add ${filePaths.length} files`;
 
-      // Convert loading -> error on the same toast id
-      toast.error(errorText, { id: localToastId });
+      toast.error(errorText);
     }
   }
 
