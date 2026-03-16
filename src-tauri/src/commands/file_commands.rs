@@ -191,6 +191,30 @@ async fn synced_paths_for_label(
     Some(paths)
 }
 
+/// Recursively compute the total size of all files within a directory.
+/// Hidden files (starting with '.') are excluded to match listing behaviour.
+async fn dir_size_recursive(path: &Path) -> u64 {
+    let mut total: u64 = 0;
+    let Ok(mut dir) = tokio::fs::read_dir(path).await else {
+        return 0;
+    };
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
+        if meta.is_dir() {
+            total += Box::pin(dir_size_recursive(&entry.path())).await;
+        } else {
+            total += meta.len();
+        }
+    }
+    total
+}
+
 /// List contents of sync folder
 #[tauri::command]
 pub async fn list_sync_folder(
@@ -268,10 +292,16 @@ pub async fn list_sync_folder(
             }
         };
 
+        let size = if is_folder {
+            dir_size_recursive(&target.join(&name)).await
+        } else {
+            meta.len()
+        };
+
         entries.push(FileEntry {
             name,
             is_folder,
-            size: meta.len(),
+            size,
             modified: meta
                 .modified()
                 .ok()

@@ -193,3 +193,90 @@ async fn export_subfolder_file() {
     let content = tokio::fs::read_to_string(&output_file).await.unwrap();
     assert_eq!(content, "a,b,c\n1,2,3");
 }
+
+// ---------------------------------------------------------------------------
+// dir_size_recursive tests
+//
+// The function lives in the binary crate and can't be imported directly, so we
+// replicate the exact same logic here to validate its behaviour in isolation.
+// ---------------------------------------------------------------------------
+
+/// Mirror of `commands::file_commands::dir_size_recursive` for testing.
+async fn dir_size_recursive(path: &Path) -> u64 {
+    let mut total: u64 = 0;
+    let Ok(mut dir) = tokio::fs::read_dir(path).await else {
+        return 0;
+    };
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(meta) = entry.metadata().await else {
+            continue;
+        };
+        if meta.is_dir() {
+            total += Box::pin(dir_size_recursive(&entry.path())).await;
+        } else {
+            total += meta.len();
+        }
+    }
+    total
+}
+
+/// Empty directory should report size 0.
+#[tokio::test]
+async fn dir_size_empty_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let size = dir_size_recursive(tmp.path()).await;
+    assert_eq!(size, 0);
+}
+
+/// Directory with only regular files sums their sizes.
+#[tokio::test]
+async fn dir_size_flat_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    // 10 bytes + 20 bytes = 30 bytes
+    fs::write(tmp.path().join("a.txt"), &[0u8; 10]).await.unwrap();
+    fs::write(tmp.path().join("b.txt"), &[0u8; 20]).await.unwrap();
+    let size = dir_size_recursive(tmp.path()).await;
+    assert_eq!(size, 30);
+}
+
+/// Nested directories are summed recursively.
+#[tokio::test]
+async fn dir_size_nested_folders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = tmp.path().join("sub");
+    let deep = sub.join("deep");
+    fs::create_dir_all(&deep).await.unwrap();
+
+    fs::write(tmp.path().join("root.txt"), &[0u8; 5]).await.unwrap();
+    fs::write(sub.join("mid.txt"), &[0u8; 15]).await.unwrap();
+    fs::write(deep.join("leaf.txt"), &[0u8; 25]).await.unwrap();
+
+    let size = dir_size_recursive(tmp.path()).await;
+    assert_eq!(size, 45); // 5 + 15 + 25
+}
+
+/// Hidden files (starting with '.') are excluded from the total.
+#[tokio::test]
+async fn dir_size_excludes_hidden_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("visible.txt"), &[0u8; 10]).await.unwrap();
+    fs::write(tmp.path().join(".hidden"), &[0u8; 100]).await.unwrap();
+
+    let hidden_dir = tmp.path().join(".hidden_dir");
+    fs::create_dir_all(&hidden_dir).await.unwrap();
+    fs::write(hidden_dir.join("secret.txt"), &[0u8; 200]).await.unwrap();
+
+    let size = dir_size_recursive(tmp.path()).await;
+    assert_eq!(size, 10); // only visible.txt counts
+}
+
+/// Non-existent path returns 0 instead of an error.
+#[tokio::test]
+async fn dir_size_nonexistent_path() {
+    let size = dir_size_recursive(Path::new("/tmp/does_not_exist_hippius_test")).await;
+    assert_eq!(size, 0);
+}
