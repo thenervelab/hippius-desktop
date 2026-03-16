@@ -2,12 +2,14 @@
 use cocoa::base::id;
 #[cfg(target_os = "macos")]
 use objc::{class, msg_send, sel, sel_impl};
+#[cfg(target_os = "macos")]
+use tracing::{debug, error};
 
 #[cfg(target_os = "macos")]
 pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
     unsafe {
-        println!(
-            "[Bookmark] Attempting to create security-scoped bookmark for: {}",
+        debug!(
+            "Attempting to create security-scoped bookmark for: {}",
             path
         );
 
@@ -23,11 +25,11 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
         let url: id = msg_send![ns_url_class, fileURLWithPath: path_str];
 
         if url.is_null() {
-            eprintln!("[Bookmark] ERROR: Failed to create URL from path: {}", path);
+            error!("Failed to create URL from path: {}", path);
             return Err("Failed to create URL from path".to_string());
         }
 
-        println!("[Bookmark] URL created successfully");
+        debug!("Bookmark URL created successfully");
 
         // Create bookmark data with security scope
         let mut error: id = std::ptr::null_mut();
@@ -47,15 +49,15 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
                     let error_str = std::ffi::CStr::from_ptr(error_cstr)
                         .to_string_lossy()
                         .into_owned();
-                    eprintln!("[Bookmark] ERROR: Failed to create bookmark: {}", error_str);
+                    error!("Failed to create bookmark: {}", error_str);
                     return Err(format!(
                         "Failed to create security-scoped bookmark: {}",
                         error_str
                     ));
                 }
             }
-            eprintln!(
-                "[Bookmark] ERROR: Failed to create security-scoped bookmark (unknown error)"
+            error!(
+                "Failed to create security-scoped bookmark (unknown error)"
             );
             return Err("Failed to create security-scoped bookmark".to_string());
         }
@@ -65,8 +67,8 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
         let bytes: *const u8 = msg_send![bookmark_data, bytes];
         let data = std::slice::from_raw_parts(bytes, length).to_vec();
 
-        println!(
-            "[Bookmark] Successfully created bookmark ({} bytes)",
+        debug!(
+            "Successfully created bookmark ({} bytes)",
             data.len()
         );
         Ok(data)
@@ -76,8 +78,8 @@ pub fn create_security_scoped_bookmark(path: &str) -> Result<Vec<u8>, String> {
 #[cfg(target_os = "macos")]
 pub fn resolve_security_scoped_bookmark(bookmark_data: &[u8]) -> Result<(String, id), String> {
     unsafe {
-        println!(
-            "[Bookmark] Attempting to resolve security-scoped bookmark ({} bytes)",
+        debug!(
+            "Attempting to resolve security-scoped bookmark ({} bytes)",
             bookmark_data.len()
         );
 
@@ -92,11 +94,11 @@ pub fn resolve_security_scoped_bookmark(bookmark_data: &[u8]) -> Result<(String,
         ];
 
         if data.is_null() {
-            eprintln!("[Bookmark] ERROR: Failed to create NSData from bookmark");
+            error!("Failed to create NSData from bookmark");
             return Err("Failed to create NSData from bookmark".to_string());
         }
 
-        println!("[Bookmark] NSData created successfully");
+        debug!("Bookmark NSData created successfully");
 
         // Resolve bookmark
         let url: id = msg_send![
@@ -109,20 +111,20 @@ pub fn resolve_security_scoped_bookmark(bookmark_data: &[u8]) -> Result<(String,
         ];
 
         if url.is_null() {
-            eprintln!("[Bookmark] ERROR: Failed to resolve security-scoped bookmark");
+            error!("Failed to resolve security-scoped bookmark");
             return Err("Failed to resolve security-scoped bookmark".to_string());
         }
 
-        println!("[Bookmark] Bookmark resolved successfully");
+        debug!("Bookmark resolved successfully");
 
         // Start accessing security-scoped resource
         let did_start: bool = msg_send![url, startAccessingSecurityScopedResource];
         if !did_start {
-            eprintln!("[Bookmark] ERROR: Failed to start accessing security-scoped resource");
+            error!("Failed to start accessing security-scoped resource");
             return Err("Failed to start accessing security-scoped resource".to_string());
         }
 
-        println!("[Bookmark] Successfully started accessing security-scoped resource");
+        debug!("Successfully started accessing security-scoped resource");
 
         // Get path string
         let path: id = msg_send![url, path];
@@ -131,7 +133,7 @@ pub fn resolve_security_scoped_bookmark(bookmark_data: &[u8]) -> Result<(String,
             .to_string_lossy()
             .into_owned();
 
-        println!("[Bookmark] Resolved path: {}", path_str);
+        debug!("Resolved bookmark path: {}", path_str);
 
         // NOTE: We intentionally do NOT call stopAccessingSecurityScopedResource here.
         // For a sync app, we need persistent access to the folder for the app's lifetime.

@@ -1,4 +1,5 @@
 use crate::DB_POOL;
+use tracing::debug;
 
 #[cfg(target_os = "macos")]
 use crate::macos_bookmarks::{
@@ -26,7 +27,7 @@ pub async fn store_bookmark(path: &str, scope_type: &str) -> Result<(), String> 
     .await
     .map_err(|e| format!("Failed to store bookmark: {}", e))?;
 
-    println!("[Bookmarks] Stored security-scoped bookmark for: {}", path);
+    debug!("Stored security-scoped bookmark for: {}", path);
     Ok(())
 }
 
@@ -61,8 +62,8 @@ pub async fn activate_bookmark(path: &str) -> Result<bool, String> {
         .execute(pool)
         .await;
 
-        println!(
-            "[Bookmarks] Activated security-scoped bookmark for: {}",
+        debug!(
+            "Activated security-scoped bookmark for: {}",
             path
         );
         Ok(true)
@@ -90,7 +91,7 @@ pub async fn remove_bookmark(path: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to remove bookmark: {}", e))?;
 
-    println!("[Bookmarks] Removed security-scoped bookmark for: {}", path);
+    debug!("Removed security-scoped bookmark for: {}", path);
     Ok(())
 }
 

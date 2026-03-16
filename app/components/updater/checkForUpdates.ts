@@ -1,3 +1,5 @@
+// NOTE: Intentionally kept in TypeScript — @tauri-apps/plugin-updater only exposes
+// check() and downloadAndInstall() as JS APIs with no Rust equivalent.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 import { check, Update } from "@tauri-apps/plugin-updater";

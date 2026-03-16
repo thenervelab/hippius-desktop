@@ -56,8 +56,8 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
             if sp.path.trim().is_empty() {
                 continue;
             }
-            println!(
-                "[Import] Importing sync path: {}, label: {}",
+            info!(
+                "Importing sync path: {}, label: {}",
                 sp.path, sp.label
             );
             let existing: Option<(String,)> =
@@ -206,8 +206,8 @@ pub async fn export_app_data() -> Result<ExportDataResult, String> {
         })
         .collect::<Vec<_>>();
 
-    println!(
-        "[Export] Exported {} sub-accounts, {} sync paths",
+    info!(
+        "Exported {} sub-accounts, {} sync paths",
         sub_accounts.len(),
         sync_paths.len(),
     );

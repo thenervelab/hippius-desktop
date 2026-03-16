@@ -10,6 +10,7 @@ use futures::StreamExt;
 use serde::Serialize;
 use sp_core::crypto::Ss58Codec;
 use subxt::tx::PairSigner;
+use tracing::info;
 
 // Re-use the generated runtime types from substrate_tx.
 use crate::commands::substrate_tx::custom_runtime;
@@ -355,7 +356,7 @@ pub async fn stake_bond(amount: String) -> Result<TxResult, String> {
         .is_some();
 
     let tx_hash = if already_bonded {
-        println!("[Blockchain] Submitting bond_extra transaction...");
+        info!("Submitting bond_extra transaction...");
         let tx = custom_runtime::tx().staking().bond_extra(amount);
         client
             .tx()
@@ -367,7 +368,7 @@ pub async fn stake_bond(amount: String) -> Result<TxResult, String> {
             .map_err(|e| format!("Transaction failed: {e}"))?
             .extrinsic_hash()
     } else {
-        println!("[Blockchain] Submitting bond transaction...");
+        info!("Submitting bond transaction...");
         let tx = custom_runtime::tx()
             .staking()
             .bond(amount, custom_runtime::runtime_types::pallet_staking::RewardDestination::Staked);
@@ -382,7 +383,7 @@ pub async fn stake_bond(amount: String) -> Result<TxResult, String> {
             .extrinsic_hash()
     };
 
-    println!("[Blockchain] Bond tx finalized: {:?}", tx_hash);
+    info!("Bond tx finalized: {:?}", tx_hash);
     Ok(TxResult {
         tx_hash: format!("{tx_hash:?}"),
         success: true,
@@ -399,7 +400,7 @@ pub async fn stake_unbond(amount: String) -> Result<TxResult, String> {
         .parse()
         .map_err(|e| format!("Invalid amount: {e}"))?;
 
-    println!("[Blockchain] Submitting unbond transaction...");
+    info!("Submitting unbond transaction...");
     let tx = custom_runtime::tx().staking().unbond(amount);
     let tx_hash = client
         .tx()
@@ -411,7 +412,7 @@ pub async fn stake_unbond(amount: String) -> Result<TxResult, String> {
         .map_err(|e| format!("Transaction failed: {e}"))?
         .extrinsic_hash();
 
-    println!("[Blockchain] Unbond tx finalized: {:?}", tx_hash);
+    info!("Unbond tx finalized: {:?}", tx_hash);
     Ok(TxResult {
         tx_hash: format!("{tx_hash:?}"),
         success: true,
@@ -446,7 +447,7 @@ pub async fn stake_withdraw_unbonded() -> Result<TxResult, String> {
         None => 0,
     };
 
-    println!("[Blockchain] Submitting withdraw_unbonded transaction (spans={num_slashing_spans})...");
+    info!("Submitting withdraw_unbonded transaction (spans={num_slashing_spans})...");
     let tx = custom_runtime::tx()
         .staking()
         .withdraw_unbonded(num_slashing_spans);
@@ -460,7 +461,7 @@ pub async fn stake_withdraw_unbonded() -> Result<TxResult, String> {
         .map_err(|e| format!("Transaction failed: {e}"))?
         .extrinsic_hash();
 
-    println!("[Blockchain] Withdraw tx finalized: {:?}", tx_hash);
+    info!("Withdraw tx finalized: {:?}", tx_hash);
     Ok(TxResult {
         tx_hash: format!("{tx_hash:?}"),
         success: true,
@@ -494,7 +495,7 @@ pub async fn stake_claim_rewards() -> Result<TxResult, String> {
         return Err("Cannot claim rewards: era is 0".to_string());
     }
 
-    println!("[Blockchain] Submitting payout_stakers for era {}...", current_era - 1);
+    info!("Submitting payout_stakers for era {}...", current_era - 1);
     let tx = custom_runtime::tx()
         .staking()
         .payout_stakers(account_id, current_era - 1);
@@ -508,7 +509,7 @@ pub async fn stake_claim_rewards() -> Result<TxResult, String> {
         .map_err(|e| format!("Transaction failed: {e}"))?
         .extrinsic_hash();
 
-    println!("[Blockchain] Payout tx finalized: {:?}", tx_hash);
+    info!("Payout tx finalized: {:?}", tx_hash);
     Ok(TxResult {
         tx_hash: format!("{tx_hash:?}"),
         success: true,
@@ -532,7 +533,7 @@ pub async fn transfer_balance(
         <sp_core::crypto::AccountId32 as Ss58Codec>::from_ss58check(&recipient_address)
             .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
 
-    println!("[Blockchain] Submitting transfer_keep_alive transaction...");
+    info!("Submitting transfer_keep_alive transaction...");
     let tx = custom_runtime::tx()
         .balances()
         .transfer_keep_alive(recipient.into(), amount);
@@ -547,9 +548,129 @@ pub async fn transfer_balance(
         .map_err(|e| format!("Transaction failed: {e}"))?
         .extrinsic_hash();
 
-    println!("[Blockchain] Transfer tx finalized: {:?}", tx_hash);
+    info!("Transfer tx finalized: {:?}", tx_hash);
     Ok(TxResult {
         tx_hash: format!("{tx_hash:?}"),
         success: true,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Unit conversion & explorer URL
+// ---------------------------------------------------------------------------
+
+const DECIMALS: u32 = 18;
+const EXPLORER_BASE: &str = "https://hipstats.com";
+
+/// Convert a human-readable amount (e.g. "1.5") to planck string (18 decimals).
+#[tauri::command]
+pub fn to_plancks(amount: String) -> Result<String, String> {
+    if amount.is_empty() {
+        return Err("Invalid amount".to_string());
+    }
+    // Validate the input is a valid number
+    amount.parse::<f64>().map_err(|_| "Invalid amount".to_string())?;
+
+    let (whole, fraction) = match amount.split_once('.') {
+        Some((w, f)) => (w, f),
+        None => (amount.as_str(), ""),
+    };
+
+    // Pad or truncate fraction to 18 digits
+    let fraction_padded = if fraction.len() >= DECIMALS as usize {
+        &fraction[..DECIMALS as usize]
+    } else {
+        &format!("{:0<width$}", fraction, width = DECIMALS as usize)
+    };
+
+    let combined = format!("{}{}", whole, fraction_padded);
+    // Remove leading zeros
+    let trimmed = combined.trim_start_matches('0');
+    if trimmed.is_empty() {
+        Ok("0".to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
+}
+
+/// Convert a planck string to human-readable f64 (divide by 10^18).
+#[tauri::command]
+pub fn from_plancks(plancks: String) -> Result<f64, String> {
+    let value: f64 = plancks
+        .parse()
+        .map_err(|_| "Invalid planck value".to_string())?;
+    Ok(value / 1e18)
+}
+
+/// Return the explorer URL for an address.
+#[tauri::command]
+pub fn get_explorer_url(address: String) -> String {
+    format!("{}/accounts/{}", EXPLORER_BASE, address)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_plancks_integer() {
+        assert_eq!(to_plancks("1".into()).unwrap(), "1000000000000000000");
+    }
+
+    #[test]
+    fn to_plancks_decimal() {
+        assert_eq!(to_plancks("1.5".into()).unwrap(), "1500000000000000000");
+    }
+
+    #[test]
+    fn to_plancks_zero() {
+        assert_eq!(to_plancks("0".into()).unwrap(), "0");
+    }
+
+    #[test]
+    fn to_plancks_small_fraction() {
+        assert_eq!(to_plancks("0.000000000000000001".into()).unwrap(), "1");
+    }
+
+    #[test]
+    fn to_plancks_many_decimals_truncates() {
+        // More than 18 decimals — truncate
+        assert_eq!(
+            to_plancks("0.1234567890123456789999".into()).unwrap(),
+            "123456789012345678"
+        );
+    }
+
+    #[test]
+    fn to_plancks_invalid() {
+        assert!(to_plancks("abc".into()).is_err());
+        assert!(to_plancks("".into()).is_err());
+    }
+
+    #[test]
+    fn from_plancks_basic() {
+        let result = from_plancks("1000000000000000000".into()).unwrap();
+        assert!((result - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn from_plancks_zero() {
+        let result = from_plancks("0".into()).unwrap();
+        assert!((result - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn from_plancks_invalid() {
+        assert!(from_plancks("not_a_number".into()).is_err());
+    }
+
+    #[test]
+    fn explorer_url() {
+        let url = get_explorer_url("5GrwvaEF".into());
+        assert_eq!(url, "https://hipstats.com/accounts/5GrwvaEF");
+    }
 }

@@ -9,6 +9,7 @@ use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::Emitter;
 use tokio::sync::Mutex;
+use tracing::{info, warn};
 
 static BLOCK_SUB_RUNNING: AtomicBool = AtomicBool::new(false);
 static LATEST_BLOCK: AtomicU64 = AtomicU64::new(0);
@@ -47,7 +48,7 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
             match subscribe_blocks(&app).await {
                 Ok(()) => break,
                 Err(e) => {
-                    println!("[BlockSub] Error: {e}, reconnecting in 5s...");
+                    warn!("Block subscription error: {e}, reconnecting in 5s...");
                     IS_CONNECTED.store(false, Ordering::SeqCst);
                     let _ = app.emit(
                         "block_number_updated",
@@ -80,7 +81,7 @@ async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
         .await
         .map_err(|e| format!("Block subscription failed: {e}"))?;
 
-    println!("[BlockSub] Subscribed to finalized blocks");
+    info!("Subscribed to finalized blocks");
 
     while let Some(result) = blocks.next().await {
         if !BLOCK_SUB_RUNNING.load(Ordering::SeqCst) {

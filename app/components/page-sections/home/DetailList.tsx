@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, ReactNode, useMemo } from "react";
+import { useState, useEffect, ReactNode, useMemo } from "react";
 import { Icons } from "@/components/ui";
 import DetailsCard from "./DetailsCard";
 import { useUserCredits } from "@/app/lib/hooks/api/useUserCredits";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
-import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
+import { invoke } from "@tauri-apps/api/core";
+import { Account } from "@/lib/types";
 import { useRemoteStorageStats } from "@/app/lib/hooks/api/useRemoteStorageStats";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 import { formatCreditBalance } from "@/app/lib/utils/formatters/formatCredits";
@@ -36,9 +37,16 @@ export default function DetailList() {
     useMarketplaceCredits();
 
   // Transform marketplace credits to the format expected by the chart
-  const transformedCreditsData = transformMarketplaceCreditsToAccounts(
-    marketplaceCredits || []
-  );
+  const [transformedCreditsData, setTransformedCreditsData] = useState<Account[]>([]);
+  useEffect(() => {
+    if (!marketplaceCredits?.length) {
+      setTransformedCreditsData([]);
+      return;
+    }
+    invoke<Account[]>("transform_marketplace_credits", { credits: marketplaceCredits })
+      .then(setTransformedCreditsData)
+      .catch(() => setTransformedCreditsData([]));
+  }, [marketplaceCredits]);
 
   const handleRefreshCredits = async () => {
     try {

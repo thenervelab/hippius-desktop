@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize)]
 struct MigrationError {
@@ -255,7 +255,7 @@ pub async fn check_migration(
         if pending.is_empty() {
             // Server confirms everything is migrated
             if status != "complete" {
-                let _ = upsert_migration_status(
+                if let Err(e) = upsert_migration_status(
                     &account_id,
                     "complete",
                     0,
@@ -264,7 +264,10 @@ pub async fn check_migration(
                     &sync_path,
                     &server_url,
                 )
-                .await;
+                .await
+                {
+                    warn!("Failed to update migration status to complete: {e}");
+                }
             }
             return Ok(MigrationCheckResult {
                 needs_migration: false,
@@ -683,16 +686,19 @@ async fn run_migration_download(
     // Update DB with download results
     let failed_json = serde_json::to_string(&failed_keys)
         .unwrap_or_else(|_| "[]".to_string());
-    let _ = upsert_migration_status(
-        &account_id,
+    if let Err(e) = upsert_migration_status(
+        account_id,
         "in_progress",
         total as i64,
         completed as i64,
         &failed_json,
-        &sync_path,
-        &server_url,
+        sync_path,
+        server_url,
     )
-    .await;
+    .await
+    {
+        warn!("Failed to update migration status after downloads: {e}");
+    }
 
     // Phase 2: Create the migration drive
     let _ = app.emit(
@@ -709,7 +715,7 @@ async fn run_migration_download(
     // Register the sync path for the "migration" label
     let owner = crate::utils::account_key::account_key(account_id);
     if let Some(pool) = DB_POOL.get() {
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             r#"
             INSERT INTO sync_paths (owner, path, type, label, timestamp)
             VALUES (?, ?, 'private', 'migration', strftime('%s', 'now'))
@@ -721,7 +727,10 @@ async fn run_migration_download(
         .bind(&owner)
         .bind(&sync_path)
         .execute(pool)
-        .await;
+        .await
+        {
+            warn!("Failed to register migration sync path: {e}");
+        }
     }
 
     // Ensure the active account is set so the sync loop can report
@@ -738,8 +747,8 @@ async fn run_migration_download(
     .await
     {
         Ok(result) => {
-            println!(
-                "[Migration] Drive initialized, user_id: {}",
+            info!(
+                "Migration drive initialized, user_id: {}",
                 result.user_id
             );
         }
@@ -858,22 +867,22 @@ pub async fn report_migrated_files(
             .await
         {
             Ok(r) if r.status().is_success() => {
-                println!(
-                    "[Migration] Reported {} files for bucket '{}'",
+                info!(
+                    "Reported {} files for bucket '{}'",
                     keys.len(),
                     bucket_name
                 );
             }
             Ok(r) => {
                 let text = r.text().await.unwrap_or_default();
-                println!(
-                    "[Migration] Report failed for bucket '{}': {}",
+                warn!(
+                    "Report failed for bucket '{}': {}",
                     bucket_name, text
                 );
             }
             Err(e) => {
-                println!(
-                    "[Migration] Report request failed for '{}': {}",
+                warn!(
+                    "Report request failed for '{}': {}",
                     bucket_name, e
                 );
             }

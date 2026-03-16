@@ -85,10 +85,14 @@ use commands::local_db::{
 };
 use commands::file_commands::{add_file, add_folder, export_file, list_sync_folder, remove_file, resolve_file_path};
 use commands::blockchain::{
-    get_account_balance, get_block_timestamp, get_referral_links, get_staking_info, stake_bond,
-    stake_claim_rewards, stake_unbond, stake_withdraw_unbonded, transfer_balance, validate_address,
+    from_plancks, get_account_balance, get_block_timestamp, get_explorer_url, get_referral_links,
+    get_staking_info, stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded,
+    to_plancks, transfer_balance, validate_address,
 };
-use commands::chart_formatting::{format_balance_chart, format_credits_chart, format_storage_chart};
+use commands::chart_formatting::{
+    calculate_storage_cost, format_balance_chart, format_credits_chart, format_storage_chart,
+    transform_marketplace_credits,
+};
 use block_subscription::{
     get_current_block_number, start_block_subscription, stop_block_subscription,
 };
@@ -99,6 +103,7 @@ use commands::substrate_tx::{
 use once_cell::sync::OnceCell;
 use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Emitter, Manager};
+use tracing::{info, debug};
 
 /// Global SQLite connection pool. Set once during `setup()` and read by all
 /// command handlers. Access with `DB_POOL.get().ok_or("Database not initialized")?`.
@@ -132,8 +137,8 @@ fn main() {
         .with(filter)
         .init();
 
-    println!("[Main] Application starting...");
-    println!("[Main] Tracing subscriber initialized - hcfs-client logs now visible");
+    info!("Application starting...");
+    info!("Tracing subscriber initialized - hcfs-client logs now visible");
 
     let builder = Builder::default()
         .plugin(tauri_plugin_process::init())
@@ -143,14 +148,20 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            println!(
-                "[SingleInstance] Another instance attempted to start with argv: {:?}",
+            info!(
+                "Another instance attempted to start with argv: {:?}",
                 argv
             );
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
+                if let Err(e) = window.unminimize() {
+                    debug!("Failed to unminimize window: {e}");
+                }
+                if let Err(e) = window.show() {
+                    debug!("Failed to show window: {e}");
+                }
+                if let Err(e) = window.set_focus() {
+                    debug!("Failed to set window focus: {e}");
+                }
             }
             // On macOS, a URL-forwarder helper sends deep link URLs
             // via the single-instance socket as argv entries.
@@ -158,7 +169,7 @@ fn main() {
             // handler picks them up.
             for arg in &argv {
                 if arg.starts_with("hippiusapp://") {
-                    println!("[SingleInstance] Deep link URL detected: {}", arg);
+                    info!("Deep link URL detected: {}", arg);
                     let _ = app.emit("deep-link://new-url", vec![arg]);
                     break;
                 }
@@ -260,6 +271,9 @@ fn main() {
             transfer_balance,
             validate_address,
             get_referral_links,
+            to_plancks,
+            from_plancks,
+            get_explorer_url,
             // Block subscription
             start_block_subscription,
             stop_block_subscription,
@@ -384,12 +398,14 @@ fn main() {
             format_credits_chart,
             format_storage_chart,
             format_balance_chart,
+            transform_marketplace_credits,
+            calculate_storage_cost,
         ]);
 
     let builder = setup(builder);
     let builder = on_window_event(builder);
 
-    println!("[Main] Running Tauri application...");
+    info!("Running Tauri application...");
     builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

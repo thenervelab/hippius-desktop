@@ -4,7 +4,7 @@ import { FC, useState, useMemo } from "react";
 import { Input, CardButton, Icons, AbstractIconWrapper } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useStaking } from "@/app/lib/hooks/useStaking";
-import { formatStakingAmount } from "@/app/lib/utils/staking";
+import { formatBalance } from "@/app/lib/utils/formatters/formatBalance";
 import { formatPreciseBalance } from "@/app/lib/utils/formatters/formatPreciseBalance";
 
 interface TokenFormProps {
@@ -56,7 +56,7 @@ const TokenForm: FC<TokenFormProps> = ({
             balanceAmountType: typeof balanceAmount,
             bondedAmount: stakingInfo.bonded,
             bondedAmountType: typeof stakingInfo.bonded,
-            formattedBonded: formatStakingAmount(stakingInfo.bonded)
+            formattedBonded: formatBalance(stakingInfo.bonded)
         });
 
         if (isStaking) {
@@ -75,7 +75,7 @@ const TokenForm: FC<TokenFormProps> = ({
     // Format the staked amount for display
     const formattedStakedAmount = useMemo(() => {
         if (showStakedAmount) {
-            return formatStakingAmount(stakingInfo.bonded);
+            return formatBalance(stakingInfo.bonded);
         }
         return stakedAmount || "0.00";
     }, [showStakedAmount, stakingInfo.bonded, stakedAmount]);
@@ -130,7 +130,7 @@ const TokenForm: FC<TokenFormProps> = ({
                             </span>
                             <span className="ml-1">
                                 {isUnstaking
-                                    ? `${formatStakingAmount(stakingInfo.bonded)} hALPHA`
+                                    ? `${formatBalance(stakingInfo.bonded)} hALPHA`
                                     : formatPreciseBalance(availableAmount, 8)
                                 }
                             </span>

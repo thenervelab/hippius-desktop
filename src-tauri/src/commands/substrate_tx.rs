@@ -7,6 +7,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
 use sqlx::Row;
+use tracing::{info, warn};
 
 #[subxt::subxt(runtime_metadata_path = "metadata.scale")]
 pub mod custom_runtime {}
@@ -94,7 +95,7 @@ pub(crate) async fn set_sync_path_internal(
     .fetch_optional(pool)
     .await
     {
-        let _ = sqlx::query(
+        if let Err(e) = sqlx::query(
             "REPLACE INTO sync_paths (id, owner, path, type, label, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(legacy_id)
@@ -104,7 +105,10 @@ pub(crate) async fn set_sync_path_internal(
         .bind(label)
         .bind(timestamp)
         .execute(pool)
-        .await;
+        .await
+        {
+            warn!("Failed to replace legacy sync_paths row: {e}");
+        }
     }
 
     let res = sqlx::query(
@@ -121,8 +125,8 @@ pub(crate) async fn set_sync_path_internal(
 
     match res {
         Ok(_) => {
-            println!(
-                "[set_sync_path] Sync path for '{}' set successfully in DB.",
+            info!(
+                "Sync path for '{}' set successfully in DB",
                 path_type
             );
 
@@ -130,8 +134,8 @@ pub(crate) async fn set_sync_path_internal(
             {
                 use crate::utils::bookmark_db::store_bookmark;
                 if let Err(e) = store_bookmark(path, path_type).await {
-                    eprintln!(
-                        "[set_sync_path] Warning: Failed to create security-scoped bookmark: {}",
+                    warn!(
+                        "Failed to create security-scoped bookmark: {}",
                         e
                     );
                 }
@@ -140,8 +144,8 @@ pub(crate) async fn set_sync_path_internal(
             Ok(format!("Sync path for '{}' set successfully.", path_type))
         }
         Err(e) => {
-            eprintln!(
-                "[set_sync_path] DB write failed for owner {} type {}: {}",
+            warn!(
+                "DB write failed for owner {} type {}: {}",
                 owner, path_type, e
             );
             Err(format!("Failed to set sync path: {}", e))
@@ -192,7 +196,7 @@ pub async fn transfer_balance_tauri(
         .balances()
         .transfer_keep_alive(recipient.into(), amount);
 
-    println!("[Substrate] Submitting balance transfer transaction...");
+    info!("Submitting balance transfer transaction...");
     let tx_hash = api
         .tx()
         .sign_and_submit_then_watch_default(&tx, &signer)
@@ -203,7 +207,7 @@ pub async fn transfer_balance_tauri(
         .map_err(|e| format!("Transaction failed: {}", e))?
         .extrinsic_hash();
 
-    println!("[Substrate] Transfer submitted with hash: {:?}", tx_hash);
+    info!("Transfer submitted with hash: {:?}", tx_hash);
 
     Ok(format!(
         "Transfer submitted successfully! Finalized in block: {tx_hash}"
@@ -255,11 +259,14 @@ pub async fn get_sync_path_internal(
                 .map_err(|e| format!("DB error: {}", e))?;
 
                 if let Some((legacy_id, legacy_path)) = legacy {
-                    let _ = sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
+                    if let Err(e) = sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND type = ?")
                         .bind(owner)
                         .bind(path_type)
                         .execute(&mut *tx)
-                        .await;
+                        .await
+                    {
+                        warn!("Failed to delete scoped sync_paths during migration: {e}");
+                    }
 
                     let _ =
                         sqlx::query("UPDATE sync_paths SET owner = ? WHERE id = ? AND owner = ''")

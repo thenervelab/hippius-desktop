@@ -420,6 +420,152 @@ pub fn format_balance_chart(
 }
 
 // ---------------------------------------------------------------------------
+// Marketplace credits transformation
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct MarketplaceCreditInput {
+    pub amount: String,
+    pub date: String,
+}
+
+/// Output matches the `Account` shape the frontend charts expect.
+#[derive(Serialize, Clone, Debug)]
+pub struct MarketplaceCreditOutput {
+    pub account_id: String,
+    pub block_number: u64,
+    pub nonce: u64,
+    pub consumers: u64,
+    pub providers: u64,
+    pub sufficients: u64,
+    pub free_balance: String,
+    pub reserved_balance: String,
+    pub misc_frozen_balance: String,
+    pub fee_frozen_balance: String,
+    pub total_balance: String,
+    pub processed_timestamp: String,
+}
+
+/// Transform marketplace credits into cumulative daily running totals.
+///
+/// Groups credits by date, fills date gaps, and computes cumulative sums.
+/// Returns an `Account`-shaped vec for the frontend chart components.
+#[tauri::command]
+pub fn transform_marketplace_credits(
+    credits: Vec<MarketplaceCreditInput>,
+) -> Result<Vec<MarketplaceCreditOutput>, String> {
+    if credits.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Group and sum by date key (YYYY-MM-DD)
+    let mut daily: std::collections::BTreeMap<String, (u128, String)> =
+        std::collections::BTreeMap::new();
+
+    for credit in &credits {
+        let date_key = parse_date_key(&credit.date);
+        let raw_amount = credit.amount.parse::<u128>().unwrap_or(0);
+        let entry = daily.entry(date_key).or_insert((0, credit.date.clone()));
+        entry.0 += raw_amount;
+    }
+
+    if daily.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let first_key = daily.keys().next().unwrap().clone();
+    let last_key = daily.keys().last().unwrap().clone();
+
+    let start_date = NaiveDate::parse_from_str(&first_key, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid start date: {e}"))?;
+    let end_date = NaiveDate::parse_from_str(&last_key, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid end date: {e}"))?;
+
+    let mut results = Vec::new();
+    let mut cumulative: u128 = 0;
+    let mut current = start_date;
+    let fallback_ts = credits[0].date.clone();
+
+    while current <= end_date {
+        let key = current.format("%Y-%m-%d").to_string();
+        let timestamp = if let Some((amount, ts)) = daily.get(&key) {
+            cumulative += amount;
+            ts.clone()
+        } else {
+            fallback_ts.clone()
+        };
+
+        results.push(MarketplaceCreditOutput {
+            account_id: String::new(),
+            block_number: 0,
+            nonce: 0,
+            consumers: 0,
+            providers: 0,
+            sufficients: 0,
+            free_balance: "0".to_string(),
+            reserved_balance: "0".to_string(),
+            misc_frozen_balance: "0".to_string(),
+            fee_frozen_balance: "0".to_string(),
+            total_balance: cumulative.to_string(),
+            processed_timestamp: timestamp,
+        });
+
+        current += chrono::Duration::days(1);
+    }
+
+    Ok(results)
+}
+
+fn parse_date_key(date_str: &str) -> String {
+    // Try ISO datetime first, then plain date
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S%.fZ") {
+        return dt.format("%Y-%m-%d").to_string();
+    }
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(date_str, "%Y-%m-%dT%H:%M:%S") {
+        return dt.format("%Y-%m-%d").to_string();
+    }
+    // Already YYYY-MM-DD or close enough
+    date_str.chars().take(10).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Storage cost calculation
+// ---------------------------------------------------------------------------
+
+/// Calculate storage cost for a given storage type, timeframe, and number of GB.
+///
+/// Embeds the pricing constants from pricing-cfg.json.
+#[tauri::command]
+pub fn calculate_storage_cost(
+    storage_type: String,
+    timeframe: String,
+    num_of_gb: f64,
+) -> Result<f64, String> {
+    // Pricing constants (from pricing-cfg.json)
+    let per_block_time: f64 = 6.0;
+    let (per_block_charge, first_hour_charge) = match storage_type.as_str() {
+        "s3" | "ipfs" => (6.7878e-9, 0.0000315),
+        _ => return Err(format!("Unknown storage type: {storage_type}")),
+    };
+
+    let timeframe_duration = match timeframe.as_str() {
+        "first-hour" => 3600.0,
+        "per-month" => 2.628e6,
+        "per-year" => 3.154e7,
+        _ => return Err(format!("Unknown timeframe: {timeframe}")),
+    };
+    let first_hour_duration = 3600.0;
+
+    let first_hour_cost = first_hour_charge * num_of_gb;
+    let timeframe_minus_first_hour = timeframe_duration - first_hour_duration;
+    let single_block_charge = per_block_charge * num_of_gb;
+    let block_charge_count = timeframe_minus_first_hour / per_block_time;
+    let subsequent_time_cost = single_block_charge * block_charge_count;
+
+    Ok(first_hour_cost + subsequent_time_cost)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -534,5 +680,113 @@ mod tests {
 
         let d2 = parse_timestamp_to_date("2025-03-15");
         assert_eq!(d2, Some(NaiveDate::from_ymd_opt(2025, 3, 15).unwrap()));
+    }
+
+    // -----------------------------------------------------------------------
+    // transform_marketplace_credits
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn transform_empty_input() {
+        let result = transform_marketplace_credits(vec![]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn transform_single_day() {
+        let credits = vec![MarketplaceCreditInput {
+            amount: "1000000000000000000".into(),
+            date: "2025-03-15T10:00:00.000Z".into(),
+        }];
+        let result = transform_marketplace_credits(credits).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].total_balance, "1000000000000000000");
+    }
+
+    #[test]
+    fn transform_fills_gaps() {
+        let credits = vec![
+            MarketplaceCreditInput {
+                amount: "100".into(),
+                date: "2025-03-10T00:00:00.000Z".into(),
+            },
+            MarketplaceCreditInput {
+                amount: "200".into(),
+                date: "2025-03-13T00:00:00.000Z".into(),
+            },
+        ];
+        let result = transform_marketplace_credits(credits).unwrap();
+        // 4 days: Mar 10, 11, 12, 13
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].total_balance, "100"); // Day 1
+        assert_eq!(result[1].total_balance, "100"); // Gap filled
+        assert_eq!(result[2].total_balance, "100"); // Gap filled
+        assert_eq!(result[3].total_balance, "300"); // Cumulative
+    }
+
+    #[test]
+    fn transform_duplicate_dates() {
+        let credits = vec![
+            MarketplaceCreditInput {
+                amount: "100".into(),
+                date: "2025-03-15T10:00:00.000Z".into(),
+            },
+            MarketplaceCreditInput {
+                amount: "200".into(),
+                date: "2025-03-15T14:00:00.000Z".into(),
+            },
+        ];
+        let result = transform_marketplace_credits(credits).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].total_balance, "300");
+    }
+
+    #[test]
+    fn transform_large_values() {
+        let credits = vec![MarketplaceCreditInput {
+            amount: "999999999999999999999".into(),
+            date: "2025-03-15T00:00:00.000Z".into(),
+        }];
+        let result = transform_marketplace_credits(credits).unwrap();
+        assert_eq!(result[0].total_balance, "999999999999999999999");
+    }
+
+    // -----------------------------------------------------------------------
+    // calculate_storage_cost
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn storage_cost_per_month() {
+        let cost = calculate_storage_cost("ipfs".into(), "per-month".into(), 1.0).unwrap();
+        assert!(cost > 0.0);
+    }
+
+    #[test]
+    fn storage_cost_zero_gb() {
+        let cost = calculate_storage_cost("ipfs".into(), "per-month".into(), 0.0).unwrap();
+        assert!((cost - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn storage_cost_fractional_gb() {
+        let cost = calculate_storage_cost("s3".into(), "per-year".into(), 0.5).unwrap();
+        assert!(cost > 0.0);
+    }
+
+    #[test]
+    fn storage_cost_unknown_type() {
+        assert!(calculate_storage_cost("unknown".into(), "per-month".into(), 1.0).is_err());
+    }
+
+    #[test]
+    fn storage_cost_unknown_timeframe() {
+        assert!(calculate_storage_cost("ipfs".into(), "weekly".into(), 1.0).is_err());
+    }
+
+    #[test]
+    fn storage_cost_first_hour() {
+        let cost = calculate_storage_cost("ipfs".into(), "first-hour".into(), 1.0).unwrap();
+        // First hour: just first_hour_charge * 1 GB, no subsequent blocks
+        assert!((cost - 0.0000315).abs() < 1e-10);
     }
 }

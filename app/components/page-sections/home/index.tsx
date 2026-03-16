@@ -8,7 +8,8 @@ import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import DetailList from "./DetailList";
 import CreditUsageTrends from "./credit-usage-trends";
 import useMarketplaceCredits from "@/app/lib/hooks/api/useMarketplaceCredits";
-import { transformMarketplaceCreditsToAccounts } from "@/app/lib/utils/transformMarketplaceCredits";
+import { invoke } from "@tauri-apps/api/core";
+import { Account } from "@/lib/types";
 import StorageUsageTrends from "./storage-usage-trends";
 import useFiles from "@/app/lib/hooks/api/useFilesSize";
 import Ipfs from "@/app/components/page-sections/files/FilesContainer";
@@ -28,9 +29,16 @@ const Home: React.FC = () => {
   const { data: filesData, isLoading: isLoadingFiles } = useFiles();
 
   // Transform marketplace credits to the format expected by the chart
-  const transformedCreditsData = transformMarketplaceCreditsToAccounts(
-    marketplaceCredits || []
-  );
+  const [transformedCreditsData, setTransformedCreditsData] = useState<Account[]>([]);
+  useEffect(() => {
+    if (!marketplaceCredits?.length) {
+      setTransformedCreditsData([]);
+      return;
+    }
+    invoke<Account[]>("transform_marketplace_credits", { credits: marketplaceCredits })
+      .then(setTransformedCreditsData)
+      .catch(() => setTransformedCreditsData([]));
+  }, [marketplaceCredits]);
 
   useEffect(() => {
     const checkSyncPath = async () => {

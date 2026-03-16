@@ -10,6 +10,7 @@
 use crate::DB_POOL;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use sqlx::Row;
+use tracing::warn;
 
 /// One hour in seconds — tokens expiring sooner than this are proactively refreshed.
 pub const TOKEN_REFRESH_MARGIN_SECS: i64 = 3600;
@@ -72,11 +73,16 @@ pub async fn get_api_token(account_id: &str) -> Result<Option<String>, String> {
             .map_err(|e| format!("DB error fetching API token: {}", e))?;
         if let Some(row) = legacy {
             if let Some(token) = row.get::<Option<String>, _>("temp_auth_key") {
-                let _ = save_api_token(account_id, &token).await;
-                let _ = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
+                if let Err(e) = save_api_token(account_id, &token).await {
+                    warn!("Failed to migrate legacy API token: {e}");
+                }
+                if let Err(e) = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
                     .bind(AUTH_ROW_ID)
                     .execute(pool)
-                    .await;
+                    .await
+                {
+                    warn!("Failed to delete legacy API token row: {e}");
+                }
                 return Ok(Some(token));
             }
         }
@@ -93,7 +99,9 @@ pub async fn get_api_token(account_id: &str) -> Result<Option<String>, String> {
         .map_err(|e| format!("DB error fetching auth_session token: {}", e))?;
         if let Some(row) = session {
             if let Some(token) = row.get::<Option<String>, _>("auth_token") {
-                let _ = save_api_token(account_id, &token).await;
+                if let Err(e) = save_api_token(account_id, &token).await {
+                    warn!("Failed to persist session token to scoped table: {e}");
+                }
                 return Ok(Some(token));
             }
         }
@@ -203,11 +211,16 @@ pub async fn get_s3_credentials(account_id: &str) -> Result<Option<(String, Stri
             let secret: Option<String> = r.get("master_secret");
             if let (Some(a), Some(s)) = (access, secret) {
                 if !a.is_empty() && !s.is_empty() {
-                    let _ = save_s3_credentials(account_id, &a, &s).await;
-                    let _ = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
+                    if let Err(e) = save_s3_credentials(account_id, &a, &s).await {
+                        warn!("Failed to migrate legacy S3 credentials: {e}");
+                    }
+                    if let Err(e) = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
                         .bind(AUTH_ROW_ID)
                         .execute(pool)
-                        .await;
+                        .await
+                    {
+                        warn!("Failed to delete legacy S3 credential row: {e}");
+                    }
                     return Ok(Some((a, s)));
                 }
             }

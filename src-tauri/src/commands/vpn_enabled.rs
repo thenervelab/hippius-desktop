@@ -1,7 +1,6 @@
 use crate::DB_POOL;
 use serde::Serialize;
-// use tauri::State;
-// use sqlx::SqlitePool;
+use tracing::{info, warn, error};
 
 #[derive(Serialize)]
 pub struct VpnStatus {
@@ -20,7 +19,7 @@ pub async fn get_vpn_status() -> Result<VpnStatus, String> {
         Ok(Some((is_enabled,))) => Ok(VpnStatus { is_enabled }),
         Ok(None) => {
             // This should never happen due to our initialization, but handle it just in case
-            let _ = sqlx::query("INSERT INTO vpn_status (id, is_enabled) VALUES (1, FALSE)")
+            sqlx::query("INSERT INTO vpn_status (id, is_enabled) VALUES (1, FALSE)")
                 .execute(pool)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -43,9 +42,9 @@ pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
 
     // If enabling, check and update certificate first
     if new_status {
-        println!("[VPN] Checking certificate status before enabling...");
+        info!("Checking certificate status before enabling...");
         if let Err(e) = crate::utils::nebula::check_and_update_certificate().await {
-            eprintln!("[VPN] Certificate check failed: {}", e);
+            error!("Certificate check failed: {}", e);
             return Err(format!("Failed to verify/renew certificate: {}", e));
         }
     }
@@ -62,16 +61,16 @@ pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
     // Start or stop Nebula based on new status
     if new_status {
         // VPN enabled - start Nebula
-        println!("[VPN] VPN enabled, starting Nebula...");
+        info!("VPN enabled, starting Nebula...");
         if let Err(e) = crate::utils::nebula::start_nebula_internal().await {
-            eprintln!("[VPN] Failed to start Nebula: {}", e);
+            warn!("Failed to start Nebula: {}", e);
             // Don't return error, just log it - the toggle still succeeded
         }
     } else {
         // VPN disabled - stop Nebula
-        println!("[VPN] VPN disabled, stopping Nebula...");
+        info!("VPN disabled, stopping Nebula...");
         if let Err(e) = crate::utils::nebula::stop_nebula().await {
-            eprintln!("[VPN] Failed to stop Nebula: {}", e);
+            warn!("Failed to stop Nebula: {}", e);
             // Don't return error, just log it - the toggle still succeeded
         }
     }
@@ -100,7 +99,7 @@ pub async fn get_autoconnect_status() -> Result<AutoconnectStatus, String> {
         Ok(Some((is_enabled,))) => Ok(AutoconnectStatus { is_enabled }),
         Ok(None) => {
             // This should never happen due to our initialization, but handle it just in case
-            let _ = sqlx::query(
+            sqlx::query(
                 "INSERT INTO autoconnect_vpn_enabled (id, is_enabled) VALUES (1, FALSE)",
             )
             .execute(pool)

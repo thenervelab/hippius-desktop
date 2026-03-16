@@ -8,7 +8,7 @@ import TokenForm from "../wallet/shared/TokenForm";
 import { toast } from "sonner";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { useStaking } from "@/app/lib/hooks/useStaking";
-import { toPlancks } from "@/app/lib/utils/staking";
+import { invoke } from "@tauri-apps/api/core";
 import StakeConfirmationDialog from "../wallet/StakeConfirmationDialog";
 
 const StakeBridge = () => {
@@ -74,7 +74,7 @@ const StakeBridge = () => {
 
         try {
             // Convert amount to planck (18 decimals)
-            const amountInPlanck = toPlancks(pendingAmount);
+            const amountInPlanck = await invoke<string>("to_plancks", { amount: pendingAmount });
 
             await operations.bond(amountInPlanck);
             toast.dismiss(loadingToast);

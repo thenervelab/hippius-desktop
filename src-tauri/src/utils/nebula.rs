@@ -1,5 +1,6 @@
 use crate::utils::auth_tokens::get_api_token;
 use anyhow::{Result, anyhow};
+use tracing::{info, debug, warn, error};
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use reqwest::Client;
@@ -20,6 +21,8 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 #[cfg(target_os = "macos")]
 mod macos_auth {
+    use tracing::debug;
+
     /// Run a shell command with administrator privileges using
     /// osascript with a custom prompt. The dialog shows a
     /// standard macOS authentication window with our message.
@@ -40,7 +43,7 @@ mod macos_auth {
              with prompt \"{escaped_prompt}\""
         );
 
-        println!("[Nebula] Running admin command via osascript...");
+        debug!("Running admin command via osascript...");
 
         let output = std::process::Command::new("/usr/bin/osascript")
             .arg("-e")
@@ -70,7 +73,7 @@ mod macos_auth {
             ));
         }
 
-        println!("[Nebula] Admin command succeeded");
+        debug!("Admin command succeeded");
         Ok(())
     }
 }
@@ -335,7 +338,7 @@ async fn extract_zip(bytes: &[u8], target_dir: &Path) -> Result<()> {
             let outpath = target_dir.join(&filename);
             let mut outfile = std::fs::File::create(&outpath)?;
             std::io::copy(&mut file, &mut outfile)?;
-            println!("[Nebula] Extracted: {}", filename);
+            debug!("Extracted: {}", filename);
         }
     }
 
@@ -365,7 +368,7 @@ async fn extract_tar_gz(bytes: &[u8], target_dir: &Path) -> Result<()> {
         if filename == "nebula" || filename == "nebula-cert" {
             let outpath = target_dir.join(&filename);
             entry.unpack(&outpath)?;
-            println!("[Nebula] Extracted: {}", filename);
+            debug!("Extracted: {}", filename);
         }
     }
 
@@ -376,7 +379,7 @@ async fn extract_tar_gz(bytes: &[u8], target_dir: &Path) -> Result<()> {
 
 #[tauri::command]
 pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
-    println!("[Nebula] Checking requirements...");
+    info!("Checking requirements...");
 
     // Check current installation
     let installed_version = check_nebula_installation()
@@ -387,12 +390,12 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
     let latest_release = fetch_latest_release().await.map_err(|e| e.to_string())?;
     let latest_version = latest_release.tag_name.clone();
 
-    println!("[Nebula] Latest version: {}", latest_version);
+    debug!("Latest version: {}", latest_version);
 
     let mut needs_install = false;
 
     if installed_version.is_none() {
-        println!("[Nebula] Not installed, will install");
+        info!("Not installed, will install");
         needs_install = true;
     } else if let Some(ref installed) = installed_version {
         let cert_binary_exists = get_nebula_cert_binary_path()
@@ -400,16 +403,16 @@ pub async fn check_nebula_requirements(app: AppHandle) -> Result<(), String> {
             .unwrap_or(false);
 
         if installed != &latest_version {
-            println!(
-                "[Nebula] Update available: {} -> {}",
+            info!(
+                "Update available: {} -> {}",
                 installed, latest_version
             );
             needs_install = true;
         } else if !cert_binary_exists {
-            println!("[Nebula] nebula-cert binary missing, will reinstall");
+            info!("nebula-cert binary missing, will reinstall");
             needs_install = true;
         } else {
-            println!("[Nebula] Already up-to-date: {}", installed);
+            debug!("Already up-to-date: {}", installed);
         }
     }
 
@@ -459,7 +462,7 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
             let temp_path = nebula_dir.join("temp_download.file");
 
-            println!("[Nebula] Downloading to temp file: {}", temp_path.display());
+            debug!("Downloading to temp file: {}", temp_path.display());
 
             let client = Client::builder()
                 .timeout(Duration::from_secs(300))
@@ -477,7 +480,7 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
                 .await
                 .map_err(|e| e.to_string())?;
 
-            println!("[Nebula] Download complete");
+            info!("Download complete");
         }
     }
 
@@ -496,7 +499,7 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
         let temp_path = nebula_dir.join("temp_download.file");
 
         if temp_path.exists() {
-            println!("[Nebula] Installing from temp file...");
+            info!("Installing from temp file...");
 
             // Remove existing binaries before extraction.
             // Previous installs may have chown'd them to root (for setuid),
@@ -557,28 +560,28 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
 
             // Grant permissions to the binary (required for TUN/TAP device creation)
             let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
-            println!("[Nebula] Checking and granting permissions...");
+            info!("Checking and granting permissions...");
 
             match check_permissions(&binary_path).await {
                 Ok(has_perms) => {
                     if !has_perms {
-                        println!(
-                            "[Nebula] Binary needs permissions, requesting elevated access..."
+                        info!(
+                            "Binary needs permissions, requesting elevated access..."
                         );
                         if let Err(e) = grant_permissions(&binary_path).await {
-                            eprintln!(
-                                "[Nebula] Warning: Failed to grant permissions: {}. You may need to run the app with elevated privileges or grant permissions manually.",
+                            warn!(
+                                "Failed to grant permissions: {}. You may need to run the app with elevated privileges or grant permissions manually.",
                                 e
                             );
                         } else {
-                            println!("[Nebula] Permissions granted successfully");
+                            info!("Permissions granted successfully");
                         }
                     } else {
-                        println!("[Nebula] Binary already has required permissions");
+                        debug!("Binary already has required permissions");
                     }
                 }
                 Err(e) => {
-                    eprintln!("[Nebula] Warning: Failed to check permissions: {}", e);
+                    warn!("Failed to check permissions: {}", e);
                 }
             }
 
@@ -591,9 +594,9 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
             )
             .execute(pool)
             .await {
-                eprintln!("[Nebula] Failed to update binary installation status: {}", e);
+                error!("Failed to update binary installation status: {}", e);
             } else {
-                println!("[Nebula] Binary installation status updated in database");
+                debug!("Binary installation status updated in database");
             }
         } else {
             return Err("Installation failed: Downloaded file not found".to_string());
@@ -608,9 +611,9 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
         )
         .execute(pool)
         .await {
-            eprintln!("[Nebula] Failed to update binary installation status: {}", e);
+            error!("Failed to update binary installation status: {}", e);
         } else {
-            println!("[Nebula] Binary already installed, status updated in database");
+            debug!("Binary already installed, status updated in database");
         }
     }
 
@@ -638,8 +641,8 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
         .unwrap_or(false);
 
     if !is_enabled {
-        println!(
-            "[Nebula] VPN is disabled in settings. Checking if we need to renew an existing certificate..."
+        debug!(
+            "VPN is disabled in settings. Checking if we need to renew an existing certificate..."
         );
 
         // Only renew if we already have a certificate locally.
@@ -651,13 +654,13 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
             .is_some();
 
         if cert_exists {
-            println!("[Nebula] Found existing certificate, checking validity...");
+            info!("Found existing certificate, checking validity...");
             check_and_update_certificate()
                 .await
                 .map_err(|e| e.to_string())?;
         } else {
-            println!(
-                "[Nebula] No existing certificate found and VPN is disabled. Skipping certificate generation."
+            debug!(
+                "No existing certificate found and VPN is disabled. Skipping certificate generation."
             );
         }
 
@@ -665,30 +668,30 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
     }
 
     // Check and grant permissions if needed
-    println!("[Nebula] Verifying binary permissions...");
+    info!("Verifying binary permissions...");
     match check_permissions(&binary_path).await {
         Ok(has_perms) => {
             if !has_perms {
-                println!("[Nebula] Binary needs permissions, requesting elevated access...");
+                info!("Binary needs permissions, requesting elevated access...");
                 if let Err(e) = grant_permissions(&binary_path).await {
-                    eprintln!(
-                        "[Nebula] Warning: Failed to grant permissions: {}. Nebula may fail to start.",
+                    warn!(
+                        "Failed to grant permissions: {}. Nebula may fail to start.",
                         e
                     );
                 } else {
-                    println!("[Nebula] Permissions granted successfully");
+                    info!("Permissions granted successfully");
                 }
             } else {
-                println!("[Nebula] Binary has required permissions");
+                debug!("Binary has required permissions");
             }
         }
         Err(e) => {
-            eprintln!("[Nebula] Warning: Failed to check permissions: {}", e);
+            warn!("Failed to check permissions: {}", e);
         }
     }
 
     // Setup certificates from API
-    println!("[Nebula] Checking certificate status...");
+    info!("Checking certificate status...");
     check_and_update_certificate()
         .await
         .map_err(|e| e.to_string())?;
@@ -701,28 +704,28 @@ async fn get_api_auth_header() -> Result<(String, String)> {
     // The temp auth key (OAuth token) is used for Hippius API calls.
     // The master token is separate and used only for S3/Object Storage access.
 
-    println!("[Nebula] Getting API auth header...");
+    debug!("Getting API auth header...");
 
     let account_id = get_current_account_id().await?;
-    println!("[Nebula] Found account: {}", account_id);
+    debug!("Found account: {}", account_id);
 
     let api_token = get_api_token(&account_id)
         .await
         .map_err(|e| {
-            println!("[Nebula] ❌ Failed to get API token: {}", e);
+            error!("Failed to get API token: {}", e);
             anyhow!(e)
         })?
         .ok_or_else(|| {
-            println!(
-                "[Nebula] ❌ No API token found for account {}",
+            error!(
+                "No API token found for account {}",
                 account_id
             );
             anyhow!("No API token found for account {}", account_id)
         })?;
 
     let auth_header = format!("Token {}", api_token);
-    println!("[Nebula] ✅ Got API token (length: {})", api_token.len());
-    println!("[Nebula] 🔑 Auth header: {}", auth_header);
+    debug!("Got API token (length: {})", api_token.len());
+    debug!("Auth header set (length: {})", auth_header.len());
     Ok((auth_header, account_id))
 }
 
@@ -754,7 +757,7 @@ async fn fetch_certificate_from_api(auth_header: &str) -> Result<Option<Certific
     // I'll try to parse as single first, then list.
 
     let text = response.text().await?;
-    println!("[Nebula] Fetch certificate response: {}", text);
+    debug!("Fetch certificate response: {}", text);
 
     if let Ok(cert) = serde_json::from_str::<CertificateResponse>(&text) {
         return Ok(Some(cert));
@@ -779,7 +782,7 @@ async fn request_certificate_from_api(auth_header: &str) -> Result<CertificateRe
         .await?;
 
     let status = response.status();
-    println!("[Nebula] Request certificate status: {}", status);
+    debug!("Request certificate status: {}", status);
 
     if !status.is_success() {
         let error_body = response
@@ -790,16 +793,16 @@ async fn request_certificate_from_api(auth_header: &str) -> Result<CertificateRe
             "Failed to request certificate (status {}): {}",
             status, error_body
         );
-        println!("[Nebula] ❌ {}", error_msg);
+        error!("{}", error_msg);
         return Err(anyhow!(error_msg));
     }
 
     let text = response.text().await?;
-    println!("[Nebula] Request certificate response body: {}", text);
+    debug!("Request certificate response body: {}", text);
 
     let cert: CertificateResponse =
         serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
-    println!("[Nebula] ✅ Certificate request successful");
+    info!("Certificate request successful");
     Ok(cert)
 }
 
@@ -807,7 +810,7 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
     let client = Client::new();
     let url = format!("{}/infrastructure/certificates/renew/", HIPPIUS_API_BASE);
 
-    println!("[Nebula] Renewing certificate from: {}", url);
+    debug!("Renewing certificate from: {}", url);
 
     // Make POST request directly with auth header (same pattern as request_certificate_from_api)
     let response = client
@@ -817,7 +820,7 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
         .await?;
 
     let status = response.status();
-    println!("[Nebula] Renew certificate status: {}", status);
+    debug!("Renew certificate status: {}", status);
 
     if !status.is_success() {
         let error_body = response
@@ -828,16 +831,16 @@ async fn renew_certificate_from_api(auth_header: &str) -> Result<CertificateResp
             "Failed to renew certificate (status {}): {}",
             status, error_body
         );
-        println!("[Nebula] ❌ {}", error_msg);
+        error!("{}", error_msg);
         return Err(anyhow!(error_msg));
     }
 
     let text = response.text().await?;
-    println!("[Nebula] Renew certificate response body: {}", text);
+    debug!("Renew certificate response body: {}", text);
 
     let cert: CertificateResponse =
         serde_json::from_str(&text).map_err(|e| anyhow!("Failed to parse JSON: {}", e))?;
-    println!("[Nebula] ✅ Certificate renewal successful");
+    info!("Certificate renewal successful");
     Ok(cert)
 }
 
@@ -874,8 +877,8 @@ async fn save_certificate_files(cert: &CertificateResponse, account_id: &str) ->
 
     fs::write(config_dir.join("config.yml"), updated_config).await?;
 
-    println!(
-        "[Nebula] Saved certificate files to {}",
+    info!(
+        "Saved certificate files to {}",
         config_dir.display()
     );
     Ok(())
@@ -928,18 +931,18 @@ pub async fn check_and_update_certificate() -> Result<()> {
         if let Some(expires_at_str) = expires_at_str {
             if let Ok(expires_at) = DateTime::parse_from_rfc3339(&expires_at_str) {
                 if Utc::now() > expires_at {
-                    println!(
-                        "[Nebula] Certificate expired at {}, renewing...",
+                    info!(
+                        "Certificate expired at {}, renewing...",
                         expires_at
                     );
                     should_renew = true;
                 } else {
-                    println!("[Nebula] Certificate valid until {}", expires_at);
+                    debug!("Certificate valid until {}", expires_at);
                     // Check if files exist, if not, we might need to re-fetch or just warn
                     let config_dir = get_nebula_config_dir(&account_id)?;
                     if !config_dir.join("host.crt").exists() {
-                        println!(
-                            "[Nebula] Certificate files missing but DB record exists. Re-fetching..."
+                        info!(
+                            "Certificate files missing but DB record exists. Re-fetching..."
                         );
                         // We can try to fetch the existing one
                         if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
@@ -947,20 +950,20 @@ pub async fn check_and_update_certificate() -> Result<()> {
                             update_certificate_db(&cert).await?;
                         } else {
                             // If fetch fails (e.g. 404), maybe we need to request new?
-                            println!(
-                                "[Nebula] Could not fetch existing certificate, requesting new one..."
+                            warn!(
+                                "Could not fetch existing certificate, requesting new one..."
                             );
                             should_request = true;
                         }
                     }
                 }
             } else {
-                println!("[Nebula] Failed to parse expiration date, assuming expired/invalid");
+                warn!("Failed to parse expiration date, assuming expired/invalid");
                 should_renew = true;
             }
         } else {
-            println!(
-                "[Nebula] Certificate record exists but no expiration date. Fetching from API..."
+            debug!(
+                "Certificate record exists but no expiration date. Fetching from API..."
             );
             if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
                 save_certificate_files(&cert, &account_id).await?;
@@ -969,21 +972,21 @@ pub async fn check_and_update_certificate() -> Result<()> {
                 if let Some(expires_at_str) = &cert.expires_at {
                     if let Ok(expires_at) = DateTime::parse_from_rfc3339(expires_at_str) {
                         if Utc::now() > expires_at {
-                            println!("[Nebula] Fetched certificate is expired, renewing...");
+                            info!("Fetched certificate is expired, renewing...");
                             should_renew = true;
                         }
                     }
                 }
             } else {
-                println!("[Nebula] Could not fetch certificate details from API. Renewing...");
+                warn!("Could not fetch certificate details from API. Renewing...");
                 should_renew = true;
             }
         }
     } else {
-        println!("[Nebula] No certificate record in DB");
+        debug!("No certificate record in DB");
         // Check if we have one in API
         if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
-            println!("[Nebula] Found existing certificate in API");
+            info!("Found existing certificate in API");
             save_certificate_files(&cert, &account_id).await?;
             update_certificate_db(&cert).await?;
 
@@ -993,24 +996,24 @@ pub async fn check_and_update_certificate() -> Result<()> {
             if let Some(expires_at_str) = &cert.expires_at {
                 if let Ok(expires_at) = DateTime::parse_from_rfc3339(expires_at_str) {
                     if Utc::now() > expires_at {
-                        println!("[Nebula] Fetched certificate is expired, renewing...");
+                        info!("Fetched certificate is expired, renewing...");
                         should_renew = true;
                     }
                 }
             }
         } else {
-            println!("[Nebula] No certificate in API, requesting new one...");
+            info!("No certificate in API, requesting new one...");
             should_request = true;
         }
     }
 
-    println!(
-        "[Nebula] Status check complete. Renew: {}, Request: {}",
+    debug!(
+        "Status check complete. Renew: {}, Request: {}",
         should_renew, should_request
     );
 
     if should_renew {
-        println!("[Nebula] calling renew_certificate_from_api...");
+        debug!("Calling renew_certificate_from_api...");
 
         // Try to renew first, but if it fails (e.g. 404 because cert is too old or gone),
         // fallback to requesting a new one.
@@ -1019,8 +1022,8 @@ pub async fn check_and_update_certificate() -> Result<()> {
         let cert = match cert_result {
             Ok(c) => c,
             Err(e) => {
-                println!(
-                    "[Nebula] Renewal failed: {}. Attempting to request a new certificate...",
+                warn!(
+                    "Renewal failed: {}. Attempting to request a new certificate...",
                     e
                 );
                 request_certificate_from_api(&auth_header).await?
@@ -1030,7 +1033,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
         // Renew/Request response might not have expires_at, so we might need to fetch again
         let mut final_cert = cert;
         if final_cert.expires_at.is_none() {
-            println!("[Nebula] Renew/Request response missing expiration, fetching details...");
+            debug!("Renew/Request response missing expiration, fetching details...");
             if let Some(fetched) = fetch_certificate_from_api(&auth_header).await? {
                 final_cert = fetched;
             }
@@ -1038,14 +1041,14 @@ pub async fn check_and_update_certificate() -> Result<()> {
 
         save_certificate_files(&final_cert, &account_id).await?;
         update_certificate_db(&final_cert).await?;
-        println!("[Nebula] Certificate renewed/requested successfully");
+        info!("Certificate renewed/requested successfully");
     } else if should_request {
-        println!("[Nebula] calling request_certificate_from_api...");
+        debug!("Calling request_certificate_from_api...");
         let cert = request_certificate_from_api(&auth_header).await?;
 
         let mut final_cert = cert;
         if final_cert.expires_at.is_none() {
-            println!("[Nebula] Request response missing expiration, fetching details...");
+            debug!("Request response missing expiration, fetching details...");
             if let Some(fetched) = fetch_certificate_from_api(&auth_header).await? {
                 final_cert = fetched;
             }
@@ -1053,7 +1056,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
 
         save_certificate_files(&final_cert, &account_id).await?;
         update_certificate_db(&final_cert).await?;
-        println!("[Nebula] Certificate requested successfully");
+        info!("Certificate requested successfully");
     }
 
     Ok(())
@@ -1063,7 +1066,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
 pub async fn finish_setup() -> Result<(), String> {
     // Try to start Nebula if enabled
     if let Err(e) = start_nebula_internal().await {
-        println!("[Nebula] Failed to auto-start in finish_setup: {}", e);
+        warn!("Failed to auto-start in finish_setup: {}", e);
         // We don't return error here to not block the UI flow, just log it
     }
 
@@ -1076,7 +1079,7 @@ pub async fn start_nebula() -> Result<(), String> {
 }
 
 pub async fn start_nebula_internal() -> Result<(), String> {
-    println!("[Nebula] Attempting to start Nebula...");
+    info!("Attempting to start Nebula...");
 
     // Check DB status
     let pool = crate::DB_POOL
@@ -1091,12 +1094,12 @@ pub async fn start_nebula_internal() -> Result<(), String> {
         .unwrap_or(false);
 
     if !is_enabled {
-        println!("[Nebula] VPN is disabled in settings, skipping startup");
+        debug!("VPN is disabled in settings, skipping startup");
         return Ok(());
     }
 
     if check_nebula_running().await.unwrap_or(false) {
-        println!("[Nebula] Already running");
+        debug!("Already running");
         // Start ping task even if already running (in case it was stopped)
         start_ping_task();
         return Ok(());
@@ -1117,8 +1120,8 @@ pub async fn start_nebula_internal() -> Result<(), String> {
         ));
     }
 
-    println!(
-        "[Nebula] Starting process: {} -config {}",
+    debug!(
+        "Starting process: {} -config {}",
         binary_path.display(),
         config_file.display()
     );
@@ -1141,7 +1144,7 @@ pub async fn start_nebula_internal() -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to spawn nebula with setsid: {}", e))?;
 
-        println!("[Nebula] Started with PID: {}", child.id());
+        info!("Started with PID: {}", child.id());
     }
 
     #[cfg(target_os = "macos")]
@@ -1158,7 +1161,7 @@ pub async fn start_nebula_internal() -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to spawn nebula: {}", e))?;
 
-        println!("[Nebula] Started with PID: {}", child.id());
+        info!("Started with PID: {}", child.id());
     }
 
     #[cfg(target_os = "windows")]
@@ -1169,7 +1172,7 @@ pub async fn start_nebula_internal() -> Result<(), String> {
             .spawn()
             .map_err(|e| format!("Failed to spawn nebula: {}", e))?;
 
-        println!("[Nebula] Started with PID: {}", child.id());
+        info!("Started with PID: {}", child.id());
     }
 
     // Start the background ping task to keep stats active
@@ -1199,13 +1202,13 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
 
         // Try normal removal first (works if user-owned)
         if fs::remove_file(&path).await.is_ok() {
-            println!("[Nebula] Removed existing binary: {}", name);
+            debug!("Removed existing binary: {}", name);
             continue;
         }
 
         // Normal removal failed (likely root-owned), try elevated removal
-        println!(
-            "[Nebula] Binary {} is not user-writable, requesting elevated removal...",
+        debug!(
+            "Binary {} is not user-writable, requesting elevated removal...",
             name
         );
         let path_str = path.to_string_lossy().to_string();
@@ -1222,16 +1225,14 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
                  installation to complete the update.",
             ) {
                 Ok(()) => {
-                    println!(
-                        "[Nebula] Removed root-owned binary \
-                         via elevated privileges: {}",
+                    debug!(
+                        "Removed root-owned binary via elevated privileges: {}",
                         name
                     );
                 }
                 Err(e) => {
-                    eprintln!(
-                        "[Nebula] Warning: Could not authorize \
-                         removal of {}: {}",
+                    warn!(
+                        "Could not authorize removal of {}: {}",
                         name, e
                     );
                 }
@@ -1247,14 +1248,14 @@ async fn remove_existing_binaries(nebula_dir: &Path) {
                 .status()
             {
                 Ok(status) if status.success() => {
-                    println!("[Nebula] Removed root-owned binary via pkexec: {}", name);
+                    debug!("Removed root-owned binary via pkexec: {}", name);
                 }
                 Ok(_) => {
-                    eprintln!("[Nebula] Warning: Failed to remove {} with pkexec", name);
+                    warn!("Failed to remove {} with pkexec", name);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "[Nebula] Warning: Could not run pkexec to remove {}: {}",
+                    warn!(
+                        "Could not run pkexec to remove {}: {}",
                         name, e
                     );
                 }
@@ -1306,7 +1307,7 @@ async fn check_permissions(binary_path: &Path) -> Result<bool> {
 async fn grant_permissions(binary_path: &Path) -> Result<()> {
     #[cfg(target_os = "linux")]
     {
-        println!("[Nebula] Requesting cap_net_admin via pkexec...");
+        debug!("Requesting cap_net_admin via pkexec...");
         let status = std::process::Command::new("pkexec")
             .arg("setcap")
             .arg("cap_net_admin+ep")
@@ -1320,7 +1321,7 @@ async fn grant_permissions(binary_path: &Path) -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        println!("[Nebula] Requesting setuid via native authorization...");
+        debug!("Requesting setuid via native authorization...");
         let path_str = binary_path
             .to_str()
             .ok_or_else(|| anyhow!("Invalid path"))?;
@@ -1383,7 +1384,7 @@ pub async fn check_nebula_running() -> Result<bool> {
 
 /// Stop the Nebula process and the background ping task
 pub async fn stop_nebula() -> Result<(), String> {
-    println!("[Nebula] Stopping Nebula process...");
+    info!("Stopping Nebula process...");
 
     // Stop the background ping task first
     stop_ping_task();
@@ -1399,7 +1400,7 @@ pub async fn stop_nebula() -> Result<(), String> {
             .map_err(|e| format!("Failed to execute pkill: {}", e))?;
 
         if output.status.success() {
-            println!("[Nebula] Termination signal sent, waiting for process to stop...");
+            debug!("Termination signal sent, waiting for process to stop...");
 
             // Wait for the process to actually stop (up to 5 seconds)
             // Check every 100ms for faster response
@@ -1407,19 +1408,19 @@ pub async fn stop_nebula() -> Result<(), String> {
                 tokio::time::sleep(Duration::from_millis(100)).await;
 
                 if !check_nebula_running().await.unwrap_or(false) {
-                    println!(
-                        "[Nebula] Process stopped successfully after {} ms",
+                    info!(
+                        "Process stopped successfully after {} ms",
                         (i + 1) * 100
                     );
                     return Ok(());
                 }
 
                 if i == 49 {
-                    eprintln!("[Nebula] Warning: Process may still be running after 5 seconds");
+                    warn!("Process may still be running after 5 seconds");
                 }
             }
         } else {
-            println!("[Nebula] No process found or already stopped");
+            debug!("No process found or already stopped");
         }
     }
 
@@ -1433,7 +1434,7 @@ pub async fn stop_nebula() -> Result<(), String> {
             .map_err(|e| format!("Failed to execute taskkill: {}", e))?;
 
         if output.status.success() {
-            println!("[Nebula] Termination signal sent, waiting for process to stop...");
+            debug!("Termination signal sent, waiting for process to stop...");
 
             // Wait for the process to actually stop (up to 5 seconds)
             for i in 0..50 {
@@ -1442,11 +1443,11 @@ pub async fn stop_nebula() -> Result<(), String> {
                 // On Windows, we'd need a proper check here
                 // For now, just wait a bit
                 if i == 49 {
-                    println!("[Nebula] Process stopped successfully");
+                    info!("Process stopped successfully");
                 }
             }
         } else {
-            println!("[Nebula] No process found or already stopped");
+            debug!("No process found or already stopped");
         }
     }
 
@@ -1458,7 +1459,7 @@ async fn read_lighthouse_ips_from_config() -> Vec<String> {
     let account_id = match get_current_account_id().await {
         Ok(id) => id,
         Err(e) => {
-            eprintln!("[Nebula Ping] Failed to get account ID: {}", e);
+            error!("Failed to get account ID: {}", e);
             return Vec::new();
         }
     };
@@ -1466,7 +1467,7 @@ async fn read_lighthouse_ips_from_config() -> Vec<String> {
     let config_dir = match get_nebula_config_dir(&account_id) {
         Ok(dir) => dir,
         Err(e) => {
-            eprintln!("[Nebula Ping] Failed to get config dir: {}", e);
+            error!("Failed to get config dir: {}", e);
             return Vec::new();
         }
     };
@@ -1474,8 +1475,8 @@ async fn read_lighthouse_ips_from_config() -> Vec<String> {
     let config_file = config_dir.join("config.yml");
 
     if !config_file.exists() {
-        eprintln!(
-            "[Nebula Ping] Config file not found: {}",
+        warn!(
+            "Config file not found: {}",
             config_file.display()
         );
         return Vec::new();
@@ -1484,7 +1485,7 @@ async fn read_lighthouse_ips_from_config() -> Vec<String> {
     let content = match tokio::fs::read_to_string(&config_file).await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[Nebula Ping] Failed to read config file: {}", e);
+            error!("Failed to read config file: {}", e);
             return Vec::new();
         }
     };
@@ -1492,7 +1493,7 @@ async fn read_lighthouse_ips_from_config() -> Vec<String> {
     let config: NebulaConfig = match serde_yaml::from_str(&content) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[Nebula Ping] Failed to parse config file: {}", e);
+            error!("Failed to parse config file: {}", e);
             return Vec::new();
         }
     };
@@ -1506,8 +1507,8 @@ fn start_ping_task() {
     stop_ping_task();
 
     let handle = tokio::spawn(async {
-        println!(
-            "[Nebula Ping] Starting background ping task (interval: {}s)",
+        debug!(
+            "Starting background ping task (interval: {}s)",
             PING_INTERVAL_SECS
         );
 
@@ -1518,12 +1519,12 @@ fn start_ping_task() {
         let lighthouse_ips = read_lighthouse_ips_from_config().await;
 
         if lighthouse_ips.is_empty() {
-            eprintln!("[Nebula Ping] No lighthouse IPs found in config, ping task will not run");
+            warn!("No lighthouse IPs found in config, ping task will not run");
             return;
         }
 
-        println!(
-            "[Nebula Ping] Loaded {} lighthouse IPs from config: {:?}",
+        debug!(
+            "Loaded {} lighthouse IPs from config: {:?}",
             lighthouse_ips.len(),
             lighthouse_ips
         );
@@ -1564,7 +1565,7 @@ fn start_ping_task() {
     // Store the handle
     if let Ok(mut guard) = PING_TASK_HANDLE.lock() {
         *guard = Some(handle);
-        println!("[Nebula Ping] Background ping task started");
+        debug!("Background ping task started");
     }
 }
 
@@ -1573,7 +1574,7 @@ fn stop_ping_task() {
     if let Ok(mut guard) = PING_TASK_HANDLE.lock() {
         if let Some(handle) = guard.take() {
             handle.abort();
-            println!("[Nebula Ping] Background ping task stopped");
+            debug!("Background ping task stopped");
         }
     }
 }
@@ -1643,7 +1644,7 @@ pub async fn get_nebula_ip() -> Result<String, String> {
 /// Tries to find the Nebula network interface by checking common names and IP ranges
 async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
     let target_ip = search_ip.unwrap_or("100.64.");
-    println!("[Nebula] Searching for interface with IP: {}", target_ip);
+    debug!("Searching for interface with IP: {}", target_ip);
 
     // First try to find by common interface names
     #[cfg(target_os = "linux")]
@@ -1653,7 +1654,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
         // Check each common name
         for iface in &common_names {
             if let Ok(_) = read_sys_net_stat(iface, "tx_bytes").await {
-                println!("[Nebula] Found interface by name: {}", iface);
+                debug!("Found interface by name: {}", iface);
                 return Some(iface.to_string());
             }
         }
@@ -1675,7 +1676,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
                     // Extract interface name (it's the second field in the output)
                     if let Some(iface) = line.split_whitespace().nth(1) {
                         let iface = iface.trim_end_matches(':');
-                        println!("[Nebula] Found interface by IP range: {}", iface);
+                        debug!("Found interface by IP range: {}", iface);
                         return Some(iface.to_string());
                     }
                 }
@@ -1689,7 +1690,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
         use std::process::Command;
 
         // Method 1: ifconfig
-        println!("[Nebula] Trying ifconfig...");
+        debug!("Trying ifconfig...");
         if let Ok(output) = Command::new("ifconfig").arg("-a").output() {
             let output_str = String::from_utf8_lossy(&output.stdout);
             let mut current_iface = None;
@@ -1702,7 +1703,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
                 // Check for Nebula IP in the interface details
                 else if let Some(iface) = current_iface {
                     if line.contains(target_ip) {
-                        println!("[Nebula] Found interface by ifconfig: {}", iface);
+                        debug!("Found interface by ifconfig: {}", iface);
                         return Some(iface.to_string());
                     }
                 }
@@ -1711,7 +1712,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
 
         // Method 2: netstat -rn (Routing table)
         // This is often more reliable for finding which interface hosts an IP
-        println!("[Nebula] Trying netstat -rn...");
+        debug!("Trying netstat -rn...");
         if let Ok(output) = Command::new("netstat")
             .args(&["-rn", "-f", "inet"])
             .output()
@@ -1726,7 +1727,7 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if let Some(last) = parts.last() {
                         if last.starts_with("utun") || last.starts_with("tun") {
-                            println!("[Nebula] Found interface by netstat: {}", last);
+                            debug!("Found interface by netstat: {}", last);
                             return Some(last.to_string());
                         }
                     }
@@ -1734,8 +1735,8 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
                     if parts.len() > 1 {
                         let second_last = parts[parts.len() - 2];
                         if second_last.starts_with("utun") || second_last.starts_with("tun") {
-                            println!(
-                                "[Nebula] Found interface by netstat (2nd last): {}",
+                            debug!(
+                                "Found interface by netstat (2nd last): {}",
                                 second_last
                             );
                             return Some(second_last.to_string());
@@ -1756,16 +1757,16 @@ pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
     let search_ip = nebula_ip.as_deref();
 
     if let Some(ip) = search_ip {
-        println!("[Nebula Stats] Retrieved Nebula IP: {}", ip);
+        debug!("Retrieved Nebula IP: {}", ip);
     } else {
-        println!(
-            "[Nebula Stats] Failed to retrieve Nebula IP from certificate, using default search"
+        debug!(
+            "Failed to retrieve Nebula IP from certificate, using default search"
         );
     }
 
     // Try to find the Nebula interface dynamically
     if let Some(iface) = find_nebula_interface(search_ip).await {
-        println!("[Nebula Stats] Using interface: {}", iface);
+        debug!("Using interface: {}", iface);
 
         // Try to read stats from the detected interface
         #[cfg(target_os = "linux")]
@@ -1782,8 +1783,8 @@ pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
                     udp_rx_bytes: mb_rx,
                 };
 
-                println!(
-                    "[Nebula Stats] {} - TX: {:.3} MB, RX: {:.3} MB",
+                debug!(
+                    "{} - TX: {:.3} MB, RX: {:.3} MB",
                     iface, stats.udp_tx_bytes, stats.udp_rx_bytes
                 );
 
@@ -1802,8 +1803,8 @@ pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
                     udp_rx_bytes: mb_rx,
                 };
 
-                println!(
-                    "[Nebula Stats] {} - TX: {:.3} MB, RX: {:.3} MB",
+                debug!(
+                    "{} - TX: {:.3} MB, RX: {:.3} MB",
                     iface, stats.udp_tx_bytes, stats.udp_rx_bytes
                 );
 
@@ -1813,7 +1814,7 @@ pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
     }
 
     // Fall back to sysinfo if we couldn't determine the interface or read stats
-    println!("[Nebula Stats] Could not determine Nebula interface, falling back to sysinfo");
+    debug!("Could not determine Nebula interface, falling back to sysinfo");
     get_stats_via_sysinfo()
 }
 
@@ -1828,8 +1829,8 @@ fn get_stats_via_sysinfo() -> Result<NebulaStats, String> {
         if interface_name.contains("nebula") || interface_name.contains("utun") {
             current_tx += data.transmitted();
             current_rx += data.received();
-            println!(
-                "[Nebula Stats] Interface: {}, TX: {} bytes, RX: {} bytes",
+            debug!(
+                "Interface: {}, TX: {} bytes, RX: {} bytes",
                 interface_name,
                 data.transmitted(),
                 data.received()
@@ -1840,8 +1841,8 @@ fn get_stats_via_sysinfo() -> Result<NebulaStats, String> {
     let mb_tx = current_tx as f64 / (1024.0 * 1024.0);
     let mb_rx = current_rx as f64 / (1024.0 * 1024.0);
 
-    println!(
-        "[Nebula Stats] Total TX: {:.3} MB, Total RX: {:.3} MB",
+    debug!(
+        "Total TX: {:.3} MB, Total RX: {:.3} MB",
         mb_tx, mb_rx
     );
 
@@ -1926,8 +1927,8 @@ async fn get_macos_interface_stats(
                     let obytes_res = parts[9].parse::<u64>();
 
                     if let (Ok(ibytes), Ok(obytes)) = (ibytes_res, obytes_res) {
-                        println!(
-                            "[Nebula Stats] Found interface stats: {}, IP: {}, TX: {}, RX: {}",
+                        debug!(
+                            "Found interface stats: {}, IP: {}, TX: {}, RX: {}",
                             parts[0], target_ip, obytes, ibytes
                         );
                         return Ok((obytes, ibytes)); // TX, RX
@@ -1982,7 +1983,7 @@ pub async fn generate_node_certificate(
         return Err(anyhow!("CA certificate not found. Generate CA first."));
     }
 
-    println!("[Nebula] Generating node certificate: {}", name);
+    info!("Generating node certificate: {}", name);
 
     let duration_str = format!("{}h", duration_days * 24);
     let ca_crt_str = ca_crt.to_str().ok_or_else(|| anyhow!("CA certificate path contains invalid UTF-8"))?;
@@ -2027,9 +2028,9 @@ pub async fn generate_node_certificate(
         ));
     }
 
-    println!("[Nebula] Node certificate generated successfully");
-    println!("[Nebula]   Certificate: {}", node_crt.display());
-    println!("[Nebula]   Key: {}", node_key.display());
+    info!("Node certificate generated successfully");
+    debug!("  Certificate: {}", node_crt.display());
+    debug!("  Key: {}", node_key.display());
 
     Ok(())
 }
@@ -2091,16 +2092,16 @@ pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
                     if expires_at_utc > now {
                         return Ok(true);
                     }
-                    println!("[Nebula] Certificate expired on: {}", expires_at);
+                    debug!("Certificate expired on: {}", expires_at);
                 }
             } else {
-                println!("[Nebula] Certificate has no expiration date");
+                debug!("Certificate has no expiration date");
             }
         } else {
-            println!("[Nebula] Certificate is not active");
+            debug!("Certificate is not active");
         }
     } else {
-        println!("[Nebula] No certificate found in database");
+        debug!("No certificate found in database");
     }
 
     // If we get here, either:
