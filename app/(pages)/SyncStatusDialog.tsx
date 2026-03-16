@@ -79,7 +79,8 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const calculatedMetrics = {
     // Use displayed files for counts — includes both session and recent files
     totalFiles: syncFiles?.length || propTotalFiles || 0,
-    syncedFiles: syncFiles?.filter((f) => f.status === "uploaded" || f.status === "deleted").length || 0,
+    syncedFiles: syncFiles?.filter((f) => f.status === "uploaded").length || 0,
+    deletedFiles: syncFiles?.filter((f) => f.status === "deleted").length || 0,
     // For percentage: when in progress but no percent provided, use null to show indeterminate state
     percentage: showIndeterminateProgress 
       ? null 
@@ -142,7 +143,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
 
   if (!syncFiles?.length && !calculatedMetrics.hasActiveSync) return null;
 
-  const { totalFiles, syncedFiles, percentage, isCompleted } =
+  const { totalFiles, syncedFiles, deletedFiles, percentage, isCompleted } =
     calculatedMetrics;
   const hasFailed = propFilesFailed > 0 && isCompleted;
   if (!open) return null;
@@ -221,7 +222,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                         : "stroke-[#4171e0]"
                   )}
                   strokeLinecap="round"
-                  strokeDasharray={isUnhealthy || hasFailed ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
+                  strokeDasharray={isUnhealthy || hasFailed ? "138 138" : isCompleted ? "138 138" : percentage !== null ? `${percentage * 1.38} 138` : "17 138"}
                 />
               </svg>
 
@@ -360,9 +361,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                 )}
               >
                 {(() => {
+                  // Total completed = synced (uploaded) + deleted
+                  const completedFiles = syncedFiles + deletedFiles;
                   // Calculate actual total including failed files
                   const actualTotal = propFilesFailed > 0 
-                    ? Math.max(totalFiles, syncedFiles + propFilesFailed) 
+                    ? Math.max(totalFiles, completedFiles + propFilesFailed) 
                     : totalFiles;
                   
                   // Determine what type of sync is happening based on action counts
@@ -382,8 +385,16 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     return `${propFilesFailed} of ${actualTotal} files failed to sync`;
                   }
                   
-                  // When completed successfully, show "synced" regardless of action type
+                  // When completed successfully
                   if (isCompleted) {
+                    // Only deletes, no uploads/downloads
+                    if (deletedFiles > 0 && syncedFiles === 0) {
+                      return `${deletedFiles} ${deletedFiles === 1 ? "file" : "files"} deleted`;
+                    }
+                    // Mixed: synced + deleted
+                    if (deletedFiles > 0 && syncedFiles > 0) {
+                      return `${syncedFiles} synced, ${deletedFiles} deleted`;
+                    }
                     if (actualTotal > 0) {
                       if (hasDownloads && !hasUploads) {
                         return `${syncedFiles} of ${actualTotal} files downloaded`;
@@ -399,15 +410,15 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                   if (isInProgress || actualTotal > 0) {
                     // Only downloads (no uploads) - show download message
                     if (hasDownloads && !hasUploads) {
-                      return `${syncedFiles} of ${actualTotal} files downloaded`;
+                      return `${completedFiles} of ${actualTotal} files downloaded`;
                     }
                     // Only uploads (no downloads) - show upload/sync message
                     if (hasUploads && !hasDownloads) {
-                      return `${syncedFiles} of ${actualTotal} files synced`;
+                      return `${completedFiles} of ${actualTotal} files synced`;
                     }
                     // Both uploads and downloads - show generic sync message
                     if (hasUploads && hasDownloads) {
-                      return `${syncedFiles} of ${actualTotal} files synced`;
+                      return `${completedFiles} of ${actualTotal} files synced`;
                     }
                     // Only deletes - show delete message
                     if ((hasLocalDeletes || hasRemoteDeletes) && !hasUploads && !hasDownloads) {
@@ -415,11 +426,11 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                       return `Deleting ${deleteCount} files`;
                     }
                     // Fallback to generic sync message
-                    return `${syncedFiles} of ${actualTotal} files synced`;
+                    return `${completedFiles} of ${actualTotal} files synced`;
                   }
                   
-                  if (syncedFiles > 0) {
-                    return `${syncedFiles} files synced`;
+                  if (completedFiles > 0) {
+                    return `${completedFiles} files synced`;
                   }
                   return "Starting sync...";
                 })()}
