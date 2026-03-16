@@ -101,14 +101,7 @@ const SettingsDialogContent: React.FC = () => {
 
             {activeTab === "Recovery Phrase" && (
               <div className="shadow-menu rounded-lg bg-white p-4 w-full">
-                <RevealTextLine
-                  rotate
-                  reveal={inView}
-                  className="delay-300 w-full"
-                  parentClassName="w-full"
-                >
-                  <RecoveryPhraseSettings />
-                </RevealTextLine>
+                <RecoveryPhraseSettings />
               </div>
             )}
 

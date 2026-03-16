@@ -2,11 +2,12 @@
 
 import React, { useState } from "react";
 import SectionHeader from "./SectionHeader";
-import { CardButton, Icons } from "@/components/ui";
+import { CardButton, Icons, RevealTextLine } from "@/components/ui";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { MnemonicBackupDialog } from "./MnemonicBackupDialog";
 import { toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
+import { InView } from "react-intersection-observer";
 
 const RecoveryPhraseSettings: React.FC = () => {
   const { getMnemonic, polkadotAddress } = useWalletAuth();
@@ -42,27 +43,48 @@ const RecoveryPhraseSettings: React.FC = () => {
 
   return (
     <>
-      <div className="flex flex-col w-full border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover">
-        <SectionHeader
-          Icon={Icons.KeySquare}
-          title="Recovery Phrase"
-          subtitle="Back up your recovery phrase to ensure you can always access your encrypted files. Without it, your data cannot be recovered."
-        />
-        <div className="flex justify-between items-center p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
-          <p className="text-sm text-grey-60">
-            Your recovery phrase is the only way to restore access to your encrypted sync folder. Keep it safe and never share it.
-          </p>
-          <CardButton
-            className="max-w-[220px] h-10 ml-4 shrink-0"
-            variant="primary"
-            onClick={handleBackup}
+      <InView triggerOnce>
+        {({ inView, ref }) => (
+          <div
+            ref={ref}
+            className="flex flex-col w-full border border-grey-80 rounded-lg p-4 relative bg-[url('/assets/rpc-bg-layer.png')] bg-repeat-round bg-cover"
           >
-            <span className="text-base leading-4 font-medium">
-              Backup Recovery Phrase
-            </span>
-          </CardButton>
-        </div>
-      </div>
+            <RevealTextLine
+              rotate
+              reveal={inView}
+              parentClassName="w-full"
+              className="delay-300 w-full"
+            >
+              <SectionHeader
+                Icon={Icons.KeySquare}
+                title="Recovery Phrase"
+                subtitle="Back up your recovery phrase to ensure you can always access your encrypted files. Without it, your data cannot be recovered."
+              />
+            </RevealTextLine>
+            <RevealTextLine
+              rotate
+              reveal={inView}
+              parentClassName="w-full"
+              className="delay-500 w-full"
+            >
+              <div className="flex justify-between items-center p-4 border bg-grey-100 rounded-lg mt-4 border-grey-80 w-full">
+                <p className="text-sm text-grey-60">
+                  Your recovery phrase is the only way to restore access to your encrypted sync folder. Keep it safe and never share it.
+                </p>
+                <CardButton
+                  className="max-w-[220px] h-10 ml-4 shrink-0"
+                  variant="primary"
+                  onClick={handleBackup}
+                >
+                  <span className="text-base leading-4 font-medium">
+                    Backup Recovery Phrase
+                  </span>
+                </CardButton>
+              </div>
+            </RevealTextLine>
+          </div>
+        )}
+      </InView>
 
       {mnemonic && (
         <MnemonicBackupDialog
