@@ -89,3 +89,17 @@ export async function removeSyncPath(
 export async function allowAssetScope(path: string): Promise<void> {
     await invoke("allow_asset_scope", { path });
 }
+
+/// Returns the default sync folder path for use as `defaultPath` in OS file
+/// dialogs. Returns `undefined` (not an empty string) when unavailable so
+/// callers can fall back to the OS default location.
+export async function getSyncFolderDefaultPath(
+    accountId?: string,
+): Promise<string | undefined> {
+    try {
+        const result = await getPrivateSyncPath(accountId);
+        return result?.path || undefined;
+    } catch {
+        return undefined;
+    }
+}

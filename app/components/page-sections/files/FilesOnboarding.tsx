@@ -233,10 +233,13 @@ const FilesOnboarding: React.FC<FilesOnboardingProps> = ({
 
   const handleSelectSyncDestination = async () => {
     try {
+      const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
+      const defaultPath = await getSyncFolderDefaultPath();
       const path = await openDialog({
         directory: true,
         multiple: false,
         title: "Select Destination for Synced Files",
+        defaultPath,
       });
       if (typeof path === "string") {
         setSyncLocalPath(path);

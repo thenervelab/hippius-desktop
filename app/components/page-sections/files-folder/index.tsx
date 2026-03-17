@@ -42,6 +42,7 @@ import { usePagination } from "@/lib/hooks";
 import { List } from "lucide-react";
 import {
   getPrivateSyncPath,
+  getAllSyncPaths,
 } from "@/lib/utils/syncPathUtils";
 import { useAtomValue } from "jotai";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
@@ -93,6 +94,7 @@ export default function FolderView({
   const [syncFolderPath, setSyncFolderPath] = useState<string>("");
   const [isLoadingSyncPath, setIsLoadingSyncPath] = useState(true);
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
+  const folderSource = getParam("folderSource");
 
   const filteredData = useMemo(() => {
     return filterFiles(files, {
@@ -136,7 +138,7 @@ export default function FolderView({
           setIsRefreshing(true);
         }
 
-        const syncPath = (await getPrivateSyncPath(polkadotAddress || ""))?.path ?? "";
+        const syncPath = syncFolderPath || ((await getPrivateSyncPath(polkadotAddress || ""))?.path ?? "");
 
         // Build the subfolder path relative to the sync root
         const subfolder = getFullPath(mainFolderActualName, subFolderPath) || null;
@@ -190,6 +192,7 @@ export default function FolderView({
       mainFolderActualName,
       subFolderPath,
       polkadotAddress,
+      syncFolderPath,
     ]
   );
 
@@ -197,13 +200,27 @@ export default function FolderView({
     loadFolderContents();
   }, [loadFolderContents]);
 
+  // Resolve the correct sync path by matching folderSource against all sync paths.
+  // Falls back to getPrivateSyncPath when folderSource is unavailable.
+  const resolveSyncPath = useCallback(async (): Promise<string> => {
+    if (folderSource) {
+      try {
+        const allPaths = await getAllSyncPaths(polkadotAddress ?? undefined);
+        const match = allPaths.find((sp) => folderSource.startsWith(sp.path));
+        if (match) return match.path;
+      } catch {
+        // Fall through to default
+      }
+    }
+    return (await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "";
+  }, [folderSource, polkadotAddress]);
+
   // Load sync path (all files use private/encrypted HCFS path)
   useEffect(() => {
     (async () => {
       try {
         setIsLoadingSyncPath(true);
-        const path = (await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "";
-        setSyncFolderPath(path);
+        setSyncFolderPath(await resolveSyncPath());
       } catch (error) {
         console.error("Failed to load sync path:", error);
         setSyncFolderPath("");
@@ -211,7 +228,7 @@ export default function FolderView({
         setIsLoadingSyncPath(false);
       }
     })();
-  }, [isPrivateFolder, polkadotAddress]);
+  }, [resolveSyncPath]);
 
   // Reload sync path when settings are updated
   useEffect(() => {
@@ -219,8 +236,7 @@ export default function FolderView({
       (async () => {
         try {
           setIsLoadingSyncPath(true);
-          const path = (await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "";
-          setSyncFolderPath(path);
+          setSyncFolderPath(await resolveSyncPath());
         } catch (error) {
           console.error("Failed to reload sync path:", error);
           setSyncFolderPath("");
@@ -229,7 +245,7 @@ export default function FolderView({
         }
       })();
     }
-  }, [syncPathRefreshTrigger, isPrivateFolder, polkadotAddress]);
+  }, [syncPathRefreshTrigger, resolveSyncPath]);
   const handleRefresh = () => {
     invoke("trigger_sync_now").catch((err: unknown) => console.warn("[FilesFolder] trigger_sync_now failed:", err));
     loadFolderContents(false);
@@ -242,9 +258,12 @@ export default function FolderView({
   const initiateDownloadFolder = async () => {
     try {
       // Ask for output directory
+      const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
+      const defaultPath = await getSyncFolderDefaultPath(polkadotAddress ?? undefined);
       const outputDir = (await open({
         directory: true,
         multiple: false,
+        defaultPath,
       })) as string | null;
 
       if (!outputDir) {
@@ -335,7 +354,6 @@ export default function FolderView({
   // Check if sync path is empty (user skipped setup)
   const isSyncPathEmpty = syncFolderPath === "";
 
-  const folderSource = getParam("folderSource");
   const mainReqHash = getParam("mainReqHash");
 
   return (
@@ -403,6 +421,7 @@ export default function FolderView({
                   subFolderPath={subFolderPath}
                   onFolderAdded={handleRefresh}
                   disabled={IS_SYNC_PAUSED}
+                  syncBasePath={syncFolderPath}
                 />
 
                 <AddFileToFolderButton
@@ -413,6 +432,7 @@ export default function FolderView({
                   subfolder={getFullPath(mainFolderActualName, subFolderPath) || undefined}
                   onFileAdded={handleRefresh}
                   disabled={IS_SYNC_PAUSED}
+                  syncBasePath={syncFolderPath}
                 />
               </>
             )}

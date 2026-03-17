@@ -271,10 +271,13 @@ export function useMigration(
       let syncPath = resumeSyncPath;
 
       if (!syncPath) {
+        const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
+        const defaultPath = await getSyncFolderDefaultPath(accountId);
         const selected = await open({
           directory: true,
           multiple: false,
           title: "Choose Migration Folder",
+          defaultPath,
         });
         if (!selected) return;
         syncPath = selected as string;
@@ -296,10 +299,13 @@ export function useMigration(
         let syncPath = resumeSyncPath;
 
         if (!syncPath) {
+          const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
+          const defaultPath = await getSyncFolderDefaultPath(pendingAccountId);
           const selected = await open({
             directory: true,
             multiple: false,
             title: "Choose Migration Folder",
+            defaultPath,
           });
           if (!selected) {
             setCurrentStep("prompt");

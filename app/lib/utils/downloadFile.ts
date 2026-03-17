@@ -105,9 +105,12 @@ const downloadFolderExport = async (
   const toastId = toast.loading(`Preparing folder download: ${name}`);
 
   try {
+    const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
+    const defaultPath = await getSyncFolderDefaultPath(polkadotAddress);
     const selectedDir = await open({
       directory: true,
       multiple: false,
+      defaultPath,
     }) as string | null;
 
     if (!selectedDir) {

@@ -48,9 +48,14 @@ export default function FolderUploadDialog({
 
     const handleSelectFolder = async () => {
         try {
+            const defaultPath = selectedSyncPath ?? await (async () => {
+                const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
+                return getSyncFolderDefaultPath(polkadotAddress ?? undefined);
+            })();
             const selectedFolder = await openSelection({
                 directory: true,
                 multiple: false,
+                defaultPath,
             }) as string | null;
 
             if (selectedFolder && typeof selectedFolder === "string") {

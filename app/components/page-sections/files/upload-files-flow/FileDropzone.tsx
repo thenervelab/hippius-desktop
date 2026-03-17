@@ -11,6 +11,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { cn } from "@/lib/utils";
 import { Icons, AbstractIconWrapper, P } from "@/components/ui";
+import { useWalletAuth } from "@/app/lib/wallet-auth-context";
+import { getSyncFolderDefaultPath } from "@/lib/utils/syncPathUtils";
 
 // Type for handling both file paths (from dialog) and browser Files (from drop)
 type SetFilesFunction = (paths: string[], browserFiles?: File[]) => void;
@@ -18,14 +20,19 @@ type SetFilesFunction = (paths: string[], browserFiles?: File[]) => void;
 const FileDropzone: FC<{
   setFiles: SetFilesFunction;
   isPrivateView?: boolean;
-}> = ({ setFiles, isPrivateView = false }) => {
+  /** Override the default path the OS file dialog opens at. */
+  defaultBrowsePath?: string | null;
+}> = ({ setFiles, isPrivateView = false, defaultBrowsePath }) => {
   const [isDragging, setIsDragging] = useState(false);
+  const { polkadotAddress } = useWalletAuth();
 
   const handleSelectFiles = useCallback(async () => {
     try {
+      const defaultPath = defaultBrowsePath ?? await getSyncFolderDefaultPath(polkadotAddress ?? undefined);
       const selected = await open({
         multiple: true,
         directory: false,
+        defaultPath,
       });
 
       if (selected === null) {
@@ -39,7 +46,7 @@ const FileDropzone: FC<{
       console.error("File selection error:", error);
       toast.error("Failed to select files");
     }
-  }, [setFiles]);
+  }, [setFiles, defaultBrowsePath]);
 
   // Listen to Tauri native drag-drop events for the dropzone
   useEffect(() => {

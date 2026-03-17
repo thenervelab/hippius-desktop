@@ -34,10 +34,13 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
 
   const handleSelectFolder = async () => {
     try {
+      const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
+      const defaultPath = await getSyncFolderDefaultPath(polkadotAddress ?? undefined);
       const path = await openDialog({
         directory: true,
         multiple: false,
         title: "Select Folder to Sync",
+        defaultPath,
       });
 
       if (typeof path === "string") {

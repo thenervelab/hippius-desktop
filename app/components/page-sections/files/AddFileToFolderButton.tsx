@@ -25,6 +25,8 @@ export interface AddFileToFolderButtonProps {
     subfolder?: string;
     onFileAdded: () => void;
     disabled?: boolean;
+    /** Resolved sync root path for this folder (from FolderView). */
+    syncBasePath?: string;
 }
 
 export interface AddFileToFolderButtonRef {
@@ -34,7 +36,7 @@ export interface AddFileToFolderButtonRef {
 }
 
 const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFolderButtonProps>(
-    ({ className, folderName, isPrivateFolder, subfolder, onFileAdded, disabled: externalDisabled }, ref) => {
+    ({ className, folderName, isPrivateFolder, subfolder, onFileAdded, disabled: externalDisabled, syncBasePath }, ref) => {
         const [isOpen, setIsOpen] = useState(false);
         const [droppedFiles, setDroppedFiles] = useState<FileList | null>(null);
         const [droppedPaths, setDroppedPaths] = useState<string[] | null>(null);
@@ -94,12 +96,13 @@ const AddFileToFolderButton = forwardRef<AddFileToFolderButtonRef, AddFileToFold
                 folderName={folderName}
                 isPrivateFolder={isPrivateFolder}
                 subfolder={subfolder}
+                syncBasePath={syncBasePath}
                 initialFiles={droppedFiles}
                 initialPaths={droppedPaths}
                 onSuccess={handleSuccess}
                 onCancel={closeDialog}
             />
-        ), [folderName, isPrivateFolder, subfolder, droppedFiles, droppedPaths, handleSuccess, closeDialog]);
+        ), [folderName, isPrivateFolder, subfolder, syncBasePath, droppedFiles, droppedPaths, handleSuccess, closeDialog]);
 
         return (
             <>

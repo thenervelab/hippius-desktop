@@ -88,10 +88,13 @@ const SyncFolderSelector: React.FC<SyncFolderSelectorProps> = ({
 
   const pickCustom = async () => {
     try {
+      const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
+      const defaultPath = await getSyncFolderDefaultPath();
       const p = await open({
         directory: true,
         multiple: false,
         title: "Select Folder to Sync",
+        defaultPath,
       });
       if (typeof p === "string") {
         setCustom(p);

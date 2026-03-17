@@ -43,8 +43,11 @@ export const selectFile = async (
   acceptImagesOnly: boolean = false
 ): Promise<File[] | null> => {
   try {
+    const { getSyncFolderDefaultPath } = await import("@/lib/utils/syncPathUtils");
+    const defaultPath = await getSyncFolderDefaultPath();
     const selected = await open({
       multiple,
+      defaultPath,
       filters: acceptImagesOnly
         ? [
             {

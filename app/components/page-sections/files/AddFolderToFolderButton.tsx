@@ -12,6 +12,7 @@ interface AddFolderToFolderButtonProps {
     subFolderPath?: string;
     onFolderAdded?: () => void;
     disabled?: boolean;
+    syncBasePath?: string;
 }
 
 const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps>(
@@ -22,7 +23,8 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
             mainFolderActualName,
             subFolderPath,
             onFolderAdded,
-            disabled
+            disabled,
+            syncBasePath
         },
         ref
     ) => {
@@ -49,6 +51,7 @@ const AddFolderToFolderButton = forwardRef<unknown, AddFolderToFolderButtonProps
                     parentFolderName={folderName}
                     mainFolderActualName={mainFolderActualName}
                     subFolderPath={subFolderPath}
+                    syncBasePath={syncBasePath}
                 />
             </>
         );

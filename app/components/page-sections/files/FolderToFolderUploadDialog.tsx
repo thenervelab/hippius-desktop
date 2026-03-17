@@ -27,6 +27,8 @@ type Props = {
     parentFolderName: string;
     mainFolderActualName?: string;
     subFolderPath?: string;
+    /** Resolved sync root path (avoids incorrect getPrivateSyncPath in multi-drive). */
+    syncBasePath?: string;
 };
 
 export default function FolderToFolderUploadDialog({
@@ -38,6 +40,7 @@ export default function FolderToFolderUploadDialog({
     parentFolderName,
     mainFolderActualName,
     subFolderPath,
+    syncBasePath,
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
@@ -47,9 +50,26 @@ export default function FolderToFolderUploadDialog({
 
     const handleSelectFolder = async () => {
         try {
+            // Open the file browser at the target sync folder (including subfolder)
+            let defaultPath: string | undefined;
+            try {
+                const baseSyncPath = syncBasePath || (await getPrivateSyncPath(polkadotAddress ?? undefined))?.path;
+                if (baseSyncPath) {
+                    const subfolder = getFullPath(mainFolderActualName, subFolderPath);
+                    if (subfolder) {
+                        const { join } = await import("@tauri-apps/api/path");
+                        defaultPath = await join(baseSyncPath, subfolder);
+                    } else {
+                        defaultPath = baseSyncPath;
+                    }
+                }
+            } catch {
+                // Fall back to no default path
+            }
             const selectedFolder = await openSelection({
                 directory: true,
                 multiple: false,
+                defaultPath,
             }) as string | null;
 
             if (selectedFolder && typeof selectedFolder === "string") {
@@ -78,7 +98,7 @@ export default function FolderToFolderUploadDialog({
 
         try {
             // Get sync path and build target directory (current subfolder)
-            const baseSyncPath = (await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "";
+            const baseSyncPath = syncBasePath || ((await getPrivateSyncPath(polkadotAddress ?? undefined))?.path ?? "");
             const subfolder = getFullPath(mainFolderActualName, subFolderPath);
             let targetPath = baseSyncPath;
             if (subfolder) {
