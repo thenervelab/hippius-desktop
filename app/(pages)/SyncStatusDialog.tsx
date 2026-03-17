@@ -87,10 +87,12 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
       : (propSyncPercent !== null && propSyncPercent !== undefined 
         ? Math.round(propSyncPercent) 
         : 0),
+    // Never mark as completed while sync is still in progress — follow the tray's behavior
     isCompleted:
-      (propSyncPercent !== null && propSyncPercent !== undefined && propSyncPercent >= 100) ||
+      !isInProgress &&
+      ((propSyncPercent !== null && propSyncPercent !== undefined && propSyncPercent >= 100) ||
       (!syncFiles?.some((f) => f.status === "uploading") &&
-        syncFiles?.length > 0 && !activeTransfer),
+        syncFiles?.length > 0 && !activeTransfer)),
     hasActiveSync:
       isInProgress || syncFiles?.some((f) => f.status === "uploading") || !!activeTransfer,
   };
@@ -287,7 +289,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
                     ? "Failed"
                     : isCompleted
                       ? "Complete"
-                      : percentage !== null
+                      : percentage !== null && percentage < 100
                         ? `${percentage}%`
                         : "Syncing..."
                 }

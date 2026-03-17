@@ -154,50 +154,39 @@ const SyncStatusHandler: React.FC = () => {
   }, [sessionFiles, recentFiles]);
 
   const syncMetrics = useMemo(() => {
-    // Priority 1: Active sync in progress
-    // isActive now correctly includes hidden encrypted downloads
-    const hasPendingWork = overallProgress.inProgressFiles > 0 || 
-      (overallProgress.totalFiles > overallProgress.completedFiles + overallProgress.failedFiles);
-    const isSyncing = overallProgress.isActive || hasPendingWork;
-    
-    if (isSyncing && overallProgress.totalFiles > 0) {
+    // Comprehensive sync detection matching tray menu logic — the tray is always
+    // correct, so the widget should use the same signals.
+    const hasActiveUpload = uploadProgress !== null && uploadProgress.bytes < uploadProgress.total;
+    const hasActiveDownload = downloadProgress !== null && downloadProgress.bytes < downloadProgress.total;
+
+    const isActivelySyncing = isSyncingFromEvents ||
+      hasActiveUpload ||
+      hasActiveDownload ||
+      overallProgress.isActive ||
+      (overallProgress.inProgressFiles > 0) ||
+      (overallProgress.totalFiles > 0 &&
+       overallProgress.completedFiles < overallProgress.totalFiles &&
+       overallProgress.failedFiles === 0);
+
+    // Priority 1: overallProgress has file data
+    if (overallProgress.totalFiles > 0) {
       return {
         syncPercent: overallProgress.overallPercent,
         totalFiles: overallProgress.totalFiles,
         syncedFiles: overallProgress.completedFiles,
         uploadingFiles: overallProgress.inProgressFiles,
         filesFailed: overallProgress.failedFiles,
-        isInProgress: true,
-        isCompleted: false,
+        isInProgress: isActivelySyncing,
+        isCompleted: !isActivelySyncing && (overallProgress.completedFiles > 0 || overallProgress.failedFiles > 0),
         currentFile: overallProgress.currentFile?.fileName || null,
       };
     }
-    
-    // Priority 2: Sync completed (may have failures)
-    // This catches both successful completion and completion with failures
-    if (!isSyncing && (overallProgress.completedFiles > 0 || overallProgress.failedFiles > 0)) {
-      const totalFiles = overallProgress.completedFiles + overallProgress.failedFiles;
-      const percent = totalFiles > 0 
-        ? Math.round((overallProgress.completedFiles / totalFiles) * 100) 
-        : 100;
+
+    // Priority 2: Sync is active but overallProgress has no files yet
+    if (isActivelySyncing) {
       return {
-        syncPercent: percent,
-        totalFiles: totalFiles,
-        syncedFiles: overallProgress.completedFiles,
-        uploadingFiles: 0,
-        filesFailed: overallProgress.failedFiles,
-        isInProgress: false,
-        isCompleted: true,
-        currentFile: null,
-      };
-    }
-    
-    // Priority 3: Local sync events as fallback (old atom system)
-    // The sync is in progress if isSyncingFromEvents is true AND we have files to sync
-    if (isSyncingFromEvents && totalFilesToSync > 0) {
-      return {
-        syncPercent: null, // Don't show percentage during sync - it flickers
-        totalFiles: totalFilesToSync,
+        syncPercent: null, // Don't show percentage — no file data yet
+        totalFiles: totalFilesToSync > 0 ? totalFilesToSync : 0,
         syncedFiles: completedFilesCount,
         uploadingFiles: totalFilesToSync > completedFilesCount ? 1 : 0,
         filesFailed: 0,
@@ -207,7 +196,7 @@ const SyncStatusHandler: React.FC = () => {
       };
     }
 
-    // Priority 4: Sync just completed via old atoms (no localStorage data)
+    // Priority 3: Sync just completed via old atoms (no localStorage data)
     if (syncPercentFromAtom === 100 && completedFilesCount > 0) {
       return {
         syncPercent: 100,
@@ -221,7 +210,7 @@ const SyncStatusHandler: React.FC = () => {
       };
     }
 
-    // Priority 5: Use local file list from synced activity (historical)
+    // Priority 4: Use local file list from synced activity (historical)
     if (!syncFiles || syncFiles.length === 0) {
       return {
         syncPercent: null,
@@ -255,7 +244,7 @@ const SyncStatusHandler: React.FC = () => {
       isCompleted,
       currentFile: null,
     };
-  }, [overallProgress, isSyncingFromEvents, totalFilesToSync, completedFilesCount, currentSyncFile, syncPercentFromAtom, syncFiles]);
+  }, [overallProgress, isSyncingFromEvents, totalFilesToSync, completedFilesCount, currentSyncFile, syncPercentFromAtom, syncFiles, uploadProgress, downloadProgress]);
 
   const { isInProgress, isCompleted, uploadingFiles, filesFailed } = syncMetrics;
 
