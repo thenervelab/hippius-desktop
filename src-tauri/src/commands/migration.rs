@@ -794,7 +794,7 @@ async fn run_migration_download(
     {
         use tauri::Manager;
         let app_state = app.state::<crate::app_state::AppState>();
-        crate::utils::sync::set_active_account(&*app_state, account_id);
+        crate::utils::sync::set_active_account(&app_state, account_id);
     }
 
     // Initialize the migration drive

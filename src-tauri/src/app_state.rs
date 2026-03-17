@@ -7,20 +7,11 @@ use sp_core::sr25519;
 use sqlx::sqlite::SqlitePool;
 use std::sync::{Mutex, OnceLock};
 
+#[derive(Default)]
 pub struct AuthInfo {
     pub sr25519_pair: Option<sr25519::Pair>,
     pub substrate_address: Option<String>,
     pub eth_address: Option<String>,
-}
-
-impl Default for AuthInfo {
-    fn default() -> Self {
-        Self {
-            sr25519_pair: None,
-            substrate_address: None,
-            eth_address: None,
-        }
-    }
 }
 
 pub struct AppState {

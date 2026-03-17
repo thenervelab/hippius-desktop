@@ -714,7 +714,7 @@ pub async fn start_sync_loop(app: AppHandle) {
                         {
                             use tauri::Manager;
                             let app_state = app.state::<crate::app_state::AppState>();
-                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&*app_state)) {
+                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
                                 if crate::utils::auth_tokens::is_token_expiring(
                                     pool,
                                     &acct,
@@ -805,7 +805,7 @@ pub async fn start_sync_loop(app: AppHandle) {
                         if heartbeat_due {
                             use tauri::Manager;
                             let app_state = app.state::<crate::app_state::AppState>();
-                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&*app_state)) {
+                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
                                 if crate::utils::auth_tokens::is_token_expiring(
                                     pool,
                                     &acct,
@@ -1258,7 +1258,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             if label_owned == "migration" && outcome.files_uploaded > 0 {
                 use tauri::Manager;
                 let app_state = app.state::<crate::app_state::AppState>();
-                match crate::utils::sync::current_account_id(&*app_state) {
+                match crate::utils::sync::current_account_id(&app_state) {
                     Ok(active_account) => {
                         let app_clone = app.clone();
                         tokio::spawn(async move {
@@ -1307,7 +1307,7 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
                 {
                     use tauri::Manager;
                     let app_state = app.state::<crate::app_state::AppState>();
-                    if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&*app_state)) {
+                    if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&app_state)) {
                         let pool = pool.clone();
                         let app_clone = app.clone();
                         tokio::spawn(async move {
