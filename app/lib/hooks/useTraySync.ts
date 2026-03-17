@@ -34,6 +34,7 @@ import {
 } from "./useSyncProgress";
 import {
   getOverallProgress,
+  getRecentFiles,
 } from "../services/syncProgressService";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
 
@@ -49,6 +50,7 @@ const OPEN_VM_ID = "open-vm";
 const SYNC_ITEM_PREFIX = "sync-activity-item:";
 const SYNC_PROGRESS_ID = "sync-progress-summary";
 const SYNC_SIZE_ID = "sync-size-info";
+const SYNC_DELETE_ID = "sync-delete-summary";
 
 // add cached icon paths + state
 const DEFAULT_TRAY_ICON = "icons/TrayIcon.png";
@@ -70,6 +72,7 @@ let openVmItem: MenuItem | null = null;
 const syncRowItems = new Map<string, MenuItem>(); // legacy rows (cleaned up on init)
 let syncProgressItem: MenuItem | null = null; // "X of Y files synced" row
 let syncSizeItem: MenuItem | null = null; // "208 MB / 1 GB" row
+let syncDeleteItem: MenuItem | null = null; // "X files deleted" row
 
 /* ─ Backend payload types ─────────────────────────────────────── */
 
@@ -1052,6 +1055,10 @@ function startSyncActivityWatcher() {
           try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
           syncSizeItem = null;
         }
+        if (syncDeleteItem) {
+          try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
+          syncDeleteItem = null;
+        }
         lastSyncSummarySignature = "";
         return;
       }
@@ -1067,13 +1074,20 @@ function startSyncActivityWatcher() {
       const hasFailed = progress.failedFiles > 0;
       const isCompleted = !isActive && (progress.completedFiles > 0 || hasFailed);
 
+      // Check for recent deletions (from UI-triggered deletes)
+      const recentFiles = await getRecentFiles();
+      const recentDeletes = recentFiles.filter(
+        (f) => f.action === "local_delete" || f.action === "remote_delete"
+      );
+      const recentDeleteCount = recentDeletes.length;
+
       // Build signature to avoid redundant updates
-      const signature = `${isActive}:${isCompleted}:${hasFailed}:${progress.completedFiles}/${progress.totalFiles}:${progress.failedFiles}:${progress.overallPercent}:${progress.totalBytesTransferred}`;
+      const signature = `${isActive}:${isCompleted}:${hasFailed}:${progress.completedFiles}/${progress.totalFiles}:${progress.failedFiles}:${progress.overallPercent}:${progress.totalBytesTransferred}:del${recentDeleteCount}`;
       if (signature === lastSyncSummarySignature) return;
       lastSyncSummarySignature = signature;
 
-      if (!isActive && !isCompleted) {
-        // No sync activity at all — remove summary rows if they exist
+      if (!isActive && !isCompleted && recentDeleteCount === 0) {
+        // No sync activity and no recent deletes — remove summary rows if they exist
         if (syncProgressItem) {
           try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
           syncProgressItem = null;
@@ -1081,6 +1095,10 @@ function startSyncActivityWatcher() {
         if (syncSizeItem) {
           try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
           syncSizeItem = null;
+        }
+        if (syncDeleteItem) {
+          try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
+          syncDeleteItem = null;
         }
         return;
       }
@@ -1098,74 +1116,128 @@ function startSyncActivityWatcher() {
       }
       // Completed without failures is already handled by the useEffect
 
-      // Build progress text and size text depending on state
-      let progressText: string;
-      let sizeText: string | null = null;
+      // Build progress + size rows only when there's an active or completed sync session
+      if (isActive || isCompleted) {
+        let progressText: string;
+        let sizeText: string | null = null;
 
-      if (isActive) {
-        // In-progress: show current progress
-        if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.totalBytesTransferred === 0) {
-          progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} pending`;
+        if (isActive) {
+          // In-progress: show current progress
+          if (progress.totalFiles > 0 && progress.overallPercent === 0 && progress.completedFiles === 0 && progress.totalBytesTransferred === 0) {
+            progressText = `${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} pending`;
+          } else {
+            progressText = progress.totalFiles > 0
+              ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} synced`
+              : "Preparing files…";
+          }
+          if (progress.totalBytesExpected > 0) {
+            sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
+          }
+        } else if (hasFailed) {
+          // Failed: show failure counts
+          const totalFiles = progress.completedFiles + progress.failedFiles;
+          progressText = `${progress.failedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} failed`;
+          if (progress.totalBytesExpected > 0) {
+            sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
+          }
         } else {
-          progressText = progress.totalFiles > 0
-            ? `${progress.completedFiles} of ${progress.totalFiles} ${progress.totalFiles === 1 ? 'file' : 'files'} synced`
-            : "Preparing files…";
+          // Completed successfully: show final counts
+          const totalFiles = progress.completedFiles + progress.failedFiles;
+          progressText = `${progress.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
+          if (progress.totalBytesExpected > 0) {
+            sizeText = `${formatBytes(progress.totalBytesExpected)} / ${formatBytes(progress.totalBytesExpected)}`;
+          }
         }
-        if (progress.totalBytesExpected > 0) {
-          sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
-        }
-      } else if (hasFailed) {
-        // Failed: show failure counts
-        const totalFiles = progress.completedFiles + progress.failedFiles;
-        progressText = `${progress.failedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} failed`;
-        if (progress.totalBytesExpected > 0) {
-          sizeText = `${formatBytes(progress.totalBytesTransferred)} / ${formatBytes(progress.totalBytesExpected)}`;
-        }
-      } else {
-        // Completed successfully: show final counts
-        const totalFiles = progress.completedFiles + progress.failedFiles;
-        progressText = `${progress.completedFiles} of ${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} synced`;
-        if (progress.totalBytesExpected > 0) {
-          sizeText = `${formatBytes(progress.totalBytesExpected)} / ${formatBytes(progress.totalBytesExpected)}`;
-        }
-      }
 
-      // Find insert position: right after the sync header (SYNC_ID)
-      const items = await menu.items();
-      let insertPos = items.findIndex((i) => i.id === SYNC_ID);
-      insertPos = insertPos >= 0 ? insertPos + 1 : 0;
+        // Find insert position: right after the sync header (SYNC_ID)
+        const items = await menu.items();
+        let insertPos = items.findIndex((i) => i.id === SYNC_ID);
+        insertPos = insertPos >= 0 ? insertPos + 1 : 0;
 
-      // Update or create progress row
-      if (!syncProgressItem) {
-        syncProgressItem = await MenuItem.new({
-          id: SYNC_PROGRESS_ID,
-          text: progressText,
-          enabled: false,
-        });
-        await menu.insert(syncProgressItem, insertPos);
-      } else {
-        await syncProgressItem.setText(progressText);
-      }
-
-      // Update or create size row
-      if (sizeText) {
-        const itemsAfterProgress = await menu.items();
-        const progressIdx = itemsAfterProgress.findIndex((i) => i.id === SYNC_PROGRESS_ID);
-        const sizeInsertPos = progressIdx >= 0 ? progressIdx + 1 : insertPos + 1;
-
-        if (!syncSizeItem) {
-          syncSizeItem = await MenuItem.new({
-            id: SYNC_SIZE_ID,
-            text: sizeText,
+        // Update or create progress row
+        if (!syncProgressItem) {
+          syncProgressItem = await MenuItem.new({
+            id: SYNC_PROGRESS_ID,
+            text: progressText,
             enabled: false,
           });
-          await menu.insert(syncSizeItem, sizeInsertPos);
+          await menu.insert(syncProgressItem, insertPos);
         } else {
-          await syncSizeItem.setText(sizeText);
+          await syncProgressItem.setText(progressText);
         }
-      } else if (syncSizeItem) {
-        try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
-        syncSizeItem = null;
+
+        // Update or create size row
+        if (sizeText) {
+          const itemsAfterProgress = await menu.items();
+          const progressIdx = itemsAfterProgress.findIndex((i) => i.id === SYNC_PROGRESS_ID);
+          const sizeInsertPos = progressIdx >= 0 ? progressIdx + 1 : insertPos + 1;
+
+          if (!syncSizeItem) {
+            syncSizeItem = await MenuItem.new({
+              id: SYNC_SIZE_ID,
+              text: sizeText,
+              enabled: false,
+            });
+            await menu.insert(syncSizeItem, sizeInsertPos);
+          } else {
+            await syncSizeItem.setText(sizeText);
+          }
+        } else if (syncSizeItem) {
+          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          syncSizeItem = null;
+        }
+      } else {
+        // No active/completed sync — remove progress/size rows if they exist
+        if (syncProgressItem) {
+          try { await menu.remove(syncProgressItem); } catch { /* already removed */ }
+          syncProgressItem = null;
+        }
+        if (syncSizeItem) {
+          try { await menu.remove(syncSizeItem); } catch { /* already removed */ }
+          syncSizeItem = null;
+        }
+      }
+
+      // Show delete summary row if there are recent deletions
+      if (recentDeleteCount > 0) {
+        const deleteText = `${recentDeleteCount} ${recentDeleteCount === 1 ? 'file' : 'files'} deleted`;
+
+        // Find insert position: after size row, or after progress row, or after sync header
+        const itemsForDelete = await menu.items();
+        let deleteInsertPos: number;
+        const sizeIdx = itemsForDelete.findIndex((i) => i.id === SYNC_SIZE_ID);
+        const progIdx = itemsForDelete.findIndex((i) => i.id === SYNC_PROGRESS_ID);
+        const headerIdx = itemsForDelete.findIndex((i) => i.id === SYNC_ID);
+        if (sizeIdx >= 0) {
+          deleteInsertPos = sizeIdx + 1;
+        } else if (progIdx >= 0) {
+          deleteInsertPos = progIdx + 1;
+        } else if (headerIdx >= 0) {
+          deleteInsertPos = headerIdx + 1;
+        } else {
+          deleteInsertPos = 0;
+        }
+
+        if (!syncDeleteItem) {
+          syncDeleteItem = await MenuItem.new({
+            id: SYNC_DELETE_ID,
+            text: deleteText,
+            enabled: false,
+          });
+          await menu.insert(syncDeleteItem, deleteInsertPos);
+        } else {
+          await syncDeleteItem.setText(deleteText);
+        }
+
+        // If there's no active sync or completed sync but we have deletes,
+        // ensure the sync header and icon reflect the delete activity
+        if (!isActive && !isCompleted) {
+          await updateTraySyncLabel(`✓ Sync Complete`);
+          await setTrayIconSyncing(false, true);
+        }
+      } else if (syncDeleteItem) {
+        try { await menu.remove(syncDeleteItem); } catch { /* already removed */ }
+        syncDeleteItem = null;
       }
     } catch (error) {
       console.error("[TraySync] Error updating sync summary:", error);
