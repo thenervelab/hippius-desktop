@@ -9,10 +9,38 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tauri::Manager;
+use tracing::{info, warn};
 
 use crate::hcfs_drive::HCFS_DRIVES;
 use crate::sync_shared::{update_state, SyncActivityItem};
 use crate::utils::account_key::account_key;
+
+/// Allow the given directory (recursively) in the Tauri asset protocol scope
+/// so the frontend can display files via `asset://localhost/...` URLs.
+///
+/// The static scope in `tauri.conf.json` only covers `$HOME/.hippius/**` (drive
+/// metadata). User-chosen sync folders live elsewhere, so we expand the scope
+/// at runtime whenever a sync path is configured or loaded.
+pub fn allow_asset_directory(app: &tauri::AppHandle, path: &str) {
+    let dir = Path::new(path);
+    if !dir.exists() {
+        info!("Skipping asset scope for non-existent path: {}", path);
+        return;
+    }
+    match app.asset_protocol_scope().allow_directory(dir, true) {
+        Ok(()) => info!("Asset protocol scope allowed for: {}", path),
+        Err(e) => warn!("Failed to allow asset scope for '{}': {}", path, e),
+    }
+}
+
+/// Tauri command to explicitly allow a directory in the asset protocol scope.
+/// Called by the frontend at startup for every known sync path.
+#[tauri::command]
+pub async fn allow_asset_scope(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    allow_asset_directory(&app, &path);
+    Ok(())
+}
 
 #[derive(Serialize)]
 pub struct FileEntry {

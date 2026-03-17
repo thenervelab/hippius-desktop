@@ -155,19 +155,24 @@ pub(crate) async fn set_sync_path_internal(
 #[tauri::command]
 pub async fn set_sync_path(
     state: tauri::State<'_, crate::app_state::AppState>,
-    _app_handle: tauri::AppHandle,
+    app_handle: tauri::AppHandle,
     params: SetSyncPathParams,
 ) -> Result<String, String> {
     crate::utils::sync::set_active_account(&*state, &params.account_id);
     let pool = state.pool()?;
-    set_sync_path_internal(
+    let result = set_sync_path_internal(
         pool,
         &params.account_id,
         &params.path,
         params.is_public,
         params.label.as_deref(),
     )
-    .await
+    .await?;
+
+    // Expand asset protocol scope so the frontend can display files from this path
+    crate::commands::file_commands::allow_asset_directory(&app_handle, &params.path);
+
+    Ok(result)
 }
 
 #[tauri::command]

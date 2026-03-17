@@ -589,6 +589,9 @@ async fn initialize_sync_inner(
     let sync_path = get_sync_path_for_label(pool, &account_id, &label).await?;
     debug!("Sync path: {}, label: {}", sync_path, label);
 
+    // Expand asset protocol scope so the frontend can preview files from this folder
+    crate::commands::file_commands::allow_asset_directory(&app, &sync_path);
+
     // 2. Read HCFS config from database
     let drive_password = get_drive_password(pool, &account_id).await?;
     let config = get_hcfs_config_internal(pool, &account_id).await?;

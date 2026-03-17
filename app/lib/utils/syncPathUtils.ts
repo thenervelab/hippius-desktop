@@ -83,3 +83,9 @@ export async function removeSyncPath(
 ): Promise<void> {
     await invoke("remove_sync_path", { accountId, label });
 }
+
+/// Expand the Tauri asset protocol scope to include the given directory,
+/// so files within it can be displayed via `asset://` URLs.
+export async function allowAssetScope(path: string): Promise<void> {
+    await invoke("allow_asset_scope", { path });
+}

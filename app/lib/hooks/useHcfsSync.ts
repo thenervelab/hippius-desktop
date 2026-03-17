@@ -8,7 +8,7 @@ import {
   type InitSyncResult,
   type HcfsConfigResult,
 } from "../utils/hcfsConfigUtils";
-import { getPrivateSyncPath, getAllSyncPaths } from "../utils/syncPathUtils";
+import { getPrivateSyncPath, getAllSyncPaths, allowAssetScope } from "../utils/syncPathUtils";
 import { invoke } from "@tauri-apps/api/core";
 import { isSyncConfiguredAtom, syncEngineStatusAtom } from "../global-atoms/unpinAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
@@ -198,6 +198,16 @@ export async function tryAutoInitSync(
     if (syncPaths.length === 0) {
       console.log("[AutoSync] No sync paths configured, skipping auto-init");
       return false;
+    }
+
+    // Expand asset protocol scope for all sync paths so file previews work,
+    // even if sync is stopped or config isn't ready yet.
+    for (const sp of syncPaths) {
+      try {
+        await allowAssetScope(sp.path);
+      } catch {
+        // Non-critical — Rust initialize_sync also does this
+      }
     }
 
     // Check if HCFS config exists

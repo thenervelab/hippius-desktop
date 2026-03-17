@@ -80,6 +80,8 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 
 **Frontend static export**: Next.js is configured with `output: "export"` — no server-side rendering. All data fetching happens client-side via Tauri IPC or TanStack Query.
 
+**Asset protocol scope**: The static scope in `tauri.conf.json` is `$HOME/.hippius/**` (for HCFS drive metadata). User-chosen sync folders live at arbitrary paths, so the scope is expanded at runtime via `app.asset_protocol_scope().allow_directory(path, true)`. This happens in three places: `set_sync_path` (when user configures a new path), `initialize_sync_inner` (on every sync start/restart), and the frontend `tryAutoInitSync` (belt-and-suspenders at login). The `allow_asset_scope` IPC command is also exposed for direct frontend use. The helper `allow_asset_directory()` lives in `file_commands.rs`.
+
 ## Testing
 
 ```bash

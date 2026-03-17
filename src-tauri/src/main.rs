@@ -83,7 +83,7 @@ use commands::local_db::{
     is_onboarding_done, set_onboarding_done,
     get_user_preference, save_user_preference,
 };
-use commands::file_commands::{add_file, add_folder, export_file, list_sync_folder, remove_file, resolve_file_path};
+use commands::file_commands::{add_file, add_folder, allow_asset_scope, export_file, list_sync_folder, remove_file, resolve_file_path};
 use commands::blockchain::{
     from_plancks, get_account_balance, get_block_timestamp, get_explorer_url, get_referral_links,
     get_staking_info, stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded,
@@ -189,6 +189,7 @@ fn main() {
             list_sync_folder,
             export_file,
             resolve_file_path,
+            allow_asset_scope,
             // App lifecycle
             app_close,
             // Substrate / blockchain
