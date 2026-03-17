@@ -243,12 +243,6 @@ export function useSyncEvents() {
             // Mark sync as configured - this enables SyncStoppedAlert to show when user stops sync
             setIsSyncConfiguredAtom(true);
 
-            // Cancel any pending completion timer — another drive is starting
-            if (completionTimerRef.current) {
-              clearTimeout(completionTimerRef.current);
-              completionTimerRef.current = null;
-            }
-
             if (totalExpected === 0) {
               // No staged changes detected upfront, but the real sync may
               // still discover remote files to download. Don't mark as syncing
@@ -256,7 +250,19 @@ export function useSyncEvents() {
               // red during idle no-op sync rounds. If the real sync later
               // discovers files, ensureSession() will create an ad-hoc session
               // when progress events arrive.
+              //
+              // IMPORTANT: Do NOT cancel the completion timer here. No-op sync
+              // cycles fire immediately after the previous sync completes, and
+              // cancelling the timer would prevent isSyncingAtom from ever being
+              // set to false — leaving the spinner stuck indefinitely.
               return;
+            }
+
+            // Cancel any pending completion timer — a real sync cycle (with files)
+            // is starting, so the previous completion should not finalize.
+            if (completionTimerRef.current) {
+              clearTimeout(completionTimerRef.current);
+              completionTimerRef.current = null;
             }
 
             // Build file lists from payload
