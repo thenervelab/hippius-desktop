@@ -50,11 +50,12 @@ pub struct InitSyncResult {
 
 #[tauri::command]
 pub async fn save_hcfs_config(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     server_url: String,
     drive_password: String,
 ) -> Result<(), String> {
-    let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let db = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query(
@@ -78,8 +79,12 @@ pub async fn save_hcfs_config(
 }
 
 #[tauri::command]
-pub async fn update_hcfs_server_url(account_id: String, server_url: String) -> Result<(), String> {
-    let db = DB_POOL.get().ok_or("Database not initialized")?;
+pub async fn update_hcfs_server_url(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    server_url: String,
+) -> Result<(), String> {
+    let db = state.pool()?;
     let owner = account_key(&account_id);
 
     let result = sqlx::query(
@@ -130,10 +135,13 @@ pub async fn update_sync_bearer_token(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn get_hcfs_config(account_id: String) -> Result<HcfsConfigResult, String> {
+/// Internal helper that accepts a pool reference directly.
+/// Used by both the Tauri command and other internal callers.
+pub(crate) async fn get_hcfs_config_internal(
+    account_id: &str,
+) -> Result<HcfsConfigResult, String> {
     let db = DB_POOL.get().ok_or("Database not initialized")?;
-    let owner = account_key(&account_id);
+    let owner = account_key(account_id);
 
     let result: Option<(String, String)> = sqlx::query_as(
         r#"
@@ -155,6 +163,13 @@ pub async fn get_hcfs_config(account_id: String) -> Result<HcfsConfigResult, Str
             has_password: false,
         }),
     }
+}
+
+#[tauri::command]
+pub async fn get_hcfs_config(
+    account_id: String,
+) -> Result<HcfsConfigResult, String> {
+    get_hcfs_config_internal(&account_id).await
 }
 
 pub(crate) async fn get_drive_password(account_id: &str) -> Result<String, String> {
@@ -560,7 +575,7 @@ async fn initialize_sync_inner(
 
     // 2. Read HCFS config from database
     let drive_password = get_drive_password(&account_id).await?;
-    let config = get_hcfs_config(account_id.clone()).await?;
+    let config = get_hcfs_config_internal(&account_id).await?;
 
     let server_url = if config.server_url.is_empty() {
         "https://arion.hippius.com".to_string()
@@ -1043,7 +1058,11 @@ pub async fn stop_drive(app: AppHandle, label: String) -> Result<(), String> {
 /// IMPORTANT: This does NOT delete files in the sync folder - only HCFS metadata.
 /// Files on the server remain intact.
 #[tauri::command]
-pub async fn reset_sync_data(app: AppHandle, account_id: String) -> Result<(), String> {
+pub async fn reset_sync_data(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+    account_id: String,
+) -> Result<(), String> {
     info!("Resetting sync data for account: {}", account_id);
 
     // First stop all active syncs
@@ -1062,7 +1081,7 @@ pub async fn reset_sync_data(app: AppHandle, account_id: String) -> Result<(), S
     }
 
     // Also clear the hcfs_config from database so user goes through setup again
-    let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let db = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query("DELETE FROM hcfs_config WHERE owner = ?")
@@ -1540,7 +1559,7 @@ pub struct RemoteStorageStatsResult {
 pub async fn get_remote_storage_stats(
     account_id: String,
 ) -> Result<RemoteStorageStatsResult, String> {
-    let config = get_hcfs_config(account_id.clone()).await?;
+    let config = get_hcfs_config_internal(&account_id).await?;
     let server_url = if config.server_url.is_empty() {
         "https://arion.hippius.com".to_string()
     } else {
@@ -1636,7 +1655,7 @@ pub struct RemoteFolderInfoResult {
 pub async fn list_remote_folders(
     account_id: String,
 ) -> Result<Vec<RemoteFolderInfoResult>, String> {
-    let config = get_hcfs_config(account_id.clone()).await?;
+    let config = get_hcfs_config_internal(&account_id).await?;
     let server_url = if config.server_url.is_empty() {
         "https://arion.hippius.com".to_string()
     } else {
@@ -1843,7 +1862,7 @@ pub async fn delete_remote_folder(
     account_id: String,
     label: String,
 ) -> Result<DeleteRemoteFolderResult, String> {
-    let config = get_hcfs_config(account_id.clone()).await?;
+    let config = get_hcfs_config_internal(&account_id).await?;
     let server_url = if config.server_url.is_empty() {
         "https://arion.hippius.com".to_string()
     } else {
@@ -1930,12 +1949,15 @@ pub async fn get_device_name() -> Result<String, String> {
 
 /// Set a custom friendly device name for this machine.
 #[tauri::command]
-pub async fn set_device_name(name: String) -> Result<(), String> {
+pub async fn set_device_name(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    name: String,
+) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Device name cannot be empty".to_string());
     }
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+    let pool = state.pool()?;
     sqlx::query(
         "INSERT INTO device_settings (id, device_name, updated_at) VALUES (1, ?, CURRENT_TIMESTAMP)
          ON CONFLICT(id) DO UPDATE SET device_name = excluded.device_name, updated_at = CURRENT_TIMESTAMP",

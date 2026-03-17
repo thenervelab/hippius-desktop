@@ -306,6 +306,7 @@ fn hash_passcode(passcode: &str) -> String {
 /// or is passed directly during initial setup.
 #[tauri::command]
 pub async fn set_passcode(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     passcode: String,
     mnemonic: String,
@@ -349,7 +350,7 @@ pub async fn set_passcode(
     // mnemonic is auto-zeroized on drop via Zeroizing wrapper
 
     // Store in wallet_store
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query(
@@ -431,11 +432,12 @@ fn decrypt_mnemonic_aes(encrypted: &str, passcode: &str) -> Result<String, Strin
 /// Unlock with passcode: verify hash, decrypt mnemonic, derive keypair, restore session.
 #[tauri::command]
 pub async fn unlock_with_passcode(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     passcode: String,
     logout_time_minutes: Option<i64>,
 ) -> Result<LoginResult, String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     // 1. Fetch wallet record
@@ -576,7 +578,10 @@ pub async fn refresh_auth_token(
 ///
 /// Note: the frontend should call `stop_sync` separately before calling this.
 #[tauri::command]
-pub async fn auth_logout(account_id: String) -> Result<(), String> {
+pub async fn auth_logout(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<(), String> {
     // 1. Clear AUTH_STATE
     {
         let mut state = AUTH_STATE
@@ -588,7 +593,7 @@ pub async fn auth_logout(account_id: String) -> Result<(), String> {
     }
 
     // 3. Clear session in DB (preserves logout_time_minutes)
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query(

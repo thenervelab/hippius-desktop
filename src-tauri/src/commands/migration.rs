@@ -486,6 +486,7 @@ async fn download_file_once(
 
 #[tauri::command]
 pub async fn start_migration(
+    state: tauri::State<'_, crate::app_state::AppState>,
     app: AppHandle,
     account_id: String,
     sync_path: String,
@@ -547,6 +548,7 @@ pub async fn start_migration(
     let s3_client = build_s3_client(&account_id).await?;
 
     // Spawn background task
+    let pool = state.pool()?.clone();
     let app_clone = app.clone();
     let account_clone = account_id.clone();
     let path_clone = sync_path.clone();
@@ -562,6 +564,7 @@ pub async fn start_migration(
             &server_clone,
             &pending,
             mnemonic_clone,
+            &pool,
         )
         .await
         {
@@ -592,6 +595,7 @@ async fn run_migration_download(
     server_url: &str,
     files: &[MigrationFile],
     mnemonic: Option<String>,
+    pool: &sqlx::SqlitePool,
 ) -> Result<(), String> {
     let total = files.len() as u64;
     let mut completed: u64 = 0;
@@ -765,23 +769,21 @@ async fn run_migration_download(
 
     // Register the sync path for the "migration" label
     let owner = crate::utils::account_key::account_key(account_id);
-    if let Some(pool) = DB_POOL.get() {
-        if let Err(e) = sqlx::query(
-            r#"
-            INSERT INTO sync_paths (owner, path, type, label, timestamp)
-            VALUES (?, ?, 'private', 'migration', strftime('%s', 'now'))
-            ON CONFLICT(owner, label) DO UPDATE SET
-                path = excluded.path,
-                timestamp = excluded.timestamp
-            "#,
-        )
-        .bind(&owner)
-        .bind(&sync_path)
-        .execute(pool)
-        .await
-        {
-            warn!("Failed to register migration sync path: {e}");
-        }
+    if let Err(e) = sqlx::query(
+        r#"
+        INSERT INTO sync_paths (owner, path, type, label, timestamp)
+        VALUES (?, ?, 'private', 'migration', strftime('%s', 'now'))
+        ON CONFLICT(owner, label) DO UPDATE SET
+            path = excluded.path,
+            timestamp = excluded.timestamp
+        "#,
+    )
+    .bind(&owner)
+    .bind(&sync_path)
+    .execute(pool)
+    .await
+    {
+        warn!("Failed to register migration sync path: {e}");
     }
 
     // Ensure the active account is set so the sync loop can report

@@ -1,4 +1,3 @@
-use crate::DB_POOL;
 use serde::Serialize;
 use tracing::{info, warn, error};
 
@@ -9,8 +8,10 @@ pub struct VpnStatus {
 
 /// Get the current VPN status
 #[tauri::command]
-pub async fn get_vpn_status() -> Result<VpnStatus, String> {
-    let pool = DB_POOL.get().ok_or("Database pool not available")?;
+pub async fn get_vpn_status(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<VpnStatus, String> {
+    let pool = state.pool()?;
 
     match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM vpn_status WHERE id = 1")
         .fetch_optional(pool)
@@ -31,11 +32,20 @@ pub async fn get_vpn_status() -> Result<VpnStatus, String> {
 
 /// Toggle the VPN status
 #[tauri::command]
-pub async fn toggle_vpn_status() -> Result<VpnStatus, String> {
-    let pool = DB_POOL.get().ok_or("Database pool not available")?;
+pub async fn toggle_vpn_status(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<VpnStatus, String> {
+    let pool = state.pool()?;
 
     // First get the current status
-    let current = get_vpn_status().await?;
+    let current = match sqlx::query_as::<_, (bool,)>("SELECT is_enabled FROM vpn_status WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+    {
+        Ok(Some((is_enabled,))) => VpnStatus { is_enabled },
+        Ok(None) => VpnStatus { is_enabled: false },
+        Err(e) => return Err(e.to_string()),
+    };
 
     // Toggle the status
     let new_status = !current.is_enabled;
@@ -87,8 +97,10 @@ pub struct AutoconnectStatus {
 
 /// Get the current Autoconnect VPN status
 #[tauri::command]
-pub async fn get_autoconnect_status() -> Result<AutoconnectStatus, String> {
-    let pool = DB_POOL.get().ok_or("Database pool not available")?;
+pub async fn get_autoconnect_status(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<AutoconnectStatus, String> {
+    let pool = state.pool()?;
 
     match sqlx::query_as::<_, (bool,)>(
         "SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1",
@@ -113,11 +125,22 @@ pub async fn get_autoconnect_status() -> Result<AutoconnectStatus, String> {
 
 /// Toggle the Autoconnect VPN status
 #[tauri::command]
-pub async fn toggle_autoconnect_status() -> Result<AutoconnectStatus, String> {
-    let pool = DB_POOL.get().ok_or("Database pool not available")?;
+pub async fn toggle_autoconnect_status(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<AutoconnectStatus, String> {
+    let pool = state.pool()?;
 
     // First get the current status
-    let current = get_autoconnect_status().await?;
+    let current = match sqlx::query_as::<_, (bool,)>(
+        "SELECT is_enabled FROM autoconnect_vpn_enabled WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some((is_enabled,))) => AutoconnectStatus { is_enabled },
+        Ok(None) => AutoconnectStatus { is_enabled: false },
+        Err(e) => return Err(e.to_string()),
+    };
 
     // Toggle the status
     let new_status = !current.is_enabled;

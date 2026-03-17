@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 
 use crate::hcfs_drive::HCFS_DRIVES;
 use crate::sync_shared::{update_state, SyncActivityItem};
-use crate::DB_POOL;
 use crate::utils::account_key::account_key;
 
 #[derive(Serialize)]
@@ -345,6 +344,7 @@ pub async fn export_file(
 /// is not configured or the file does not exist on disk.
 #[tauri::command]
 pub async fn resolve_file_path(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     label: String,
     file_name: String,
@@ -354,7 +354,7 @@ pub async fn resolve_file_path(
         return Err("Invalid file name".to_string());
     }
 
-    let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let db = state.pool()?;
     let owner = account_key(&account_id);
 
     let result: Option<(String,)> =

@@ -328,7 +328,10 @@ pub async fn get_sync_path(params: GetSyncPathParams) -> Result<SyncPathResult, 
 }
 
 #[tauri::command]
-pub async fn get_all_sync_paths(params: GetSyncPathParams) -> Result<Vec<SyncPathResult>, String> {
+pub async fn get_all_sync_paths(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    params: GetSyncPathParams,
+) -> Result<Vec<SyncPathResult>, String> {
     let account_id = match params
         .account_id
         .or_else(|| crate::utils::sync::current_account_id().ok())
@@ -338,7 +341,7 @@ pub async fn get_all_sync_paths(params: GetSyncPathParams) -> Result<Vec<SyncPat
     };
     let owner = account_key(&account_id);
 
-    let pool = DB_POOL.get().ok_or("DB_POOL not initialized")?;
+    let pool = state.pool()?;
     let rows = sqlx::query("SELECT path, type, label FROM sync_paths WHERE owner = ?")
         .bind(&owner)
         .fetch_all(pool)
@@ -381,11 +384,12 @@ pub(crate) async fn remove_sync_path_internal(
 
 #[tauri::command]
 pub async fn remove_sync_path(
+    state: tauri::State<'_, crate::app_state::AppState>,
     app: tauri::AppHandle,
     account_id: String,
     label: String,
 ) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("DB_POOL not initialized")?;
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND label = ?")

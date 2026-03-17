@@ -5,7 +5,6 @@
 //! Rust-managed SQLite database at `~/.hippius/hippius.db`.
 
 use crate::utils::account_key::account_key;
-use crate::DB_POOL;
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -43,11 +42,12 @@ pub struct ApiAuth {
 /// Store an AES-encrypted mnemonic + passcode hash for the given account.
 #[tauri::command]
 pub async fn save_wallet(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     encrypted_mnemonic: String,
     passcode_hash: String,
 ) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query(
@@ -72,8 +72,11 @@ pub async fn save_wallet(
 
 /// Retrieve the encrypted wallet record for the given account.
 #[tauri::command]
-pub async fn get_wallet(account_id: String) -> Result<Option<WalletRecord>, String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+pub async fn get_wallet(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<Option<WalletRecord>, String> {
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     let row = sqlx::query_as::<_, (String, String)>(
@@ -92,8 +95,11 @@ pub async fn get_wallet(account_id: String) -> Result<Option<WalletRecord>, Stri
 
 /// Check whether a wallet/passcode record exists for the given account.
 #[tauri::command]
-pub async fn has_wallet(account_id: String) -> Result<bool, String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+pub async fn has_wallet(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<bool, String> {
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     let row = sqlx::query_as::<_, (i64,)>(
@@ -109,8 +115,11 @@ pub async fn has_wallet(account_id: String) -> Result<bool, String> {
 
 /// Remove the wallet record for the given account.
 #[tauri::command]
-pub async fn clear_wallet(account_id: String) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+pub async fn clear_wallet(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<(), String> {
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query("DELETE FROM wallet_store WHERE owner = ?")
@@ -130,6 +139,7 @@ pub async fn clear_wallet(account_id: String) -> Result<(), String> {
 /// Token is persisted immediately so the frontend can reference it right away.
 #[tauri::command]
 pub async fn save_auth_session(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     auth_token: Option<String>,
     token_expiry: Option<i64>,
@@ -139,7 +149,7 @@ pub async fn save_auth_session(
     substrate_address: Option<String>,
     logout_time_minutes: Option<i64>,
 ) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query(
@@ -179,8 +189,11 @@ pub async fn save_auth_session(
 
 /// Retrieve the current auth session for the given account.
 #[tauri::command]
-pub async fn get_auth_session(account_id: String) -> Result<Option<AuthSession>, String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+pub async fn get_auth_session(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<Option<AuthSession>, String> {
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     let row = sqlx::query_as::<_, (
@@ -225,8 +238,11 @@ pub async fn get_auth_session(account_id: String) -> Result<Option<AuthSession>,
 ///
 /// Replaces `sessionStore.getApiAuth()` — the frontend no longer checks expiry itself.
 #[tauri::command]
-pub async fn get_auth_token(account_id: String) -> Result<Option<ApiAuth>, String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+pub async fn get_auth_token(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<Option<ApiAuth>, String> {
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     let row = sqlx::query_as::<_, (Option<String>, Option<i64>, Option<i64>, Option<String>)>(
@@ -257,8 +273,11 @@ pub async fn get_auth_token(account_id: String) -> Result<Option<ApiAuth>, Strin
 
 /// Wipe the auth session on logout. Preserves `logout_time_minutes` preference.
 #[tauri::command]
-pub async fn clear_auth_session(account_id: String) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+pub async fn clear_auth_session(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<(), String> {
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query(
@@ -285,9 +304,29 @@ pub async fn clear_auth_session(account_id: String) -> Result<(), String> {
 
 /// Server-side token expiry check. Returns `true` if the token exists and hasn't expired.
 #[tauri::command]
-pub async fn is_token_valid(account_id: String) -> Result<bool, String> {
-    let result = get_auth_token(account_id).await?;
-    Ok(result.is_some())
+pub async fn is_token_valid(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<bool, String> {
+    let pool = state.pool()?;
+    let owner = account_key(&account_id);
+
+    let row = sqlx::query_as::<_, (Option<String>, Option<i64>)>(
+        "SELECT auth_token, token_expiry FROM auth_session WHERE owner = ?",
+    )
+    .bind(&owner)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to check token validity: {e}"))?;
+
+    let result = match row {
+        Some((Some(_token), Some(expiry))) => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            !(expiry > 0 && expiry < now_ms)
+        }
+        _ => false,
+    };
+    Ok(result)
 }
 
 /// Retrieve the most recently updated auth session (any account).
@@ -295,8 +334,10 @@ pub async fn is_token_valid(account_id: String) -> Result<bool, String> {
 /// Used at app boot when we don't yet know which account was active.
 /// Returns the session with the latest `updated_at` timestamp.
 #[tauri::command]
-pub async fn get_last_auth_session() -> Result<Option<AuthSession>, String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+pub async fn get_last_auth_session(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<Option<AuthSession>, String> {
+    let pool = state.pool()?;
 
     let row = sqlx::query_as::<_, (
         Option<String>,
@@ -339,10 +380,11 @@ pub async fn get_last_auth_session() -> Result<Option<AuthSession>, String> {
 /// Update the logout timeout preference (minutes). Pass -1 for "never expire".
 #[tauri::command]
 pub async fn update_logout_time(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     logout_time_minutes: i64,
 ) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+    let pool = state.pool()?;
     let owner = account_key(&account_id);
 
     sqlx::query(

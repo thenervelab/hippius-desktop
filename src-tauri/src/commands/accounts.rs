@@ -32,13 +32,13 @@ pub struct SubAccountExport {
 }
 
 #[tauri::command]
-pub async fn import_app_data(params: ImportDataParams) -> Result<String, String> {
+pub async fn import_app_data(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    params: ImportDataParams,
+) -> Result<String, String> {
     info!("[Import] Starting app data import...");
 
-    let pool = match crate::DB_POOL.get() {
-        Some(p) => p,
-        None => return Err("Database pool not initialized".to_string()),
-    };
+    let pool = state.pool()?;
 
     let mut imported_items = Vec::new();
     let mut skipped_items = Vec::new();
@@ -161,13 +161,12 @@ pub async fn import_app_data(params: ImportDataParams) -> Result<String, String>
 }
 
 #[tauri::command]
-pub async fn export_app_data() -> Result<ExportDataResult, String> {
+pub async fn export_app_data(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<ExportDataResult, String> {
     info!("[Export] Starting app data export...");
 
-    let pool = match crate::DB_POOL.get() {
-        Some(p) => p,
-        None => return Err("Database pool not initialized".to_string()),
-    };
+    let pool = state.pool()?;
 
     // Get all sync paths
     let sync_rows = sqlx::query("SELECT path, label FROM sync_paths")
@@ -219,13 +218,12 @@ pub async fn export_app_data() -> Result<ExportDataResult, String> {
 }
 
 #[tauri::command]
-pub async fn reset_app() -> Result<(), String> {
+pub async fn reset_app(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
     info!("[Reset App] Starting app reset...");
 
-    let pool = match crate::DB_POOL.get() {
-        Some(p) => p,
-        None => return Err("Database pool not initialized".to_string()),
-    };
+    let pool = state.pool()?;
 
     // Use explicit SQL per table to avoid dynamic table name injection
     for (table, query) in [
@@ -252,21 +250,17 @@ pub async fn reset_app() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn get_all_subaccount_addresses() -> Result<Vec<(String, String)>, String> {
-    let pool = match crate::DB_POOL.get() {
-        Some(pool) => pool,
-        None => return Err("Database pool not available".to_string()),
-    };
+pub async fn get_all_subaccount_addresses(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<Vec<(String, String)>, String> {
+    let pool = state.pool()?;
 
-    let sub_accounts = match sqlx::query_as::<_, (String, String)>(
+    let sub_accounts = sqlx::query_as::<_, (String, String)>(
         "SELECT account_id, sub_account_seed_phrase FROM sub_accounts",
     )
     .fetch_all(pool)
     .await
-    {
-        Ok(accounts) => accounts,
-        Err(e) => return Err(format!("Failed to fetch sub-accounts: {}", e)),
-    };
+    .map_err(|e| format!("Failed to fetch sub-accounts: {}", e))?;
 
     let mut result = Vec::new();
 
