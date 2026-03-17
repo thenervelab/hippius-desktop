@@ -188,6 +188,11 @@ export function useMigration(
 
   const checkMigration = useCallback(
     async (accountId: string): Promise<boolean> => {
+      // Reset shouldCheck so the effect doesn't re-fire on account switch
+      appStore.set(migrationCheckAtom, {
+        ...appStore.get(migrationCheckAtom),
+        shouldCheck: false,
+      });
       try {
         const result = await invoke<MigrationCheckResult>(
           "check_migration",
@@ -352,6 +357,7 @@ export function useMigration(
       needsMigration: false,
       fileCount: 0,
       totalSize: 0,
+      shouldCheck: false,
     });
     setCurrentStep(null);
   }, []);
@@ -374,6 +380,7 @@ export function useMigration(
       needsMigration: false,
       fileCount: 0,
       totalSize: 0,
+      shouldCheck: false,
     });
     setCurrentStep(null);
     setFiles([]);

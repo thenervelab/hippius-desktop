@@ -71,25 +71,15 @@ function buildOAuthSession(
   };
 }
 
-async function checkMigrationAfterLogin(accountId: string) {
-  try {
-    const result = await invoke<{
-      needs_migration: boolean;
-      file_count: number;
-      total_size: number;
-    }>("check_migration", { accountId });
-
-    if (result.needs_migration) {
-      appStore.set(migrationCheckAtom, {
-        checked: true,
-        needsMigration: true,
-        fileCount: result.file_count,
-        totalSize: result.total_size,
-      });
-    }
-  } catch (err) {
-    console.error("[WalletAuth] Migration check failed:", err);
-  }
+/** Signal MigrationChecker to run the single authoritative check_migration call. */
+function triggerMigrationCheck() {
+  appStore.set(migrationCheckAtom, {
+    checked: false,
+    needsMigration: false,
+    fileCount: 0,
+    totalSize: 0,
+    shouldCheck: true,
+  });
 }
 
 interface WalletContextType {
@@ -248,9 +238,7 @@ export function WalletAuthProvider({
     tryAutoInitSync(accountId, mnemonic).catch((err) =>
       console.error("[WalletAuth] Failed to start sync:", err)
     );
-    checkMigrationAfterLogin(accountId).catch((err) =>
-      console.error("[WalletAuth] Migration check error:", err)
-    );
+    triggerMigrationCheck();
   }
 
   // Boot: restore session from Rust DB or localStorage OAuth session

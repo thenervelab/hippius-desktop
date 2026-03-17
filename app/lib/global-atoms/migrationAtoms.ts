@@ -5,6 +5,8 @@ export interface MigrationCheckState {
   needsMigration: boolean;
   fileCount: number;
   totalSize: number;
+  /** When true, MigrationChecker should call check_migration. */
+  shouldCheck: boolean;
 }
 
 export const migrationCheckAtom = atom<MigrationCheckState>({
@@ -12,6 +14,7 @@ export const migrationCheckAtom = atom<MigrationCheckState>({
   needsMigration: false,
   fileCount: 0,
   totalSize: 0,
+  shouldCheck: false,
 });
 
 export const showMigrationPromptAtom = atom(false);

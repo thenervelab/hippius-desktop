@@ -1150,6 +1150,11 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
                         size_bytes: t,
                         label: l1.clone(),
                     });
+                    if l1 == "migration" {
+                        crate::commands::migration::record_migration_upload(
+                            path_str.to_string(),
+                        );
+                    }
                 }
             }
         })),

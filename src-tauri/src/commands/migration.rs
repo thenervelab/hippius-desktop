@@ -4,6 +4,7 @@ use aws_sdk_s3::Client as S3Client;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -65,6 +66,7 @@ pub struct MigrationComplete {
 /// Server response from GET /migration/{user_id}
 #[derive(Debug, Deserialize)]
 struct ServerMigrationResponse {
+    #[allow(dead_code)]
     needs_migration: bool,
     #[allow(dead_code)]
     file_count: u64,
@@ -83,6 +85,36 @@ pub static MIGRATION_CANCEL: AtomicBool = AtomicBool::new(false);
 /// Handle to the background migration task so it can be aborted.
 pub(crate) static MIGRATION_TASK: Lazy<Arc<Mutex<Option<JoinHandle<()>>>>> =
     Lazy::new(|| Arc::new(Mutex::new(None)));
+
+/// Tracks file paths that have been confirmed uploaded to HCFS by the
+/// upload progress handler. Keyed by relative path within the sync folder
+/// (e.g. "bucket_name/key"). Only files in this set are reported as
+/// migrated to the server — disk existence alone is not sufficient.
+///
+/// Uses `std::sync::Mutex` (not tokio) because the upload progress
+/// callback is synchronous and the critical section is trivial
+/// (HashSet insert/clone). A blocking lock guarantees no uploads are
+/// silently dropped due to contention.
+pub(crate) static MIGRATION_UPLOADED: Lazy<std::sync::Mutex<HashSet<String>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashSet::new()));
+
+/// Record that a file has been successfully uploaded to HCFS.
+/// Called from the upload progress handler in syncing.rs when
+/// a migration-drive file upload completes (bytes == total).
+/// `relative_path` should be the path relative to the sync folder.
+pub fn record_migration_upload(relative_path: String) {
+    if let Ok(mut set) = MIGRATION_UPLOADED.lock() {
+        set.insert(relative_path);
+    }
+}
+
+/// Clear the uploaded-files tracker (called when migration completes
+/// or is cancelled/dismissed).
+pub fn clear_migration_uploads() {
+    if let Ok(mut set) = MIGRATION_UPLOADED.lock() {
+        set.clear();
+    }
+}
 
 // ---------------------------------------------------------------------------
 // DB helpers
@@ -460,6 +492,7 @@ pub async fn start_migration(
     mnemonic: Option<String>,
 ) -> Result<(), String> {
     MIGRATION_CANCEL.store(false, Ordering::SeqCst);
+    clear_migration_uploads();
 
     // Verify HCFS config exists — the frontend must prompt for a password first
     if crate::commands::syncing::get_drive_password(&account_id)
@@ -565,6 +598,14 @@ async fn run_migration_download(
     let mut failed: u64 = 0;
     let mut failed_keys: Vec<String> = Vec::new();
 
+    // Canonicalize sync_dir once so the path traversal check works
+    // even when sync_path contains symlinks (e.g. /tmp → /private/tmp
+    // on macOS).
+    let raw_sync_dir = std::path::Path::new(sync_path);
+    let sync_dir = raw_sync_dir
+        .canonicalize()
+        .unwrap_or_else(|_| raw_sync_dir.to_path_buf());
+
     for file in files {
         if MIGRATION_CANCEL.load(Ordering::SeqCst) {
             info!("[Migration] Cancelled by user");
@@ -576,7 +617,6 @@ async fn run_migration_download(
             continue;
         }
 
-        let sync_dir = std::path::Path::new(&sync_path);
         let dest = sync_dir
             .join(&file.bucket_name)
             .join(&file.key);
@@ -597,7 +637,7 @@ async fn run_migration_download(
             }
         });
         match canonical {
-            Ok(canonical) if canonical.starts_with(sync_dir) => {
+            Ok(canonical) if canonical.starts_with(&sync_dir) => {
                 // Path is within sync directory — proceed
             }
             Ok(_) => {
@@ -776,6 +816,7 @@ async fn run_migration_download(
 #[tauri::command]
 pub async fn cancel_migration(account_id: String) -> Result<(), String> {
     MIGRATION_CANCEL.store(true, Ordering::SeqCst);
+    clear_migration_uploads();
 
     // Persist cancelled state so the migration dialog won't reappear
     if !account_id.is_empty() {
@@ -804,6 +845,7 @@ pub async fn dismiss_migration(
     account_id: String,
     reason: String,
 ) -> Result<(), String> {
+    clear_migration_uploads();
     let server_url = get_server_url(&account_id).await.unwrap_or_default();
     let status = if reason.is_empty() { "dismissed" } else { &reason };
     upsert_migration_status(
@@ -864,17 +906,22 @@ pub async fn report_migrated_files(
         return Ok(());
     }
 
-    // Check which pending files exist on disk (already synced)
+    // Only report files confirmed uploaded to HCFS (not just on disk).
+    // The upload progress handler records relative paths in
+    // MIGRATION_UPLOADED when each file finishes uploading.
+    let uploaded_set = MIGRATION_UPLOADED
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+
     let mut bucket_keys: std::collections::HashMap<
         String,
         Vec<String>,
     > = std::collections::HashMap::new();
 
     for file in &pending {
-        let file_path = std::path::Path::new(&sync_path)
-            .join(&file.bucket_name)
-            .join(&file.key);
-        if file_path.exists() {
+        let relative = format!("{}/{}", file.bucket_name, file.key);
+        if uploaded_set.contains(&relative) {
             bucket_keys
                 .entry(file.bucket_name.clone())
                 .or_default()
@@ -954,6 +1001,7 @@ pub async fn report_migrated_files(
         .count() as u64;
 
     if still_pending == 0 {
+        clear_migration_uploads();
         upsert_migration_status(
             account_id,
             "complete",
@@ -1406,5 +1454,77 @@ mod tests {
         assert_eq!(resp.files.len(), 2);
         assert_eq!(resp.files[0].status, "Pending");
         assert_eq!(resp.files[1].status, "Migrated");
+    }
+
+    // -----------------------------------------------------------------------
+    // MIGRATION_UPLOADED tracker
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn record_and_clear_migration_uploads() {
+        clear_migration_uploads();
+
+        record_migration_upload("bucket/file1.txt".to_string());
+        record_migration_upload("bucket/file2.txt".to_string());
+
+        {
+            let set = MIGRATION_UPLOADED.lock().unwrap();
+            assert_eq!(set.len(), 2);
+            assert!(set.contains("bucket/file1.txt"));
+            assert!(set.contains("bucket/file2.txt"));
+        }
+
+        clear_migration_uploads();
+
+        {
+            let set = MIGRATION_UPLOADED.lock().unwrap();
+            assert!(set.is_empty());
+        }
+    }
+
+    #[test]
+    fn duplicate_upload_records_are_deduplicated() {
+        clear_migration_uploads();
+
+        record_migration_upload("bucket/same.txt".to_string());
+        record_migration_upload("bucket/same.txt".to_string());
+
+        let set = MIGRATION_UPLOADED.lock().unwrap();
+        assert_eq!(set.len(), 1);
+        drop(set);
+
+        clear_migration_uploads();
+    }
+
+    // -----------------------------------------------------------------------
+    // Path canonicalization (Bug 2 fix verification)
+    // -----------------------------------------------------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_sync_dir_does_not_cause_false_positive() {
+        let parent_dir = tempfile::tempdir().expect("create temp dir");
+        let parent = parent_dir.path().canonicalize().unwrap();
+
+        let real_dir = parent.join("real_sync");
+        std::fs::create_dir_all(&real_dir).unwrap();
+
+        let link_path = parent.join("link_sync");
+        std::os::unix::fs::symlink(&real_dir, &link_path).unwrap();
+
+        // Simulate the fixed code: canonicalize sync_dir first
+        let sync_dir = link_path
+            .canonicalize()
+            .unwrap_or_else(|_| link_path.clone());
+
+        std::fs::create_dir_all(sync_dir.join("bucket")).unwrap();
+        let dest = sync_dir.join("bucket").join("file.txt");
+        std::fs::write(&dest, "test").unwrap();
+
+        let canonical = dest.canonicalize().unwrap();
+        assert!(
+            canonical.starts_with(&sync_dir),
+            "canonical {canonical:?} should start with {sync_dir:?}"
+        );
     }
 }

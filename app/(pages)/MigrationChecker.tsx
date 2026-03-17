@@ -17,6 +17,9 @@ import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDi
  * Global migration checker that renders at the layout level.
  * Reacts to migrationCheckAtom (set during login) and shows
  * migration dialogs regardless of which page the user is on.
+ *
+ * This is the single place that calls check_migration — the login
+ * flow only sets shouldCheck=true on the atom to trigger this.
  */
 const MigrationChecker: React.FC = () => {
   const migrationCheck = useAtomValue(migrationCheckAtom);
@@ -25,13 +28,13 @@ const MigrationChecker: React.FC = () => {
 
   useEffect(() => {
     if (
-      migrationCheck.needsMigration &&
+      migrationCheck.shouldCheck &&
       !migration.currentStep &&
       polkadotAddress
     ) {
       migration.checkMigration(polkadotAddress);
     }
-  }, [migrationCheck.needsMigration, polkadotAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [migrationCheck.shouldCheck, polkadotAddress]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!migration.currentStep) return null;
 
