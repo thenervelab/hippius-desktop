@@ -55,7 +55,7 @@ All frontend-to-backend calls go through Tauri IPC via `invoke()` from `@tauri-a
 ### Backend Structure (src-tauri/src/)
 
 - **`main.rs`** — Entry point. Registers all IPC commands, initializes plugins, sets up single-instance and deep-link handling. `lib.rs` is vestigial — ignore it.
-- **`commands/`** — IPC command handlers organized by domain: `syncing.rs` (file sync), `auth.rs` (mnemonic login), `session.rs` (credential storage), `billing.rs`, `blockchain.rs` (queries, staking, unit conversion), `chart_formatting.rs` (chart data, marketplace credits, storage cost), `vm.rs`, `file_commands.rs`, `oauth.rs`, `local_db.rs` (notifications, contacts, preferences), etc.
+- **`commands/`** — IPC command handlers organized by domain: `syncing.rs` (file sync), `auth.rs` (mnemonic login), `session.rs` (credential storage), `billing.rs`, `blockchain.rs` (queries, staking, unit conversion), `chart_formatting.rs` (chart data, marketplace credits, storage cost), `migration.rs` (S3→HCFS migration: check, start, cancel, dismiss, `complete_migration_transition` for atomic dismiss+stop+reinit), `vm.rs`, `file_commands.rs`, `oauth.rs`, `local_db.rs` (notifications, contacts, preferences), etc.
 - **`hcfs_drive.rs`** — Core sync engine. Wraps `hcfs_client::Drive` in `HcfsDriveManager`, manages multi-drive registry (`HCFS_DRIVES` HashMap keyed by label), runs background sync loop with file watching.
 - **`sync_shared.rs`** — Shared sync state: cancellation token, per-drive status, connectivity health, activity ring buffer
 - **`sync_progress.rs`** — In-memory sync progress tracking (sessions, file progress, tray menu data)

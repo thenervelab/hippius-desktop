@@ -6,7 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { MigrationFile } from "./MigrationProgressDialog";
-import { getHcfsConfig, saveHcfsConfig, initializeSync } from "@/lib/utils/hcfsConfigUtils";
+import { getHcfsConfig, saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
 import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { migrationCheckAtom } from "@/lib/global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
@@ -366,31 +366,16 @@ export function useMigration(
     const accountId = activeAccountIdRef.current;
     try {
       if (accountId) {
-        // dismiss_migration with "completed" promotes the migration sync
-        // path to "default" in the DB so tryAutoInitSync picks it up.
-        await invoke("dismiss_migration", {
+        const mnemonic = getMnemonic ? await getMnemonic() : null;
+        await invoke("complete_migration_transition", {
           accountId,
-          reason: "completed",
+          existingMnemonic: mnemonic,
         });
-
-        // Stop the "migration" drive and start a "default" drive so the
-        // user transitions seamlessly into normal sync.
-        try {
-          await invoke("stop_drive", { label: "migration" });
-        } catch (err) {
-          console.warn("[Migration] stop_drive(migration) failed:", err);
-        }
-        try {
-          const mnemonic = getMnemonic ? await getMnemonic() : null;
-          await initializeSync(accountId, "default", mnemonic ?? undefined);
-          appStore.set(syncEngineStatusAtom, "active");
-          appStore.set(isSyncConfiguredAtom, true);
-        } catch (err) {
-          console.error("[Migration] Failed to start default drive:", err);
-        }
+        appStore.set(syncEngineStatusAtom, "active");
+        appStore.set(isSyncConfiguredAtom, true);
       }
     } catch (err) {
-      console.error("[Migration] Dismiss (close) failed:", err);
+      console.error("[Migration] complete_migration_transition failed:", err);
     }
     // Reset the atom so the checker doesn't re-trigger
     appStore.set(migrationCheckAtom, {

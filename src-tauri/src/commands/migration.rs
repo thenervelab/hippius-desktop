@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize)]
 struct MigrationError {
@@ -853,10 +853,10 @@ pub async fn cancel_migration(
 }
 
 /// Dismiss migration permanently so the dialog never shows again.
-/// `reason` should be "skipped" (Start Fresh) or "completed".
+/// `reason` should be "skipped" (Start Fresh) or "dismissed".
 ///
-/// When reason is "completed", the migration sync path is promoted to
-/// "default" so that `tryAutoInitSync` picks it up on subsequent logins.
+/// For completed migrations, use `complete_migration_transition` instead —
+/// it handles label promotion, drive stop, and default drive init atomically.
 #[tauri::command]
 pub async fn dismiss_migration(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -867,28 +867,6 @@ pub async fn dismiss_migration(
     clear_migration_uploads();
     let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
     let status = if reason.is_empty() { "dismissed" } else { &reason };
-
-    // When migration completed successfully, promote the "migration" sync
-    // path to "default" so the regular sync engine uses it going forward.
-    if status == "completed" {
-        let owner = crate::utils::account_key::account_key(&account_id);
-        if let Err(e) = sqlx::query(
-            r#"
-            UPDATE sync_paths
-            SET label = 'default',
-                timestamp = strftime('%s', 'now')
-            WHERE owner = ? AND label = 'migration'
-            "#,
-        )
-        .bind(&owner)
-        .execute(pool)
-        .await
-        {
-            warn!("Failed to promote migration sync path to default: {e}");
-        } else {
-            info!("Promoted migration sync path to 'default' for {account_id}");
-        }
-    }
 
     upsert_migration_status(
         pool,
@@ -903,6 +881,105 @@ pub async fn dismiss_migration(
     .await?;
     info!("Migration dismissed for account {account_id} with reason: {status}");
     Ok(())
+}
+
+/// Complete the migration lifecycle: dismiss, stop the migration drive, and
+/// start a default drive so the user transitions seamlessly into normal sync.
+///
+/// This consolidates the stop-drive + initialize-sync orchestration that was
+/// previously done on the frontend.
+#[tauri::command]
+pub async fn complete_migration_transition(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    existing_mnemonic: Option<String>,
+) -> Result<crate::commands::syncing::InitSyncResult, String> {
+    let pool = state.pool()?;
+
+    // 1. Dismiss migration and promote sync path label to "default".
+    clear_migration_uploads();
+    let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
+
+    let owner = crate::utils::account_key::account_key(&account_id);
+    if let Err(e) = sqlx::query(
+        r#"
+        UPDATE sync_paths
+        SET label = 'default',
+            timestamp = strftime('%s', 'now')
+        WHERE owner = ? AND label = 'migration'
+        "#,
+    )
+    .bind(&owner)
+    .execute(pool)
+    .await
+    {
+        warn!("Failed to promote migration sync path to default: {e}");
+    } else {
+        info!("Promoted migration sync path to 'default' for {account_id}");
+    }
+
+    upsert_migration_status(
+        pool, &account_id, "completed", 0, 0, "[]", "", &server_url,
+    )
+    .await?;
+    info!("Migration dismissed for account {account_id} with reason: completed");
+
+    // 2. Stop the "migration" drive.
+    stop_migration_drive(&app).await;
+
+    // 3. Initialize the "default" drive and start the sync loop.
+    crate::commands::syncing::initialize_sync(
+        app,
+        account_id,
+        "default".to_string(),
+        existing_mnemonic,
+    )
+    .await
+}
+
+/// Stop the migration drive and clean up its state.
+async fn stop_migration_drive(app: &AppHandle) {
+    let remaining = {
+        let mut guard = crate::hcfs_drive::HCFS_DRIVES.lock().await;
+        guard.remove("migration");
+        guard.len()
+    };
+
+    crate::sync_shared::remove_state("migration");
+    crate::sync_shared::discard_pending_activity_for_label("migration");
+
+    if remaining == 0 {
+        crate::sync_shared::request_cancel();
+        let mut handle_guard = crate::hcfs_drive::SYNC_LOOP_HANDLE.lock().await;
+        if let Some(prev) = handle_guard.take() {
+            prev.abort();
+        }
+        crate::hcfs_drive::SYNC_REVIEW_MODE.store(false, std::sync::atomic::Ordering::Release);
+        crate::sync_shared::clear_review_entered();
+        let _ = app.emit("hcfs_sync_stopped", ());
+    } else {
+        crate::sync_shared::clear_cancel();
+        crate::hcfs_drive::start_sync_loop(app.clone()).await;
+    }
+
+    info!("Stopped migration drive, {} drives remaining", remaining);
+}
+
+/// Check whether `relative` (e.g. "bucket/key.txt") is present in the
+/// uploaded set, either as an exact match or as a path-segment suffix.
+///
+/// Uses `Path::ends_with` for segment-aware matching so that
+/// "other/bucket/key.txt" matches "bucket/key.txt" but
+/// "otherbucket/key.txt" does not.
+fn is_uploaded(uploaded_set: &HashSet<String>, relative: &str) -> bool {
+    if uploaded_set.contains(relative) {
+        return true;
+    }
+    let relative_path = std::path::Path::new(relative);
+    uploaded_set
+        .iter()
+        .any(|p| std::path::Path::new(p).ends_with(relative_path))
 }
 
 /// Report successfully synced files to the server.
@@ -974,31 +1051,16 @@ pub async fn report_migrated_files(
 
     for file in &pending {
         let relative = format!("{}/{}", file.bucket_name, file.key);
-        if uploaded_set.contains(&relative) {
+        if is_uploaded(&uploaded_set, &relative) {
             bucket_keys
                 .entry(file.bucket_name.clone())
                 .or_default()
                 .push(file.key.clone());
         } else {
-            // Check if a path in the set ends with the expected relative
-            // (handles hcfs-client returning slightly different prefix)
-            let matched = uploaded_set.iter().any(|p| p.ends_with(&relative));
-            if matched {
-                info!(
-                    expected = %relative,
-                    "Migration: path matched via suffix"
-                );
-                bucket_keys
-                    .entry(file.bucket_name.clone())
-                    .or_default()
-                    .push(file.key.clone());
-            } else if !uploaded_set.is_empty() {
-                info!(
-                    expected = %relative,
-                    uploaded_paths = ?uploaded_set,
-                    "Migration: no match for pending file"
-                );
-            }
+            debug!(
+                expected = %relative,
+                "Migration: no match for pending file"
+            );
         }
     }
 
@@ -1602,5 +1664,49 @@ mod tests {
             canonical.starts_with(&sync_dir),
             "canonical {canonical:?} should start with {sync_dir:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // is_uploaded — path-segment-aware matching
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_uploaded_exact_match() {
+        let set: HashSet<String> = ["mybucket/photo.jpg".to_string()].into();
+        assert!(is_uploaded(&set, "mybucket/photo.jpg"));
+    }
+
+    #[test]
+    fn is_uploaded_suffix_match_with_prefix() {
+        // hcfs-client may return paths with an extra leading directory
+        let set: HashSet<String> = ["some/prefix/mybucket/photo.jpg".to_string()].into();
+        assert!(is_uploaded(&set, "mybucket/photo.jpg"));
+    }
+
+    #[test]
+    fn is_uploaded_no_false_positive_on_partial_segment() {
+        // "otherbucket/photo.jpg" must NOT match "bucket/photo.jpg"
+        // because "otherbucket" != "bucket" at the segment level.
+        let set: HashSet<String> = ["otherbucket/photo.jpg".to_string()].into();
+        assert!(!is_uploaded(&set, "bucket/photo.jpg"));
+    }
+
+    #[test]
+    fn is_uploaded_no_match_empty_set() {
+        let set: HashSet<String> = HashSet::new();
+        assert!(!is_uploaded(&set, "bucket/file.txt"));
+    }
+
+    #[test]
+    fn is_uploaded_no_match_different_file() {
+        let set: HashSet<String> = ["bucket/other.txt".to_string()].into();
+        assert!(!is_uploaded(&set, "bucket/file.txt"));
+    }
+
+    #[test]
+    fn is_uploaded_suffix_match_deep_prefix() {
+        let set: HashSet<String> =
+            ["a/b/c/mybucket/deep/file.txt".to_string()].into();
+        assert!(is_uploaded(&set, "mybucket/deep/file.txt"));
     }
 }
