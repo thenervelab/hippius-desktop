@@ -4,10 +4,10 @@
 //! On first use (or after `clear_substrate_client()`), connects to the WSS
 //! endpoint from the database with up to 10 retries at 5-second intervals.
 
-use crate::DB_POOL;
 use crate::constants::substrate::WSS_ENDPOINT;
 use once_cell::sync::Lazy;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -20,7 +20,9 @@ static SUBSTRATE_CLIENT: Lazy<RwLock<Option<Arc<OnlineClient<PolkadotConfig>>>>>
 
 const MAX_RETRIES: usize = 10;
 
-pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
+pub async fn get_substrate_client(
+    pool: &SqlitePool,
+) -> Result<Arc<OnlineClient<PolkadotConfig>>, String> {
     // Check if we have an existing client
     let existing_client = {
         let client = SUBSTRATE_CLIENT
@@ -34,7 +36,7 @@ pub async fn get_substrate_client() -> Result<Arc<OnlineClient<PolkadotConfig>>,
     }
 
     // Get the current WSS endpoint from database, fallback to default constant
-    let wss_endpoint = get_current_wss_endpoint()
+    let wss_endpoint = get_current_wss_endpoint(pool)
         .await
         .unwrap_or_else(|_| WSS_ENDPOINT.to_string());
 
@@ -87,10 +89,8 @@ pub fn clear_substrate_client() {
     }
 }
 
-// Get the current WSS endpoint from database
-pub async fn get_current_wss_endpoint() -> Result<String, String> {
-    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
-
+/// Get the current WSS endpoint from database.
+pub async fn get_current_wss_endpoint(pool: &SqlitePool) -> Result<String, String> {
     let row = sqlx::query("SELECT endpoint FROM wss_endpoint WHERE id = 1")
         .fetch_optional(pool)
         .await
@@ -105,10 +105,11 @@ pub async fn get_current_wss_endpoint() -> Result<String, String> {
     }
 }
 
-// Update the WSS endpoint in database and clear the current client
-pub async fn update_wss_endpoint(new_endpoint: String) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("Database pool not initialized")?;
-
+/// Update the WSS endpoint in database and clear the current client.
+pub async fn update_wss_endpoint(
+    pool: &SqlitePool,
+    new_endpoint: String,
+) -> Result<(), String> {
     // Validate the endpoint format (basic check)
     if !new_endpoint.starts_with("ws://") && !new_endpoint.starts_with("wss://") {
         return Err("Invalid WSS endpoint format. Must start with ws:// or wss://".to_string());

@@ -410,8 +410,9 @@ pub async fn update_logout_time(
 /// so that Rust subsystems (sync, VPN) can retrieve it via `get_api_token`.
 #[tauri::command]
 pub async fn save_api_token_command(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     token: String,
 ) -> Result<(), String> {
-    crate::utils::auth_tokens::save_api_token(&account_id, &token).await
+    crate::utils::auth_tokens::save_api_token(state.pool()?, &account_id, &token).await
 }

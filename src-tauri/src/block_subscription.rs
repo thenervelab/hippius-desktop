@@ -72,7 +72,10 @@ pub async fn start_block_subscription(app: tauri::AppHandle) -> Result<(), Strin
 }
 
 async fn subscribe_blocks(app: &tauri::AppHandle) -> Result<(), String> {
-    let client = get_substrate_client().await?;
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let pool = app_state.pool()?;
+    let client = get_substrate_client(pool).await?;
     IS_CONNECTED.store(true, Ordering::SeqCst);
 
     let mut blocks = client

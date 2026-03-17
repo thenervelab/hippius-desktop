@@ -101,14 +101,8 @@ use commands::substrate_tx::{
     get_all_sync_paths, get_sync_path, get_wss_endpoint, remove_sync_path, set_sync_path,
     transfer_balance_tauri, update_wss_endpoint_command,
 };
-use once_cell::sync::OnceCell;
-use sqlx::sqlite::SqlitePool;
 use tauri::{Builder, Emitter, Manager};
 use tracing::{info, debug};
-
-/// Global SQLite connection pool. Set once during `setup()` and read by all
-/// command handlers. Access with `DB_POOL.get().ok_or("Database not initialized")?`.
-pub static DB_POOL: OnceCell<SqlitePool> = OnceCell::new();
 
 /// Load environment variables from `.env` file(s). Tries both the working
 /// directory and the `CARGO_MANIFEST_DIR` path (for development builds).

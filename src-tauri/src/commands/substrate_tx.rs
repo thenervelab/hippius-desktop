@@ -1,7 +1,7 @@
-use crate::DB_POOL;
 use crate::substrate_client::{
     get_current_wss_endpoint, get_substrate_client, update_wss_endpoint,
 };
+use sqlx::sqlite::SqlitePool;
 use crate::utils::account_key::account_key;
 use chrono::Utc;
 use serde::Deserialize;
@@ -75,6 +75,7 @@ pub struct SyncPathResult {
 
 /// Core DB upsert + macOS bookmark logic, shared by `set_sync_path` and `restore_remote_folders`.
 pub(crate) async fn set_sync_path_internal(
+    pool: &SqlitePool,
     account_id: &str,
     path: &str,
     is_public: bool,
@@ -83,8 +84,6 @@ pub(crate) async fn set_sync_path_internal(
     let path_type = if is_public { "public" } else { "private" };
     let label = label.unwrap_or("default");
     let timestamp = Utc::now().timestamp();
-
-    let pool = DB_POOL.get().ok_or("DB_POOL not initialized")?;
     let owner = account_key(account_id);
 
     // Legacy cleanup: if a pre-owner row exists (owner is empty) with the same type, replace it once.
@@ -133,7 +132,7 @@ pub(crate) async fn set_sync_path_internal(
             #[cfg(target_os = "macos")]
             {
                 use crate::utils::bookmark_db::store_bookmark;
-                if let Err(e) = store_bookmark(path, path_type).await {
+                if let Err(e) = store_bookmark(pool, path, path_type).await {
                     warn!(
                         "Failed to create security-scoped bookmark: {}",
                         e
@@ -155,11 +154,14 @@ pub(crate) async fn set_sync_path_internal(
 
 #[tauri::command]
 pub async fn set_sync_path(
+    state: tauri::State<'_, crate::app_state::AppState>,
     _app_handle: tauri::AppHandle,
     params: SetSyncPathParams,
 ) -> Result<String, String> {
-    crate::utils::sync::set_active_account(&params.account_id);
+    crate::utils::sync::set_active_account(&*state, &params.account_id);
+    let pool = state.pool()?;
     set_sync_path_internal(
+        pool,
         &params.account_id,
         &params.path,
         params.is_public,
@@ -170,6 +172,7 @@ pub async fn set_sync_path(
 
 #[tauri::command]
 pub async fn transfer_balance_tauri(
+    state: tauri::State<'_, crate::app_state::AppState>,
     sender_seed: String,
     recipient_address: String,
     amount: String,
@@ -188,7 +191,7 @@ pub async fn transfer_balance_tauri(
     let recipient = sp_core::crypto::AccountId32::from_ss58check(&recipient_address)
         .map_err(|e| format!("Invalid recipient address: {e:?}"))?;
 
-    let api = get_substrate_client()
+    let api = get_substrate_client(state.pool()?)
         .await
         .map_err(|e| format!("Failed to connect to Substrate node: {e}"))?;
 
@@ -215,11 +218,12 @@ pub async fn transfer_balance_tauri(
 }
 
 pub async fn get_sync_path_internal(
+    pool: &SqlitePool,
     is_public: bool,
     owner: &str,
 ) -> Result<SyncPathResult, String> {
     let path_type = if is_public { "public" } else { "private" };
-    if let Some(pool) = DB_POOL.get() {
+    {
         // Try scoped entry first
         let rec_row =
             sqlx::query("SELECT path, label FROM sync_paths WHERE owner = ? AND type = ?")
@@ -303,16 +307,17 @@ pub async fn get_sync_path_internal(
                 path_type
             ))
         }
-    } else {
-        Err("DB_POOL not initialized".to_string())
     }
 }
 
 #[tauri::command]
-pub async fn get_sync_path(params: GetSyncPathParams) -> Result<SyncPathResult, String> {
+pub async fn get_sync_path(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    params: GetSyncPathParams,
+) -> Result<SyncPathResult, String> {
     let account_id = match params
         .account_id
-        .or_else(|| crate::utils::sync::current_account_id().ok())
+        .or_else(|| crate::utils::sync::current_account_id(&*state).ok())
     {
         Some(id) => id,
         None => {
@@ -324,7 +329,7 @@ pub async fn get_sync_path(params: GetSyncPathParams) -> Result<SyncPathResult, 
         }
     };
     let owner = account_key(&account_id);
-    get_sync_path_internal(params.is_public, &owner).await
+    get_sync_path_internal(state.pool()?, params.is_public, &owner).await
 }
 
 #[tauri::command]
@@ -334,7 +339,7 @@ pub async fn get_all_sync_paths(
 ) -> Result<Vec<SyncPathResult>, String> {
     let account_id = match params
         .account_id
-        .or_else(|| crate::utils::sync::current_account_id().ok())
+        .or_else(|| crate::utils::sync::current_account_id(&*state).ok())
     {
         Some(id) => id,
         None => return Ok(Vec::new()),
@@ -366,10 +371,10 @@ pub async fn get_all_sync_paths(
 /// Delete a sync path row from the DB without stopping the drive.
 /// Used for rollback when `initialize_sync` fails after the path was inserted.
 pub(crate) async fn remove_sync_path_internal(
+    pool: &SqlitePool,
     account_id: &str,
     label: &str,
 ) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("DB_POOL not initialized")?;
     let owner = account_key(account_id);
 
     sqlx::query("DELETE FROM sync_paths WHERE owner = ? AND label = ?")
@@ -406,12 +411,17 @@ pub async fn remove_sync_path(
 }
 
 #[tauri::command]
-pub async fn get_wss_endpoint() -> Result<String, String> {
-    get_current_wss_endpoint().await
+pub async fn get_wss_endpoint(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<String, String> {
+    get_current_wss_endpoint(state.pool()?).await
 }
 
 #[tauri::command]
-pub async fn update_wss_endpoint_command(endpoint: String) -> Result<String, String> {
-    update_wss_endpoint(endpoint.clone()).await?;
+pub async fn update_wss_endpoint_command(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    endpoint: String,
+) -> Result<String, String> {
+    update_wss_endpoint(state.pool()?, endpoint.clone()).await?;
     Ok(format!("WSS endpoint updated to: {}", endpoint))
 }

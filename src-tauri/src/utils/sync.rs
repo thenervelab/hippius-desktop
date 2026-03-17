@@ -1,17 +1,18 @@
-use once_cell::sync::Lazy;
-use std::sync::Mutex;
+use crate::app_state::AppState;
 
-static ACTIVE_ACCOUNT_ID: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
-
-pub fn set_active_account(account_id: &str) {
-    let mut guard = ACTIVE_ACCOUNT_ID.lock().unwrap();
+pub fn set_active_account(state: &AppState, account_id: &str) {
+    let mut guard = state
+        .active_account_id
+        .lock()
+        .expect("active_account_id lock poisoned");
     *guard = Some(account_id.to_string());
 }
 
-pub fn current_account_id() -> Result<String, String> {
-    ACTIVE_ACCOUNT_ID
+pub fn current_account_id(state: &AppState) -> Result<String, String> {
+    state
+        .active_account_id
         .lock()
-        .unwrap()
+        .expect("active_account_id lock poisoned")
         .clone()
         .ok_or_else(|| "No active account set".to_string())
 }

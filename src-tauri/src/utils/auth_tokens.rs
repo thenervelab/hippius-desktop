@@ -7,9 +7,9 @@
 //! S3 master token functions are kept solely for the old-S3-to-HCFS migration
 //! path (`commands/migration.rs`).
 
-use crate::DB_POOL;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use sqlx::Row;
+use sqlx::sqlite::SqlitePool;
 use tracing::warn;
 
 /// One hour in seconds — tokens expiring sooner than this are proactively refreshed.
@@ -24,24 +24,24 @@ const DEFAULT_API_BASE: &str = "https://api.hippius.com/api";
 ///
 /// Used after login (mnemonic or OAuth) so that the sync engine, Nebula VPN,
 /// and other subsystems can retrieve it later via [`get_api_token`].
-pub async fn save_api_token(account_id: &str, token: &str) -> Result<(), String> {
-    if let Some(pool) = DB_POOL.get() {
-        sqlx::query(
-            r#"
-            INSERT INTO objectstore_auth_scoped (owner, temp_auth_key, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(owner) DO UPDATE SET temp_auth_key = excluded.temp_auth_key, updated_at = CURRENT_TIMESTAMP
-            "#,
-        )
-        .bind(account_id)
-        .bind(token)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("DB error saving API token: {}", e))?;
-        Ok(())
-    } else {
-        Err("DB_POOL not initialized".to_string())
-    }
+pub async fn save_api_token(
+    pool: &SqlitePool,
+    account_id: &str,
+    token: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        r#"
+        INSERT INTO objectstore_auth_scoped (owner, temp_auth_key, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(owner) DO UPDATE SET temp_auth_key = excluded.temp_auth_key, updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(account_id)
+    .bind(token)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("DB error saving API token: {}", e))?;
+    Ok(())
 }
 
 /// Retrieve the API auth token for this account.
@@ -49,78 +49,77 @@ pub async fn save_api_token(account_id: &str, token: &str) -> Result<(), String>
 /// Returns the bearer token string or `None` if no token is stored.
 /// Falls back to the legacy `objectstore_auth` table (auto-migrates),
 /// then to the `auth_session` table (auto-migrates).
-pub async fn get_api_token(account_id: &str) -> Result<Option<String>, String> {
-    if let Some(pool) = DB_POOL.get() {
-        // Prefer scoped record
-        let scoped =
-            sqlx::query("SELECT temp_auth_key FROM objectstore_auth_scoped WHERE owner = ?")
-                .bind(account_id)
-                .fetch_optional(pool)
-                .await
-                .map_err(|e| format!("DB error fetching API token: {}", e))?;
-
-        if let Some(row) = scoped {
-            if let Some(token) = row.get::<Option<String>, _>("temp_auth_key") {
-                return Ok(Some(token));
-            }
-        }
-
-        // Legacy single-row fallback — auto-migrate
-        let legacy = sqlx::query("SELECT temp_auth_key FROM objectstore_auth WHERE id = ?")
-            .bind(AUTH_ROW_ID)
+pub async fn get_api_token(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<Option<String>, String> {
+    // Prefer scoped record
+    let scoped =
+        sqlx::query("SELECT temp_auth_key FROM objectstore_auth_scoped WHERE owner = ?")
+            .bind(account_id)
             .fetch_optional(pool)
             .await
             .map_err(|e| format!("DB error fetching API token: {}", e))?;
-        if let Some(row) = legacy {
-            if let Some(token) = row.get::<Option<String>, _>("temp_auth_key") {
-                if let Err(e) = save_api_token(account_id, &token).await {
-                    warn!("Failed to migrate legacy API token: {e}");
-                }
-                if let Err(e) = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
-                    .bind(AUTH_ROW_ID)
-                    .execute(pool)
-                    .await
-                {
-                    warn!("Failed to delete legacy API token row: {e}");
-                }
-                return Ok(Some(token));
-            }
-        }
 
-        // Fall back to auth_session table (session restored from DB
-        // without populating objectstore_auth_scoped)
-        let owner = crate::utils::account_key::account_key(account_id);
-        let session = sqlx::query(
-            "SELECT auth_token FROM auth_session WHERE owner = ? AND auth_token IS NOT NULL",
-        )
-        .bind(&owner)
+    if let Some(row) = scoped {
+        if let Some(token) = row.get::<Option<String>, _>("temp_auth_key") {
+            return Ok(Some(token));
+        }
+    }
+
+    // Legacy single-row fallback — auto-migrate
+    let legacy = sqlx::query("SELECT temp_auth_key FROM objectstore_auth WHERE id = ?")
+        .bind(AUTH_ROW_ID)
         .fetch_optional(pool)
         .await
-        .map_err(|e| format!("DB error fetching auth_session token: {}", e))?;
-        if let Some(row) = session {
-            if let Some(token) = row.get::<Option<String>, _>("auth_token") {
-                if let Err(e) = save_api_token(account_id, &token).await {
-                    warn!("Failed to persist session token to scoped table: {e}");
-                }
-                return Ok(Some(token));
+        .map_err(|e| format!("DB error fetching API token: {}", e))?;
+    if let Some(row) = legacy {
+        if let Some(token) = row.get::<Option<String>, _>("temp_auth_key") {
+            if let Err(e) = save_api_token(pool, account_id, &token).await {
+                warn!("Failed to migrate legacy API token: {e}");
             }
+            if let Err(e) = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
+                .bind(AUTH_ROW_ID)
+                .execute(pool)
+                .await
+            {
+                warn!("Failed to delete legacy API token row: {e}");
+            }
+            return Ok(Some(token));
         }
-
-        Ok(None)
-    } else {
-        Err("DB_POOL not initialized".to_string())
     }
+
+    // Fall back to auth_session table (session restored from DB
+    // without populating objectstore_auth_scoped)
+    let owner = crate::utils::account_key::account_key(account_id);
+    let session = sqlx::query(
+        "SELECT auth_token FROM auth_session WHERE owner = ? AND auth_token IS NOT NULL",
+    )
+    .bind(&owner)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("DB error fetching auth_session token: {}", e))?;
+    if let Some(row) = session {
+        if let Some(token) = row.get::<Option<String>, _>("auth_token") {
+            if let Err(e) = save_api_token(pool, account_id, &token).await {
+                warn!("Failed to persist session token to scoped table: {e}");
+            }
+            return Ok(Some(token));
+        }
+    }
+
+    Ok(None)
 }
 
 /// Check if the stored auth token is expired or will expire within `margin_secs`.
 ///
 /// Returns `true` if the token should be refreshed (expired, expiring soon, or no session).
 /// Used by the sync loop to proactively refresh tokens before they cause 401 errors.
-pub async fn is_token_expiring(account_id: &str, margin_secs: i64) -> bool {
-    let pool = match DB_POOL.get() {
-        Some(p) => p,
-        None => return true,
-    };
+pub async fn is_token_expiring(
+    pool: &SqlitePool,
+    account_id: &str,
+    margin_secs: i64,
+) -> bool {
     let owner = crate::utils::account_key::account_key(account_id);
     let row = sqlx::query("SELECT token_expiry FROM auth_session WHERE owner = ?")
         .bind(&owner)
@@ -150,96 +149,95 @@ pub async fn is_token_expiring(account_id: &str, margin_secs: i64) -> bool {
 
 /// Save S3 credentials for this account (migration use only).
 pub async fn save_s3_credentials(
+    pool: &SqlitePool,
     account_id: &str,
     access_key_id: &str,
     secret: &str,
 ) -> Result<(), String> {
-    if let Some(pool) = DB_POOL.get() {
-        sqlx::query(
-            r#"
-            INSERT INTO objectstore_auth_scoped (owner, master_access_key_id, master_secret, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(owner) DO UPDATE SET
-                master_access_key_id = excluded.master_access_key_id,
-                master_secret = excluded.master_secret,
-                updated_at = CURRENT_TIMESTAMP
-            "#,
-        )
-        .bind(account_id)
-        .bind(access_key_id)
-        .bind(secret)
-        .execute(pool)
-        .await
-        .map_err(|e| format!("DB error saving S3 credentials: {}", e))?;
-        Ok(())
-    } else {
-        Err("DB_POOL not initialized".to_string())
-    }
+    sqlx::query(
+        r#"
+        INSERT INTO objectstore_auth_scoped (owner, master_access_key_id, master_secret, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(owner) DO UPDATE SET
+            master_access_key_id = excluded.master_access_key_id,
+            master_secret = excluded.master_secret,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(account_id)
+    .bind(access_key_id)
+    .bind(secret)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("DB error saving S3 credentials: {}", e))?;
+    Ok(())
 }
 
 /// Retrieve S3 credentials for this account (migration use only).
-pub async fn get_s3_credentials(account_id: &str) -> Result<Option<(String, String)>, String> {
-    if let Some(pool) = DB_POOL.get() {
-        let scoped = sqlx::query(
-            "SELECT master_access_key_id, master_secret FROM objectstore_auth_scoped WHERE owner = ?",
-        )
-        .bind(account_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("DB error fetching S3 credentials: {}", e))?;
+pub async fn get_s3_credentials(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<Option<(String, String)>, String> {
+    let scoped = sqlx::query(
+        "SELECT master_access_key_id, master_secret FROM objectstore_auth_scoped WHERE owner = ?",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("DB error fetching S3 credentials: {}", e))?;
 
-        if let Some(r) = scoped {
-            let access: Option<String> = r.get("master_access_key_id");
-            let secret: Option<String> = r.get("master_secret");
-            return Ok(match (access, secret) {
-                (Some(a), Some(s)) if !a.is_empty() && !s.is_empty() => Some((a, s)),
-                _ => None,
-            });
-        }
+    if let Some(r) = scoped {
+        let access: Option<String> = r.get("master_access_key_id");
+        let secret: Option<String> = r.get("master_secret");
+        return Ok(match (access, secret) {
+            (Some(a), Some(s)) if !a.is_empty() && !s.is_empty() => Some((a, s)),
+            _ => None,
+        });
+    }
 
-        // Legacy single-row fallback
-        let row = sqlx::query(
-            "SELECT master_access_key_id, master_secret FROM objectstore_auth WHERE id = ?",
-        )
-        .bind(AUTH_ROW_ID)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("DB error fetching S3 credentials: {}", e))?;
+    // Legacy single-row fallback
+    let row = sqlx::query(
+        "SELECT master_access_key_id, master_secret FROM objectstore_auth WHERE id = ?",
+    )
+    .bind(AUTH_ROW_ID)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("DB error fetching S3 credentials: {}", e))?;
 
-        if let Some(r) = row {
-            let access: Option<String> = r.get("master_access_key_id");
-            let secret: Option<String> = r.get("master_secret");
-            if let (Some(a), Some(s)) = (access, secret) {
-                if !a.is_empty() && !s.is_empty() {
-                    if let Err(e) = save_s3_credentials(account_id, &a, &s).await {
-                        warn!("Failed to migrate legacy S3 credentials: {e}");
-                    }
-                    if let Err(e) = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
-                        .bind(AUTH_ROW_ID)
-                        .execute(pool)
-                        .await
-                    {
-                        warn!("Failed to delete legacy S3 credential row: {e}");
-                    }
-                    return Ok(Some((a, s)));
+    if let Some(r) = row {
+        let access: Option<String> = r.get("master_access_key_id");
+        let secret: Option<String> = r.get("master_secret");
+        if let (Some(a), Some(s)) = (access, secret) {
+            if !a.is_empty() && !s.is_empty() {
+                if let Err(e) = save_s3_credentials(pool, account_id, &a, &s).await {
+                    warn!("Failed to migrate legacy S3 credentials: {e}");
                 }
+                if let Err(e) = sqlx::query("DELETE FROM objectstore_auth WHERE id = ?")
+                    .bind(AUTH_ROW_ID)
+                    .execute(pool)
+                    .await
+                {
+                    warn!("Failed to delete legacy S3 credential row: {e}");
+                }
+                return Ok(Some((a, s)));
             }
         }
-        Ok(None)
-    } else {
-        Err("DB_POOL not initialized".to_string())
     }
+    Ok(None)
 }
 
 /// Ensure S3 credentials are stored in the DB, fetching from API if needed
 /// (migration use only). Does NOT set environment variables.
-pub async fn ensure_s3_credentials(account_id: &str) -> Result<(), String> {
+pub async fn ensure_s3_credentials(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<(), String> {
     // Check if we already have credentials in the DB
-    if get_s3_credentials(account_id).await?.is_some() {
+    if get_s3_credentials(pool, account_id).await?.is_some() {
         return Ok(());
     }
 
-    let api_token = get_api_token(account_id)
+    let api_token = get_api_token(pool, account_id)
         .await?
         .ok_or_else(|| "No stored S3 credentials and no API token available".to_string())?;
 
@@ -293,5 +291,5 @@ pub async fn ensure_s3_credentials(account_id: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to parse S3 credentials response: {}", e))?;
 
-    save_s3_credentials(account_id, &parsed.access_key_id, &parsed.secret).await
+    save_s3_credentials(pool, account_id, &parsed.access_key_id, &parsed.secret).await
 }

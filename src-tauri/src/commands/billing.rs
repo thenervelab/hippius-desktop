@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn get_user_credits_balance(account_id: String) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+pub async fn get_user_credits_balance(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    let client = ApiClient::new(state.pool()?.clone());
     client
         .get::<serde_json::Value>("/api/billing/credits/balance/", &account_id)
         .await
@@ -18,11 +21,12 @@ pub async fn get_user_credits_balance(account_id: String) -> Result<serde_json::
 
 #[tauri::command]
 pub async fn get_billing_transactions(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     page: Option<i64>,
     limit: Option<i64>,
 ) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+    let client = ApiClient::new(state.pool()?.clone());
     let page_str = page.unwrap_or(1).to_string();
     let limit_str = limit.unwrap_or(10).to_string();
     let params = vec![("page", page_str.as_str()), ("limit", limit_str.as_str())];
@@ -37,8 +41,11 @@ pub async fn get_billing_transactions(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn get_subscription_plans(account_id: String) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+pub async fn get_subscription_plans(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    let client = ApiClient::new(state.pool()?.clone());
     client
         .get::<serde_json::Value>(
             "/api/billing/stripe/subscription-plans/",
@@ -49,8 +56,11 @@ pub async fn get_subscription_plans(account_id: String) -> Result<serde_json::Va
 }
 
 #[tauri::command]
-pub async fn get_active_subscription(account_id: String) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+pub async fn get_active_subscription(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    let client = ApiClient::new(state.pool()?.clone());
     client
         .get::<serde_json::Value>(
             "/api/billing/stripe/active-subscription/",
@@ -62,12 +72,13 @@ pub async fn get_active_subscription(account_id: String) -> Result<serde_json::V
 
 #[tauri::command]
 pub async fn create_subscription(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     price_id: String,
     success_url: Option<String>,
     cancel_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+    let client = ApiClient::new(state.pool()?.clone());
     let body = serde_json::json!({
         "price_id": price_id,
         "success_url": success_url,
@@ -85,10 +96,11 @@ pub async fn create_subscription(
 
 #[tauri::command]
 pub async fn get_customer_portal_url(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     return_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+    let client = ApiClient::new(state.pool()?.clone());
     let body = serde_json::json!({ "return_url": return_url });
     client
         .post::<serde_json::Value, _>(
@@ -101,8 +113,11 @@ pub async fn get_customer_portal_url(
 }
 
 #[tauri::command]
-pub async fn get_deposit_address(account_id: String) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+pub async fn get_deposit_address(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<serde_json::Value, String> {
+    let client = ApiClient::new(state.pool()?.clone());
     client
         .get::<serde_json::Value>("/api/billing/substrate-address/", &account_id)
         .await

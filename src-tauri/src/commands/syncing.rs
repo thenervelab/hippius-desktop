@@ -12,7 +12,7 @@
 
 use tracing::{debug, error, info, warn};
 
-use crate::DB_POOL;
+use sqlx::sqlite::SqlitePool;
 use crate::hcfs_drive::{
     HCFS_DRIVES, HcfsDriveManager, SYNC_IN_PROGRESS, SYNC_LOOP_HANDLE, SYNC_REVIEW_MODE,
     StagedChanges, start_sync_loop,
@@ -105,24 +105,21 @@ pub async fn update_hcfs_server_url(
     Ok(())
 }
 
-/// Update the bearer token on all live drives and persist it in the DB.
-///
-/// Called by the frontend after re-authenticating when the server returns
-/// 401 Unauthorized (expired token).
-#[tauri::command]
-pub async fn update_sync_bearer_token(
-    account_id: String,
-    bearer_token: String,
+/// Internal implementation for updating bearer token.
+pub(crate) async fn update_sync_bearer_token_internal(
+    pool: &SqlitePool,
+    account_id: &str,
+    bearer_token: &str,
 ) -> Result<(), String> {
     // 1. Persist to DB so future initialize_sync calls use the fresh token
-    crate::utils::auth_tokens::save_api_token(&account_id, &bearer_token)
+    crate::utils::auth_tokens::save_api_token(pool, account_id, bearer_token)
         .await
         .map_err(|e| format!("Failed to persist auth token: {e}"))?;
 
     // 2. Update all live drives in-memory
     let mut guard = HCFS_DRIVES.lock().await;
     for (label, manager) in guard.iter_mut() {
-        if let Err(e) = manager.update_bearer_token(bearer_token.clone()) {
+        if let Err(e) = manager.update_bearer_token(bearer_token.to_string()) {
             error!(
                 "Failed to update bearer token for drive '{}': {}",
                 label, e
@@ -135,12 +132,26 @@ pub async fn update_sync_bearer_token(
     Ok(())
 }
 
+/// Update the bearer token on all live drives and persist it in the DB.
+///
+/// Called by the frontend after re-authenticating when the server returns
+/// 401 Unauthorized (expired token).
+#[tauri::command]
+pub async fn update_sync_bearer_token(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    bearer_token: String,
+) -> Result<(), String> {
+    update_sync_bearer_token_internal(state.pool()?, &account_id, &bearer_token).await
+}
+
 /// Internal helper that accepts a pool reference directly.
 /// Used by both the Tauri command and other internal callers.
 pub(crate) async fn get_hcfs_config_internal(
+    pool: &SqlitePool,
     account_id: &str,
 ) -> Result<HcfsConfigResult, String> {
-    let db = DB_POOL.get().ok_or("Database not initialized")?;
+    let db = pool;
     let owner = account_key(account_id);
 
     let result: Option<(String, String)> = sqlx::query_as(
@@ -167,13 +178,14 @@ pub(crate) async fn get_hcfs_config_internal(
 
 #[tauri::command]
 pub async fn get_hcfs_config(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<HcfsConfigResult, String> {
-    get_hcfs_config_internal(&account_id).await
+    get_hcfs_config_internal(state.pool()?, &account_id).await
 }
 
-pub(crate) async fn get_drive_password(account_id: &str) -> Result<String, String> {
-    let db = DB_POOL.get().ok_or("Database not initialized")?;
+pub(crate) async fn get_drive_password(pool: &SqlitePool, account_id: &str) -> Result<String, String> {
+    let db = pool;
     let owner = account_key(account_id);
 
     let result: Option<(String,)> = sqlx::query_as(
@@ -192,8 +204,8 @@ pub(crate) async fn get_drive_password(account_id: &str) -> Result<String, Strin
 }
 
 /// Read the sync path for a specific label from the database.
-async fn get_sync_path_for_label(account_id: &str, label: &str) -> Result<String, String> {
-    let db = DB_POOL.get().ok_or("Database not initialized")?;
+async fn get_sync_path_for_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<String, String> {
+    let db = pool;
     let owner = account_key(account_id);
 
     let result: Option<(String,)> =
@@ -548,6 +560,10 @@ async fn initialize_sync_inner(
     existing_mnemonic: Option<String>,
     start_loop: bool,
 ) -> Result<InitSyncResult, String> {
+    use tauri::Manager;
+    let pool_owned = app.state::<crate::app_state::AppState>().pool()?.clone();
+    let pool = &pool_owned;
+
     info!(
         "initialize_sync called for account: {}, label: '{}'",
         account_id, label
@@ -570,12 +586,12 @@ async fn initialize_sync_inner(
     clear_review_entered();
 
     // 1. Read sync path for the given label from database
-    let sync_path = get_sync_path_for_label(&account_id, &label).await?;
+    let sync_path = get_sync_path_for_label(pool, &account_id, &label).await?;
     debug!("Sync path: {}, label: {}", sync_path, label);
 
     // 2. Read HCFS config from database
-    let drive_password = get_drive_password(&account_id).await?;
-    let config = get_hcfs_config_internal(&account_id).await?;
+    let drive_password = get_drive_password(pool, &account_id).await?;
+    let config = get_hcfs_config_internal(pool, &account_id).await?;
 
     let server_url = if config.server_url.is_empty() {
         "https://arion.hippius.com".to_string()
@@ -601,7 +617,7 @@ async fn initialize_sync_inner(
             );
             // Remove the sync path so it doesn't auto-init on next startup
             if let Err(e) = crate::commands::substrate_tx::remove_sync_path_internal(
-                &account_id, &label,
+                pool, &account_id, &label,
             )
             .await
             {
@@ -666,7 +682,7 @@ async fn initialize_sync_inner(
     let mut manager = HcfsDriveManager::new(PathBuf::from(&sync_path), folder_dir.clone());
 
     // 6. Retrieve the auth token BEFORE unlock so we can set ss58_address first
-    let bearer_token = get_api_token(&account_id)
+    let bearer_token = get_api_token(pool, &account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
@@ -956,6 +972,7 @@ async fn initialize_sync_inner(
         let reg_label = label.clone();
         let reg_ss58 = account_id.to_string();
         let reg_fhash = fhash.clone();
+        let reg_pool = pool.clone();
         tokio::spawn(async move {
             let config = HcfsClientConfig {
                 base_url: reg_server,
@@ -968,7 +985,7 @@ async fn initialize_sync_inner(
             };
             match hcfs_client::client::HcfsClient::new(config) {
                 Ok(client) => {
-                    let dev_name = get_device_name_internal().await.ok();
+                    let dev_name = get_device_name_internal(&reg_pool).await.ok();
                     if let Err(e) = client.register_folder(&reg_ss58, &reg_fhash, &reg_label, dev_name.as_deref()).await {
                         warn!("Folder registration failed: {}", e);
                     } else {
@@ -1235,8 +1252,8 @@ fn setup_progress_handlers(app: &AppHandle, manager: &mut HcfsDriveManager, labe
 /// Retrieve the master BIP-39 mnemonic for an account by decrypting it from
 /// disk. Shared implementation used by both the Tauri command and the billing
 /// auth module.
-pub async fn get_mnemonic_for_account(account_id: &str) -> Result<String, String> {
-    let drive_password = get_drive_password(account_id).await?;
+pub async fn get_mnemonic_for_account(pool: &SqlitePool, account_id: &str) -> Result<String, String> {
+    let drive_password = get_drive_password(pool, account_id).await?;
 
     // Prefer the master mnemonic at account level
     let master_path = master_mnemonic_path(account_id)?;
@@ -1258,12 +1275,11 @@ pub async fn get_mnemonic_for_account(account_id: &str) -> Result<String, String
         Some(_) => Err("Drive is not initialized".to_string()),
         None => {
             // No active drive — try reading DB for any sync path
-            let db = DB_POOL.get().ok_or("Database not initialized")?;
             let owner = account_key(account_id);
             let result: Option<(String, String)> =
                 sqlx::query_as("SELECT path, label FROM sync_paths WHERE owner = ? LIMIT 1")
                     .bind(&owner)
-                    .fetch_optional(db)
+                    .fetch_optional(pool)
                     .await
                     .map_err(|e| format!("DB error: {e}"))?;
 
@@ -1285,8 +1301,11 @@ pub async fn get_mnemonic_for_account(account_id: &str) -> Result<String, String
 /// Tauri command wrapper: return the master BIP-39 mnemonic by decrypting it
 /// from disk.
 #[tauri::command]
-pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
-    get_mnemonic_for_account(&account_id).await
+pub async fn get_drive_mnemonic(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<String, String> {
+    get_mnemonic_for_account(state.pool()?, &account_id).await
 }
 
 /// Persist the master mnemonic to disk early (during login), even before any
@@ -1298,12 +1317,14 @@ pub async fn get_drive_mnemonic(account_id: String) -> Result<String, String> {
 /// sync). No-op if the HCFS drive password has not been set yet.
 #[tauri::command]
 pub async fn persist_master_mnemonic(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     mnemonic: String,
 ) -> Result<(), String> {
+    let pool = state.pool()?;
     let master_path = master_mnemonic_path(&account_id)?;
 
-    let drive_password = match get_drive_password(&account_id).await {
+    let drive_password = match get_drive_password(pool, &account_id).await {
         Ok(pw) => pw,
         Err(_) => {
             // HCFS config not set up yet — nothing we can do.
@@ -1557,16 +1578,18 @@ pub struct RemoteStorageStatsResult {
 /// across all manifests — sync folders AND S3 uploads.
 #[tauri::command]
 pub async fn get_remote_storage_stats(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<RemoteStorageStatsResult, String> {
-    let config = get_hcfs_config_internal(&account_id).await?;
+    let pool = state.pool()?;
+    let config = get_hcfs_config_internal(pool, &account_id).await?;
     let server_url = if config.server_url.is_empty() {
         "https://arion.hippius.com".to_string()
     } else {
         config.server_url
     };
 
-    let bearer_token = get_api_token(&account_id)
+    let bearer_token = get_api_token(pool, &account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| {
@@ -1653,16 +1676,18 @@ pub struct RemoteFolderInfoResult {
 /// List all folders registered for the current account on the remote server.
 #[tauri::command]
 pub async fn list_remote_folders(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<Vec<RemoteFolderInfoResult>, String> {
-    let config = get_hcfs_config_internal(&account_id).await?;
+    let pool = state.pool()?;
+    let config = get_hcfs_config_internal(pool, &account_id).await?;
     let server_url = if config.server_url.is_empty() {
         "https://arion.hippius.com".to_string()
     } else {
         config.server_url
     };
 
-    let bearer_token = get_api_token(&account_id)
+    let bearer_token = get_api_token(pool, &account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
@@ -1729,12 +1754,14 @@ fn sanitize_label(label: &str) -> Result<String, String> {
 /// loop once at the end so all restored drives are picked up in a single pass.
 #[tauri::command]
 pub async fn restore_remote_folders(
+    state: tauri::State<'_, crate::app_state::AppState>,
     app: tauri::AppHandle,
     account_id: String,
     base_path: String,
     folders: Vec<RestoreFolderRequest>,
     existing_mnemonic: Option<String>,
 ) -> Result<Vec<RestoreResult>, String> {
+    let pool = state.pool()?;
     let mut results = Vec::with_capacity(folders.len());
     let mut any_success = false;
 
@@ -1766,6 +1793,7 @@ pub async fn restore_remote_folders(
 
         // Set sync path in DB
         if let Err(e) = crate::commands::substrate_tx::set_sync_path_internal(
+            pool,
             &account_id,
             &path_str,
             false,
@@ -1820,6 +1848,7 @@ pub async fn restore_remote_folders(
             Err(e) => {
                 // Rollback: remove the sync path we just inserted
                 if let Err(rollback_err) = crate::commands::substrate_tx::remove_sync_path_internal(
+                    pool,
                     &account_id,
                     &folder.label,
                 )
@@ -1858,18 +1887,20 @@ pub struct DeleteRemoteFolderResult {
 /// If the folder is also synced locally, stops the drive and removes the sync path.
 #[tauri::command]
 pub async fn delete_remote_folder(
+    state: tauri::State<'_, crate::app_state::AppState>,
     app: tauri::AppHandle,
     account_id: String,
     label: String,
 ) -> Result<DeleteRemoteFolderResult, String> {
-    let config = get_hcfs_config_internal(&account_id).await?;
+    let pool = state.pool()?;
+    let config = get_hcfs_config_internal(pool, &account_id).await?;
     let server_url = if config.server_url.is_empty() {
         "https://arion.hippius.com".to_string()
     } else {
         config.server_url
     };
 
-    let bearer_token = get_api_token(&account_id)
+    let bearer_token = get_api_token(pool, &account_id)
         .await
         .map_err(|e| format!("Failed to get auth token: {e}"))?
         .ok_or_else(|| "No authentication token found. Please log in again.".to_string())?;
@@ -1905,6 +1936,7 @@ pub async fn delete_remote_folder(
             warn!("Failed to stop drive '{}' during remote folder deletion: {e}", label);
         }
         if let Err(e) = crate::commands::substrate_tx::remove_sync_path_internal(
+            pool,
             &account_id,
             &label,
         )
@@ -1930,8 +1962,7 @@ pub async fn delete_remote_folder(
 // =============================================================================
 
 /// Internal helper to read the device name from DB.
-async fn get_device_name_internal() -> Result<String, String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
+async fn get_device_name_internal(pool: &SqlitePool) -> Result<String, String> {
     let row = sqlx::query_scalar::<_, String>(
         "SELECT device_name FROM device_settings WHERE id = 1",
     )
@@ -1943,8 +1974,10 @@ async fn get_device_name_internal() -> Result<String, String> {
 
 /// Get the friendly device name for this machine.
 #[tauri::command]
-pub async fn get_device_name() -> Result<String, String> {
-    get_device_name_internal().await
+pub async fn get_device_name(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<String, String> {
+    get_device_name_internal(state.pool()?).await
 }
 
 /// Set a custom friendly device name for this machine.

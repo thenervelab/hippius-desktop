@@ -61,8 +61,11 @@ pub struct VMActionResponse {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn list_vm_flavors(account_id: String) -> Result<Vec<VMFlavor>, String> {
-    let client = ApiClient::new();
+pub async fn list_vm_flavors(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<Vec<VMFlavor>, String> {
+    let client = ApiClient::new(state.pool()?.clone());
     client
         .get("/api/infrastructure/vm/flavors/", &account_id)
         .await
@@ -70,8 +73,11 @@ pub async fn list_vm_flavors(account_id: String) -> Result<Vec<VMFlavor>, String
 }
 
 #[tauri::command]
-pub async fn list_vm_images(account_id: String) -> Result<Vec<VMImage>, String> {
-    let client = ApiClient::new();
+pub async fn list_vm_images(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<Vec<VMImage>, String> {
+    let client = ApiClient::new(state.pool()?.clone());
     client
         .get("/api/infrastructure/vm/images/", &account_id)
         .await
@@ -79,8 +85,11 @@ pub async fn list_vm_images(account_id: String) -> Result<Vec<VMImage>, String> 
 }
 
 #[tauri::command]
-pub async fn list_vm_applications(account_id: String) -> Result<Vec<VMApplication>, String> {
-    let client = ApiClient::new();
+pub async fn list_vm_applications(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<Vec<VMApplication>, String> {
+    let client = ApiClient::new(state.pool()?.clone());
     client
         .get("/api/infrastructure/vm/applications/", &account_id)
         .await
@@ -88,8 +97,11 @@ pub async fn list_vm_applications(account_id: String) -> Result<Vec<VMApplicatio
 }
 
 #[tauri::command]
-pub async fn list_vm_instances(account_id: String) -> Result<Vec<VMInstance>, String> {
-    let client = ApiClient::new();
+pub async fn list_vm_instances(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<Vec<VMInstance>, String> {
+    let client = ApiClient::new(state.pool()?.clone());
     client
         .get("/api/infrastructure/vm/instances/", &account_id)
         .await
@@ -97,8 +109,12 @@ pub async fn list_vm_instances(account_id: String) -> Result<Vec<VMInstance>, St
 }
 
 #[tauri::command]
-pub async fn get_vm_instance(account_id: String, instance_id: i64) -> Result<VMInstance, String> {
-    let client = ApiClient::new();
+pub async fn get_vm_instance(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+    instance_id: i64,
+) -> Result<VMInstance, String> {
+    let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/");
     client
         .get(&path, &account_id)
@@ -128,10 +144,11 @@ struct CreateVMBody {
 
 #[tauri::command]
 pub async fn create_vm(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     params: CreateVMParams,
 ) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+    let client = ApiClient::new(state.pool()?.clone());
     let body = CreateVMBody {
         flavor_id: params.flavor_id,
         image_id: params.image_id,
@@ -147,10 +164,11 @@ pub async fn create_vm(
 
 #[tauri::command]
 pub async fn reboot_vm(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     instance_id: i64,
 ) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+    let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/reboot/");
     client
         .post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id)
@@ -160,10 +178,11 @@ pub async fn reboot_vm(
 
 #[tauri::command]
 pub async fn start_vm(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     instance_id: i64,
 ) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+    let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/start/");
     client
         .post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id)
@@ -173,10 +192,11 @@ pub async fn start_vm(
 
 #[tauri::command]
 pub async fn stop_vm(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     instance_id: i64,
 ) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+    let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/stop/");
     client
         .post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id)
@@ -186,10 +206,11 @@ pub async fn stop_vm(
 
 #[tauri::command]
 pub async fn terminate_vm(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     instance_id: i64,
 ) -> Result<serde_json::Value, String> {
-    let client = ApiClient::new();
+    let client = ApiClient::new(state.pool()?.clone());
     let path = format!("/api/infrastructure/vm/instances/{instance_id}/terminate/");
     client
         .post::<serde_json::Value, _>(&path, &serde_json::json!({}), &account_id)

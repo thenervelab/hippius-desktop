@@ -711,17 +711,21 @@ pub async fn start_sync_loop(app: AppHandle) {
                         warn!(status = ?health_status, "Skipping sync due to connectivity");
                     } else {
                         // Proactive token refresh
-                        if let Ok(acct) = crate::utils::sync::current_account_id() {
-                            if crate::utils::auth_tokens::is_token_expiring(
-                                &acct,
-                                crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
-                            ).await {
-                                info!("Token expiring soon, proactively refreshing");
-                                let app_clone = app.clone();
-                                if let Err(e) = crate::commands::auth::refresh_auth_token(
-                                    app_clone, acct,
+                        {
+                            use tauri::Manager;
+                            let app_state = app.state::<crate::app_state::AppState>();
+                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&*app_state)) {
+                                if crate::utils::auth_tokens::is_token_expiring(
+                                    pool,
+                                    &acct,
+                                    crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
                                 ).await {
-                                    warn!(error = %e, "Proactive token refresh failed");
+                                    info!("Token expiring soon, proactively refreshing");
+                                    if let Err(e) = crate::commands::auth::refresh_auth_token_internal(
+                                        pool, &app, &acct,
+                                    ).await {
+                                        warn!(error = %e, "Proactive token refresh failed");
+                                    }
                                 }
                             }
                         }
@@ -799,16 +803,17 @@ pub async fn start_sync_loop(app: AppHandle) {
                         // Proactively refresh the auth token if it's expiring
                         // within the next hour, so the sync doesn't hit a 401.
                         if heartbeat_due {
-                            if let Ok(acct) = crate::utils::sync::current_account_id() {
+                            use tauri::Manager;
+                            let app_state = app.state::<crate::app_state::AppState>();
+                            if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&*app_state)) {
                                 if crate::utils::auth_tokens::is_token_expiring(
+                                    pool,
                                     &acct,
                                     crate::utils::auth_tokens::TOKEN_REFRESH_MARGIN_SECS,
                                 ).await {
                                     info!("Token expiring soon, proactively refreshing");
-                                    let app_clone = app.clone();
-                                    let acct_clone = acct.clone();
-                                    if let Err(e) = crate::commands::auth::refresh_auth_token(
-                                        app_clone, acct_clone,
+                                    if let Err(e) = crate::commands::auth::refresh_auth_token_internal(
+                                        pool, &app, &acct,
                                     ).await {
                                         warn!(error = %e, "Proactive token refresh failed");
                                     }
@@ -1251,7 +1256,9 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
             // After a successful migration drive sync, report migrated files
             // Only report when files were actually uploaded to avoid premature completion
             if label_owned == "migration" && outcome.files_uploaded > 0 {
-                match crate::utils::sync::current_account_id() {
+                use tauri::Manager;
+                let app_state = app.state::<crate::app_state::AppState>();
+                match crate::utils::sync::current_account_id(&*app_state) {
                     Ok(active_account) => {
                         let app_clone = app.clone();
                         tokio::spawn(async move {
@@ -1297,14 +1304,19 @@ pub async fn trigger_sync_for_drive(app: &AppHandle, label: &str) -> bool {
 
                 // Try to refresh the token automatically using the stored mnemonic.
                 // This avoids requiring the frontend to manually call refresh_auth_token.
-                if let Ok(acct) = crate::utils::sync::current_account_id() {
-                    let app_clone = app.clone();
-                    tokio::spawn(async move {
-                        match crate::commands::auth::refresh_auth_token(app_clone, acct).await {
-                            Ok(()) => info!("Auto token refresh succeeded, next sync will use fresh token"),
-                            Err(e) => warn!(error = %e, "Auto token refresh failed"),
-                        }
-                    });
+                {
+                    use tauri::Manager;
+                    let app_state = app.state::<crate::app_state::AppState>();
+                    if let (Ok(pool), Ok(acct)) = (app_state.pool(), crate::utils::sync::current_account_id(&*app_state)) {
+                        let pool = pool.clone();
+                        let app_clone = app.clone();
+                        tokio::spawn(async move {
+                            match crate::commands::auth::refresh_auth_token_internal(&pool, &app_clone, &acct).await {
+                                Ok(()) => info!("Auto token refresh succeeded, next sync will use fresh token"),
+                                Err(e) => warn!(error = %e, "Auto token refresh failed"),
+                            }
+                        });
+                    }
                 }
             }
 

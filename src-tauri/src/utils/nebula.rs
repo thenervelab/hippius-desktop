@@ -175,10 +175,7 @@ struct CertificateResponse {
 }
 
 /// Get the current account ID from the database
-async fn get_current_account_id() -> Result<String> {
-    let pool = crate::DB_POOL
-        .get()
-        .ok_or_else(|| anyhow!("Database not initialized"))?;
+async fn get_current_account_id(pool: &sqlx::SqlitePool) -> Result<String> {
     let account_row =
         sqlx::query("SELECT owner FROM objectstore_auth_scoped ORDER BY updated_at DESC LIMIT 1")
             .fetch_optional(pool)
@@ -488,7 +485,11 @@ pub async fn download_nebula(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
+pub async fn install_nebula(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let pool = state.pool()?;
     let (needs_update, latest_version) = {
         let state = SETUP_STATE.lock().unwrap();
         (state.needs_update, state.latest_version.clone())
@@ -586,9 +587,6 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
             }
 
             // Update database to mark binary as installed
-            let pool = crate::DB_POOL
-                .get()
-                .ok_or("Database not initialized".to_string())?;
             if let Err(e) = sqlx::query(
                 "UPDATE nebula_binary_status SET is_nebula_binary_installed = TRUE, last_updated = CURRENT_TIMESTAMP WHERE id = 1"
             )
@@ -603,9 +601,6 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
         }
     } else {
         // Binary is already installed, update database status
-        let pool = crate::DB_POOL
-            .get()
-            .ok_or("Database not initialized".to_string())?;
         if let Err(e) = sqlx::query(
             "UPDATE nebula_binary_status SET is_nebula_binary_installed = TRUE, last_updated = CURRENT_TIMESTAMP WHERE id = 1"
         )
@@ -620,8 +615,8 @@ pub async fn install_nebula(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
+/// Internal verify_nebula implementation that takes pool directly.
+pub async fn verify_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), String> {
     // Verify binaries
     let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
     if !binary_path.exists() {
@@ -629,9 +624,6 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
     }
 
     // Check VPN status in DB
-    let pool = crate::DB_POOL
-        .get()
-        .ok_or("Database not initialized".to_string())?;
 
     let is_enabled: bool = sqlx::query("SELECT is_enabled FROM vpn_status WHERE id = 1")
         .fetch_optional(pool)
@@ -655,7 +647,7 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
 
         if cert_exists {
             info!("Found existing certificate, checking validity...");
-            check_and_update_certificate()
+            check_and_update_certificate(pool)
                 .await
                 .map_err(|e| e.to_string())?;
         } else {
@@ -692,24 +684,32 @@ pub async fn verify_nebula(app: AppHandle) -> Result<(), String> {
 
     // Setup certificates from API
     info!("Checking certificate status...");
-    check_and_update_certificate()
+    check_and_update_certificate(pool)
         .await
         .map_err(|e| e.to_string())?;
 
     Ok(())
 }
 
-async fn get_api_auth_header() -> Result<(String, String)> {
+#[tauri::command]
+pub async fn verify_nebula(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    _app: AppHandle,
+) -> Result<(), String> {
+    verify_nebula_internal(state.pool()?).await
+}
+
+async fn get_api_auth_header(pool: &sqlx::SqlitePool) -> Result<(String, String)> {
     // We need an account ID to get the temp auth key for API authentication.
     // The temp auth key (OAuth token) is used for Hippius API calls.
     // The master token is separate and used only for S3/Object Storage access.
 
     debug!("Getting API auth header...");
 
-    let account_id = get_current_account_id().await?;
+    let account_id = get_current_account_id(pool).await?;
     debug!("Found account: {}", account_id);
 
-    let api_token = get_api_token(&account_id)
+    let api_token = get_api_token(pool, &account_id)
         .await
         .map_err(|e| {
             error!("Failed to get API token: {}", e);
@@ -884,10 +884,7 @@ async fn save_certificate_files(cert: &CertificateResponse, account_id: &str) ->
     Ok(())
 }
 
-async fn update_certificate_db(cert: &CertificateResponse) -> Result<()> {
-    let pool = crate::DB_POOL
-        .get()
-        .ok_or_else(|| anyhow!("Database not initialized"))?;
+async fn update_certificate_db(pool: &sqlx::SqlitePool, cert: &CertificateResponse) -> Result<()> {
 
     // We assume there's only one active certificate for the VPN
     sqlx::query(
@@ -912,11 +909,8 @@ async fn update_certificate_db(cert: &CertificateResponse) -> Result<()> {
     Ok(())
 }
 
-pub async fn check_and_update_certificate() -> Result<()> {
-    let (auth_header, account_id) = get_api_auth_header().await?;
-    let pool = crate::DB_POOL
-        .get()
-        .ok_or_else(|| anyhow!("Database not initialized"))?;
+pub async fn check_and_update_certificate(pool: &sqlx::SqlitePool) -> Result<()> {
+    let (auth_header, account_id) = get_api_auth_header(pool).await?;
 
     // Check DB for existing certificate
     let row = sqlx::query("SELECT expires_at FROM nebula_certificate WHERE id = 1")
@@ -947,7 +941,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
                         // We can try to fetch the existing one
                         if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
                             save_certificate_files(&cert, &account_id).await?;
-                            update_certificate_db(&cert).await?;
+                            update_certificate_db(pool, &cert).await?;
                         } else {
                             // If fetch fails (e.g. 404), maybe we need to request new?
                             warn!(
@@ -967,7 +961,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
             );
             if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
                 save_certificate_files(&cert, &account_id).await?;
-                update_certificate_db(&cert).await?;
+                update_certificate_db(pool, &cert).await?;
 
                 if let Some(expires_at_str) = &cert.expires_at {
                     if let Ok(expires_at) = DateTime::parse_from_rfc3339(expires_at_str) {
@@ -988,7 +982,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
         if let Some(cert) = fetch_certificate_from_api(&auth_header).await? {
             info!("Found existing certificate in API");
             save_certificate_files(&cert, &account_id).await?;
-            update_certificate_db(&cert).await?;
+            update_certificate_db(pool, &cert).await?;
 
             // recursive check to ensure it's not expired?
             // The fetch response should have expires_at.
@@ -1040,7 +1034,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
         }
 
         save_certificate_files(&final_cert, &account_id).await?;
-        update_certificate_db(&final_cert).await?;
+        update_certificate_db(pool, &final_cert).await?;
         info!("Certificate renewed/requested successfully");
     } else if should_request {
         debug!("Calling request_certificate_from_api...");
@@ -1055,7 +1049,7 @@ pub async fn check_and_update_certificate() -> Result<()> {
         }
 
         save_certificate_files(&final_cert, &account_id).await?;
-        update_certificate_db(&final_cert).await?;
+        update_certificate_db(pool, &final_cert).await?;
         info!("Certificate requested successfully");
     }
 
@@ -1063,9 +1057,11 @@ pub async fn check_and_update_certificate() -> Result<()> {
 }
 
 #[tauri::command]
-pub async fn finish_setup() -> Result<(), String> {
+pub async fn finish_setup(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
     // Try to start Nebula if enabled
-    if let Err(e) = start_nebula_internal().await {
+    if let Err(e) = start_nebula_internal(state.pool()?).await {
         warn!("Failed to auto-start in finish_setup: {}", e);
         // We don't return error here to not block the UI flow, just log it
     }
@@ -1074,18 +1070,16 @@ pub async fn finish_setup() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn start_nebula() -> Result<(), String> {
-    start_nebula_internal().await
+pub async fn start_nebula(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<(), String> {
+    start_nebula_internal(state.pool()?).await
 }
 
-pub async fn start_nebula_internal() -> Result<(), String> {
+pub async fn start_nebula_internal(pool: &sqlx::SqlitePool) -> Result<(), String> {
     info!("Attempting to start Nebula...");
 
     // Check DB status
-    let pool = crate::DB_POOL
-        .get()
-        .ok_or("Database not initialized".to_string())?;
-
     let is_enabled: bool = sqlx::query("SELECT is_enabled FROM vpn_status WHERE id = 1")
         .fetch_optional(pool)
         .await
@@ -1101,13 +1095,13 @@ pub async fn start_nebula_internal() -> Result<(), String> {
     if check_nebula_running().await.unwrap_or(false) {
         debug!("Already running");
         // Start ping task even if already running (in case it was stopped)
-        start_ping_task();
+        start_ping_task(pool.clone());
         return Ok(());
     }
 
     let binary_path = get_nebula_binary_path().map_err(|e| e.to_string())?;
 
-    let account_id = get_current_account_id().await.map_err(|e| e.to_string())?;
+    let account_id = get_current_account_id(pool).await.map_err(|e| e.to_string())?;
     let config_dir = get_nebula_config_dir(&account_id).map_err(|e| e.to_string())?;
 
     // Use config.yml (from API) instead of hostname-based config
@@ -1176,7 +1170,7 @@ pub async fn start_nebula_internal() -> Result<(), String> {
     }
 
     // Start the background ping task to keep stats active
-    start_ping_task();
+    start_ping_task(pool.clone());
 
     Ok(())
 }
@@ -1455,8 +1449,8 @@ pub async fn stop_nebula() -> Result<(), String> {
 }
 
 /// Read lighthouse IPs from the Nebula config file
-async fn read_lighthouse_ips_from_config() -> Vec<String> {
-    let account_id = match get_current_account_id().await {
+async fn read_lighthouse_ips_from_config(pool: &sqlx::SqlitePool) -> Vec<String> {
+    let account_id = match get_current_account_id(pool).await {
         Ok(id) => id,
         Err(e) => {
             error!("Failed to get account ID: {}", e);
@@ -1502,11 +1496,11 @@ async fn read_lighthouse_ips_from_config() -> Vec<String> {
 }
 
 /// Start the background ping task to keep VPN stats active
-fn start_ping_task() {
+fn start_ping_task(pool: sqlx::SqlitePool) {
     // Stop any existing ping task first
     stop_ping_task();
 
-    let handle = tokio::spawn(async {
+    let handle = tokio::spawn(async move {
         debug!(
             "Starting background ping task (interval: {}s)",
             PING_INTERVAL_SECS
@@ -1516,7 +1510,7 @@ fn start_ping_task() {
         tokio::time::sleep(Duration::from_secs(3)).await;
 
         // Read lighthouse IPs from config
-        let lighthouse_ips = read_lighthouse_ips_from_config().await;
+        let lighthouse_ips = read_lighthouse_ips_from_config(&pool).await;
 
         if lighthouse_ips.is_empty() {
             warn!("No lighthouse IPs found in config, ping task will not run");
@@ -1587,8 +1581,8 @@ pub async fn get_nebula_version() -> Result<String, String> {
         .ok_or_else(|| "Nebula not installed".to_string())
 }
 
-pub async fn get_nebula_ip_internal() -> Result<String> {
-    let account_id = get_current_account_id().await?;
+pub async fn get_nebula_ip_internal(pool: &sqlx::SqlitePool) -> Result<String> {
+    let account_id = get_current_account_id(pool).await?;
     let config_dir = get_nebula_config_dir(&account_id)?;
     // Use host.crt from API instead of hostname-based cert
     let crt_path = config_dir.join("host.crt");
@@ -1637,8 +1631,10 @@ pub async fn get_nebula_ip_internal() -> Result<String> {
 }
 
 #[tauri::command]
-pub async fn get_nebula_ip() -> Result<String, String> {
-    get_nebula_ip_internal().await.map_err(|e| e.to_string())
+pub async fn get_nebula_ip(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<String, String> {
+    get_nebula_ip_internal(state.pool()?).await.map_err(|e| e.to_string())
 }
 
 /// Tries to find the Nebula network interface by checking common names and IP ranges
@@ -1751,9 +1747,12 @@ async fn find_nebula_interface(search_ip: Option<&str>) -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn get_nebula_stats() -> Result<NebulaStats, String> {
+pub async fn get_nebula_stats(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<NebulaStats, String> {
+    let pool = state.pool()?;
     // Try to get the Nebula IP from the certificate to help find the interface
-    let nebula_ip = get_nebula_ip_internal().await.ok();
+    let nebula_ip = get_nebula_ip_internal(pool).await.ok();
     let search_ip = nebula_ip.as_deref();
 
     if let Some(ip) = search_ip {
@@ -1965,13 +1964,14 @@ pub async fn get_nebula_status() -> Result<NebulaStatus, String> {
 
 /// Generate a Nebula node certificate
 pub async fn generate_node_certificate(
+    pool: &sqlx::SqlitePool,
     name: &str,
     ip: &str,
     groups: Vec<String>,
     duration_days: u32,
 ) -> Result<()> {
     let nebula_cert_binary = get_nebula_cert_binary_path()?;
-    let account_id = get_current_account_id().await?;
+    let account_id = get_current_account_id(pool).await?;
     let config_dir = get_nebula_config_dir(&account_id)?;
 
     let ca_crt = config_dir.join("ca.crt");
@@ -2053,10 +2053,10 @@ pub async fn check_nebula_update() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn get_nebula_binary_installed_status() -> Result<bool, String> {
-    let pool = crate::DB_POOL
-        .get()
-        .ok_or("Database not initialized".to_string())?;
+pub async fn get_nebula_binary_installed_status(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<bool, String> {
+    let pool = state.pool()?;
 
     // First check if binary is installed
     let is_installed: bool =

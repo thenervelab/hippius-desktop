@@ -7,8 +7,8 @@
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use sqlx::sqlite::SqlitePool;
 
-use crate::DB_POOL;
 use crate::utils::account_key::account_key;
 
 /// Build a URL with query parameters appended.
@@ -92,10 +92,10 @@ impl From<ApiError> for String {
 // ---------------------------------------------------------------------------
 
 /// Read the auth token for an account from the `auth_session` DB table.
-pub async fn get_auth_token_for_account(account_id: &str) -> Result<String, ApiError> {
-    let pool = DB_POOL
-        .get()
-        .ok_or_else(|| ApiError::Other("Database not initialized".into()))?;
+pub async fn get_auth_token_for_account(
+    pool: &SqlitePool,
+    account_id: &str,
+) -> Result<String, ApiError> {
     let owner = account_key(account_id);
 
     let row: Option<(String,)> =
@@ -122,13 +122,15 @@ pub async fn get_auth_token_for_account(account_id: &str) -> Result<String, ApiE
 pub struct ApiClient {
     client: reqwest::Client,
     base_url: String,
+    pool: SqlitePool,
 }
 
 impl ApiClient {
-    pub fn new() -> Self {
+    pub fn new(pool: SqlitePool) -> Self {
         Self {
             client: reqwest::Client::new(),
             base_url: api_base_url(),
+            pool,
         }
     }
 
@@ -138,7 +140,7 @@ impl ApiClient {
         path: &str,
         account_id: &str,
     ) -> Result<T, ApiError> {
-        let token = get_auth_token_for_account(account_id).await?;
+        let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
         let resp = self
@@ -160,7 +162,7 @@ impl ApiClient {
         params: &[(&str, &str)],
         account_id: &str,
     ) -> Result<T, ApiError> {
-        let token = get_auth_token_for_account(account_id).await?;
+        let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = url_with_params(&self.base_url, path, params);
 
         let resp = self
@@ -182,7 +184,7 @@ impl ApiClient {
         body: &B,
         account_id: &str,
     ) -> Result<T, ApiError> {
-        let token = get_auth_token_for_account(account_id).await?;
+        let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
         let resp = self
@@ -206,7 +208,7 @@ impl ApiClient {
         body: &B,
         account_id: &str,
     ) -> Result<(), ApiError> {
-        let token = get_auth_token_for_account(account_id).await?;
+        let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
         let resp = self
@@ -236,7 +238,7 @@ impl ApiClient {
         body: &B,
         account_id: &str,
     ) -> Result<T, ApiError> {
-        let token = get_auth_token_for_account(account_id).await?;
+        let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
         let resp = self
@@ -255,7 +257,7 @@ impl ApiClient {
 
     /// DELETE request with auth.
     pub async fn delete(&self, path: &str, account_id: &str) -> Result<(), ApiError> {
-        let token = get_auth_token_for_account(account_id).await?;
+        let token = get_auth_token_for_account(&self.pool, account_id).await?;
         let url = format!("{}{}", self.base_url, path);
 
         let resp = self

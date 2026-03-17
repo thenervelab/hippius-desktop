@@ -53,7 +53,7 @@ pub async fn toggle_vpn_status(
     // If enabling, check and update certificate first
     if new_status {
         info!("Checking certificate status before enabling...");
-        if let Err(e) = crate::utils::nebula::check_and_update_certificate().await {
+        if let Err(e) = crate::utils::nebula::check_and_update_certificate(pool).await {
             error!("Certificate check failed: {}", e);
             return Err(format!("Failed to verify/renew certificate: {}", e));
         }
@@ -72,7 +72,7 @@ pub async fn toggle_vpn_status(
     if new_status {
         // VPN enabled - start Nebula
         info!("VPN enabled, starting Nebula...");
-        if let Err(e) = crate::utils::nebula::start_nebula_internal().await {
+        if let Err(e) = crate::utils::nebula::start_nebula_internal(pool).await {
             warn!("Failed to start Nebula: {}", e);
             // Don't return error, just log it - the toggle still succeeded
         }

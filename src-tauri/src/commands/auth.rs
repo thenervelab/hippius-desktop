@@ -18,7 +18,7 @@ use crate::auth_state::AUTH_STATE;
 use crate::commands::syncing::get_mnemonic_for_account;
 use crate::utils::account_key::account_key;
 use crate::utils::auth_tokens::save_api_token;
-use crate::DB_POOL;
+use sqlx::sqlite::SqlitePool;
 use tauri::Emitter;
 
 const DEFAULT_BASE_URL: &str = "https://api.hippius.com";
@@ -162,6 +162,7 @@ async fn challenge_response(
 // ── Helper: persist session ────────────────────────────────────────────
 
 async fn persist_session(
+    pool: &SqlitePool,
     substrate_address: &str,
     token: &str,
     token_expiry: i64,
@@ -170,7 +171,6 @@ async fn persist_session(
     provider: &str,
     logout_time_minutes: i64,
 ) -> Result<(), String> {
-    let pool = DB_POOL.get().ok_or("Database not initialized")?;
     let owner = account_key(substrate_address);
 
     let user_id_i64 = user_id.as_i64();
@@ -218,6 +218,7 @@ async fn persist_session(
 /// in `AUTH_STATE` for subsequent signing operations (staking, transfers).
 #[tauri::command]
 pub async fn login_with_mnemonic(
+    state: tauri::State<'_, crate::app_state::AppState>,
     mnemonic: String,
     referral_code: Option<String>,
     logout_time_minutes: Option<i64>,
@@ -249,8 +250,10 @@ pub async fn login_with_mnemonic(
     }
 
     // 4. Persist session in DB
+    let pool = state.pool()?;
     let ltm = logout_time_minutes.unwrap_or(-1);
     persist_session(
+        pool,
         &substrate_address,
         &token,
         token_expiry,
@@ -262,7 +265,7 @@ pub async fn login_with_mnemonic(
     .await?;
 
     // 5. Persist API token for sync engine
-    save_api_token(&substrate_address, &token)
+    save_api_token(pool, &substrate_address, &token)
         .await
         .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
@@ -487,6 +490,7 @@ pub async fn unlock_with_passcode(
     // 8. Persist session
     let ltm = logout_time_minutes.unwrap_or(1440);
     persist_session(
+        pool,
         &substrate_address,
         &token,
         token_expiry,
@@ -498,7 +502,7 @@ pub async fn unlock_with_passcode(
     .await?;
 
     // 9. Persist API token for sync engine
-    save_api_token(&substrate_address, &token)
+    save_api_token(pool, &substrate_address, &token)
         .await
         .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
@@ -514,20 +518,18 @@ pub async fn unlock_with_passcode(
     })
 }
 
-/// Silently refresh the auth token using the mnemonic from the encrypted Drive.
-///
-/// Called when the sync engine detects a 401. No frontend round-trip needed
-/// for mnemonic-based sessions.
-#[tauri::command]
-pub async fn refresh_auth_token(
-    app: tauri::AppHandle,
-    account_id: String,
+/// Internal implementation for token refresh, callable from both the Tauri
+/// command and the sync loop (which only has an AppHandle, not tauri::State).
+pub async fn refresh_auth_token_internal(
+    pool: &SqlitePool,
+    app: &tauri::AppHandle,
+    account_id: &str,
 ) -> Result<(), String> {
     // Block sync during token refresh to avoid 401 races
     let _guard = crate::sync_shared::TokenRefreshGuard::new();
 
     // 1. Get mnemonic from Drive (auto-zeroized on drop)
-    let mnemonic = Zeroizing::new(get_mnemonic_for_account(&account_id).await?);
+    let mnemonic = Zeroizing::new(get_mnemonic_for_account(pool, account_id).await?);
 
     // 2. Derive keys
     let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
@@ -539,6 +541,7 @@ pub async fn refresh_auth_token(
 
     // 4. Persist new session
     persist_session(
+        pool,
         &substrate_address,
         &token,
         token_expiry,
@@ -550,14 +553,15 @@ pub async fn refresh_auth_token(
     .await?;
 
     // 5. Persist API token for sync engine
-    save_api_token(&substrate_address, &token)
+    save_api_token(pool, &substrate_address, &token)
         .await
         .map_err(|e| format!("Failed to persist API token: {e}"))?;
 
     // 6. Update live drive's bearer token
-    if let Err(e) = crate::commands::syncing::update_sync_bearer_token(
-        account_id.clone(),
-        token.clone(),
+    if let Err(e) = crate::commands::syncing::update_sync_bearer_token_internal(
+        pool,
+        account_id,
+        &token,
     )
     .await
     {
@@ -572,6 +576,19 @@ pub async fn refresh_auth_token(
     }
 
     Ok(())
+}
+
+/// Silently refresh the auth token using the mnemonic from the encrypted Drive.
+///
+/// Called when the sync engine detects a 401. No frontend round-trip needed
+/// for mnemonic-based sessions.
+#[tauri::command]
+pub async fn refresh_auth_token(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    app: tauri::AppHandle,
+    account_id: String,
+) -> Result<(), String> {
+    refresh_auth_token_internal(state.pool()?, &app, &account_id).await
 }
 
 /// Logout: clear in-memory keypair and session.

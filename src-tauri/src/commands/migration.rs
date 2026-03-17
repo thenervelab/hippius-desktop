@@ -1,4 +1,4 @@
-use crate::DB_POOL;
+use sqlx::sqlite::SqlitePool;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::Client as S3Client;
 use once_cell::sync::Lazy;
@@ -121,11 +121,9 @@ pub fn clear_migration_uploads() {
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn get_migration_status_db(
+    pool: &SqlitePool,
     account_id: &str,
 ) -> Result<Option<(String, i64, i64, String, String)>, String> {
-    let pool = DB_POOL
-        .get()
-        .ok_or_else(|| "Database not initialized".to_string())?;
     let row = sqlx::query(
         "SELECT status, total_files, completed_files, sync_path, server_url \
          FROM migration_status WHERE account_id = ?",
@@ -148,6 +146,7 @@ pub(crate) async fn get_migration_status_db(
 }
 
 pub(crate) async fn upsert_migration_status(
+    pool: &SqlitePool,
     account_id: &str,
     status: &str,
     total_files: i64,
@@ -156,9 +155,6 @@ pub(crate) async fn upsert_migration_status(
     sync_path: &str,
     server_url: &str,
 ) -> Result<(), String> {
-    let pool = DB_POOL
-        .get()
-        .ok_or_else(|| "Database not initialized".to_string())?;
     sqlx::query(
         r#"
         INSERT INTO migration_status
@@ -189,11 +185,9 @@ pub(crate) async fn upsert_migration_status(
 }
 
 pub(crate) async fn get_server_url(
+    pool: &SqlitePool,
     account_id: &str,
 ) -> Result<String, String> {
-    let pool = DB_POOL
-        .get()
-        .ok_or_else(|| "Database not initialized".to_string())?;
     let owner = crate::utils::account_key::account_key(account_id);
     let row =
         sqlx::query("SELECT server_url FROM hcfs_config WHERE owner = ?")
@@ -268,11 +262,13 @@ pub(crate) async fn fetch_migration_files(
 
 #[tauri::command]
 pub async fn check_migration(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<MigrationCheckResult, String> {
+    let pool = state.pool()?;
     // 1. Check local DB for existing migration
     if let Some((status, _total, _completed, sync_path, _server_url)) =
-        get_migration_status_db(&account_id).await?
+        get_migration_status_db(pool, &account_id).await?
     {
         // If the user already dismissed (skipped, cancelled, or completed)
         // the migration, never show the prompt again.
@@ -289,7 +285,7 @@ pub async fn check_migration(
         }
 
         // Status is "in_progress" — verify with the server
-        let server_url = get_server_url(&account_id).await?;
+        let server_url = get_server_url(pool, &account_id).await?;
         let files =
             fetch_migration_files(&server_url, &account_id).await?;
         let pending: Vec<MigrationFile> = files
@@ -300,6 +296,7 @@ pub async fn check_migration(
         if pending.is_empty() {
             // Server confirms everything is migrated
             if let Err(e) = upsert_migration_status(
+                pool,
                 &account_id,
                 "complete",
                 0,
@@ -335,7 +332,7 @@ pub async fn check_migration(
     }
 
     // 2. No local state -- check server
-    let server_url = get_server_url(&account_id).await?;
+    let server_url = get_server_url(pool, &account_id).await?;
     let files =
         fetch_migration_files(&server_url, &account_id).await?;
     let pending: Vec<MigrationFile> = files
@@ -369,10 +366,11 @@ fn should_skip_key(key: &str) -> bool {
 }
 
 async fn build_s3_client(
+    pool: &SqlitePool,
     account_id: &str,
 ) -> Result<S3Client, String> {
     let (access_key, secret) =
-        crate::utils::auth_tokens::get_s3_credentials(account_id)
+        crate::utils::auth_tokens::get_s3_credentials(pool, account_id)
             .await?
             .ok_or_else(|| "No S3 credentials found".to_string())?;
 
@@ -495,8 +493,10 @@ pub async fn start_migration(
     MIGRATION_CANCEL.store(false, Ordering::SeqCst);
     clear_migration_uploads();
 
+    let pool = state.pool()?;
+
     // Verify HCFS config exists — the frontend must prompt for a password first
-    if crate::commands::syncing::get_drive_password(&account_id)
+    if crate::commands::syncing::get_drive_password(pool, &account_id)
         .await
         .is_err()
     {
@@ -505,12 +505,13 @@ pub async fn start_migration(
 
     // Ensure S3 credentials exist
     crate::utils::auth_tokens::ensure_s3_credentials(
+        pool,
         &account_id,
     )
     .await?;
 
     // Fetch pending files from server
-    let server_url = get_server_url(&account_id).await?;
+    let server_url = get_server_url(pool, &account_id).await?;
     let all_files =
         fetch_migration_files(&server_url, &account_id).await?;
     let pending: Vec<MigrationFile> = all_files
@@ -534,6 +535,7 @@ pub async fn start_migration(
 
     // Save state to DB
     upsert_migration_status(
+        pool,
         &account_id,
         "in_progress",
         total as i64,
@@ -545,10 +547,10 @@ pub async fn start_migration(
     .await?;
 
     // Build S3 client
-    let s3_client = build_s3_client(&account_id).await?;
+    let s3_client = build_s3_client(pool, &account_id).await?;
 
     // Spawn background task
-    let pool = state.pool()?.clone();
+    let pool = pool.clone();
     let app_clone = app.clone();
     let account_clone = account_id.clone();
     let path_clone = sync_path.clone();
@@ -742,6 +744,7 @@ async fn run_migration_download(
     let failed_json = serde_json::to_string(&failed_keys)
         .unwrap_or_else(|_| "[]".to_string());
     if let Err(e) = upsert_migration_status(
+        pool,
         account_id,
         "in_progress",
         total as i64,
@@ -788,7 +791,11 @@ async fn run_migration_download(
 
     // Ensure the active account is set so the sync loop can report
     // migrated files after a successful sync cycle.
-    crate::utils::sync::set_active_account(account_id);
+    {
+        use tauri::Manager;
+        let app_state = app.state::<crate::app_state::AppState>();
+        crate::utils::sync::set_active_account(&*app_state, account_id);
+    }
 
     // Initialize the migration drive
     match crate::commands::syncing::initialize_sync(
@@ -816,14 +823,19 @@ async fn run_migration_download(
 }
 
 #[tauri::command]
-pub async fn cancel_migration(account_id: String) -> Result<(), String> {
+pub async fn cancel_migration(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    account_id: String,
+) -> Result<(), String> {
+    let pool = state.pool()?;
     MIGRATION_CANCEL.store(true, Ordering::SeqCst);
     clear_migration_uploads();
 
     // Persist cancelled state so the migration dialog won't reappear
     if !account_id.is_empty() {
-        let server_url = get_server_url(&account_id).await.unwrap_or_default();
+        let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
         if let Err(e) = upsert_migration_status(
+            pool,
             &account_id,
             "cancelled",
             0,
@@ -844,13 +856,16 @@ pub async fn cancel_migration(account_id: String) -> Result<(), String> {
 /// `reason` should be "skipped" (Start Fresh) or "completed".
 #[tauri::command]
 pub async fn dismiss_migration(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     reason: String,
 ) -> Result<(), String> {
+    let pool = state.pool()?;
     clear_migration_uploads();
-    let server_url = get_server_url(&account_id).await.unwrap_or_default();
+    let server_url = get_server_url(pool, &account_id).await.unwrap_or_default();
     let status = if reason.is_empty() { "dismissed" } else { &reason };
     upsert_migration_status(
+        pool,
         &account_id,
         status,
         0,
@@ -870,7 +885,10 @@ pub async fn report_migrated_files(
     app: &AppHandle,
     account_id: &str,
 ) -> Result<(), String> {
-    let db_status = get_migration_status_db(account_id).await?;
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let pool = app_state.pool()?;
+    let db_status = get_migration_status_db(pool, account_id).await?;
     let Some((status, _total, _completed, sync_path, server_url)) =
         db_status
     else {
@@ -890,6 +908,7 @@ pub async fn report_migrated_files(
         // All files migrated
         let migrated = files.len() as u64;
         upsert_migration_status(
+            pool,
             account_id,
             "complete",
             files.len() as i64,
@@ -1005,6 +1024,7 @@ pub async fn report_migrated_files(
     if still_pending == 0 {
         clear_migration_uploads();
         upsert_migration_status(
+            pool,
             account_id,
             "complete",
             files_after.len() as i64,
@@ -1022,6 +1042,7 @@ pub async fn report_migrated_files(
         );
     } else {
         upsert_migration_status(
+            pool,
             account_id,
             "in_progress",
             files_after.len() as i64,

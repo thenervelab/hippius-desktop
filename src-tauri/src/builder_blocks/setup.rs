@@ -1,4 +1,4 @@
-use crate::{DB_POOL, constants::substrate::WSS_ENDPOINT};
+use crate::constants::substrate::WSS_ENDPOINT;
 use dirs;
 use sqlx::Row;
 use sqlx::sqlite::SqlitePool;
@@ -574,7 +574,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
 
                 let db_url = format!("sqlite:{}", db_path.display());
                 let pool = SqlitePool::connect(&db_url).await.unwrap();
-                DB_POOL.set(pool.clone()).unwrap();
                 app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
 
                 // Ensure all tables and columns exist
@@ -737,7 +736,10 @@ async fn verify_nebula_setup(app: tauri::AppHandle) -> Result<(), String> {
     }
 
     // Verify Nebula (this will check and renew certificates if needed)
-    if let Err(e) = nebula::verify_nebula(app).await {
+    use tauri::Manager;
+    let app_state = app.state::<crate::app_state::AppState>();
+    let pool = app_state.pool().map_err(|e| format!("{e}"))?;
+    if let Err(e) = nebula::verify_nebula_internal(pool).await {
         warn!("Nebula verification failed: {}", e);
         return Err("Nebula verification failed".into());
     }

@@ -72,12 +72,14 @@ fn derive_keys(mnemonic: &str) -> Result<(String, PrivateKeySigner, String), Str
 /// the encrypted Drive on disk.
 #[tauri::command]
 pub async fn billing_auth(
+    state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     mnemonic: Option<String>,
 ) -> Result<BillingAuthResult, String> {
+    let pool = state.pool()?;
     let mut mnemonic = match mnemonic {
         Some(m) if !m.is_empty() => m,
-        _ => get_mnemonic_for_account(&account_id).await?,
+        _ => get_mnemonic_for_account(pool, &account_id).await?,
     };
 
     // Derive keys from the mnemonic, then zeroize it immediately.
