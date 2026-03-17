@@ -539,6 +539,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             }
 
             let app_handle = app.handle().clone();
+            app_handle.manage(crate::app_state::AppState::new());
             let win = app.get_webview_window("main").expect("main window not found");
 
             if let Some(m) = win.current_monitor()? {
@@ -574,6 +575,7 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
                 let db_url = format!("sqlite:{}", db_path.display());
                 let pool = SqlitePool::connect(&db_url).await.unwrap();
                 DB_POOL.set(pool.clone()).unwrap();
+                app_handle.state::<crate::app_state::AppState>().set_pool(pool.clone());
 
                 // Ensure all tables and columns exist
                 if let Err(e) = ensure_table_schema(&pool).await {
