@@ -128,28 +128,38 @@ const SyncStatusHandler: React.FC = () => {
   const hasSyncError = useAtomValue(hasSyncErrorAtom);
   
   // Merge session files and recent files for display
-  // Session files take priority (active sync), recent files fill in the rest
+  // Recent deletes take priority over session entries (user just deleted from UI),
+  // then session files, then remaining recent files.
   const displayFiles = useMemo(() => {
     const files: SyncActivityRow[] = [];
     const addedPaths = new Set<string>();
-    
-    // Add session files first (currently syncing)
+
+    // Collect paths of recently deleted files so they override stale session entries
+    const recentDeletePaths = new Set<string>();
+    for (const file of recentFiles) {
+      if (file.action === "local_delete" || file.action === "remote_delete") {
+        recentDeletePaths.add(file.path);
+      }
+    }
+
+    // Add session files, but skip any that were recently deleted from the UI
     for (const file of sessionFiles) {
+      if (recentDeletePaths.has(file.path)) continue;
       files.push(syncFileToActivityRow(file));
       addedPaths.add(file.path);
     }
-    
-    // Add recent files that aren't already in session
+
+    // Add recent files that aren't already covered by session entries
     for (const file of recentFiles) {
       if (!addedPaths.has(file.path)) {
         files.push(recentFileToActivityRow(file));
         addedPaths.add(file.path);
       }
     }
-    
+
     // Sort by timestamp (most recent first)
     files.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-    
+
     return files;
   }, [sessionFiles, recentFiles]);
 
