@@ -12,7 +12,6 @@
 
 mod api_client;
 mod app_state;
-mod auth_state;
 mod builder_blocks;
 mod commands;
 mod constants;

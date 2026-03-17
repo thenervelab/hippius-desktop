@@ -14,7 +14,6 @@ use sp_core::Pair as _;
 use tracing::warn;
 use zeroize::Zeroizing;
 
-use crate::auth_state::AUTH_STATE;
 use crate::commands::syncing::get_mnemonic_for_account;
 use crate::utils::account_key::account_key;
 use crate::utils::auth_tokens::save_api_token;
@@ -215,7 +214,7 @@ async fn persist_session(
 /// Full mnemonic login: validate → derive keys → challenge-response → persist session.
 ///
 /// The mnemonic is zeroized after key derivation. The derived keypair is held
-/// in `AUTH_STATE` for subsequent signing operations (staking, transfers).
+/// in `AppState.auth` for subsequent signing operations (staking, transfers).
 #[tauri::command]
 pub async fn login_with_mnemonic(
     state: tauri::State<'_, crate::app_state::AppState>,
@@ -239,14 +238,15 @@ pub async fn login_with_mnemonic(
     )
     .await?;
 
-    // 3. Store keypair in AUTH_STATE
+    // 3. Store keypair in AppState.auth
     {
-        let mut state = AUTH_STATE
+        let mut auth = state
+            .auth
             .lock()
             .map_err(|e| format!("Auth state lock failed: {e}"))?;
-        state.sr25519_pair = Some(sr25519_pair);
-        state.substrate_address = Some(substrate_address.clone());
-        state.eth_address = Some(eth_address.clone());
+        auth.sr25519_pair = Some(sr25519_pair);
+        auth.substrate_address = Some(substrate_address.clone());
+        auth.eth_address = Some(eth_address.clone());
     }
 
     // 4. Persist session in DB
@@ -477,14 +477,15 @@ pub async fn unlock_with_passcode(
     let (token, user_id, username, is_new, token_expiry) =
         challenge_response(&client, &eth_signer, &eth_address, &substrate_address, None).await?;
 
-    // 7. Store keypair in AUTH_STATE
+    // 7. Store keypair in AppState.auth
     {
-        let mut state = AUTH_STATE
+        let mut auth = state
+            .auth
             .lock()
             .map_err(|e| format!("Auth state lock failed: {e}"))?;
-        state.sr25519_pair = Some(sr25519_pair);
-        state.substrate_address = Some(substrate_address.clone());
-        state.eth_address = Some(eth_address.clone());
+        auth.sr25519_pair = Some(sr25519_pair);
+        auth.substrate_address = Some(substrate_address.clone());
+        auth.eth_address = Some(eth_address.clone());
     }
 
     // 8. Persist session
@@ -599,14 +600,15 @@ pub async fn auth_logout(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
 ) -> Result<(), String> {
-    // 1. Clear AUTH_STATE
+    // 1. Clear auth info
     {
-        let mut state = AUTH_STATE
+        let mut auth = state
+            .auth
             .lock()
             .map_err(|e| format!("Auth state lock failed: {e}"))?;
-        state.sr25519_pair = None;
-        state.substrate_address = None;
-        state.eth_address = None;
+        auth.sr25519_pair = None;
+        auth.substrate_address = None;
+        auth.eth_address = None;
     }
 
     // 3. Clear session in DB (preserves logout_time_minutes)
@@ -637,18 +639,24 @@ pub async fn auth_logout(
 
 /// Return the SS58 address for the currently authenticated session.
 #[tauri::command]
-pub fn get_polkadot_address() -> Result<Option<String>, String> {
-    let state = AUTH_STATE
+pub fn get_polkadot_address(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<Option<String>, String> {
+    let auth = state
+        .auth
         .lock()
         .map_err(|e| format!("Auth state lock failed: {e}"))?;
-    Ok(state.substrate_address.clone())
+    Ok(auth.substrate_address.clone())
 }
 
 /// Return the Ethereum address for the currently authenticated session.
 #[tauri::command]
-pub fn get_eth_address() -> Result<Option<String>, String> {
-    let state = AUTH_STATE
+pub fn get_eth_address(
+    state: tauri::State<'_, crate::app_state::AppState>,
+) -> Result<Option<String>, String> {
+    let auth = state
+        .auth
         .lock()
         .map_err(|e| format!("Auth state lock failed: {e}"))?;
-    Ok(state.eth_address.clone())
+    Ok(auth.eth_address.clone())
 }

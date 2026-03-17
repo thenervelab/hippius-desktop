@@ -2,9 +2,8 @@
 //!
 //! Moves all Polkadot RPC queries and staking transaction signing to Rust.
 //! Queries read on-chain state via `subxt`. Transactions sign with the
-//! keypair stored in `AUTH_STATE` (populated by login/unlock).
+//! keypair stored in `AppState.auth` (populated by login/unlock).
 
-use crate::auth_state::AUTH_STATE;
 use crate::substrate_client::get_substrate_client;
 use futures::StreamExt;
 use serde::Serialize;
@@ -74,22 +73,23 @@ pub struct BlockTimestampResult {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: get signer from AUTH_STATE
+// Helper: get signer from AppState.auth
 // ---------------------------------------------------------------------------
 
-fn get_signer() -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, String> {
-    let state = AUTH_STATE.lock().map_err(|e| format!("Lock error: {e}"))?;
-    let pair = state
+fn get_signer(
+    app_state: &crate::app_state::AppState,
+) -> Result<PairSigner<subxt::PolkadotConfig, sp_core::sr25519::Pair>, String> {
+    let auth = app_state.auth.lock().map_err(|e| format!("Lock error: {e}"))?;
+    let pair = auth
         .sr25519_pair
         .clone()
         .ok_or("Not authenticated — please log in first")?;
     Ok(PairSigner::new(pair))
 }
 
-fn get_substrate_address() -> Result<String, String> {
-    let state = AUTH_STATE.lock().map_err(|e| format!("Lock error: {e}"))?;
-    state
-        .substrate_address
+fn get_substrate_address(app_state: &crate::app_state::AppState) -> Result<String, String> {
+    let auth = app_state.auth.lock().map_err(|e| format!("Lock error: {e}"))?;
+    auth.substrate_address
         .clone()
         .ok_or("Not authenticated — please log in first".to_string())
 }
@@ -139,7 +139,7 @@ pub async fn get_account_balance(
 pub async fn get_staking_info(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<StakingInfo, String> {
-    let address = get_substrate_address()?;
+    let address = get_substrate_address(&state)?;
     let client = get_substrate_client(state.pool()?).await?;
 
     let account_id: subxt::utils::AccountId32 = address
@@ -343,9 +343,9 @@ pub async fn stake_bond(
     state: tauri::State<'_, crate::app_state::AppState>,
     amount: String,
 ) -> Result<TxResult, String> {
-    let signer = get_signer()?;
+    let signer = get_signer(&state)?;
     let client = get_substrate_client(state.pool()?).await?;
-    let address = get_substrate_address()?;
+    let address = get_substrate_address(&state)?;
 
     let amount: u128 = amount
         .parse()
@@ -410,7 +410,7 @@ pub async fn stake_unbond(
     state: tauri::State<'_, crate::app_state::AppState>,
     amount: String,
 ) -> Result<TxResult, String> {
-    let signer = get_signer()?;
+    let signer = get_signer(&state)?;
     let client = get_substrate_client(state.pool()?).await?;
 
     let amount: u128 = amount
@@ -441,9 +441,9 @@ pub async fn stake_unbond(
 pub async fn stake_withdraw_unbonded(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<TxResult, String> {
-    let signer = get_signer()?;
+    let signer = get_signer(&state)?;
     let client = get_substrate_client(state.pool()?).await?;
-    let address = get_substrate_address()?;
+    let address = get_substrate_address(&state)?;
 
     let account_id: subxt::utils::AccountId32 = address
         .parse()
@@ -492,9 +492,9 @@ pub async fn stake_withdraw_unbonded(
 pub async fn stake_claim_rewards(
     state: tauri::State<'_, crate::app_state::AppState>,
 ) -> Result<TxResult, String> {
-    let signer = get_signer()?;
+    let signer = get_signer(&state)?;
     let client = get_substrate_client(state.pool()?).await?;
-    let address = get_substrate_address()?;
+    let address = get_substrate_address(&state)?;
 
     let account_id: subxt::utils::AccountId32 = address
         .parse()
@@ -537,14 +537,14 @@ pub async fn stake_claim_rewards(
     })
 }
 
-/// Transfer balance using the keypair from AUTH_STATE (no seed phrase needed).
+/// Transfer balance using the keypair from AppState.auth (no seed phrase needed).
 #[tauri::command]
 pub async fn transfer_balance(
     state: tauri::State<'_, crate::app_state::AppState>,
     recipient_address: String,
     amount: String,
 ) -> Result<TxResult, String> {
-    let signer = get_signer()?;
+    let signer = get_signer(&state)?;
     let client = get_substrate_client(state.pool()?).await?;
 
     let amount: u128 = amount
