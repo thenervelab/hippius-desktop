@@ -4,7 +4,6 @@
 //! and session persistence. The frontend never stores OAuth state
 //! in localStorage/sessionStorage.
 
-use crate::DB_POOL;
 use crate::utils::account_key::account_key;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -140,6 +139,7 @@ pub async fn start_oauth_flow(provider: String) -> Result<OAuthUrlResult, String
 /// Returns the session data for the frontend to update React state.
 #[tauri::command]
 pub async fn complete_oauth_flow(
+    state: tauri::State<'_, crate::app_state::AppState>,
     params: OAuthCallbackParams,
 ) -> Result<OAuthSessionResult, String> {
     // Check for errors — sanitize before returning to frontend
@@ -234,9 +234,7 @@ pub async fn complete_oauth_flow(
 
     // Persist auth session in the DB
     if !substrate_address.is_empty() {
-        let pool = DB_POOL
-            .get()
-            .ok_or("Database not initialized")?;
+        let pool = state.pool()?;
         let owner = account_key(&substrate_address);
 
         sqlx::query(
