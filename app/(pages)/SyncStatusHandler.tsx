@@ -274,15 +274,15 @@ const SyncStatusHandler: React.FC = () => {
     // Check if there are failed files that need to be shown
     const hasFailedFiles = filesFailed > 0 || overallProgress.failedFiles > 0 || hasSyncError;
 
-    if (!isCompleted && isPermanentlyClosed) {
-      setIsPermanentlyClosed(false);
+    // Only reset isPermanentlyClosed when a new sync session starts.
+    // This is now primarily handled by the hcfs_sync_started event listener.
+    // Don't reopen if user explicitly closed
+    if (isPermanentlyClosed) {
+      return;
     }
 
     // Show widget when there's activity, sync files, sync completed, OR failed files/errors
-    if (
-      (hasAnyActivity || hasSyncFiles || hasSyncCompleted || hasFailedFiles) &&
-      !isPermanentlyClosed
-    ) {
+    if (hasAnyActivity || hasSyncFiles || hasSyncCompleted || hasFailedFiles) {
       refetch();
       setIsSyncOpen(true);
     }
@@ -338,7 +338,8 @@ const SyncStatusHandler: React.FC = () => {
   // Listen for explicit sync stop event and immediately close the widget
   useEffect(() => {
     let cancelled = false;
-    let unsub: (() => void) | null = null;
+    let unsubStop: (() => void) | null = null;
+    let unsubStart: (() => void) | null = null;
 
     listen("hcfs_sync_stopped", () => {
       if (!cancelled) {
@@ -346,18 +347,27 @@ const SyncStatusHandler: React.FC = () => {
         // Don't set permanently closed - allow reopening if sync restarts
       }
     }).then((u) => {
-      if (cancelled) {
-        u();
-      } else {
-        unsub = u;
-      }
+      if (cancelled) { u(); } else { unsubStop = u; }
     }).catch(err => {
       console.warn("[SyncStatusHandler] Failed to listen for sync_stopped:", err);
     });
 
+    // Listen for new sync starting — reopen widget if it was manually closed
+    listen("hcfs_sync_started", () => {
+      if (!cancelled) {
+        setIsPermanentlyClosed(false);
+        setIsSyncOpen(true);
+      }
+    }).then((u) => {
+      if (cancelled) { u(); } else { unsubStart = u; }
+    }).catch(err => {
+      console.warn("[SyncStatusHandler] Failed to listen for sync_started:", err);
+    });
+
     return () => {
       cancelled = true;
-      unsub?.();
+      unsubStop?.();
+      unsubStart?.();
     };
   }, []);
 

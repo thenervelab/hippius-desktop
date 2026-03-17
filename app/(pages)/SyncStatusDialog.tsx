@@ -184,7 +184,7 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
               cellDim: 20,
             }}
             className={cn(
-              "absolute w-full h-full opacity-50 inset-0 transition-opacity duration-300",
+              "absolute w-full h-full opacity-50 inset-0 transition-opacity duration-300 pointer-events-none",
               isExpanded ? "opacity-50" : "opacity-0 sm:opacity-0"
             )}
           />
