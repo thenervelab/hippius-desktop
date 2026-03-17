@@ -71,7 +71,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
               {isFullSuccess
                 ? "All your files have been successfully migrated to Hippius Drive."
                 : isPartialSuccess
-                ? "Some files could not be migrated. You can find them using their IPFS links."
+                ? "Some files could not be migrated. You can find them in your original S3 storage."
                 : "The migration could not be completed. Please try again later."}
             </p>
           </div>
@@ -129,7 +129,7 @@ const MigrationCompleteDialog: React.FC<MigrationCompleteDialogProps> = ({
           {/* Help Text */}
           {effectiveFailedCount > 0 && (
             <p className="text-xs text-grey-60 text-center">
-              Failed files can still be accessed via their original IPFS links.
+              Failed files can still be accessed from your original S3 storage.
             </p>
           )}
         </div>

@@ -242,8 +242,21 @@ pub async fn check_migration(
     if let Some((status, _total, _completed, sync_path, _server_url)) =
         get_migration_status_db(&account_id).await?
     {
-        // Always verify with the server — local "complete" may be stale
-        // if the previous run reported completion prematurely.
+        // If the user already dismissed (skipped, cancelled, or completed)
+        // the migration, never show the prompt again.
+        let terminal_statuses = ["dismissed", "skipped", "cancelled", "complete"];
+        if terminal_statuses.iter().any(|s| status.eq_ignore_ascii_case(s)) {
+            return Ok(MigrationCheckResult {
+                needs_migration: false,
+                file_count: 0,
+                total_size: 0,
+                files: vec![],
+                sync_path: None,
+                is_resuming: false,
+            });
+        }
+
+        // Status is "in_progress" — verify with the server
         let server_url = get_server_url(&account_id).await?;
         let files =
             fetch_migration_files(&server_url, &account_id).await?;
@@ -254,20 +267,18 @@ pub async fn check_migration(
 
         if pending.is_empty() {
             // Server confirms everything is migrated
-            if status != "complete" {
-                if let Err(e) = upsert_migration_status(
-                    &account_id,
-                    "complete",
-                    0,
-                    0,
-                    "[]",
-                    &sync_path,
-                    &server_url,
-                )
-                .await
-                {
-                    warn!("Failed to update migration status to complete: {e}");
-                }
+            if let Err(e) = upsert_migration_status(
+                &account_id,
+                "complete",
+                0,
+                0,
+                "[]",
+                &sync_path,
+                &server_url,
+            )
+            .await
+            {
+                warn!("Failed to update migration status to complete: {e}");
             }
             return Ok(MigrationCheckResult {
                 needs_migration: false,
@@ -763,8 +774,49 @@ async fn run_migration_download(
 }
 
 #[tauri::command]
-pub async fn cancel_migration() -> Result<(), String> {
+pub async fn cancel_migration(account_id: String) -> Result<(), String> {
     MIGRATION_CANCEL.store(true, Ordering::SeqCst);
+
+    // Persist cancelled state so the migration dialog won't reappear
+    if !account_id.is_empty() {
+        let server_url = get_server_url(&account_id).await.unwrap_or_default();
+        if let Err(e) = upsert_migration_status(
+            &account_id,
+            "cancelled",
+            0,
+            0,
+            "[]",
+            "",
+            &server_url,
+        )
+        .await
+        {
+            warn!("Failed to persist cancelled migration status: {e}");
+        }
+    }
+    Ok(())
+}
+
+/// Dismiss migration permanently so the dialog never shows again.
+/// `reason` should be "skipped" (Start Fresh) or "completed".
+#[tauri::command]
+pub async fn dismiss_migration(
+    account_id: String,
+    reason: String,
+) -> Result<(), String> {
+    let server_url = get_server_url(&account_id).await.unwrap_or_default();
+    let status = if reason.is_empty() { "dismissed" } else { &reason };
+    upsert_migration_status(
+        &account_id,
+        status,
+        0,
+        0,
+        "[]",
+        "",
+        &server_url,
+    )
+    .await?;
+    info!("Migration dismissed for account {account_id} with reason: {status}");
     Ok(())
 }
 

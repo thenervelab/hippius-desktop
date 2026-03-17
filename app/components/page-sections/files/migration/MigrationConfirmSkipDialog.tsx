@@ -34,8 +34,8 @@ const MigrationConfirmSkipDialog: React.FC<MigrationConfirmSkipDialogProps> = ({
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && handleClose()}>
-      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[450px] h-fit">
+    <Dialog.Root open={open}>
+      <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[450px] h-fit" preventClose>
         <Dialog.Title className="sr-only">Confirm Skip Migration</Dialog.Title>
 
         <div className="px-4 py-6 flex flex-col gap-5">
@@ -61,8 +61,8 @@ const MigrationConfirmSkipDialog: React.FC<MigrationConfirmSkipDialogProps> = ({
             </div>
             <h2 className="text-xl font-semibold text-grey-10">Are you sure?</h2>
             <p className="text-sm text-grey-50 max-w-sm">
-              This will permanently skip migrating your <strong className="text-grey-30">{fileCount} files</strong>.
-              You can still access them via IPFS links, but they won&apos;t appear in your Hippius Drive.
+              This will permanently skip migrating your <strong className="text-grey-30">{fileCount} files</strong> from S3 to Arion.
+              They won&apos;t appear in your Hippius Drive.
             </p>
           </div>
 
@@ -73,7 +73,7 @@ const MigrationConfirmSkipDialog: React.FC<MigrationConfirmSkipDialogProps> = ({
               <div className="text-sm text-grey-30">
                 <p className="font-medium text-error-50 mb-1">This action cannot be undone</p>
                 <p className="text-xs text-grey-50">
-                  Your files will not be deleted from IPFS, but you&apos;ll need to manually
+                  Your files will not be deleted from S3, but you&apos;ll need to manually
                   re-upload them if you want them in your Hippius Drive later.
                 </p>
               </div>

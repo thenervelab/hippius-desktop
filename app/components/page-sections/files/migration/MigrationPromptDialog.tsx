@@ -9,7 +9,6 @@ import { FolderSync } from "lucide-react";
 
 export interface MigrationPromptDialogProps {
     open: boolean;
-    onClose: () => void;
     onMigrate: () => void;
     onSkip: () => void;
     fileCount: number;
@@ -18,15 +17,14 @@ export interface MigrationPromptDialogProps {
 
 const MigrationPromptDialog: React.FC<MigrationPromptDialogProps> = ({
     open,
-    onClose,
     onMigrate,
     onSkip,
     fileCount,
     totalSize,
 }) => {
     return (
-        <Dialog.Root open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[480px] h-fit">
+        <Dialog.Root open={open}>
+            <DialogContainer className="md:inset-0 md:m-auto md:w-[90vw] md:max-w-[480px] h-fit" preventClose>
                 <Dialog.Title className="sr-only">Migration Required</Dialog.Title>
 
                 <div className="px-4 py-6 flex flex-col gap-5">
@@ -52,8 +50,8 @@ const MigrationPromptDialog: React.FC<MigrationPromptDialogProps> = ({
                         </div>
                         <h2 className="text-xl font-semibold text-grey-10">Migration Required</h2>
                         <p className="text-sm text-grey-50 max-w-sm">
-                            We&apos;ve upgraded our storage system for better performance and security.
-                            Your existing files need to be migrated.
+                            We&apos;ve upgraded from S3 to Arion for better performance and security.
+                            Your existing files need to be migrated to continue using Hippius Drive.
                         </p>
                     </div>
 

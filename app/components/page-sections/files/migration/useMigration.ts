@@ -4,9 +4,11 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import { MigrationFile } from "./MigrationProgressDialog";
 import { getHcfsConfig, saveHcfsConfig } from "@/lib/utils/hcfsConfigUtils";
 import { syncEngineStatusAtom, isSyncConfiguredAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { migrationCheckAtom } from "@/lib/global-atoms/migrationAtoms";
 import { appStore } from "@/lib/store/jotaiStore";
 
 export type MigrationStep = "prompt" | "skip-confirm" | "setup" | "progress" | "complete";
@@ -61,8 +63,8 @@ export interface UseMigrationReturn {
   onSetupComplete: (result: { serverUrl: string; password: string }) => Promise<void>;
   isSettingUp: boolean;
   cancelMigration: () => Promise<void>;
-  confirmSkip: () => void;
-  closeMigration: () => void;
+  confirmSkip: () => Promise<void>;
+  closeMigration: () => Promise<void>;
 }
 
 export function useMigration(
@@ -85,6 +87,10 @@ export function useMigration(
 
   const [pendingAccountId, setPendingAccountId] = useState<string | null>(null);
   const [isSettingUp, setIsSettingUp] = useState(false);
+
+  // Tracks the account ID across the entire migration lifecycle so
+  // confirmSkip / cancelMigration / closeMigration can persist the choice.
+  const activeAccountIdRef = useRef<string | null>(null);
 
   const [successCount, setSuccessCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
@@ -199,6 +205,7 @@ export function useMigration(
           setIsResuming(result.is_resuming);
           setResumeSyncPath(result.sync_path);
           setCurrentStep("prompt");
+          activeAccountIdRef.current = accountId;
           return true;
         }
         return false;
@@ -311,7 +318,13 @@ export function useMigration(
   const cancelMigration = useCallback(async () => {
     setIsCancelling(true);
     try {
-      await invoke("cancel_migration");
+      const accountId = activeAccountIdRef.current;
+      if (accountId) {
+        await invoke("cancel_migration", { accountId });
+      } else {
+        // Fallback: at minimum stop the download loop
+        await invoke("cancel_migration", { accountId: "" });
+      }
     } catch (err) {
       console.error("[Migration] Cancel failed:", err);
     }
@@ -319,11 +332,49 @@ export function useMigration(
     setCurrentStep("complete");
   }, []);
 
-  const confirmSkip = useCallback(() => {
+  const confirmSkip = useCallback(async () => {
+    try {
+      const accountId = activeAccountIdRef.current;
+      if (accountId) {
+        await invoke("dismiss_migration", {
+          accountId,
+          reason: "skipped",
+        });
+      }
+      toast.success("Started fresh! Your S3 files have been skipped and won't be migrated.");
+    } catch (err) {
+      console.error("[Migration] Dismiss (skip) failed:", err);
+      toast.error("Failed to save your choice. Please try again.");
+    }
+    // Reset the atom so the checker doesn't re-trigger
+    appStore.set(migrationCheckAtom, {
+      checked: true,
+      needsMigration: false,
+      fileCount: 0,
+      totalSize: 0,
+    });
     setCurrentStep(null);
   }, []);
 
-  const closeMigration = useCallback(() => {
+  const closeMigration = useCallback(async () => {
+    try {
+      const accountId = activeAccountIdRef.current;
+      if (accountId) {
+        await invoke("dismiss_migration", {
+          accountId,
+          reason: "completed",
+        });
+      }
+    } catch (err) {
+      console.error("[Migration] Dismiss (close) failed:", err);
+    }
+    // Reset the atom so the checker doesn't re-trigger
+    appStore.set(migrationCheckAtom, {
+      checked: true,
+      needsMigration: false,
+      fileCount: 0,
+      totalSize: 0,
+    });
     setCurrentStep(null);
     setFiles([]);
     setCurrentFileIndex(0);
@@ -340,6 +391,7 @@ export function useMigration(
     setUploadedCount(0);
     setCurrentUploadFile("");
     uploadedFilesRef.current.clear();
+    activeAccountIdRef.current = null;
   }, []);
 
   return {

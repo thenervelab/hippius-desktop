@@ -40,7 +40,6 @@ const MigrationChecker: React.FC = () => {
       {migration.currentStep === "prompt" && (
         <MigrationPromptDialog
           open
-          onClose={() => migration.setCurrentStep(null)}
           onMigrate={() =>
             polkadotAddress &&
             migration.startMigration(polkadotAddress)
